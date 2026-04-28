@@ -32,8 +32,10 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
+        # Pages must be enabled once manually in the repo settings
+        # (Settings -> Pages -> Build and deployment -> Source: GitHub
+        # Actions). The default GITHUB_TOKEN can't create the Pages
+        # site itself; only push to it.
 
       - name: Build docs
         run: mkdocs build --strict
