@@ -39,6 +39,7 @@ config/slack.json
 data/secrets.json
 .env
 .env.*
+!.env.example
 settings.json
 
 # ── IDE / Editor ──
