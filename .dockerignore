@@ -122,6 +122,8 @@ docs/
 *.rst
 *.txt
 !requirements.txt
+!requirements-core.txt
+!requirements-ai.txt
 
 # -----------------------------------------------------------------------------
 # Version Control
@@ -183,6 +185,8 @@ node_modules/
 *.lock
 !frontend/package-lock.json
 !requirements.txt
+!requirements-core.txt
+!requirements-ai.txt
 docker-compose*.yml
 !docker-compose.yml
 Dockerfile.dev
