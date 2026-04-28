@@ -356,6 +356,56 @@ def import_bibtex_file(
 # Zotero import
 # ---------------------------------------------------------------------------
 
+def _build_zotero_collection_paths(
+    collections: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Resolve Zotero collection keys to "Parent / Child" path strings.
+
+    ALMa's ``collections.name`` column is flat and ``UNIQUE``, so we encode
+    the Zotero hierarchy in the name itself. This preserves nesting visually
+    and prevents two same-named Zotero collections in different parents from
+    silently merging into one local collection.
+
+    Args:
+        collections: Iterable of dicts with ``key``, ``name``, ``parent_key``.
+            ``parent_key`` is the key of the parent collection or None/False
+            for top-level collections.
+
+    Returns:
+        Mapping of collection key to its resolved path string. Paths use
+        ``" / "`` as the separator. Cycles (malformed inputs) are broken
+        defensively so the function never recurses forever.
+    """
+    name_by_key: Dict[str, str] = {}
+    parent_by_key: Dict[str, Optional[str]] = {}
+    for c in collections:
+        key = (c.get("key") or "").strip()
+        if not key:
+            continue
+        name_by_key[key] = (c.get("name") or "").strip()
+        parent = c.get("parent_key")
+        if parent is False or not parent:
+            parent_by_key[key] = None
+        else:
+            parent_by_key[key] = str(parent).strip() or None
+
+    def _build(key: str, seen: frozenset) -> str:
+        name = name_by_key.get(key, "")
+        if key in seen:
+            # Cycle in input: stop unwinding and return the local name only.
+            return name
+        parent = parent_by_key.get(key)
+        if parent and parent in name_by_key:
+            parent_path = _build(parent, seen | {key})
+            if parent_path and name:
+                return f"{parent_path} / {name}"
+            if parent_path:
+                return parent_path
+        return name
+
+    return {key: _build(key, frozenset()) for key in name_by_key}
+
+
 def _normalize_zotero_item(item: dict) -> dict:
     """Normalize a Zotero API item to our internal format.
 
@@ -486,14 +536,27 @@ def import_zotero(
 
     result.total = len(items)
 
-    # Build a map of Zotero collection keys -> names for tag import
-    zotero_collection_map: dict[str, str] = {}
+    # Build a map of Zotero collection keys -> "Parent / Child" path strings.
+    # We resolve hierarchy here (rather than at every item) so that mirrored
+    # local collections preserve nesting and same-name siblings under
+    # different parents don't silently merge into one local collection.
+    zotero_collections_meta: list[dict] = []
     try:
         for coll in zot.collections():
             cdata = coll.get("data", coll)
-            zotero_collection_map[cdata.get("key", "")] = cdata.get("name", "")
+            ckey = (cdata.get("key") or "").strip()
+            if not ckey:
+                continue
+            zotero_collections_meta.append({
+                "key": ckey,
+                "name": cdata.get("name") or "",
+                "parent_key": cdata.get("parentCollection"),
+            })
     except Exception:
         pass  # non-critical
+    zotero_collection_path_map: Dict[str, str] = _build_zotero_collection_paths(
+        zotero_collections_meta
+    )
 
     imported_refs: list[str] = []
 
@@ -508,17 +571,24 @@ def import_zotero(
                 )
                 continue
 
+            # Resolve membership keys to full "Parent / Child" paths. Drop any
+            # blanks (orphan keys whose collection metadata wasn't returned).
+            resolved_paths: list[str] = []
+            seen_paths: set[str] = set()
+            for ck in norm.get("zotero_collections", []):
+                path = zotero_collection_path_map.get(ck, "").strip()
+                if path and path not in seen_paths:
+                    resolved_paths.append(path)
+                    seen_paths.add(path)
+            norm["zotero_collections"] = resolved_paths
+
             # Build notes from tags
             tag_info = ""
             if norm["zotero_tags"]:
                 tag_info = f"\nTags: {', '.join(norm['zotero_tags'])}"
-            zotero_coll_names = [
-                zotero_collection_map.get(ck, ck)
-                for ck in norm.get("zotero_collections", [])
-            ]
             coll_info = ""
-            if zotero_coll_names:
-                coll_info = f"\nZotero collections: {', '.join(zotero_coll_names)}"
+            if resolved_paths:
+                coll_info = f"\nZotero collections: {', '.join(resolved_paths)}"
 
             notes = f"Imported from Zotero ({norm['item_type']}){tag_info}{coll_info}"
 
@@ -563,18 +633,18 @@ def import_zotero(
                     paper_id,
                 )
 
-            # Create local collections mirroring Zotero collections
-            for coll_key in norm.get("zotero_collections", []):
-                coll_name = zotero_collection_map.get(coll_key)
-                if coll_name:
-                    mirror_coll_id = _find_or_create_collection(
-                        conn, coll_name, color="#8B5CF6"
-                    )
-                    _add_to_collection(
-                        conn,
-                        mirror_coll_id,
-                        paper_id,
-                    )
+            # Create local collections mirroring Zotero collections. Names
+            # carry the full "Parent / Child" path so the Zotero hierarchy is
+            # preserved (ALMa's collections.name is flat + UNIQUE).
+            for coll_path in resolved_paths:
+                mirror_coll_id = _find_or_create_collection(
+                    conn, coll_path, color="#8B5CF6"
+                )
+                _add_to_collection(
+                    conn,
+                    mirror_coll_id,
+                    paper_id,
+                )
 
             # Import Zotero tags as local tags
             for tag_name in norm.get("zotero_tags", []):
@@ -640,16 +710,105 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
+_RDF_NS = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
+_RDF_ABOUT = f"{_RDF_NS}about"
+_RDF_RESOURCE = f"{_RDF_NS}resource"
+
+
+def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dict[str, list[str]]]:
+    """Extract collection hierarchy + item membership from a Zotero RDF tree.
+
+    Zotero's RDF export represents collections as ``<z:Collection>`` elements
+    whose ``rdf:about`` is the collection URI. Each collection has a
+    ``<dc:title>`` and zero or more ``<dcterms:hasPart rdf:resource="..."/>``
+    children. ``hasPart`` references can be either items (papers) or
+    sub-collections — sub-collections are detected by matching the resource
+    URI against another collection's ``rdf:about``.
+
+    Returns:
+        ``(path_by_key, item_membership)`` where:
+        - ``path_by_key`` maps each collection URI to its full
+          ``"Parent / Child"`` path string.
+        - ``item_membership`` maps each item URI to a list of collection
+          paths it belongs to.
+    """
+    raw_collections: list[dict] = []
+    for node in root:
+        if _strip_ns(node.tag).lower() != "collection":
+            continue
+        key = node.attrib.get(_RDF_ABOUT, "").strip()
+        if not key:
+            continue
+        name = ""
+        members: list[str] = []
+        for child in list(node):
+            ctag = _strip_ns(child.tag).lower()
+            if ctag == "title" and child.text:
+                name = child.text.strip()
+            elif ctag == "haspart":
+                ref = child.attrib.get(_RDF_RESOURCE, "").strip()
+                if ref:
+                    members.append(ref)
+        if not name:
+            continue
+        raw_collections.append({"key": key, "name": name, "members": members})
+
+    if not raw_collections:
+        return {}, {}
+
+    # Sub-collection detection: a member URI that is itself a collection key
+    # marks a parent/child collection edge; everything else is an item ref.
+    collection_keys = {c["key"] for c in raw_collections}
+    parent_by_key: Dict[str, Optional[str]] = {c["key"]: None for c in raw_collections}
+    item_membership: Dict[str, list[str]] = {}
+    for c in raw_collections:
+        for ref in c["members"]:
+            if ref in collection_keys:
+                parent_by_key[ref] = c["key"]
+            else:
+                item_membership.setdefault(ref, []).append(c["key"])
+
+    path_by_key = _build_zotero_collection_paths([
+        {"key": c["key"], "name": c["name"], "parent_key": parent_by_key.get(c["key"])}
+        for c in raw_collections
+    ])
+
+    # Convert membership values from collection keys to full path strings,
+    # dropping blanks/duplicates so callers can treat the list as canonical.
+    paths_by_item: Dict[str, list[str]] = {}
+    for item_uri, keys in item_membership.items():
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for k in keys:
+            p = path_by_key.get(k, "").strip()
+            if p and p not in seen:
+                seen.add(p)
+                ordered.append(p)
+        if ordered:
+            paths_by_item[item_uri] = ordered
+
+    return path_by_key, paths_by_item
+
+
 def _parse_zotero_rdf(xml_content: str) -> list[dict]:
     """Parse a Zotero RDF export into normalized import records.
 
     The parser is intentionally tolerant across RDF variants and relies on
-    common Dublin Core / Biblio fields.
+    common Dublin Core / Biblio fields. ``<z:Collection>`` nodes are parsed
+    separately to attach each item's collection memberships (as resolved
+    "Parent / Child" path strings) to the returned records.
     """
     root = ET.fromstring(xml_content)
+    _, paths_by_item = _parse_zotero_rdf_collections(root)
     items: list[dict] = []
 
     for node in root.iter():
+        # Skip collection nodes outright -- they are taxonomy, not papers.
+        # Without this, a collection's <dc:title> child was previously
+        # captured as if it were a paper title and produced ghost rows.
+        if _strip_ns(node.tag).lower() == "collection":
+            continue
+
         # Most non-item nodes are skipped early; items generally contain title.
         title = ""
         authors: list[str] = []
@@ -697,7 +856,7 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
                 elif ctext_l.startswith("http") and not url:
                     url = ctext
             elif ctag in {"uri", "homepage", "link"} and not url:
-                url = (child.attrib.get("{http://www.w3.org/1999/02/22-rdf-syntax-ns#}resource") or ctext or "").strip()
+                url = (child.attrib.get(_RDF_RESOURCE) or ctext or "").strip()
             elif ctag in {"description", "abstract", "abstractnote"} and ctext and not abstract:
                 abstract = ctext
             elif ctag in {"subject", "keyword"} and ctext:
@@ -721,6 +880,12 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
                 if m:
                     doi = _normalize_doi_value(m.group(1))
 
+        # Resolve this item's collection memberships from the URI map built
+        # at the top of the function. Items without an rdf:about (rare) get
+        # no memberships.
+        item_uri = node.attrib.get(_RDF_ABOUT, "").strip()
+        zotero_collections = list(paths_by_item.get(item_uri, [])) if item_uri else []
+
         items.append({
             "title": title.strip(),
             "authors": ", ".join(a for a in authors if a).strip(),
@@ -731,14 +896,27 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
             "abstract": abstract.strip(),
             "keywords": keywords,
             "item_type": item_type,
+            "zotero_collections": zotero_collections,
         })
 
-    # Deduplicate by title (RDF can contain resource aliases)
+    # Deduplicate by title (RDF can contain resource aliases). When two
+    # nodes alias the same paper, merge their zotero_collections so we
+    # don't drop membership info on whichever node happens to be second.
     deduped: dict[str, dict] = {}
     for item in items:
         key = item["title"].strip().lower()
-        if key and key not in deduped:
+        if not key:
+            continue
+        if key not in deduped:
             deduped[key] = item
+            continue
+        existing_paths = deduped[key].get("zotero_collections") or []
+        seen = set(existing_paths)
+        for path in item.get("zotero_collections") or []:
+            if path and path not in seen:
+                existing_paths.append(path)
+                seen.add(path)
+        deduped[key]["zotero_collections"] = existing_paths
     return list(deduped.values())
 
 
@@ -804,6 +982,25 @@ def import_zotero_rdf(
                 _add_to_collection(
                     conn,
                     local_collection_id,
+                    paper_id,
+                )
+
+            # Mirror each Zotero collection the item belongs to as a local
+            # collection (purple chip; same color as the Web API path). Names
+            # carry the full "Parent / Child" path so nesting is preserved
+            # and same-named siblings under different parents stay distinct.
+            # The single paper_id is reused, so a paper in N Zotero
+            # collections produces 1 papers row + N collection_items rows
+            # (never N papers rows).
+            for coll_path in item.get("zotero_collections") or []:
+                if not coll_path:
+                    continue
+                mirror_coll_id = _find_or_create_collection(
+                    conn, coll_path, color="#8B5CF6"
+                )
+                _add_to_collection(
+                    conn,
+                    mirror_coll_id,
                     paper_id,
                 )
 
