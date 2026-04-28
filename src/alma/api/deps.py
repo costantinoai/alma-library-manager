@@ -229,6 +229,11 @@ def init_db_schema() -> None:
         conn.row_factory = sqlite3.Row
         try:
             # ---- SQLite performance pragmas ----
+            # auto_vacuum=INCREMENTAL must be set BEFORE any tables are
+            # created — its mode is locked once the file has content.
+            # The scheduled `db_maintenance` job calls
+            # `PRAGMA incremental_vacuum` daily to release freed pages.
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA foreign_keys=ON")
@@ -821,11 +826,19 @@ def init_db_schema() -> None:
             )
 
             conn.execute(
+                # OpenAlex work IDs are stored as the bare integer suffix
+                # (e.g. ``W65738273`` → ``65738273``). The W-prefix is
+                # restored at query time. Storing as INTEGER + WITHOUT
+                # ROWID roughly halves on-disk size relative to
+                # rowid+TEXT: WITHOUT ROWID merges the table and its
+                # autoindex into a single B-tree (no duplication), and
+                # an INTEGER referenced_work_id costs ~5 bytes versus
+                # ~10 bytes for the W-prefixed string form.
                 """CREATE TABLE IF NOT EXISTS publication_references (
                     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-                    referenced_work_id TEXT NOT NULL,
+                    referenced_work_id INTEGER NOT NULL,
                     PRIMARY KEY (paper_id, referenced_work_id)
-                )"""
+                ) WITHOUT ROWID"""
             )
 
             # ==============================================================

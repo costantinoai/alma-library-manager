@@ -1391,8 +1391,9 @@ def _semantic_similar_candidates(
         return []
     if not lib_rows:
         return []
+    from alma.core.vector_blob import decode_vector
     lib_vecs = [
-        np.frombuffer(row["embedding"], dtype=np.float32)
+        decode_vector(row["embedding"])
         for row in lib_rows
         if row["embedding"]
     ]
@@ -1455,9 +1456,7 @@ def _semantic_similar_candidates(
         blob = row["embedding"]
         if not oid or not blob:
             continue
-        per_author_vecs.setdefault(oid, []).append(
-            np.frombuffer(blob, dtype=np.float32)
-        )
+        per_author_vecs.setdefault(oid, []).append(decode_vector(blob))
 
     ranked: list[tuple[float, str, str, int]] = []
     for row in author_rows:
@@ -1518,15 +1517,13 @@ def _cited_by_high_signal_candidates(
     try:
         rows = db.execute(
             """
-            -- Match bare `W...` identifiers directly on both sides.
-            -- `papers.openalex_id` is normalized to bare form by the
-            -- one-shot heal in `init_db_schema`, and
-            -- `publication_references.referenced_work_id` is already
-            -- bare. Wrapping either side in `lower(trim(...))` kills
-            -- the partial UNIQUE index and sends the planner into a
-            -- full scan — same family as the adjacent-bucket fix
-            -- (SQLite query-planning lesson). Probe on user's DB:
-            -- **1878ms → sub-100ms** after this change.
+            -- `papers.openalex_id` is canonical bare W-form
+            -- (e.g. ``W123``). `publication_references.referenced_work_id`
+            -- stores the bare integer suffix (``123``). Restore the
+            -- ``W`` prefix on the references side so the JOIN matches
+            -- without forcing a function wrapper on the indexed
+            -- ``papers.openalex_id`` column. Probe on user's DB:
+            -- **1878ms → sub-100ms** after this style of optimization.
             WITH rated_library AS (
                 SELECT p.id AS library_paper_id
                 FROM papers p
@@ -1539,7 +1536,7 @@ def _cited_by_high_signal_candidates(
                 FROM rated_library rl
                 JOIN publication_references pr ON pr.paper_id = rl.library_paper_id
                 JOIN papers cited
-                  ON cited.openalex_id = pr.referenced_work_id
+                  ON cited.openalex_id = ('W' || pr.referenced_work_id)
             )
             -- `lower(trim(...))` on the SELECT output is cheap (post-
             -- aggregation) and keeps the returned candidate id in the
@@ -1997,7 +1994,7 @@ def list_author_suggestions(
                     referenced_local AS (
                         SELECT lr.seed_paper_id, rp.id AS referenced_paper_id
                         FROM library_refs lr
-                        JOIN papers rp ON rp.openalex_id = lr.referenced_work_id
+                        JOIN papers rp ON rp.openalex_id = ('W' || lr.referenced_work_id)
                     )
                     SELECT
                         pa.openalex_id AS candidate_openalex_id,

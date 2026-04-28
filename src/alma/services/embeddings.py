@@ -305,7 +305,7 @@ def run_embedding_computation(
 
             if payload:
                 try:
-                    import numpy as np
+                    from alma.core.vector_blob import encode_vector
 
                     embeddings = provider.embed([p[1] for p in payload])
                     if len(embeddings) != len(payload):
@@ -315,14 +315,13 @@ def run_embedding_computation(
 
                     inserted_paper_ids: list[str] = []
                     for (row, _text), emb in zip(payload, embeddings):
-                        embedding_array = np.array(emb, dtype=np.float32)
                         conn.execute(
                             "INSERT OR REPLACE INTO publication_embeddings "
                             "(paper_id, embedding, model, source, created_at) "
                             "VALUES (?, ?, ?, ?, ?)",
                             (
                                 row["id"],
-                                embedding_array.tobytes(),
+                                encode_vector(emb),
                                 model_hf_id,
                                 source_for_provider_name(provider.name),
                                 datetime.utcnow().isoformat(),
@@ -355,19 +354,18 @@ def run_embedding_computation(
                         level="WARNING",
                         step="batch_fallback",
                     )
-                    import numpy as np
+                    from alma.core.vector_blob import encode_vector
 
                     for row, text in payload:
                         try:
                             emb = provider.embed([text])[0]
-                            embedding_array = np.array(emb, dtype=np.float32)
                             conn.execute(
                                 "INSERT OR REPLACE INTO publication_embeddings "
                                 "(paper_id, embedding, model, source, created_at) "
                                 "VALUES (?, ?, ?, ?, ?)",
                                 (
                                     row["id"],
-                                    embedding_array.tobytes(),
+                                    encode_vector(emb),
                                     model_hf_id,
                                     source_for_provider_name(provider.name),
                                     datetime.utcnow().isoformat(),

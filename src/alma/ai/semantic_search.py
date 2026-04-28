@@ -95,7 +95,8 @@ def _semantic_search_with_query_vector(
     scored: list[tuple[str, float]] = []
     for emb_row in emb_rows:
         try:
-            embedding = np.frombuffer(emb_row["_embedding"], dtype=np.float32).copy()
+            from alma.core.vector_blob import decode_vector
+            embedding = decode_vector(emb_row["_embedding"])
             if embedding.shape != query_vec.shape:
                 continue
             emb_norm = np.linalg.norm(embedding)

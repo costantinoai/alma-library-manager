@@ -655,6 +655,26 @@ def setup_scheduler() -> None:
             "Registered maintain_citation_graph job (interval=%dh)", graph_maintenance_hours,
         )
 
+    # -- DB maintenance (daily) -------------------------------------------
+    # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
+    # UTC — well after the daily author refresh at AUTHOR_REFRESH_HOUR
+    # (default 03:00) so the two never compete for the writer lock.
+    sched.add_job(
+        db_maintenance_periodic,
+        trigger=CronTrigger(hour=4, minute=30),
+        id="db_maintenance",
+        name="Daily DB maintenance",
+        replace_existing=True,
+    )
+    with _job_lock:
+        _job_meta["db_maintenance"] = {
+            "action": "db_maintenance",
+            "name": "Daily DB maintenance",
+            "description": "Incremental vacuum + operation_logs retention, daily at 04:30 UTC",
+            "cron": "30 4 * * *",
+        }
+    logger.info("Registered db_maintenance job (cron 04:30 UTC)")
+
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""
@@ -996,6 +1016,104 @@ def maintain_citation_graph_periodic() -> None:
             operation_key="graphs.reference_backfill",
             finished_at=datetime.utcnow().isoformat(),
             message="Periodic citation graph maintenance failed",
+        )
+
+
+def _operation_log_retention_days() -> int:
+    """Days of `operation_logs` history to keep before pruning. Default 30."""
+    raw = os.getenv("ALMA_OPERATION_LOG_RETENTION_DAYS", "").strip()
+    if not raw:
+        return 30
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 30
+
+
+def db_maintenance_periodic() -> None:
+    """Reclaim free pages and prune stale ``operation_logs`` rows.
+
+    Runs daily. Two cheap maintenance steps that share one connection:
+
+    1. ``PRAGMA incremental_vacuum`` — releases pages freed by deletes
+       since the last run. Only meaningful when the DB was created (or
+       converted) with ``auto_vacuum=INCREMENTAL`` (handled in
+       ``init_db_schema``).
+    2. ``DELETE FROM operation_logs WHERE timestamp < cutoff`` — caps
+       the activity-log table at ``ALMA_OPERATION_LOG_RETENTION_DAYS``
+       (default 30). Without this cap, every run accumulates dozens of
+       rows and the table grows unbounded.
+    """
+    job_id = "periodic_db_maintenance"
+    set_job_status(
+        job_id,
+        status="running",
+        trigger_source="scheduler",
+        started_at=datetime.utcnow().isoformat(),
+        operation_key="db.maintenance",
+        message="Running DB maintenance",
+    )
+    summary: dict[str, object] = {}
+    try:
+        from alma.api.deps import open_db_connection
+
+        conn = open_db_connection()
+        try:
+            # Operation log retention — committed in its own transaction
+            # so the VACUUM below has clean ground.
+            retention_days = _operation_log_retention_days()
+            cutoff = (
+                datetime.utcnow() - timedelta(days=retention_days)
+            ).isoformat()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM operation_logs WHERE timestamp < ?",
+                    (cutoff,),
+                )
+                deleted = cur.rowcount
+                conn.commit()
+                summary["operation_logs_pruned"] = deleted
+                summary["operation_logs_retention_days"] = retention_days
+            except sqlite3.OperationalError as exc:
+                logger.warning("operation_logs prune skipped: %s", exc)
+
+            # Incremental vacuum runs in autocommit and releases all
+            # currently-free pages. Cheap when there's little to free.
+            try:
+                free_before = conn.execute(
+                    "PRAGMA freelist_count"
+                ).fetchone()[0]
+                if free_before:
+                    conn.isolation_level = None
+                    conn.execute("PRAGMA incremental_vacuum")
+                    free_after = conn.execute(
+                        "PRAGMA freelist_count"
+                    ).fetchone()[0]
+                    summary["pages_freed"] = free_before - free_after
+                else:
+                    summary["pages_freed"] = 0
+            except sqlite3.OperationalError as exc:
+                logger.warning("incremental_vacuum skipped: %s", exc)
+        finally:
+            conn.close()
+        set_job_status(
+            job_id,
+            status="completed",
+            trigger_source="scheduler",
+            operation_key="db.maintenance",
+            finished_at=datetime.utcnow().isoformat(),
+            message="DB maintenance complete",
+            result=summary,
+        )
+    except Exception:
+        logger.exception("Fatal error in db_maintenance_periodic")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key="db.maintenance",
+            finished_at=datetime.utcnow().isoformat(),
+            message="DB maintenance failed",
         )
 
 

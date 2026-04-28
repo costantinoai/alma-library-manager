@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
     # Install the in-memory ring-buffer log handler for the /logs endpoint
     install_log_handler()
 
-    # Initialise database schema ONCE (all DDL, migrations, seeds).
+    # Initialise database schema ONCE (all DDL, seeds).
     # This keeps per-request get_db() lightweight and avoids lock contention.
     from alma.api.deps import init_db_schema
     init_db_schema()

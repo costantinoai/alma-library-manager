@@ -118,7 +118,8 @@ def compute_centroid_from_ids(
     ).fetchall()
     if not rows:
         return None
-    embeddings = [np.frombuffer(r["embedding"], dtype=np.float32).copy() for r in rows]
+    from alma.core.vector_blob import decode_vector
+    embeddings = [decode_vector(r["embedding"]) for r in rows]
     return np.mean(np.stack(embeddings), axis=0)
 
 

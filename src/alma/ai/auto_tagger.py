@@ -109,7 +109,8 @@ def _embedding_based_suggestions(
     if target_row is None:
         return []
 
-    target_emb = np.frombuffer(target_row["embedding"], dtype=np.float32).copy()
+    from alma.core.vector_blob import decode_vector
+    target_emb = decode_vector(target_row["embedding"])
     target_norm = np.linalg.norm(target_emb)
     if target_norm == 0.0:
         return []
@@ -155,7 +156,7 @@ def _embedding_based_suggestions(
             continue
 
         try:
-            emb = np.frombuffer(row["embedding"], dtype=np.float32).copy()
+            emb = decode_vector(row["embedding"])
             emb_norm = np.linalg.norm(emb)
             if emb_norm == 0.0:
                 continue

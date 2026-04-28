@@ -165,6 +165,23 @@ def _normalize_openalex_work_id(work_id: str) -> str:
     return wid
 
 
+def _work_id_to_int(work_id: str) -> int | None:
+    """Convert an OpenAlex work ID to its bare integer form.
+
+    ``W65738273`` → ``65738273``. URL-form variants are normalized
+    first. Returns ``None`` for empty / malformed input — callers
+    silently drop those rows rather than corrupting the references
+    table with sentinel values.
+    """
+    norm = _normalize_openalex_work_id(work_id or "")
+    if not norm or len(norm) < 2 or norm[0] not in ("W", "w"):
+        return None
+    try:
+        return int(norm[1:])
+    except (ValueError, TypeError):
+        return None
+
+
 def fetch_works_for_author(
     author_openalex_id: str,
     from_year: Optional[int] = None,
@@ -728,7 +745,12 @@ def _upsert_referenced_works(
     paper_id: str,
     referenced_work_ids: List[str],
 ) -> int:
-    """Replace local reference rows for one paper."""
+    """Replace local reference rows for one paper.
+
+    OpenAlex work IDs are stored as INTEGER (bare numeric suffix of the
+    ``W…`` ID); see the schema in ``init_db_schema``. Non-conforming
+    inputs are dropped rather than written as sentinels.
+    """
     if not paper_id:
         return 0
     try:
@@ -737,18 +759,18 @@ def _upsert_referenced_works(
             (paper_id,),
         )
         inserted = 0
-        seen: set[str] = set()
+        seen: set[int] = set()
         for raw_work_id in referenced_work_ids or []:
-            work_id = _normalize_openalex_work_id(str(raw_work_id or ""))
-            if not work_id or work_id in seen:
+            work_id_int = _work_id_to_int(str(raw_work_id or ""))
+            if work_id_int is None or work_id_int in seen:
                 continue
-            seen.add(work_id)
+            seen.add(work_id_int)
             conn.execute(
                 """
                 INSERT OR REPLACE INTO publication_references (paper_id, referenced_work_id)
                 VALUES (?, ?)
                 """,
-                (paper_id, work_id),
+                (paper_id, work_id_int),
             )
             inserted += 1
         return inserted
@@ -1789,7 +1811,7 @@ def materialize_missing_referenced_works(
     default_statuses = seed_statuses or ["library"]
     params: list[object] = []
     where_clauses = [
-        "COALESCE(pr.referenced_work_id, '') <> ''",
+        "pr.referenced_work_id IS NOT NULL",
         "target.id IS NULL",
     ]
 
@@ -1805,12 +1827,16 @@ def materialize_missing_referenced_works(
         where_clauses.append(f"seed.status IN ({placeholders})")
         params.extend(default_statuses)
 
+    # Restore the ``W`` prefix on the references side so the JOIN
+    # matches papers.openalex_id (canonical bare W-form). A function
+    # wrapper on either column would defeat the index — string concat
+    # on the integer column does not.
     sql = f"""
         SELECT DISTINCT pr.referenced_work_id
         FROM publication_references pr
         JOIN papers seed ON seed.id = pr.paper_id
         LEFT JOIN papers target
-          ON lower(trim(target.openalex_id)) = lower(trim(pr.referenced_work_id))
+          ON target.openalex_id = ('W' || pr.referenced_work_id)
         WHERE {' AND '.join(where_clauses)}
         ORDER BY COALESCE(seed.updated_at, seed.created_at, seed.publication_date, '') DESC
         LIMIT ?
@@ -1822,11 +1848,12 @@ def materialize_missing_referenced_works(
     except sqlite3.OperationalError:
         return {"candidates": 0, "fetched": 0, "materialized": 0}
 
-    target_ids = [
-        _normalize_openalex_work_id(str((row["referenced_work_id"] if isinstance(row, sqlite3.Row) else row[0]) or ""))
-        for row in rows
-    ]
-    target_ids = [target_id for target_id in target_ids if target_id]
+    target_ids: list[str] = []
+    for row in rows:
+        raw = row["referenced_work_id"] if isinstance(row, sqlite3.Row) else row[0]
+        if raw is None:
+            continue
+        target_ids.append(f"W{raw}")
     if not target_ids:
         return {"candidates": 0, "fetched": 0, "materialized": 0}
 
@@ -2037,6 +2064,88 @@ _WORKS_SELECT_FIELDS = ",".join([
     "sustainable_development_goals",
     "institutions_distinct_count", "countries_distinct_count",
 ])
+
+
+def fetch_citing_works_for_openalex_id(
+    work_id: str,
+    *,
+    limit: int = 30,
+    sort_by_citations: bool = True,
+) -> list[dict]:
+    """Fetch the works that cite ``work_id`` from OpenAlex.
+
+    Backs the user-facing "derivative works" view: returns up to
+    ``limit`` papers whose ``referenced_works`` contains ``work_id``,
+    sorted by ``cited_by_count`` descending so high-impact citing
+    papers surface first. The result is the raw OpenAlex shape; the
+    caller is expected to push it through ``_normalize_work`` (or its
+    equivalent) before persisting or returning to the UI.
+
+    Returns ``[]`` on empty input, network errors, or non-200 responses
+    so callers can fall back to local data without an exception.
+    """
+    normalized = _normalize_openalex_work_id(work_id or "")
+    if not normalized:
+        return []
+    bounded = max(1, min(int(limit or 30), 200))
+    sort_param = "cited_by_count:desc" if sort_by_citations else "publication_date:desc"
+    try:
+        client = get_client()
+        resp = client.get(
+            "/works",
+            params={
+                "filter": f"cites:{normalized}",
+                "per-page": bounded,
+                "sort": sort_param,
+                "select": _WORKS_SELECT_FIELDS,
+            },
+            timeout=30,
+        )
+    except Exception as exc:
+        logger.warning("OpenAlex cites:%s fetch failed: %s", normalized, exc)
+        return []
+    if resp.status_code != 200:
+        logger.warning(
+            "OpenAlex cites:%s returned %d", normalized, resp.status_code
+        )
+        return []
+    return list((resp.json() or {}).get("results") or [])
+
+
+def fetch_referenced_works_for_openalex_id(
+    work_id: str,
+    *,
+    limit: int = 30,
+) -> list[dict]:
+    """Fetch the works that ``work_id`` references, with full metadata.
+
+    Two-step: pull the seed's ``referenced_works`` list (just W-IDs),
+    then batch-fetch each target's metadata via
+    ``batch_fetch_works_by_openalex_ids``. Capped at ``limit`` so we
+    don't pull a 1000-citation review's full bibliography just to
+    populate a sidebar.
+
+    Returns ``[]`` on empty input, network errors, or non-200 responses.
+    """
+    normalized = _normalize_openalex_work_id(work_id or "")
+    if not normalized:
+        return []
+    refs_by_seed = batch_fetch_referenced_works_for_openalex_ids(
+        [normalized], batch_size=1, max_workers=1
+    )
+    ref_ids = refs_by_seed.get(normalized, [])
+    if not ref_ids:
+        return []
+    bounded = max(1, min(int(limit or 30), 200))
+    target_ids = ref_ids[:bounded]
+    works_by_id = batch_fetch_works_by_openalex_ids(target_ids)
+    # Preserve the OpenAlex-declared reference order so the caller can
+    # render the bibliography in publication order.
+    return [
+        works_by_id[wid]
+        for wid in target_ids
+        if wid in works_by_id
+    ]
 
 
 def _normalize_work(w: Dict) -> Dict:

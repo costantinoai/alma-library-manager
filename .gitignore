@@ -27,7 +27,9 @@ pytest.ini
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.gz
 data/*.db
+data/backups/
 src/*.db
 
 # ── Configuration with secrets ──

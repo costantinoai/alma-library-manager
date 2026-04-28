@@ -133,8 +133,10 @@ def _load_library_centroid(db: sqlite3.Connection, model: str):
         ).fetchall()
     except sqlite3.OperationalError:
         return None
+    from alma.core.vector_blob import decode_vector
+
     vectors = [
-        np.frombuffer(row["embedding"], dtype=np.float32)
+        decode_vector(row["embedding"])
         for row in rows
         if row["embedding"]
     ]
@@ -203,13 +205,15 @@ def _load_author_centroid_similarities(
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
+    from alma.core.vector_blob import decode_vector
+
     out: dict[str, float] = {}
     for row in rows:
         oid = str(row["oid"] or "").strip().lower()
         blob = row["blob"]
         if not oid or not blob:
             continue
-        vec = np.frombuffer(blob, dtype=np.float32)
+        vec = decode_vector(blob)
         norm = float(np.linalg.norm(vec))
         if norm <= 0.0:
             continue

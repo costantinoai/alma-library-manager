@@ -94,8 +94,10 @@ def refresh_author_centroid(
         ).fetchall()
     except sqlite3.OperationalError:
         return False
+    from alma.core.vector_blob import decode_vector, encode_vector
+
     vectors = [
-        np.frombuffer(row["embedding"], dtype=np.float32)
+        decode_vector(row["embedding"])
         for row in rows
         if row["embedding"]
     ]
@@ -105,7 +107,7 @@ def refresh_author_centroid(
             (oid, model),
         )
         return False
-    centroid = np.mean(np.stack(vectors), axis=0).astype(np.float32)
+    centroid = np.mean(np.stack(vectors), axis=0)
     conn.execute(
         """
         INSERT INTO author_centroids
@@ -119,7 +121,7 @@ def refresh_author_centroid(
         (
             oid,
             model,
-            centroid.tobytes(),
+            encode_vector(centroid),
             len(vectors),
             datetime.now(timezone.utc).isoformat(),
         ),
@@ -593,11 +595,8 @@ def _insert_vector(
 ) -> None:
     """Insert one SPECTER2 vector blob into publication_embeddings."""
 
-    try:
-        import numpy as np
-    except ImportError:
-        return
-    arr = np.asarray(vector, dtype=np.float32)
+    from alma.core.vector_blob import encode_vector
+
     conn.execute(
         """
         INSERT INTO publication_embeddings
@@ -612,7 +611,7 @@ def _insert_vector(
             paper_id,
             model,
             source,
-            arr.tobytes(),
+            encode_vector(vector),
             datetime.now(timezone.utc).isoformat(),
         ),
     )

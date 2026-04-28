@@ -867,7 +867,8 @@ def _dense_fallback_candidates(
         if canonical_candidate_key(row_dict) in skip_keys:
             continue
         try:
-            vec = np.frombuffer(row["embedding"], dtype=np.float32)
+            from alma.core.vector_blob import decode_vector
+            vec = decode_vector(row["embedding"])
         except Exception:
             continue
         vec_norm = float(norm(vec))

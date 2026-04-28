@@ -1311,11 +1311,12 @@ def refresh_lens_recommendations(
                     f"WHERE model = ? AND paper_id IN ({placeholders})",
                     [active_embedding_model, *chunk],
                 ).fetchall()
+                from alma.core.vector_blob import decode_vector
                 for row in rows:
                     key = pid_to_key.get(str(row["paper_id"]))
                     if key and row["embedding"]:
                         try:
-                            candidate_embedding_map[key] = np.frombuffer(row["embedding"], dtype=np.float32).copy()
+                            candidate_embedding_map[key] = decode_vector(row["embedding"])
                             reused_embedding_count += 1
                         except Exception:
                             pass
@@ -2374,13 +2375,14 @@ def _fetch_seed_embedding_vectors(
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
+    from alma.core.vector_blob import decode_vector
     out: dict[str, "np.ndarray"] = {}
     for row in rows:
         paper_id = str(row["paper_id"] or "").strip()
         if not paper_id:
             continue
         try:
-            vec = np.frombuffer(row["embedding"], dtype=np.float32).copy()
+            vec = decode_vector(row["embedding"])
             norm = float(np.linalg.norm(vec))
             if norm <= 0.0:
                 continue
@@ -2734,10 +2736,11 @@ def _retrieve_vector_channel(
     if not seed_rows:
         return []
 
+    from alma.core.vector_blob import decode_vector
     seed_vecs: list["np.ndarray"] = []
     for row in seed_rows:
         try:
-            vec = np.frombuffer(row["embedding"], dtype=np.float32).copy()
+            vec = decode_vector(row["embedding"])
             norm = float(np.linalg.norm(vec))
             if norm <= 0.0:
                 continue
@@ -2775,7 +2778,7 @@ def _retrieve_vector_channel(
             continue
         scanned += 1
         try:
-            vec = np.frombuffer(row["embedding"], dtype=np.float32).copy()
+            vec = decode_vector(row["embedding"])
             if vec.shape != centroid.shape:
                 continue
             norm = float(np.linalg.norm(vec))
@@ -2910,7 +2913,13 @@ def _retrieve_graph_channel(
             ).fetchall()
         except sqlite3.OperationalError:
             return []
-        work_ids = [str(r["referenced_work_id"]) for r in rows if r["referenced_work_id"]]
+        # publication_references stores the bare integer ID; OpenAlex
+        # batch fetch expects W-prefixed strings.
+        work_ids = [
+            f"W{r['referenced_work_id']}"
+            for r in rows
+            if r["referenced_work_id"]
+        ]
         if not work_ids:
             return []
         works = batch_fetch_works_by_openalex_ids(work_ids, batch_size=50, max_workers=4)
