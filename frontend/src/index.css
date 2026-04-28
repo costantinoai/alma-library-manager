@@ -1,0 +1,524 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * ALMa v3 brand theme — "two papers, one desk"
+ *
+ * Source of truth: branding/palette.md, branding/type.md (+ this file's
+ * own surface-taxonomy comment block below — the canonical tier ladder).
+ *
+ * Conceptual frame (v3, 2026-04-26):
+ *   The desk is darker warm parchment. Two paper qualities lift from it:
+ *   reading paper (warm cream — papers, authors, recommendations) and
+ *   working paper (cooler off-white — settings, lens controls, branch
+ *   studio chrome, alerts automation, insights tiles). Stacking lightens.
+ *   The accent is Folio binding blue, not corporate teal.
+ *
+ * Three layers:
+ *   1. Flat brand tokens — single anchor colors used by name
+ *      (canvas / content / chrome / folio / ink). Mapped to Tailwind
+ *      utilities like `bg-alma-canvas`, `text-alma-folio`.
+ *   2. 50-950 ramps for alma / parchment / pale / gold — back-compat for
+ *      the ~200 existing `bg-alma-X` etc. call sites; they now inherit
+ *      the navy-anchored palette automatically.
+ *   3. Semantic CSS variables (`:root` block below) — `--color-bg`,
+ *      `--color-surface`, `--color-border`, `--color-text` etc. for
+ *      primitive styling that wants to read by role rather than by
+ *      brand name.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+@theme {
+  /* ── ALMa navy ramp — Cardstock Navy ─────────────────────────────────────
+   * Anchored at alma-800 = #14233A, the brand navy. Reads as a small
+   * piece of dyed carton paper: deep, slightly desaturated, matte —
+   * not a glossy midnight, not a corporate SaaS blue. The lighter
+   * steps stay cool-neutral so the ramp pairs cleanly with the warm
+   * paper / cream content surfaces; the deeper steps (700-950) are
+   * where the cardstock-cover effect lives.
+   *
+   * Tuning notes:
+   *   - 800 (BRAND NAVY) = #14233A — the carton-paper anchor. Slightly
+   *     more grey-balanced than a pure blue navy; reads as dyed pulp.
+   *   - 900 (BRAND INK)  = #0D1828 — page-edge underside / high-
+   *     emphasis text color.
+   *   - 950 deepens to #060E1A for the deep cardstock grain wells.
+   */
+  --color-alma-50:  #F0F2F6;
+  --color-alma-100: #DCE0E8;
+  --color-alma-200: #B7BFCD;
+  --color-alma-300: #8B97AB;
+  --color-alma-400: #5C6B85;
+  --color-alma-500: #354563;
+  --color-alma-600: #1F2C46;
+  --color-alma-700: #1A2540;
+  --color-alma-800: #14233A;   /* BRAND NAVY — carton-paper anchor */
+  --color-alma-900: #0D1828;   /* BRAND INK — page-edge underside */
+  --color-alma-950: #060E1A;   /* cardstock-cover deep grain wells */
+
+  /* ── Surface anchors (v3 — two papers, one desk) ───────────────────────
+   * The desk + the two paper qualities that lift from it. Used by name
+   * (e.g. `bg-alma-canvas`, `bg-alma-content`, `bg-alma-chrome`). These
+   * don't have a 50-950 ramp — they're identity surfaces that should
+   * always read the same hex.
+   *
+   * Lightness ladder (canvas darkest → stacked surfaces lightest):
+   *   canvas        93%   the desk
+   *   chrome        95%   working paper (settings, lens, branch chrome,
+   *                       insights tiles, alerts automation)
+   *   content       97%   reading paper (papers, authors, recommendations)
+   *   chrome-elev   97%   nested chrome (popovers/dialogs/inner sub-cards
+   *                       on chrome surfaces)
+   *   content-elev  98%   nested content (sub-cards inside a paper card,
+   *                       drop-cap frames, paper-detail abstract block)
+   *
+   * Warmth ladder:
+   *   content (R-B differential ≈ 30) — clearly yellow-cream, "ivory"
+   *   chrome  (R-B differential ≈ 14) — neutral cream, "manila"
+   * The differential is what tells "I'm reading something" from "I'm
+   * operating something" without needing to read a label.
+   */
+  --color-alma-canvas:       #F1EAD8;   /* the desk — paper-warm, slightly darker than cards */
+  /* 2026-04-26 night — lifted ~3 luminance units toward off-white per
+   * the brand v3 contrast lesson: PaperCard's cream-on-cream against
+   * the warm canvas was too flat. The new value still carries a paper
+   * warmth (R > G > B) but reads as "off-white paper" rather than
+   * "cream slip". `*-elev` lifts another half-step for nested cases. */
+  --color-alma-content:      #FDFBF3;   /* reading paper — content cards */
+  --color-alma-content-elev: #FFFEF9;   /* stacked / nested content */
+  --color-alma-chrome:       #F8F4E8;   /* working paper — chrome cards (off-white) */
+  --color-alma-chrome-elev:  #FBF8EE;   /* stacked / nested chrome */
+
+  /* ── Folio binding blue (accent) ───────────────────────────────────────
+   * The accent. Replaces the v2 teal (#0E6F6D). Reads as the dyed cloth
+   * binding of a Folio Society edition — deep, slightly desaturated,
+   * library-card blue. Pairs cleanly with both the warm cream/parchment
+   * surfaces and the navy cardstock cover; never reads as corporate
+   * teal or summer-saturated SaaS-blue.
+   *
+   * Used for: links, active nav items, the bookmark ribbon on the
+   * sidebar, focus rings, primary CTAs that aren't the navy-fill
+   * Button. The soft variant is a fill for accent-tone SubPanels and
+   * info banners.
+   */
+  --color-alma-folio:      #1E5B86;   /* accent — Folio binding blue */
+  --color-alma-folio-soft: #DCEAF4;   /* soft accent fill */
+
+  /* ── Legacy aliases (v2 → v3 migration shims) ──────────────────────────
+   * Kept temporarily so utilities like `bg-alma-cream`, `text-alma-cream`,
+   * `text-alma-teal`, `bg-alma-paper` continue to render during the F5
+   * caller migration sweep. After the sweep, callers will use the
+   * semantic v3 tokens directly and these aliases will be dropped.
+   *
+   * Mapping notes:
+   *   alma-paper   → canvas (the bg surface role it played in v2)
+   *   alma-cream   → near-white #FFF9F0 (ivory text on dark sidebar
+   *                  + chrome card surface back-compat)
+   *   alma-teal    → folio (Folio binding blue replaces v2 teal)
+   */
+  --color-alma-paper: var(--color-alma-canvas);
+  --color-alma-cream: #FFF9F0;
+  --color-alma-teal:  var(--color-alma-folio);
+
+  /* ── Parchment ramp ─────────────────────────────────────────────────────
+   * Anchored at parchment-200 (#F3EAD6 brand parchment). Used for warm
+   * surfaces, editorial accents, library/paper tone treatments.
+   */
+  --color-parchment-50:  #FBF8F1;
+  --color-parchment-100: #F8F2E3;
+  --color-parchment-200: #F3EAD6;   /* BRAND PARCHMENT anchor */
+  --color-parchment-300: #E9DCBC;
+  --color-parchment-400: #DAC795;
+  --color-parchment-500: #C2A86B;
+  --color-parchment-600: #A1894F;
+  --color-parchment-700: #7F6B3C;
+  --color-parchment-800: #5A4C2A;
+  --color-parchment-900: #3A311B;
+
+  /* ── Pale-blue ramp ─────────────────────────────────────────────────────
+   * Anchored at pale-300 (#B7D2E4 brand pale-blue). Used for quiet
+   * panels, info highlights, soft secondary surfaces.
+   */
+  --color-pale-50:  #F1F6FA;
+  --color-pale-100: #E2ECF4;
+  --color-pale-200: #CFDDEB;
+  --color-pale-300: #B7D2E4;   /* BRAND PALE-BLUE anchor */
+  --color-pale-400: #93B6D2;
+  --color-pale-500: #6F98BB;
+  --color-pale-600: #517A9E;
+  --color-pale-700: #3D5F7C;
+  --color-pale-800: #2A4258;
+  --color-pale-900: #182937;
+
+  /* ── Gold ramp ──────────────────────────────────────────────────────────
+   * Anchored at gold-400 (#C49A45 brand gold) — re-tuned from the old
+   * #c4841d to a slightly cooler, more muted gold. Reserved for FINE
+   * TRIM ONLY: book bands, separator dots, premium-action accents.
+   * Avoid for body text (poor contrast).
+   */
+  --color-gold-50:  #FBF6E8;
+  --color-gold-100: #F4E9C4;
+  --color-gold-200: #E9D693;
+  --color-gold-300: #DCBE5E;
+  --color-gold-400: #C49A45;   /* BRAND GOLD anchor */
+  --color-gold-500: #A77E36;
+  --color-gold-600: #826128;
+  --color-gold-700: #5F471D;
+  --color-gold-800: #3F2F14;
+  --color-gold-900: #251C0C;
+
+  /* ── Semantic status colors ─────────────────────────────────────────────
+   * Kept on emerald / amber / rose / sky. These are SEMANTIC (positive /
+   * warning / negative / info) and orthogonal to brand recolor. Don't
+   * shift them with the rebrand.
+   */
+  --color-success-50:  #ecfdf5;
+  --color-success-100: #d1fae5;
+  --color-success-500: #10b981;
+  --color-success-600: #059669;
+  --color-success-700: #047857;
+
+  --color-warning-50:  #fffbeb;
+  --color-warning-100: #fef3c7;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+
+  --color-critical-50:  #fff1f2;
+  --color-critical-100: #ffe4e6;
+  --color-critical-500: #f43f5e;
+  --color-critical-600: #e11d48;
+  --color-critical-700: #be123c;
+
+  --color-info-50:  #f0f9ff;
+  --color-info-100: #e0f2fe;
+  --color-info-500: #0ea5e9;
+  --color-info-600: #0284c7;
+  --color-info-700: #0369a1;
+
+  /* ── Fonts ──────────────────────────────────────────────────────────────
+   * Display / brand → Merriweather Semibold. UI / body → Inter.
+   * `--font-brand` is the legacy alias used by `font-brand` Tailwind
+   * utility callers (TopBar h1, Sidebar wordmark, SettingsPage section
+   * header) — points at Merriweather post-rebrand.
+   */
+  --font-brand:  'Merriweather', Georgia, 'Times New Roman', serif;
+  --font-sans:   'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-serif:  var(--font-brand);
+
+  /* ── Paper-warm shadow scale ───────────────────────────────────────────
+   * Ink-tinted (rgb 9 22 42), more diffuse than Tailwind's default
+   * shadow. Cards/menus/popovers use these to lift visibly off the warm
+   * paper bg without going hard-black.
+   *   shadow-paper-sm  — buttons at rest
+   *   shadow-paper-md  — dropdown menus, popovers (default)
+   *   shadow-paper-lg  — toasts, hero cards, hovered clickable cards
+   */
+  --shadow-paper-sm: 0 1px 2px rgb(9 22 42 / 0.08);
+  --shadow-paper-md: 0 12px 32px rgb(9 22 42 / 0.12);
+  --shadow-paper-lg: 0 24px 60px rgb(9 22 42 / 0.18);
+
+  /* ── Paper-sheet shadow stack (cards) ──────────────────────────────────
+   * Layered to read as a physical sheet of paper resting on a desk:
+   *   1. Inset top white highlight  — the lit upper edge / paper face
+   *   2. 1px close parchment shadow — paper thickness against the desk
+   *   3. Mid drop                   — the page floats faintly off the surface
+   *   4. Far ambient                — depth diffusing into the room
+   * Single-layer drop shadows look synthetic; this stack reads like real
+   * paper. Use on Card surfaces. Hover variant deepens the lift; lg
+   * variant is for hero / feature cards (paper-detail header, anchored
+   * seed, landing hero).
+   */
+  --shadow-paper-sheet:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.85),
+    0 1px 0 0 rgb(155 130 86 / 0.10),
+    0 4px 10px -2px rgb(9 22 42 / 0.06),
+    0 18px 38px -16px rgb(9 22 42 / 0.10);
+
+  --shadow-paper-sheet-hover:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.92),
+    0 1px 0 0 rgb(155 130 86 / 0.14),
+    0 10px 22px -4px rgb(9 22 42 / 0.10),
+    0 28px 56px -20px rgb(9 22 42 / 0.14);
+
+  --shadow-paper-sheet-lg:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.95),
+    0 1px 0 0 rgb(155 130 86 / 0.16),
+    0 12px 24px -6px rgb(9 22 42 / 0.10),
+    0 36px 70px -24px rgb(9 22 42 / 0.16);
+
+  /* ── Paper-inset shadow (sub-panels) ───────────────────────────────────
+   * Recessed feel for sub-boxes nested inside a Card — a frame pressed
+   * into the page. Used by SubPanel `tone="parchment"`. The cool variant
+   * mirrors the same depth on slate surfaces (Activity panel sub-boxes).
+   */
+  --shadow-paper-inset:
+    inset 0 1px 2px 0 rgb(155 130 86 / 0.12),
+    inset 0 0 0 1px rgb(217 203 175 / 0.18);
+
+  --shadow-paper-inset-cool:
+    inset 0 1px 2px 0 rgb(15 23 42 / 0.05),
+    inset 0 0 0 1px rgb(226 232 240 / 0.55);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Layer 3 — semantic CSS variables (not exposed as Tailwind utilities).
+ * Read with `var()` inside primitive CSS where the role is what matters
+ * (e.g. "this is a chrome card", "this is the body background"), not the
+ * specific brand color. v3 surface roles:
+ *
+ *   --color-bg              the desk (canvas)
+ *   --color-surface-content reading paper (papers, authors, recs)
+ *   --color-surface-chrome  working paper (settings, lens, branch UI,
+ *                           insights tiles, alerts automation)
+ *   --color-surface         legacy alias → chrome (default card)
+ *   --color-surface-elev    nested chrome (popovers/dialogs over chrome)
+ * ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --color-bg:              var(--color-alma-canvas);
+  --color-surface:         var(--color-alma-chrome);   /* default card */
+  --color-surface-content: var(--color-alma-content);  /* reading paper */
+  --color-surface-chrome:  var(--color-alma-chrome);   /* working paper */
+  --color-surface-elev:    var(--color-alma-chrome-elev);
+  --color-surface-content-elev: var(--color-alma-content-elev);
+  --color-text:            var(--color-alma-900);      /* ink */
+  --color-heading:         var(--color-alma-800);      /* navy */
+  --color-muted:           #64748B;
+  --color-border:          #D5C7AB;                    /* warm parchment hairline (slightly tightened for v3 darker canvas) */
+  --color-border-cool:     #DCD6C5;                    /* cooler hairline for chrome surfaces */
+  --color-accent:          var(--color-alma-folio);
+  --color-accent-soft:     var(--color-alma-folio-soft);
+  --color-focus:           var(--color-alma-folio);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Surface taxonomy v3 — "two papers, one desk".
+ *
+ * The desk is the darkest surface; both kinds of paper lift from it. The
+ * two paper qualities tell the user what kind of work they're doing
+ * before they read a single label:
+ *
+ *   - reading paper   warm ivory cream   "this contains a piece of work"
+ *   - working paper   cooler off-white   "this helps me operate the system"
+ *
+ * Stacking lightens. A popover on a card is brighter than the card; a
+ * sub-card inside a content card is brighter than its host. The reverse
+ * never happens — nothing sits ON TOP of something darker than itself.
+ *
+ *   ┌─────────────────────────────────────────────────────────────────┐
+ *   │  DESK (canvas)                              alma-canvas #EDE3CE │
+ *   │     ┌────────────────────┐  ┌────────────────────────────────┐  │
+ *   │     │ chrome card        │  │ content card                   │  │
+ *   │     │ (settings, lens,   │  │ (papers, authors, recs)        │  │
+ *   │     │  branch UI tools,  │  │ alma-content #FAF2DC           │  │
+ *   │     │  insights tiles)   │  │   ┌─────────────────────────┐  │  │
+ *   │     │ alma-chrome        │  │   │ nested content sub-card │  │  │
+ *   │     │ #F4F1E6            │  │   │ alma-content-elev       │  │  │
+ *   │     │   ┌──────────────┐ │  │   │ #FCF7E7                 │  │  │
+ *   │     │   │ chrome-elev  │ │  │   └─────────────────────────┘  │  │
+ *   │     │   │ #F9F6EC      │ │  └────────────────────────────────┘  │
+ *   │     │   └──────────────┘ │                                      │
+ *   │     └────────────────────┘                                      │
+ *   └─────────────────────────────────────────────────────────────────┘
+ *
+ * Surface assignment (the canonical list):
+ *
+ *   CANVAS                  alma-canvas    #EDE3CE
+ *     ├ App body bg
+ *     └ TopBar (contiguous with body, no separate fill)
+ *
+ *   CONTENT card            alma-content   #FAF2DC      (Card tone="content")
+ *     ├ Paper rows / paper-detail panel header
+ *     ├ Author rows / author-detail panel
+ *     ├ Recommendation rows in Discovery
+ *     └ Discovery branch result tiles (the papers, not the branch chrome)
+ *
+ *   CONTENT elevated        alma-content-elev  #FCF7E7  (SubPanel tone="content")
+ *     ├ Drop-cap abstract block inside paper-detail
+ *     ├ Citation snippet inside paper-detail
+ *     └ Inner sub-cards on a content card
+ *
+ *   CHROME card             alma-chrome    #F4F1E6      (Card default — tone="chrome")
+ *     ├ Settings panels (one card per section)
+ *     ├ Lens controls / Lens weights / branch-control chrome
+ *     ├ Branch Studio outer card (the controls; not the branch tiles)
+ *     ├ Alerts page suggested-automation cards
+ *     ├ Insights stat tiles (each tile is a small chrome card)
+ *     ├ Insights chart cards (the chart frame)
+ *     ├ Dialogs, popovers, toasts, dropdown menus
+ *     └ Form panels — the input itself uses the recessed-well treatment
+ *
+ *   CHROME elevated         alma-chrome-elev  #F9F6EC   (SubPanel tone="chrome")
+ *     ├ Inner config groups inside a settings card
+ *     ├ Sidebar of a multi-pane settings dialog
+ *     └ Per-row chrome inside a chrome card
+ *
+ *   COVER                   alma-800 + cardstock texture
+ *     ├ Sidebar (.alma-cardstock-cover utility)
+ *     └ Any other "binding" surface (none currently)
+ *
+ *   OPS (deliberately cool — operational/utility surfaces only)
+ *     White / slate-50 / slate-100   — Activity panel body, log rows.
+ *     Use ONLY for surfaces that aren't editorial. The cool palette is
+ *     what tells the user "this is system telemetry, not reading".
+ *
+ *   ACCENTS (orthogonal — apply on top of any surface)
+ *     folio    active states, links, focus ring, bookmark ribbon
+ *              (was teal in v2 — retuned to library-card blue in v3)
+ *     gold     trim only — BrandRule, gilt edges, "TOP"/"premium" hits
+ *     rose     destructive / error semantic state
+ *     amber    warning semantic state
+ *     emerald  success semantic state
+ *     sky      info semantic state
+ *
+ * Three rules keep the ladder honest:
+ *   1. Never put a same-tone surface inside another same-tone surface
+ *      (chrome-on-chrome, content-on-content) without lifting to the
+ *      -elev step or using a SubPanel.
+ *   2. Never reverse the lift. A nested element must be EQUAL OR
+ *      LIGHTER than its host. Popovers are lighter than the page.
+ *   3. Content tone signals "the user is reading this." If a card is
+ *      chrome to operate and contains rendered content underneath
+ *      (e.g. a paper-detail panel: chrome controls header, content
+ *      paper body), use TWO surfaces — don't paint the whole thing.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+body {
+  margin: 0;
+  /* Desk surface — darker warm parchment. The fiber grain texture
+   * (`/brand/paper-texture.svg` at ~5% alpha) reads as material
+   * texture, not noise. Cards covering the desk hide the texture
+   * cleanly. Tile repeats at 256×256. v3 canvas is ~2 luminance
+   * units darker than v2 paper, so the grain reads slightly stronger
+   * — keeps the desk feeling grippy and matte rather than flat. */
+  background-color: var(--color-bg);
+  background-image: url("/brand/paper-texture.svg");
+  background-repeat: repeat;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Editorial focus ring — Folio-blue halo on warm offset, per
+ * branding/docs/accessibility.md. Apply to interactive controls that
+ * want a more distinctive ring than Tailwind's default focus-visible. */
+.alma-focus-ring:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 3px;
+}
+
+/* Paper grain overlay — a near-subliminal texture layer applied to
+ * elevated card surfaces. The body bg already carries the same grain in
+ * negative space; on a hero card we let a fraction of that grain show
+ * through the cream surface so the card reads as paper, not as a flat
+ * fill. Kept extremely faint (~3% alpha) so it never competes with type. */
+.alma-paper-grain {
+  position: relative;
+  isolation: isolate;
+}
+.alma-paper-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("/brand/paper-texture.svg");
+  background-repeat: repeat;
+  opacity: 0.45;
+  mix-blend-mode: multiply;
+  border-radius: inherit;
+}
+
+/* Subtle paper-sheet gradient — used by elevated/hero content cards.
+ * Brighter at the top edge (paper face catches light), warming faintly
+ * toward the bottom (a hint of underside / page-curl shadow accumulating).
+ * The total range is ~5 luminance units so it reads as material, not as
+ * a Photoshop filter. v3: anchored on the content ladder (warm reading
+ * paper). For chrome elevated cards, prefer flat alma-chrome-elev. */
+.alma-paper-sheet-bg {
+  background-image: linear-gradient(
+    180deg,
+    #FDFAF0 0%,
+    var(--color-alma-content-elev) 55%,
+    var(--color-alma-content) 100%
+  );
+}
+
+/* Cardstock cover — the sidebar reads as a small piece of dyed carton
+ * paper. Matte, faintly fibrous, with a gentle inner vignette so the
+ * corners feel slightly compressed (the way a piece of cardstock does
+ * when handled). No spine, no gilt — the material is honest and
+ * pragmatic, not decorated.
+ *
+ * Stack of effects, back to front:
+ *   1. Carton-paper navy fill (alma-800 = #14233A)
+ *   2. Cardstock grain texture tile                    — fibre + density
+ *   3. Soft inner vignette (inset 60px shadow)         — corners settle in
+ *   4. Faint inner-edge highlight (inset 1px white)    — cardstock catches light
+ *
+ * Pair with cool-cream text (alma-content body, alma-200 muted,
+ * Folio-blue accent on active items).
+ *
+ * NOTE — `.alma-cardstock-cover` MUST NOT set `position: relative` here.
+ * Custom CSS outside `@layer` outranks Tailwind utilities in the cascade
+ * (Tailwind v4 puts utilities inside `@layer utilities`, and unlayered
+ * rules win). Setting `position: relative` here would override the
+ * Sidebar's `fixed inset-y-0` and silently demote the whole sidebar to
+ * static flow — the entire app layout collapses. The sidebar already
+ * carries `position: fixed`, which IS a positioned element. If this
+ * utility is ever applied to a non-positioned element, that consumer
+ * must add its own `position: relative` (or `relative` Tailwind
+ * utility). */
+.alma-cardstock-cover {
+  background-color: var(--color-alma-800);
+  /* Two-layer fill: a very faint top-down warmth gradient (cover catches
+   * room light at top, settles toward the desk at bottom) sitting under
+   * the cardstock grain tile. The gradient is only ~6 luminance units
+   * wide so it reads as material lighting, not as decoration. */
+  background-image:
+    linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.045) 0%,
+      rgb(255 255 255 / 0.0)   38%,
+      rgb(0 0 0 / 0.12)       100%
+    ),
+    url("/brand/cardstock-texture.svg");
+  background-repeat: no-repeat, repeat;
+  background-size: 100% 100%, 240px 240px;
+  /* Moleskine-cover depth stack: a pronounced inner vignette so the
+   * corners feel "compressed in" the way a hand-handled notebook cover
+   * does, a soft right-edge spine shadow (the book block falling off
+   * the bound edge), and faint top + left edge highlights so the cover
+   * reads as catching ambient room light. */
+  box-shadow:
+    inset 0 0 110px 0 rgb(0 0 0 / 0.45),
+    inset -10px 0 22px -8px rgb(0 0 0 / 0.55),
+    inset 1px 0 0 0 rgb(255 255 255 / 0.09),
+    inset 0 1px 0 0 rgb(255 255 255 / 0.07),
+    inset 0 -1px 0 0 rgb(0 0 0 / 0.32);
+}
+
+/* The active nav item on the cardstock cover reads as a cloth bookmark
+ * tucked behind the page: a Folio-blue ribbon on the left edge plus a
+ * faint blue-tinted overlay across the row. Currently unused — the
+ * Sidebar inlines an absolutely-positioned span instead — but kept here
+ * as a utility for future reuse outside the Sidebar. */
+.alma-bookmark-ribbon {
+  position: relative;
+}
+.alma-bookmark-ribbon::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(
+    to bottom,
+    var(--color-alma-folio) 0%,
+    #2A6E97 50%,
+    var(--color-alma-folio) 100%
+  );
+  box-shadow: 0 0 8px 0 rgb(30 91 134 / 0.45);
+  pointer-events: none;
+}

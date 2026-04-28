@@ -1,0 +1,7 @@
+# Backwards-compatible umbrella file — installs everything the
+# `normal` Docker variant uses. Prefer `requirements-core.txt` +
+# `requirements-ai.txt` directly when you want the split (e.g. inside
+# the Dockerfile). Keep in sync with pyproject.toml.
+
+-r requirements-core.txt
+-r requirements-ai.txt

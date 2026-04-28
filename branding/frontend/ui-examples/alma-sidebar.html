@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ALMa sidebar example</title>
+  <link rel="stylesheet" href="../tokens.css" />
+  <style>
+    body { margin: 0; background: var(--color-bg); font-family: var(--font-ui); color: var(--color-text); }
+    .layout { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+    aside { background: var(--alma-navy); color: var(--alma-cream); padding: 28px 20px; }
+    .brand { display: flex; gap: 12px; align-items: center; margin-bottom: 32px; font-family: var(--font-brand); font-size: 28px; }
+    .brand img { width: 52px; height: 52px; object-fit: contain; }
+    nav { display: grid; gap: 8px; }
+    nav a { color: #DDE7F3; text-decoration: none; border-radius: 12px; padding: 12px 14px; display: flex; gap: 10px; align-items: center; }
+    nav a[aria-current="page"] { background: rgb(14 111 109 / .32); color: #fff; }
+    main { padding: 40px; }
+    .search { max-width: 720px; display: flex; gap: 12px; background: #fff; border: 1px solid var(--color-border); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow-sm); }
+    input { flex: 1; border: 0; outline: 0; font: inherit; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand">
+        <img src="../../branding/logo/alma-app-icon.svg" alt="" />
+        <span>ALMa</span>
+      </div>
+      <nav>
+        <a href="#" aria-current="page">Library</a>
+        <a href="#">Discover</a>
+        <a href="#">Authors</a>
+        <a href="#">Collections</a>
+        <a href="#">Tags</a>
+        <a href="#">Citations</a>
+      </nav>
+    </aside>
+    <main>
+      <h1 style="font-family:var(--font-brand); color:var(--alma-navy); font-size:44px;">All Papers</h1>
+      <div class="search"><span>⌕</span><input aria-label="Search library" placeholder="Search papers, authors, collections…" /></div>
+    </main>
+  </div>
+</body>
+</html>

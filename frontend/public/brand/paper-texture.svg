@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <!--
+    Laid-paper grain. Two layers:
+      1. Soft fiber noise (low-frequency fractal turbulence) — the random
+         pulp speckle of warm paper.
+      2. Faint horizontal laid lines — the directional grain of mould-made
+         book paper, the kind a Folio Society edition reads on.
+
+    Both are tinted toward warm parchment (rgb 90 76 42, ≈ parchment-800)
+    at very low alpha so the texture sits *under* page surfaces without
+    competing with type. Card / sidebar / topbar surfaces cover it
+    cleanly; only the body negative space carries the grain.
+  -->
+  <filter id="paperFiber" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.62" numOctaves="2" seed="3" stitchTiles="stitch"/>
+    <feColorMatrix values="0 0 0 0 0.35
+                           0 0 0 0 0.30
+                           0 0 0 0 0.16
+                           0 0 0 0.055 0"/>
+  </filter>
+  <filter id="laidLines" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="turbulence" baseFrequency="0.02 1.6" numOctaves="1" seed="7" stitchTiles="stitch"/>
+    <feColorMatrix values="0 0 0 0 0.35
+                           0 0 0 0 0.30
+                           0 0 0 0 0.16
+                           0 0 0 0.022 0"/>
+  </filter>
+  <rect width="100%" height="100%" filter="url(#paperFiber)"/>
+  <rect width="100%" height="100%" filter="url(#laidLines)"/>
+</svg>

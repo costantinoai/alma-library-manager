@@ -1,0 +1,145 @@
+# =============================================================================
+# ALMa — Docker Compose
+# =============================================================================
+# All user-sensitive state lives on the host and is bind-mounted in:
+#   - .env             secrets (OpenAlex / Slack keys)
+#   - settings.json    user preferences (backend, from_year, openalex_email…)
+#   - data/            scholar.db + caches + secrets.json
+#   - config/          plugin configs (slack.config, etc.)
+#
+# Nothing in this list is baked into the image — the image is reproducible
+# and shareable; the host is where personal data stays.
+#
+# Variants — choose with the ALMA_VARIANT env var:
+#   ALMA_VARIANT=normal (default)  full AI stack (~2 GB image after build)
+#   ALMA_VARIANT=lite              core only, no torch / sklearn (~300 MB)
+#                                  intended for Raspberry Pi and other
+#                                  low-memory hosts. AI features (local
+#                                  embeddings, clustering, projections)
+#                                  degrade gracefully — every AI import
+#                                  in src/alma is lazy.
+#
+# Resource ceilings are also overridable: ALMA_CPUS, ALMA_MEMORY.
+# For Raspberry Pi 4 (4 GB), a reasonable combo is:
+#   ALMA_VARIANT=lite ALMA_CPUS=2.0 ALMA_MEMORY=1G docker compose up -d
+#
+# First-time setup:
+#   cp .env.example .env          # then edit and add your API keys
+#   cp settings.example.json settings.json
+#   mkdir -p data config
+#   docker compose up -d          # normal variant
+#   # OR
+#   ALMA_VARIANT=lite docker compose up -d
+# =============================================================================
+
+services:
+  alma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VARIANT: ${ALMA_VARIANT:-normal}
+    image: alma:${ALMA_VARIANT:-normal}
+    container_name: alma
+    restart: unless-stopped
+
+    # -------------------------------------------------------------------------
+    # Run as container UID 0. In ROOTLESS Docker (the default on Docker
+    # Desktop and most modern installs) this remaps to the host user that
+    # started the daemon, so bind-mounted files keep their host ownership
+    # and `.env` / `settings.json` stay readable.
+    # In ROOTFUL Docker the same line means "real root inside the
+    # container". The hardening below (no-new-privileges, cap_drop ALL,
+    # read_only fs, tmpfs, localhost-only port) keeps the blast radius
+    # small, but rootful users may prefer to chown bind-mount targets to a
+    # non-root UID and override this line accordingly.
+    # -------------------------------------------------------------------------
+    user: "0:0"
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    # The image's root layer is immutable. Anything the app writes must go
+    # to a bind-mount or the tmpfs below.
+    read_only: true
+
+    tmpfs:
+      - /tmp:mode=1777,size=128M
+
+    deploy:
+      resources:
+        limits:
+          # Defaults sized for the `normal` variant — the AI stack
+          # (transformers + sklearn) can balloon to ~2 GB once an
+          # embedding model is loaded; leave headroom. Override on
+          # constrained hosts (Pi: ALMA_MEMORY=1G).
+          cpus: ${ALMA_CPUS:-2.0}
+          memory: ${ALMA_MEMORY:-4G}
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    ports:
+      # Bind to localhost only. Put a reverse proxy in front for remote access.
+      - "127.0.0.1:8000:8000"
+
+    # -------------------------------------------------------------------------
+    # Environment
+    # -------------------------------------------------------------------------
+    # `env_file` injects values from .env as process env vars at container
+    # start. The same .env is ALSO bind-mounted below so the Settings UI's
+    # key-rotation flow (python-dotenv set_key / unset_key) can persist
+    # changes back to the host file.
+    env_file:
+      - .env
+
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      # Optional API auth — leave empty for single-user local mode.
+      - API_KEY=${API_KEY:-}
+
+    # -------------------------------------------------------------------------
+    # Bind mounts — host paths shown on the left, container paths on the right.
+    # All host paths must exist before `docker compose up`.
+    # -------------------------------------------------------------------------
+    volumes:
+      # Database, caches, secrets.json
+      - type: bind
+        source: ./data
+        target: /app/data
+
+      # Plugin configs (slack.config, …)
+      - type: bind
+        source: ./config
+        target: /app/config
+
+      # User preferences. Mounted as a single file so the Settings API can
+      # rewrite it via the standard `update_settings` flow.
+      - type: bind
+        source: ./settings.json
+        target: /app/settings.json
+
+      # Secrets file. Mounted as a single file so `dotenv.set_key` writes
+      # propagate back to the host (key rotation in the Settings UI).
+      - type: bind
+        source: ./.env
+        target: /app/.env
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Generous start_period — first boot runs schema migrations and
+      # registers plugins before the API is ready.
+      start_period: 60s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

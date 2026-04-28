@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+  <!--
+    Carton-paper grain. The texture for a small piece of dyed cardstock:
+    fibrous, matte, faintly uneven — not the pebbled polish of leather.
+
+    Two layers, both at very low alpha so they read as material, not
+    pattern:
+
+      1. White fibre highlights (high-frequency fractal noise)
+         The pulp inclusions and surface fibers that catch the light;
+         small bright random speckles at micron scale.
+      2. Dark grain shadows (mid-frequency fractal noise)
+         The slight density variation in the cardstock — places where
+         the pulp packed denser cast tiny shadows; larger random dark
+         speckles.
+
+    No directional weave (cardstock isn't a woven material). The two
+    layers combined give a quiet, irregular tooth — like a piece of
+    paper that has been dyed deep navy: matte, fibrous, honest.
+  -->
+  <filter id="cardstockHighlights" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="1.25" numOctaves="2" seed="31" stitchTiles="stitch"/>
+    <feColorMatrix values="0 0 0 0 1
+                           0 0 0 0 1
+                           0 0 0 0 1
+                           0 0 0 0.32 0"/>
+  </filter>
+  <filter id="cardstockPebble" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="2" seed="13" stitchTiles="stitch"/>
+    <feColorMatrix values="0 0 0 0 0
+                           0 0 0 0 0
+                           0 0 0 0 0
+                           0 0 0 0.42 0"/>
+  </filter>
+  <filter id="cardstockGrain" x="0" y="0" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="2.6" numOctaves="1" seed="47" stitchTiles="stitch"/>
+    <feColorMatrix values="0 0 0 0 0
+                           0 0 0 0 0
+                           0 0 0 0 0
+                           0 0 0 0.24 0"/>
+  </filter>
+  <rect width="100%" height="100%" filter="url(#cardstockHighlights)"/>
+  <rect width="100%" height="100%" filter="url(#cardstockPebble)"/>
+  <rect width="100%" height="100%" filter="url(#cardstockGrain)"/>
+</svg>

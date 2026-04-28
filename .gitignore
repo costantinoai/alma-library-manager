@@ -1,0 +1,101 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──
+.venv*/
+venv*/
+
+# ── Testing / Coverage ──
+.coverage
+.pytest_cache/
+htmlcov/
+# Tests are kept local-only; never commit to any branch.
+tests/
+frontend/tests/
+pytest.ini
+.github/workflows/tests.yml
+
+# ── Database files ──
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/*.db
+src/*.db
+
+# ── Configuration with secrets ──
+*.config
+config/slack.json
+**/config/slack.json
+data/secrets.json
+.env
+.env.*
+settings.json
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+.spyproject/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Frontend ──
+frontend/node_modules/
+frontend/dist/
+
+# ── Root-level tooling (shadcn MCP is invoked via npx; no local install needed) ──
+/node_modules/
+/package.json
+/package-lock.json
+
+# ── Runtime artifacts ──
+logs/*.log
+logs/*.pid
+
+# ── Temporary / Backup ──
+*.bkp
+*.bak
+**/obsolete/
+alma.zip
+
+# ── Branding source (AI-gen reference PNGs, local-only) ──
+branding/source/
+
+# ── Claude Code / AI tooling ──
+CLAUDE.md
+.claude/
+tasks/
+
+# ── Internal working docs (not for distribution) ──
+REFACTORING_PLAN.md
+DEVELOPMENT.md
+MERGE_ASSESSMENT.md
+MODERNIZATION_PLAN.md
+TEST_SUITE_CRITICAL_ANALYSIS.md
+TODO.md
+AGENTS.md
+docs/PHASE4_SUMMARY.md
+docs/api_samples/
+docs/ui/
+docs/_internal/
+FUTURE_PLANS.md
+
+# ── MkDocs build output ──
+site/
+
+*storybook.log
+storybook-static
+frontend/screenshot.mjs
+frontend/snap.mjs

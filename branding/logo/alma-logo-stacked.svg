@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1400" role="img" aria-labelledby="title desc">
+<title id="title">ALMa stacked logo</title>
+<desc id="desc">Stacked ALMa logo.</desc>
+<defs>
+  <linearGradient id="navyGrad" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#17345B"/><stop offset="1" stop-color="#0F1E36"/></linearGradient>
+  <linearGradient id="tealGrad" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#159892"/><stop offset="1" stop-color="#0E6F6D"/></linearGradient>
+  <linearGradient id="paleGrad" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#DCEFF8"/><stop offset="1" stop-color="#B7D2E4"/></linearGradient>
+  <linearGradient id="parchGrad" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#FFF1D2"/><stop offset="1" stop-color="#F3EAD6"/></linearGradient>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="10" stdDeviation="9" flood-color="#09162A" flood-opacity=".16"/></filter>
+  <style><![CDATA[
+    .outline{stroke:#09162A;stroke-width:8;stroke-linecap:round;stroke-linejoin:round}
+    .thin{stroke:#09162A;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .gold{stroke:#C49A45;stroke-width:7;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .goldThin{stroke:#C49A45;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;fill:none}
+    .wm{font-family:Merriweather,Georgia,'Times New Roman',serif;font-weight:600;fill:#0F1E36}
+    .caps{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-weight:700;letter-spacing:14px;fill:#0E6F6D}
+    .ui{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;fill:#0F1E36}
+    .label{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;font-weight:800;letter-spacing:6px;fill:#0F1E36}
+  ]]></style>
+</defs>
+<rect width="1200" height="1400" fill="#fff"/>
+<g transform="translate(116 112) scale(.84)">
+<g id="alma-mark" filter="url(#shadow)">
+  <rect x="76" y="602" width="270" height="24" rx="12" fill="#0F1E36"/>
+  <rect x="624" y="602" width="320" height="24" rx="12" fill="#0F1E36"/>
+  <rect x="108" y="154" width="94" height="448" rx="20" fill="url(#navyGrad)" class="outline"/>
+  <path d="M124 205 H189 M124 226 H189 M124 532 H189 M124 553 H189" class="gold"/>
+  <path d="M224 219 Q224 200 244 200 H304 Q324 200 324 221 V602 H224 Z" fill="url(#tealGrad)" class="outline"/>
+  <path d="M238 249 H309 M238 270 H309 M238 532 H309 M238 553 H309" class="goldThin"/>
+  <path d="M274 337 V496" class="goldThin"/>
+  <path d="M274 373 C246 360 248 331 274 318 C300 331 302 361 274 373Z M274 419 C245 407 247 379 274 365 C302 379 304 407 274 419Z M274 466 C245 453 247 426 274 411 C303 426 305 453 274 466Z" class="goldThin"/>
+  <path fill="url(#navyGrad)" class="outline" fill-rule="evenodd" d="M390 601 L497 174 Q502 152 525 149 Q591 156 657 149 Q680 152 686 174 L794 601 Q799 621 777 621 H698 Q679 621 675 603 L645 478 H539 L509 603 Q505 621 486 621 H408 Q385 621 390 601 Z M571 426 H613 L593 274 Z"/>
+  <path d="M516 215 H668 M511 238 H673 M462 438 H723 M458 461 H728 M454 486 H734" class="gold"/>
+  <path d="M563 594 H626 V715 L595 689 L563 715 Z" fill="url(#tealGrad)" class="outline" stroke-width="5"/>
+  <rect x="808" y="169" width="92" height="433" rx="20" fill="url(#paleGrad)" class="outline"/>
+  <path d="M823 212 H885 M823 235 H885 M823 532 H885 M823 555 H885" class="thin"/>
+  <g transform="rotate(10 1018 410)">
+    <rect x="963" y="224" width="92" height="377" rx="20" fill="url(#parchGrad)" class="outline"/>
+    <path d="M980 261 H1040 M980 286 H1040 M980 533 H1040 M980 559 H1040" class="thin"/>
+    <path d="M1009 353 V500" class="goldThin"/>
+    <path d="M1009 390 C983 379 985 354 1009 342 C1035 354 1037 379 1009 390Z M1009 432 C982 421 983 395 1009 382 C1038 395 1039 421 1009 432Z M1009 474 C982 463 983 438 1009 424 C1038 438 1039 463 1009 474Z" class="goldThin"/>
+  </g>
+</g></g>
+<text x="600" y="910" text-anchor="middle" class="wm" font-size="164">ALMa</text>
+<path d="M268 980 H528 M672 980 H932" class="goldThin"/><circle cx="600" cy="980" r="11" fill="#C49A45"/>
+<text x="600" y="1070" text-anchor="middle" class="caps" font-size="38">ANOTHER LIBRARY MANAGER</text>
+</svg>

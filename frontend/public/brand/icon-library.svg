@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" role="img" aria-labelledby="title">
+  <title id="title">Library</title>
+  <!-- Three books standing on a shelf, like the brand mark in miniature. -->
+  <path d="M40 195 L40 75 L70 75 L70 195"/>
+  <path d="M75 195 L75 50 L110 50 L110 195"/>
+  <path d="M115 195 L115 90 L150 90 L150 195"/>
+  <path d="M30 195 L195 195"/>
+  <!-- gold-style band hints (still currentColor for theming) -->
+  <path d="M48 110 L62 110 M85 95 L100 95 M125 130 L140 130"/>
+</svg>

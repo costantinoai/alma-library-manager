@@ -1,0 +1,23 @@
+# Heavyweight AI dependencies — installed ONLY in the `normal` Docker
+# variant. Mirrors `pyproject.toml` `[project.optional-dependencies].ai`.
+#
+# Embedding-side only; LLM features were removed in 2026-04 (see
+# tasks/01_LLM_PRODUCTION_EXIT.md). This file pulls torch transitively
+# via `adapters` — that's the ~1.5 GB image growth excluded from the
+# `lite` variant.
+#
+# What this enables on top of core:
+#   - Local SPECTER2 encoder (compute embeddings without an API key)
+#
+# What you LOSE in `lite`:
+#   - Local embeddings only. The lite variant can still use the
+#     OpenAI cloud embedding provider, or import vectors fetched from
+#     Semantic Scholar — and clustering / projections / TF-IDF
+#     similarity all run as long as some vectors exist (they live in
+#     `requirements-core.txt`).
+#
+# Every import in src/alma that touches transformers/adapters is
+# lazy-loaded inside the function that needs it, so the `lite` image
+# boots cleanly and only fails the local-encoder code path.
+transformers~=4.51.3
+adapters>=1.0.0

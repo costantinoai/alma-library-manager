@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ALMa library card example</title>
+  <link rel="stylesheet" href="../tokens.css" />
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--color-bg); font-family: var(--font-ui); color: var(--color-text); }
+    .paper-card { width: min(680px, calc(100vw - 40px)); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 22px; box-shadow: var(--shadow-md); overflow: hidden; }
+    .card-header { padding: 22px 24px; display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--color-border); }
+    h2 { margin: 0; font: 600 22px/1.25 var(--font-brand); color: var(--alma-navy); }
+    .meta { color: var(--color-muted); font-size: 14px; margin-top: 6px; }
+    .tag { background: var(--color-accent-soft); color: var(--alma-teal); border-radius: 999px; padding: 6px 10px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .body { padding: 20px 24px; }
+    .field { display: grid; grid-template-columns: 110px 1fr; gap: 16px; padding: 10px 0; }
+    .label { color: var(--color-muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+  </style>
+</head>
+<body>
+  <article class="paper-card">
+    <header class="card-header">
+      <div>
+        <h2>Graph Neural Networks for Molecular Property Prediction</h2>
+        <div class="meta">J. Smith, M. Liu, P. Brown · Nature Machine Intelligence · 2024</div>
+      </div>
+      <span class="tag">Machine Learning</span>
+    </header>
+    <div class="body">
+      <div class="field"><div class="label">DOI</div><div>10.1038/s42256-024-00789-6</div></div>
+      <div class="field"><div class="label">Collection</div><div>AI in Drug Discovery</div></div>
+      <div class="field"><div class="label">Notes</div><div>Summarize methods and compare to baseline molecular fingerprints.</div></div>
+    </div>
+  </article>
+</body>
+</html>

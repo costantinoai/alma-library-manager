@@ -1,0 +1,1173 @@
+"""Paper query API endpoints."""
+
+import hashlib
+import logging
+import sqlite3
+import uuid
+import json
+from datetime import datetime, timedelta
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel, Field
+
+from alma.api.deps import get_db, get_current_user
+from alma.api.helpers import raise_internal, row_to_paper_response
+from alma.api.models import PaperResponse, ErrorResponse
+from alma.application import library as library_app
+from alma.application import authors as authors_app
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(
+    prefix="/papers",
+    tags=["papers"],
+    responses={
+        401: {"model": ErrorResponse, "description": "Unauthorized"},
+        500: {"model": ErrorResponse, "description": "Internal Server Error"},
+    }
+)
+
+
+class SemanticPaperSearchRequest(BaseModel):
+    """Explicit semantic paper search request."""
+
+    query: str = Field(..., min_length=1, description="Short semantic search query")
+    scope: str = Field("library", description="Search scope: library | all")
+    limit: int = Field(20, ge=1, le=100, description="Maximum semantic results")
+
+
+@router.get(
+    "",
+    response_model=List[PaperResponse],
+    summary="Query papers",
+    description="Search and filter papers across all authors.",
+)
+def query_publications(
+    scope: Optional[str] = Query(None, description="Paper scope: all | library | background | followed_corpus"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Membership status: tracked | library | dismissed | removed"),
+    added_from: Optional[str] = Query(None, description="Filter by acquisition/provenance value"),
+    openalex_resolution_status: Optional[str] = Query(None, description="Filter by OpenAlex resolution status"),
+    has_topics: Optional[bool] = Query(None, description="Filter by presence of publication_topics rows"),
+    has_tags: Optional[bool] = Query(None, description="Filter by presence of publication_tags rows"),
+    author_id: Optional[str] = Query(None, description="Optional author ID to constrain results to one author corpus"),
+    year: Optional[int] = Query(None, description="Filter by specific year"),
+    min_year: Optional[int] = Query(None, description="Minimum year (inclusive)"),
+    max_year: Optional[int] = Query(None, description="Maximum year (inclusive)"),
+    min_citations: Optional[int] = Query(None, description="Minimum citations"),
+    search: Optional[str] = Query(None, description="Search in title and abstract"),
+    semantic: bool = Query(False, description="Enable semantic search (requires AI provider)"),
+    order: Optional[str] = Query(
+        None,
+        description="Sort order: citations | recent | title | rating | authors | journal | status | added_at",
+    ),
+    order_dir: Optional[str] = Query(
+        None,
+        description="Sort direction: asc | desc",
+    ),
+    limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
+    offset: int = Query(0, ge=0, description="Results to skip"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Query papers with various filters.
+
+    This endpoint supports multiple filter criteria that can be combined:
+    - Filter by year (exact, range)
+    - Filter by minimum citations
+    - Full-text search in title and abstract
+    - Pagination with limit/offset
+
+    Returns:
+        List[PaperResponse]: Matching papers ordered by citations
+
+    Example:
+        ```bash
+        # Get recent highly-cited papers
+        curl "http://localhost:8000/api/v1/papers?min_year=2023&min_citations=50&limit=20"
+
+        # Search for specific topics
+        curl "http://localhost:8000/api/v1/papers?search=neural+networks"
+        ```
+    """
+    if semantic and search:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Semantic search uses live AI inference and must run through an Activity-backed AI action.",
+        )
+
+    try:
+        # Build dynamic query. Exclude preprint rows that merged into a
+        # published journal twin (see `alma.application.preprint_dedup`)
+        # — they keep their UUID for FK integrity but shouldn't appear as
+        # duplicate cards in the /papers listing.
+        query_parts = [
+            "SELECT p.* FROM papers p "
+            "WHERE COALESCE(p.canonical_paper_id, '') = ''"
+        ]
+        params = []
+
+        scope_value = str(scope or "all").strip().lower()
+        if scope_value == "library":
+            query_parts.append("AND p.status = 'library'")
+        elif scope_value in {"background", "non_library"}:
+            query_parts.append("AND p.status <> 'library'")
+        elif scope_value in {"followed_corpus", "followed_author_corpus"}:
+            query_parts.append(
+                """
+                AND EXISTS (
+                    SELECT 1
+                    FROM publication_authors pa
+                    JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+                    JOIN followed_authors fa ON fa.author_id = a.id
+                    WHERE pa.paper_id = p.id
+                )
+                """
+            )
+
+        status_value = str(status_filter or "").strip().lower()
+        if status_value:
+            if status_value not in {
+                library_app.TRACKED_STATUS,
+                library_app.LIBRARY_STATUS,
+                library_app.DISMISSED_STATUS,
+                library_app.REMOVED_STATUS,
+            }:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid paper status filter")
+            query_parts.append("AND p.status = ?")
+            params.append(status_value)
+
+        added_from_value = str(added_from or "").strip()
+        if added_from_value:
+            query_parts.append("AND COALESCE(p.added_from, '') = ?")
+            params.append(added_from_value)
+
+        resolution_value = str(openalex_resolution_status or "").strip()
+        if resolution_value:
+            query_parts.append("AND COALESCE(p.openalex_resolution_status, '') = ?")
+            params.append(resolution_value)
+
+        if has_topics is not None:
+            query_parts.append(
+                f"""AND {'EXISTS' if has_topics else 'NOT EXISTS'} (
+                    SELECT 1 FROM publication_topics pt WHERE pt.paper_id = p.id
+                )"""
+            )
+
+        if has_tags is not None:
+            query_parts.append(
+                f"""AND {'EXISTS' if has_tags else 'NOT EXISTS'} (
+                    SELECT 1 FROM publication_tags tag_rel WHERE tag_rel.paper_id = p.id
+                )"""
+            )
+
+        if author_id:
+            author = authors_app.get_author(db, author_id)
+            if author is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Author not found")
+            author_name = str(author.get("name") or "").strip()
+            openalex_id = str(author.get("openalex_id") or "").strip()
+            clause, clause_params = authors_app._author_paper_clause(  # type: ignore[attr-defined]
+                db,
+                author_id=author_id,
+                author_name=author_name,
+                openalex_id=openalex_id,
+            )
+            if not clause:
+                return []
+            query_parts.append(f"AND {clause}")
+            params.extend(clause_params)
+
+        if year:
+            query_parts.append("AND p.year = ?")
+            params.append(year)
+
+        if min_year:
+            query_parts.append("AND p.year >= ?")
+            params.append(min_year)
+
+        if max_year:
+            query_parts.append("AND p.year <= ?")
+            params.append(max_year)
+
+        if min_citations is not None:
+            query_parts.append("AND p.cited_by_count >= ?")
+            params.append(min_citations)
+
+        if search:
+            query_parts.append("AND (p.title LIKE ? OR p.abstract LIKE ? OR p.authors LIKE ? OR p.journal LIKE ?)")
+            search_pattern = f"%{search}%"
+            params.extend([search_pattern, search_pattern, search_pattern, search_pattern])
+
+        # Add ordering and pagination
+        ord_clause = "COALESCE(p.cited_by_count, 0) DESC, COALESCE(p.publication_date, '') DESC, COALESCE(p.year, 0) DESC"
+        if order:
+            o = (order or "").lower().strip()
+            requested_dir = (order_dir or "").lower().strip()
+            desc_default = {"citations", "recent", "rating", "added_at"}
+            dir_sql = "ASC" if requested_dir == "asc" else "DESC"
+            if requested_dir not in {"asc", "desc"}:
+                dir_sql = "DESC" if o in desc_default else "ASC"
+            if o == "recent":
+                ord_clause = (
+                    "COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0)), "
+                    f"COALESCE(p.added_at, p.created_at, '')) {dir_sql}, COALESCE(p.cited_by_count, 0) DESC"
+                )
+            elif o == "title":
+                ord_clause = f"p.title COLLATE NOCASE {dir_sql}"
+            elif o == "rating":
+                ord_clause = f"COALESCE(p.rating, 0) {dir_sql}, COALESCE(p.added_at, p.created_at, '') DESC"
+            elif o == "authors":
+                ord_clause = f"COALESCE(p.authors, '') COLLATE NOCASE {dir_sql}, p.title COLLATE NOCASE ASC"
+            elif o == "journal":
+                ord_clause = f"COALESCE(p.journal, '') COLLATE NOCASE {dir_sql}, p.title COLLATE NOCASE ASC"
+            elif o == "status":
+                ord_clause = f"p.status COLLATE NOCASE {dir_sql}, p.title COLLATE NOCASE ASC"
+            elif o == "added_at":
+                ord_clause = f"COALESCE(p.added_at, p.created_at, '') {dir_sql}, p.title COLLATE NOCASE ASC"
+            else:
+                ord_clause = f"COALESCE(p.cited_by_count, 0) {dir_sql}, COALESCE(p.publication_date, '') DESC, COALESCE(p.year, 0) DESC"
+        query_parts.append(f"ORDER BY {ord_clause} LIMIT ? OFFSET ?")
+        params.extend([limit, offset])
+
+        # Execute query
+        query = " ".join(query_parts)
+        cursor = db.execute(query, params)
+        papers = cursor.fetchall()
+
+        result = []
+        for paper in papers:
+            result.append(row_to_paper_response(paper))
+
+        logger.info(f"Retrieved {len(result)} papers (limit={limit}, offset={offset})")
+        return result
+
+    except Exception as e:
+        raise_internal("Failed to query papers", e)
+
+
+@router.post(
+    "/semantic-search",
+    summary="Run explicit SPECTER2 semantic paper search",
+    description=(
+        "Embed a short query with the SPECTER2 adhoc-query adapter and compare "
+        "against cached S2/SPECTER2 paper vectors. Runs through Activity because "
+        "query embedding is live AI inference."
+    ),
+)
+def semantic_paper_search(
+    body: SemanticPaperSearchRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Queue an explicit SPECTER2 semantic search job."""
+    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+
+    query = " ".join(str(body.query or "").strip().split())
+    if not query:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="query is required")
+    scope = str(body.scope or "library").strip().lower()
+    if scope not in {"library", "all"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope must be 'library' or 'all'")
+    limit = max(1, min(int(body.limit or 20), 100))
+
+    key_hash = hashlib.sha1(f"{scope}|{limit}|{query.lower()}".encode("utf-8")).hexdigest()[:16]
+    operation_key = f"papers.semantic_search.{key_hash}"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="SPECTER2 semantic search already running",
+        )
+
+    job_id = f"papers_semantic_search_{uuid.uuid4().hex[:8]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        message="SPECTER2 semantic search queued; query embedding may use CPU/GPU",
+        started_at=datetime.utcnow().isoformat(),
+        total=limit,
+        processed=0,
+    )
+    schedule_immediate(job_id, _run_semantic_paper_search, job_id, query, scope, limit)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="SPECTER2 semantic search queued",
+    )
+
+
+def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) -> None:
+    """Background worker for explicit SPECTER2 semantic search."""
+    from alma.ai.environment import activate_dependency_environment
+    from alma.ai.semantic_search import (
+        SPECTER2_ADHOC_QUERY_ADAPTER,
+        specter2_semantic_search,
+    )
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import add_job_log, set_job_status
+    from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+
+    conn = open_db_connection()
+    try:
+        set_job_status(
+            job_id,
+            status="running",
+            processed=0,
+            total=limit,
+            message="Embedding query with SPECTER2 adhoc-query adapter",
+        )
+        dep_env = activate_dependency_environment(conn)
+        add_job_log(
+            job_id,
+            "Dependency environment resolved",
+            step="environment",
+            data={
+                "selected_python_executable": dep_env.selected_python_executable,
+                "backend_python_executable": dep_env.as_dict().get("backend_python_executable"),
+                "python_version_match": dep_env.as_dict().get("python_version_match"),
+            },
+        )
+
+        vector_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
+            (S2_SPECTER2_MODEL,),
+        ).fetchone()["c"]
+        if int(vector_count or 0) <= 0:
+            set_job_status(
+                job_id,
+                status="completed",
+                processed=0,
+                total=0,
+                message="No cached S2/SPECTER2 paper vectors are available",
+                result={
+                    "query": query,
+                    "scope": scope,
+                    "count": 0,
+                    "items": [],
+                    "embedding_model": S2_SPECTER2_MODEL,
+                    "query_model": SPECTER2_ADHOC_QUERY_ADAPTER,
+                },
+                finished_at=datetime.utcnow().isoformat(),
+            )
+            return
+
+        rows = specter2_semantic_search(query, conn, scope=scope, limit=limit)
+        items = []
+        for row in rows:
+            paper = row_to_paper_response(row).model_dump()
+            items.append(
+                {
+                    "paper": paper,
+                    "score": round(float(row.get("score") or 0.0), 4),
+                    "match_type": row.get("match_type") or "semantic",
+                    "embedding_model": row.get("embedding_model") or S2_SPECTER2_MODEL,
+                    "query_model": row.get("query_model") or SPECTER2_ADHOC_QUERY_ADAPTER,
+                }
+            )
+        add_job_log(
+            job_id,
+            "SPECTER2 semantic search complete",
+            step="summary",
+            data={
+                "query": query,
+                "scope": scope,
+                "results": len(items),
+                "searched_vectors": int(vector_count or 0),
+                "embedding_model": S2_SPECTER2_MODEL,
+                "query_model": SPECTER2_ADHOC_QUERY_ADAPTER,
+            },
+        )
+        set_job_status(
+            job_id,
+            status="completed",
+            processed=len(items),
+            total=limit,
+            message=f"SPECTER2 semantic search returned {len(items)} result(s)",
+            result={
+                "query": query,
+                "scope": scope,
+                "count": len(items),
+                "items": items,
+                "embedding_model": S2_SPECTER2_MODEL,
+                "query_model": SPECTER2_ADHOC_QUERY_ADAPTER,
+            },
+            finished_at=datetime.utcnow().isoformat(),
+        )
+    except Exception as exc:
+        message = str(exc)
+        if "Local SPECTER2 requires" in message:
+            message = (
+                "SPECTER2 semantic search requires adapters, transformers, torch, and numpy "
+                "inside the selected AI environment."
+            )
+        add_job_log(
+            job_id,
+            message,
+            level="ERROR",
+            step="semantic_search_error",
+            data={"raw_error": str(exc)},
+        )
+        set_job_status(
+            job_id,
+            status="failed",
+            error=str(exc),
+            message=message,
+            finished_at=datetime.utcnow().isoformat(),
+        )
+    finally:
+        conn.close()
+
+
+@router.get(
+    "/stats",
+    summary="Get paper statistics",
+    description="Get aggregate statistics about papers in the database.",
+)
+def get_publication_stats(
+    min_year: Optional[int] = Query(None, description="Minimum publication year to include"),
+    max_year: Optional[int] = Query(None, description="Maximum publication year to include"),
+    top_limit: int = Query(10, ge=1, le=100, description="Top authors/papers limit"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Get aggregate paper statistics.
+
+    Args:
+        min_year: Filter stats to papers from this year (inclusive)
+        max_year: Filter stats to papers up to this year (inclusive)
+        top_limit: How many entries to return for top lists
+
+    Returns:
+        dict with counts, per-year distribution, top-cited papers, and
+        top authors by citations within the provided year window.
+    """
+    try:
+        # Common WHERE clause parts (bound to papers alias `p`)
+        where_parts = ["1=1"]
+        params: list = []
+        if min_year is not None:
+            where_parts.append("p.year >= ?")
+            params.append(min_year)
+        if max_year is not None:
+            where_parts.append("p.year <= ?")
+            params.append(max_year)
+        where = " AND ".join(where_parts)
+
+        # Total papers/citations (single pass)
+        totals = db.execute(
+            f"""
+            SELECT COUNT(*) AS count, COALESCE(SUM(p.cited_by_count), 0) AS total
+            FROM papers p
+            WHERE {where}
+            """,
+            params,
+        ).fetchone()
+        total_pubs = totals["count"] or 0
+        total_citations = totals["total"] or 0
+
+        total_authors = db.execute("SELECT COUNT(*) AS c FROM authors").fetchone()["c"] or 0
+
+        # Papers by year (no limit by default; return ascending years for chart readability)
+        cursor = db.execute(
+            f"""
+               SELECT year, COUNT(*) as count
+               FROM papers p
+               WHERE p.year IS NOT NULL AND {where}
+               GROUP BY year
+               ORDER BY year ASC
+            """,
+            params,
+        )
+        by_year = [dict(row) for row in cursor.fetchall()]
+
+        # Top cited papers (within window)
+        cursor = db.execute(
+            f"""
+               SELECT p.title AS title, COALESCE(p.cited_by_count,0) AS citations, p.year AS year
+               FROM papers p
+               WHERE {where}
+               ORDER BY citations DESC
+               LIMIT ?
+            """,
+            [*params, top_limit],
+        )
+        top_cited = [dict(row) for row in cursor.fetchall()]
+
+        # Top authors by citations (within window).
+        # publication_authors carries (paper_id, openalex_id) as a primary
+        # key with display_name always populated, so we aggregate on
+        # openalex_id and read the display name straight off the paper row.
+        # We intentionally do NOT join to ``authors``: the partial unique
+        # index on ``lower(openalex_id)`` can't be used for an equality join
+        # on a function, so the planner scans authors on every group (~2s on
+        # the real DB). The openalex_id is the stable handle the UI drills
+        # into anyway.
+        cursor = db.execute(
+            f"""
+               SELECT
+                   pa.openalex_id AS author_id,
+                   MAX(pa.display_name) AS name,
+                   COALESCE(SUM(p.cited_by_count), 0) AS citations,
+                   COUNT(*) AS publications
+               FROM publication_authors pa
+               JOIN papers p ON p.id = pa.paper_id
+               WHERE {where} AND pa.openalex_id IS NOT NULL
+                 AND TRIM(pa.openalex_id) <> ''
+               GROUP BY pa.openalex_id
+               ORDER BY citations DESC
+               LIMIT ?
+            """,
+            [*params, top_limit],
+        )
+        top_authors = [
+            {
+                "author_id": row["author_id"],
+                "name": row["name"],
+                "citations": row["citations"] or 0,
+                "publications": row["publications"] or 0,
+            }
+            for row in cursor.fetchall()
+        ]
+
+        # Top journals by publication count (and citations) within window
+        # We ignore empty or NULL journal entries for this aggregation.
+        cursor = db.execute(
+            f"""
+               SELECT p.journal AS journal, COUNT(*) AS publications, COALESCE(SUM(p.cited_by_count),0) AS citations
+               FROM papers p
+               WHERE {where} AND p.journal IS NOT NULL AND TRIM(p.journal) <> ''
+               GROUP BY p.journal
+               ORDER BY publications DESC, citations DESC
+               LIMIT ?
+            """,
+            [*params, top_limit],
+        )
+        top_journals = [
+            {"journal": row["journal"], "publications": row["publications"], "citations": row["citations"]}
+            for row in cursor.fetchall()
+        ]
+
+        # Institutions by country (geo stats)
+        countries = []
+        try:
+            # Only if institutions table exists
+            chk = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publication_institutions'").fetchone()
+            if chk:
+                cursor = db.execute(
+                    f"""
+                       SELECT TRIM(UPPER(pi.country_code)) AS country_code, COUNT(*) AS publications
+                       FROM publication_institutions pi
+                       JOIN papers p ON pi.paper_id = p.id
+                       WHERE {where} AND pi.country_code IS NOT NULL AND TRIM(pi.country_code) <> ''
+                       GROUP BY TRIM(UPPER(pi.country_code))
+                       ORDER BY publications DESC
+                       LIMIT ?
+                    """,
+                    [*params, top_limit],
+                )
+                countries = [ {"country_code": r["country_code"], "publications": r["publications"]} for r in cursor.fetchall() ]
+        except Exception:
+            countries = []
+
+        # Shape response to a simpler schema expected by tests/consumers
+        return {
+            "total_publications": total_pubs,
+            "total_citations": total_citations,
+            "total_authors": total_authors,
+            "by_year": by_year,
+            "top_cited": top_cited,
+            "top_authors": top_authors,
+            "top_journals": top_journals,
+        }
+
+    except Exception as e:
+        raise_internal("Failed to retrieve paper statistics", e)
+
+
+@router.put(
+    "/{paper_id}/rate",
+    summary="Rate a paper",
+    description="Set a star rating (0-5) for a saved Library paper.",
+)
+def rate_publication(
+    paper_id: str,
+    rating: int = Query(..., description="Star rating from 0 to 5"),
+    pub_db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    target = pub_db.execute(
+        "SELECT id, title, status FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if rating < 0 or rating > 5:
+        raise HTTPException(status_code=400, detail="rating must be between 0 and 5")
+    if target is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if str(target["status"] or "") != library_app.LIBRARY_STATUS:
+        raise HTTPException(status_code=400, detail="Only saved Library papers can be rated")
+
+    library_app.rate_paper(pub_db, target["id"], int(rating))
+    library_app.record_paper_feedback(
+        pub_db,
+        target["id"],
+        action="rate",
+        rating=int(rating),
+        source_surface="papers",
+    )
+    pub_db.commit()
+    return {
+        "success": True,
+        "paper_id": target["id"],
+        "title": target["title"],
+        "rating": int(rating),
+    }
+
+
+@router.get(
+    "/{paper_id}/details",
+    summary="Get full paper details",
+    description="Return a single paper row plus the semantic topics attached to it.",
+)
+def get_paper_details(
+    paper_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Full paper details for the PaperDetailPanel popup.
+
+    Returns the standard PaperResponse fields plus a `topics` list of
+    ``{term, score, domain, field, subfield, topic_id}`` from
+    ``publication_topics`` so the popup can show the semantic labels that
+    OpenAlex attached to the work.
+    """
+    row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    paper = row_to_paper_response(row).model_dump()
+
+    topic_rows = db.execute(
+        """
+        SELECT term, score, domain, field, subfield, topic_id
+        FROM publication_topics
+        WHERE paper_id = ?
+        ORDER BY COALESCE(score, 0) DESC, term ASC
+        """,
+        (paper_id,),
+    ).fetchall()
+    paper["topics"] = [dict(r) for r in topic_rows]
+    return paper
+
+
+_NETWORK_CACHE_TTL_HOURS = 24
+_LOCAL_SUFFICIENCY_THRESHOLD = 8  # below this, trigger S2 fallback
+
+
+def _network_cache_read(
+    db: sqlite3.Connection, paper_id: str, direction: str
+) -> Optional[dict]:
+    """Return the fresh cached T6b payload, or None when missing/stale."""
+    try:
+        row = db.execute(
+            "SELECT payload_json, expires_at FROM paper_network_cache "
+            "WHERE paper_id = ? AND direction = ?",
+            (paper_id, direction),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if not row:
+        return None
+    try:
+        expires = datetime.fromisoformat(str(row["expires_at"] or ""))
+    except ValueError:
+        return None
+    if expires < datetime.utcnow():
+        return None
+    try:
+        return json.loads(row["payload_json"] or "null")
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _network_cache_write(
+    db: sqlite3.Connection, paper_id: str, direction: str, payload: dict
+) -> None:
+    try:
+        now = datetime.utcnow()
+        db.execute(
+            """
+            INSERT OR REPLACE INTO paper_network_cache
+                (paper_id, direction, fetched_at, expires_at, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                paper_id,
+                direction,
+                now.isoformat(),
+                (now + timedelta(hours=_NETWORK_CACHE_TTL_HOURS)).isoformat(),
+                json.dumps(payload),
+            ),
+        )
+        db.commit()
+    except sqlite3.OperationalError as exc:
+        logger.debug("paper_network_cache write failed: %s", exc)
+
+
+def _s2_candidate_to_related_work(cand: dict) -> dict:
+    """Shape an S2-hydrated candidate into the `RelatedWork` envelope.
+
+    Distinct from `_related_work_row_to_model` which reads local
+    `papers` rows. S2 rows carry `paper_id=None` (the paper isn't in
+    our corpus) unless a later join matches via DOI / openalex_id.
+    """
+    return {
+        "paper_id": None,
+        "title": (cand.get("title") or "").strip() or "Untitled",
+        "authors": (cand.get("authors") or None),
+        "year": cand.get("year"),
+        "doi": (cand.get("doi") or None),
+        "url": (cand.get("url") or None),
+        "journal": (cand.get("journal") or None),
+        "abstract": (cand.get("abstract") or None),
+        "tldr": (cand.get("tldr") or None),
+        "cited_by_count": int(cand.get("cited_by_count") or 0),
+        "influential_citation_count": int(cand.get("influential_citation_count") or 0),
+        "openalex_id": None,
+        "semantic_scholar_id": (cand.get("semantic_scholar_id") or None),
+        "status": None,
+        "rating": None,
+        "is_influential": bool(cand.get("is_influential") or False),
+        "source": "s2_remote",
+    }
+
+
+def _merge_related_works(
+    local_works: list[dict], s2_works: list[dict], *, limit: int
+) -> list[dict]:
+    """Merge local + S2 rows, dedupe, prefer local (it has paper_id).
+
+    Dedup keys: DOI first, then S2 paper id. Local rows always come
+    first in the output so the Pivot button (which needs a local
+    `paper_id`) appears on the strongest-match copy.
+    """
+    local_dois = {
+        (w.get("doi") or "").strip().lower()
+        for w in local_works
+        if (w.get("doi") or "").strip()
+    }
+    local_oa = {
+        (w.get("openalex_id") or "").strip().lower()
+        for w in local_works
+        if (w.get("openalex_id") or "").strip()
+    }
+    local_s2 = {
+        (w.get("semantic_scholar_id") or "").strip()
+        for w in local_works
+        if (w.get("semantic_scholar_id") or "").strip()
+    }
+
+    merged = list(local_works)
+    for w in s2_works:
+        doi = (w.get("doi") or "").strip().lower()
+        s2_id = (w.get("semantic_scholar_id") or "").strip()
+        # Skip any S2 row that matches a local row by DOI / openalex / s2 id.
+        if doi and doi in local_dois:
+            continue
+        if s2_id and s2_id in local_s2:
+            continue
+        # OpenAlex IDs aren't emitted by the S2 edge fetch, so no
+        # openalex dedup possible here — fine, DOI + S2 id cover it.
+        _ = local_oa  # kept for future tightening
+        merged.append(w)
+    return merged[:limit]
+
+
+def _related_work_row_to_model(row: sqlite3.Row) -> dict:
+    """Project a `papers` row into the trimmed `RelatedWork` shape."""
+    return {
+        "paper_id": str(row["id"] or "").strip() or None,
+        "title": str(row["title"] or "").strip() or "Untitled",
+        "authors": (row["authors"] or None),
+        "year": row["year"],
+        "doi": (row["doi"] or None),
+        "url": (row["url"] or None),
+        "journal": (row["journal"] or None),
+        "abstract": (row["abstract"] or None),
+        "tldr": (row["tldr"] or None) if "tldr" in row.keys() else None,
+        "cited_by_count": int(row["cited_by_count"] or 0),
+        "influential_citation_count": (
+            int(row["influential_citation_count"] or 0)
+            if "influential_citation_count" in row.keys()
+            else 0
+        ),
+        "openalex_id": (row["openalex_id"] or None),
+        "semantic_scholar_id": (
+            (row["semantic_scholar_id"] or None)
+            if "semantic_scholar_id" in row.keys()
+            else None
+        ),
+        "status": (row["status"] or None),
+        "rating": row["rating"] if "rating" in row.keys() else None,
+        "is_influential": False,
+        "source": "local",
+    }
+
+
+def _anchor_s2_seed_id(anchor: sqlite3.Row) -> Optional[str]:
+    """Return the best S2-acceptable seed id for an anchor paper, or None.
+
+    Order: native `paperId` > `DOI:{doi}` > `CorpusID:{corpus}`. S2's
+    recommendation/reference/citation endpoints accept all three forms
+    interchangeably.
+    """
+    s2_id = str(anchor["semantic_scholar_id"] or "").strip() \
+        if "semantic_scholar_id" in anchor.keys() else ""
+    if s2_id:
+        return s2_id
+    doi = str(anchor["doi"] or "").strip() if "doi" in anchor.keys() else ""
+    if doi:
+        return f"DOI:{doi}"
+    corpus = str(anchor["semantic_scholar_corpus_id"] or "").strip() \
+        if "semantic_scholar_corpus_id" in anchor.keys() else ""
+    if corpus:
+        return f"CorpusID:{corpus}"
+    return None
+
+
+@router.get(
+    "/{paper_id}/prior-works",
+    summary="Papers referenced by this paper (corpus + S2 fallback)",
+)
+def list_prior_works(
+    paper_id: str,
+    limit: int = 30,
+    include_remote: bool = True,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Return papers this paper references (outgoing graph edges).
+
+    Local-first SQL over `publication_references`; falls back to S2
+    `/paper/{id}/references` when the local count is thin (and
+    `include_remote` is set; default true). S2 results are merged,
+    deduped against local by DOI / S2 id, and cached for 24 h in
+    `paper_network_cache` so repeat dialog opens are instant.
+    """
+    bounded = max(1, min(int(limit or 30), 100))
+    anchor = db.execute(
+        "SELECT id, openalex_id, doi, semantic_scholar_id, "
+        "semantic_scholar_corpus_id FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if anchor is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    try:
+        rows = db.execute(
+            """
+            SELECT DISTINCT p.*
+            FROM publication_references pr
+            JOIN papers p ON p.openalex_id = pr.referenced_work_id
+            WHERE pr.paper_id = ?
+              AND COALESCE(p.status, '') != 'removed'
+            ORDER BY COALESCE(p.cited_by_count, 0) DESC,
+                     COALESCE(p.year, 0) DESC,
+                     p.title COLLATE NOCASE ASC
+            LIMIT ?
+            """,
+            (paper_id, bounded),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        logger.debug("prior-works query failed: %s", exc)
+        rows = []
+    local_works = [_related_work_row_to_model(r) for r in rows]
+
+    remote_works: list[dict] = []
+    remote_count = 0
+    # T6b — fall back to S2 when local coverage is thin. Cache hits
+    # skip the network entirely (24h TTL, keyed on paper_id +
+    # direction).
+    if include_remote and len(local_works) < _LOCAL_SUFFICIENCY_THRESHOLD:
+        cached = _network_cache_read(db, paper_id, "prior")
+        if cached is not None:
+            remote_works = cached.get("s2_works") or []
+            remote_count = int(cached.get("remote_count") or 0)
+        else:
+            seed = _anchor_s2_seed_id(anchor)
+            if seed:
+                try:
+                    from alma.discovery import semantic_scholar as _s2
+
+                    s2_raw = _s2.fetch_references_for_paper(seed, limit=bounded)
+                except Exception as exc:
+                    logger.debug("S2 references fallback failed: %s", exc)
+                    s2_raw = []
+                remote_works = [_s2_candidate_to_related_work(c) for c in s2_raw]
+                remote_count = len(remote_works)
+                _network_cache_write(
+                    db, paper_id, "prior",
+                    {"s2_works": remote_works, "remote_count": remote_count},
+                )
+
+    merged = _merge_related_works(local_works, remote_works, limit=bounded)
+    return {
+        "direction": "prior",
+        "source_paper_id": paper_id,
+        "works": merged,
+        "local_count": len(local_works),
+        "remote_count": remote_count,
+    }
+
+
+@router.get(
+    "/{paper_id}/derivative-works",
+    summary="Papers that cite this paper (corpus + S2 fallback)",
+)
+def list_derivative_works(
+    paper_id: str,
+    limit: int = 30,
+    include_remote: bool = True,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Return papers that cite this paper (incoming graph edges).
+
+    Local-first SQL over `publication_references`, ordered by
+    influential-citation count. Falls back to S2
+    `/paper/{id}/citations` when the local count is thin (and
+    `include_remote` is set). S2 per-edge `isInfluential` lights up
+    the amber ★ chip on the frontend row.
+    """
+    bounded = max(1, min(int(limit or 30), 100))
+    anchor = db.execute(
+        "SELECT id, openalex_id, doi, semantic_scholar_id, "
+        "semantic_scholar_corpus_id FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if anchor is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    anchor_openalex_id = str(anchor["openalex_id"] or "").strip()
+    local_works: list[dict] = []
+    if anchor_openalex_id:
+        try:
+            rows = db.execute(
+                """
+                SELECT DISTINCT p.*
+                FROM publication_references pr
+                JOIN papers p ON p.id = pr.paper_id
+                WHERE pr.referenced_work_id = ?
+                  AND p.id != ?
+                  AND COALESCE(p.status, '') != 'removed'
+                ORDER BY COALESCE(p.influential_citation_count, 0) DESC,
+                         COALESCE(p.year, 0) DESC,
+                         COALESCE(p.cited_by_count, 0) DESC,
+                         p.title COLLATE NOCASE ASC
+                LIMIT ?
+                """,
+                (anchor_openalex_id, paper_id, bounded),
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.debug("derivative-works query failed: %s", exc)
+            rows = []
+        local_works = [_related_work_row_to_model(r) for r in rows]
+
+    remote_works: list[dict] = []
+    remote_count = 0
+    if include_remote and len(local_works) < _LOCAL_SUFFICIENCY_THRESHOLD:
+        cached = _network_cache_read(db, paper_id, "derivative")
+        if cached is not None:
+            remote_works = cached.get("s2_works") or []
+            remote_count = int(cached.get("remote_count") or 0)
+        else:
+            seed = _anchor_s2_seed_id(anchor)
+            if seed:
+                try:
+                    from alma.discovery import semantic_scholar as _s2
+
+                    s2_raw = _s2.fetch_citations_for_paper(seed, limit=bounded)
+                except Exception as exc:
+                    logger.debug("S2 citations fallback failed: %s", exc)
+                    s2_raw = []
+                remote_works = [_s2_candidate_to_related_work(c) for c in s2_raw]
+                # Sort derivative remote rows by influential first, then
+                # by citation count so the best evidence bubbles up
+                # alongside any local rows (local already sorted).
+                remote_works.sort(
+                    key=lambda w: (
+                        -int(bool(w.get("is_influential"))),
+                        -int(w.get("influential_citation_count") or 0),
+                        -int(w.get("cited_by_count") or 0),
+                    )
+                )
+                remote_count = len(remote_works)
+                _network_cache_write(
+                    db, paper_id, "derivative",
+                    {"s2_works": remote_works, "remote_count": remote_count},
+                )
+
+    merged = _merge_related_works(local_works, remote_works, limit=bounded)
+    return {
+        "direction": "derivative",
+        "source_paper_id": paper_id,
+        "works": merged,
+        "local_count": len(local_works),
+        "remote_count": remote_count,
+    }
+
+
+@router.delete(
+    "/{paper_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a paper",
+    description="Remove a specific paper from the database.",
+)
+def delete_publication(
+    paper_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Delete a specific paper from the database.
+
+    Args:
+        paper_id: UUID of the paper
+
+    Raises:
+        HTTPException: If paper is not found
+
+    Example:
+        ```bash
+        curl -X DELETE "http://localhost:8000/api/v1/papers/550e8400-e29b-41d4-a716-446655440000"
+        ```
+    """
+    try:
+        # Check if paper exists
+        cursor = db.execute(
+            "SELECT id, title FROM papers WHERE id = ?",
+            (paper_id,)
+        )
+        paper = cursor.fetchone()
+
+        if not paper:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Paper not found"
+            )
+
+        library_app.soft_remove_from_library(db, paper_id)
+        db.commit()
+
+        logger.info(f"Soft-removed paper: {paper['title']} (ID: {paper_id})")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_internal("Failed to delete paper", e)
+
+
+# -- Preprint ↔ journal dedup -------------------------------------------------
+
+
+@router.post(
+    "/dedup-preprints",
+    summary="Detect + merge preprint↔journal twin papers",
+    description=(
+        "Scans for pairs where the same work exists as both a preprint "
+        "(arXiv / bioRxiv / psyRxiv / chemRxiv / OSF / MDPI) and a "
+        "published journal row, collapsing each pair into the journal "
+        "version. `scope=library` only collapses pairs where at least one "
+        "side is a saved Library paper (fast); `scope=corpus` considers "
+        "every pair (can take a while on a large corpus). FK rows migrate "
+        "preprint → canonical; Library + Discovery lists filter the "
+        "merged preprint out automatically."
+    ),
+)
+def dedup_preprint_twins(
+    scope: str = Query("corpus", description="library | corpus"),
+    limit: Optional[int] = Query(None, description="Cap the number of pairs to merge"),
+    background: bool = Query(True, description="Queue via Activity envelope"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Activity-envelope runner for preprint↔journal dedup."""
+    from alma.api.deps import _db_path, open_db_connection
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+    from alma.application.preprint_dedup import run_preprint_dedup
+
+    scope_value = (scope or "corpus").strip().lower()
+    if scope_value not in {"library", "corpus"}:
+        scope_value = "corpus"
+
+    if not background:
+        return run_preprint_dedup(_db_path(), limit=limit, scope=scope_value)
+
+    # One job per (operation, scope) so a Library-scoped run doesn't
+    # dedup-block a full-corpus sweep (or vice versa).
+    operation_key = f"papers.dedup_preprints:{scope_value}"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message=f"Preprint dedup already running (scope={scope_value})",
+        )
+
+    job_id = f"preprint_dedup_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=datetime.utcnow().isoformat(),
+        message=f"Scanning for preprint↔journal twins (scope={scope_value})",
+    )
+    add_job_log(job_id, f"Preprint dedup queued (scope={scope_value})", step="queued")
+
+    def _runner() -> dict:
+        class _Ctx:
+            def log_step(self, step, *, message=None, processed=None, total=None, **_):
+                try:
+                    set_job_status(
+                        job_id,
+                        status="running",
+                        message=message,
+                        processed=processed,
+                        total=total,
+                    )
+                except Exception:
+                    pass
+
+        try:
+            summary = run_preprint_dedup(
+                _db_path(),
+                ctx=_Ctx(),
+                limit=limit,
+                scope=scope_value,
+            )
+            add_job_log(
+                job_id,
+                f"Dedup complete: merged={summary['merged']} skipped={summary['skipped']} errors={summary['errors']}",
+                step="done",
+                data=summary,
+            )
+            return summary
+        except Exception as exc:
+            add_job_log(job_id, f"Dedup failed: {exc}", level="ERROR", step="failed")
+            raise
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message=f"Preprint dedup queued (scope={scope_value})",
+    )

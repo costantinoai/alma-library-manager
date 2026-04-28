@@ -1,0 +1,45 @@
+# Core ALMa runtime dependencies — installed in BOTH the `normal` and
+# `lite` Docker variants. This list mirrors `pyproject.toml`
+# `[project.dependencies]` + the `[import]` extra.
+#
+# The split between core and AI exists so the `lite` Docker variant
+# (suitable for low-memory hosts like Raspberry Pi) can ship without
+# the ~1.5 GB torch/transformers stack. Clustering (HDBSCAN / KMeans),
+# 2-D projections (UMAP / t-SNE), and TF-IDF text similarity stay in
+# core because they're foundational to Discovery branches and don't
+# need torch — sklearn + hdbscan + umap-learn add ~150 MB total and
+# all ship ARM wheels (Pi-friendly). Keep this file in sync with
+# pyproject.toml.
+
+# --- Web framework ---
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# --- Scheduling / HTTP / numerics ---
+apscheduler>=3.10.4
+requests>=2.31.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# --- Config / .env loading ---
+python-dotenv>=1.0.0
+
+# --- Sources / fallbacks ---
+scholarly
+
+# --- Plugins (Slack notifier) ---
+slack-sdk>=3.20.0
+
+# --- Library imports (BibTeX / Zotero) ---
+bibtexparser>=1.4.0
+pyzotero>=1.5.0
+
+# --- Discovery clustering / projections / TF-IDF (Pi-friendly,
+#     no torch dependency). Powers HDBSCAN/KMeans branches in
+#     Discovery, the UMAP/t-SNE Insights Graph, and TF-IDF text
+#     similarity used as a fallback when vectors are unavailable. ---
+scikit-learn>=1.3.0
+hdbscan>=0.8.33
+umap-learn>=0.5.5

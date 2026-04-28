@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 220" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" role="img" aria-labelledby="title">
+  <title id="title">Discover</title>
+  <!-- Magnifying glass, double-circle motif from the brand sheet. -->
+  <circle cx="92" cy="92" r="55"/>
+  <circle cx="92" cy="92" r="36"/>
+  <path d="M132 132 L185 185"/>
+  <path d="M168 158 L195 185"/>
+</svg>

@@ -1,0 +1,23 @@
+{
+  "name": "ALMa",
+  "short_name": "ALMa",
+  "description": "Another Library Manager \u2014 a scientific library manager.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFFCF7",
+  "theme_color": "#0F1E36",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

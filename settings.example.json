@@ -1,0 +1,14 @@
+{
+  "database": "./data/scholar.db",
+  "slack_config_path": "./config/slack.config",
+  "api_call_delay": "1.0",
+  "backend": "scholar",
+  "openalex_email": null,
+  "fetch_full_history": false,
+  "from_year": null,
+  "slack_channel": null,
+  "id_resolution_semantic_scholar_enabled": true,
+  "id_resolution_orcid_enabled": true,
+  "id_resolution_scholar_scrape_auto_enabled": false,
+  "id_resolution_scholar_scrape_manual_enabled": true
+}

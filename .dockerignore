@@ -1,0 +1,194 @@
+# =============================================================================
+# Docker Build Context Exclusions
+# =============================================================================
+# Exclude files that:
+# - Contain sensitive data (secrets, configs, databases)
+# - Are not needed at runtime (tests, docs, dev tools)
+# - Would bloat the image unnecessarily
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Sensitive Data - NEVER include in images
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+credentials/
+*.key
+*.pem
+*.crt
+config/slack.config
+config/*.config
+*.secret
+# User preferences — mounted from host at runtime, never baked in
+settings.json
+
+# -----------------------------------------------------------------------------
+# Database Files - Data should be mounted, not baked in
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak
+data/
+
+# -----------------------------------------------------------------------------
+# Python Artifacts
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# -----------------------------------------------------------------------------
+# Virtual Environments
+# -----------------------------------------------------------------------------
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# -----------------------------------------------------------------------------
+# Testing & Coverage
+# -----------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+tests/
+test_*.py
+*_test.py
+conftest.py
+
+# -----------------------------------------------------------------------------
+# Type Checking & Linting
+# -----------------------------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pytype/
+
+# -----------------------------------------------------------------------------
+# IDE & Editor Files
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-*
+.spyproject/
+
+# -----------------------------------------------------------------------------
+# Documentation
+# -----------------------------------------------------------------------------
+docs/
+*.md
+!README.md
+*.rst
+*.txt
+!requirements.txt
+
+# -----------------------------------------------------------------------------
+# Version Control
+# -----------------------------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.github/
+.githooks/
+
+# -----------------------------------------------------------------------------
+# CI/CD & Dev Tools
+# -----------------------------------------------------------------------------
+.pre-commit-config.yaml
+.travis.yml
+.gitlab-ci.yml
+Jenkinsfile
+Makefile
+tox.ini
+pytest.ini
+setup.cfg
+pyproject.toml.bak
+.editorconfig
+
+# -----------------------------------------------------------------------------
+# OS-specific Files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Temporary & Log Files
+# -----------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+logs/
+tmp/
+temp/
+
+# -----------------------------------------------------------------------------
+# Claude Code
+# -----------------------------------------------------------------------------
+.claude/
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+node_modules/
+*.lock
+!frontend/package-lock.json
+!requirements.txt
+docker-compose*.yml
+!docker-compose.yml
+Dockerfile.dev
+
+# -----------------------------------------------------------------------------
+# Frontend - exclude build artifacts but keep source for Docker build
+# -----------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
