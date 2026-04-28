@@ -1,382 +1,193 @@
 # ALMa — Another Library Manager
 
-> 🚧 **Early preview (`0.9.0`).** Public testing release. The three core
-> jobs (Library / Discovery / Feed) work end-to-end. Pre-built Docker
-> images are available on GHCR as `:0.9.0` for both variants — see
-> [Option A](#option-a--pull-a-pre-built-image-from-ghcr-suggested)
-> below. The first-run experience is bare; polished in-app
-> onboarding ships with `1.0.0`. Read [Getting started after install](#getting-started-after-install)
-> before launching for the first time.
+> **Early preview (`v0.9.1`).** The three core jobs — Library, Discovery,
+> and Feed — work end-to-end. The first-run experience is bare; a polished
+> onboarding ships with `v1.0.0`. Public testing welcome.
 
-Your personal academic research feed. ALMa tracks authors and publications
-via [OpenAlex](https://openalex.org/) (primary) + [Semantic Scholar](https://www.semanticscholar.org/)
-(metadata + SPECTER2 vectors), with Google Scholar (`scholarly`) as an
-opt-in best-effort author-resolution fallback. Discovery candidates are
-ranked with SPECTER2 embeddings; saved papers live in your local
-SQLite library — all from a single, self-hosted web UI.
+ALMa is a personal academic research feed. You follow a handful of
+authors and topics; ALMa watches OpenAlex (the open citation graph)
+and Semantic Scholar for new work, builds a local SQLite library of
+the things you save, and uses SPECTER2 embeddings to surface papers
+related to what you already care about. It runs on your own machine —
+nothing about your reading list leaves the box you put it on.
 
----
+The app has five views: a chronological **Feed** of new publications
+from the people you follow, a **Library** for the things you've saved
+and the notes you've taken on them, **Authors** for the people whose
+work you track, **Discovery** for "things related to your library that
+aren't in your feed yet", and **Insights** for a 30,000-foot view of
+your collection (timelines, topics, a clustered map of what you read).
 
-## Documentation
-
-Full documentation lives at **<https://costantinoai.github.io/alma-library-manager/>**
-(or build it locally with `pip install -e ".[docs]"` then `mkdocs serve`).
-
-* [Vision & philosophy](https://costantinoai.github.io/alma-library-manager/vision/) — read this once
-* [Getting started](https://costantinoai.github.io/alma-library-manager/getting-started/) — install + first run
-* [Concepts](https://costantinoai.github.io/alma-library-manager/concepts/) — Feed, Library, Discovery, Authors, Insights, Alerts
-* [REST API reference](https://costantinoai.github.io/alma-library-manager/reference/api/) — every endpoint
+Full docs: **<https://costantinoai.github.io/alma-library-manager/>**
 
 ---
 
-## Features
+## Quick start (Docker)
 
-| Area | What it does |
-|------|-------------|
-| **Feed** | Chronological inbox of new publications from monitored authors, topics, and queries (60-day window, dedup across sources) |
-| **Discovery** | Lens-based recommendations using a multi-source retrieval lane (OpenAlex + Semantic Scholar + citation chain + co-author graph + SPECTER2 similarity), with branch studio for sub-lens exploration |
-| **Authors** | Multi-source author suggestions (D12: library_core + library_reference + semantic_similar + openalex_related + s2_related + cited_by_high_signal) with hierarchical identity resolver and preprint↔journal twin engine |
-| **Library** | Save, rate (like / love / dislike), reading-list workflow, tag, organize into collections; BibTeX, Zotero JSON, and Zotero RDF import — imports land directly in Saved (D4) |
-| **Insights** | Publication timeline, geography, topics, journals, author rails, recommendation engagement, and a clustered SPECTER2 knowledge graph with auto-k clusters + word-cloud overlay |
-| **Alerts** | Composable rule sets (`author`, `keyword`, `topic`, `similarity`, `discovery_lens`) delivered as Slack digests on manual / daily / weekly schedules |
-| **Settings** | OpenAlex / S2 / Slack credentials, discovery weights, AI provider environment, corpus maintenance (refresh authors with scope, dedup preprint↔journal twins), Activity log |
-
-### AI capabilities (opt-in)
-
-- **Paper embeddings**: SPECTER2 is canonical (`allenai/specter2_base`).
-  ALMa fetches Semantic Scholar's pre-computed `specter_v2` vectors when
-  available; missing papers can be computed locally on demand. OpenAI
-  embeddings remain available as an optional provider.
-- **Clustering**: HDBSCAN over SPECTER2 vectors with auto-k via
-  silhouette sweep, projected to 2D for the Insights graph.
-
-AI dependencies run in an isolated Python environment (venv / uv /
-conda) selected from Settings — they never touch your system Python.
-
-### Performance
-
-| Operation | Budget |
-|---|---|
-| Discovery lens refresh (canonical lens, ~330 saved papers) | **~76 s** end-to-end (down from 298 s) |
-| Backend page-mount reads (`/library/saved`, `/feed`, `/authors`) | < 1 s P95 under concurrent refresh |
-| Frontend tsc check | < 30 s |
-
----
-
-## Quick start
-
-**Docker is the recommended way to run ALMa.** It pins the Python
-runtime, the AI stack, and all native dependencies into a single
-reproducible image, and bind-mounts your data from the host so
-nothing personal is baked in. Bare metal installs are supported but
-fragile (torch / transformers / hdbscan have heavyweight native
-deps); use Docker unless you have a specific reason not to.
-
-### Choosing a variant — `normal` vs `lite`
-
-ALMa ships in two image flavours:
-
-| | `normal` (default) | `lite` |
-|---|---|---|
-| Library / Discovery / Feed (the three core jobs) | ✅ | ✅ |
-| BibTeX + Zotero imports | ✅ | ✅ |
-| Authors monitoring + ORCID dedup | ✅ | ✅ |
-| OpenAlex enrichment + Semantic Scholar vectors | ✅ | ✅ |
-| HDBSCAN / KMeans clustering (Discovery branches) | ✅ | ✅ |
-| UMAP / t-SNE projections (Insights Graph tab) | ✅ | ✅ |
-| TF-IDF text similarity (similarity fallback) | ✅ | ✅ |
-| Cloud OpenAI embeddings (set provider in Settings) | ✅ | ✅ |
-| **Local SPECTER2 embeddings** (no API needed) | ✅ | ❌ (no torch) |
-| Image size | ~2 GB | ~450 MB |
-| Memory at runtime | ~2 GB peak (model loaded) | ~512 MB-1 GB |
-| Recommended host | desktop / server, ≥4 GB RAM | Raspberry Pi / NAS / VPS |
-
-The only thing `lite` actually loses is the **local** embedding
-encoder — `transformers` + `adapters` + `torch` is ~1.5 GB and
-mostly impractical on a Pi. Discovery branches, the Insights Graph,
-and TF-IDF fallback all stay because their deps (`scikit-learn`,
-`hdbscan`, `umap-learn`) are foundational and ship ARM wheels.
-
-In `lite` you can still get embeddings by either (a) configuring
-the OpenAI cloud provider in Settings, or (b) relying on the
-Semantic Scholar vectors that ALMa fetches automatically for any
-paper with a known DOI — most of your library will land with
-vectors via this path. Local SPECTER2 is the unique normal-only
-feature.
-
-Pick `lite` only if you intend to run on a memory-constrained host
-(or you're happy delegating embeddings to a cloud provider).
-
----
-
-### Option A — pull a pre-built image from GHCR (suggested)
-
-Pre-built images are published to GitHub Container Registry on every
-release tag. The current public-testing tag is `0.9.0`.
-
-```bash
-# normal variant (full AI stack)
-docker pull ghcr.io/costantinoai/alma-library-manager:0.9.0
-
-# lite variant (no torch; for Raspberry Pi / low-memory hosts)
-docker pull ghcr.io/costantinoai/alma-library-manager:0.9.0-lite
-
-# Once 1.0.0 ships, `:latest` and `:latest-lite` will track the
-# newest stable release.
-```
-
-Then drop a minimal `docker-compose.yml` next to your data:
+The fastest way to run ALMa, and what you should pick unless you have
+a strong reason not to. Docker pins Python, the AI stack, and every
+native dependency into one image so you don't have to.
 
 ```bash
 mkdir alma && cd alma
 mkdir -p data config
 touch .env settings.json
 chmod 600 .env
-# edit .env — at minimum set OPENALEX_EMAIL (free) and any optional
-# API keys
 ```
 
-Use the [docker-compose.yml from this repo](./docker-compose.yml) as
-a template, replacing the `build:` block with `image:`:
+Drop a `docker-compose.yml` next to those files:
 
 ```yaml
 services:
   alma:
-    image: ghcr.io/costantinoai/alma-library-manager:0.9.0          # or :0.9.0-lite
+    image: ghcr.io/costantinoai/alma-library-manager:0.9.1
     container_name: alma
     restart: unless-stopped
     ports: ["127.0.0.1:8000:8000"]
     env_file: [.env]
     volumes:
-      - type: bind
-        source: ./data
-        target: /app/data
-      - type: bind
-        source: ./config
-        target: /app/config
-      - type: bind
-        source: ./settings.json
-        target: /app/settings.json
-      - type: bind
-        source: ./.env
-        target: /app/.env
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./settings.json:/app/settings.json
+      - ./.env:/app/.env
 ```
 
-Then `docker compose up -d` and open [http://localhost:8000](http://localhost:8000).
-
-First steps in the app:
-
-1. Confirm OpenAlex email in **Settings → External APIs**.
-2. Follow 3-5 authors from **Discovery → Find & Add**.
-3. Wait for backfills in **Activity**.
-4. Save / like a few papers in **Feed**.
-5. Optionally import BibTeX or Zotero data from **Library → Imports**.
-6. Refresh the default Discovery lens.
-
-### Option B — build locally with Docker
+Then bring it up and open `http://localhost:8000`:
 
 ```bash
-git clone https://github.com/costantinoai/alma-library-manager.git
-cd alma-library-manager
-cp .env.example .env          # then edit and add your API keys
-chmod 600 .env
-
-mkdir -p data config
-[ -f settings.json ] || cp settings.example.json settings.json
-
-# normal variant (default)
 docker compose up -d
-
-# lite variant
-ALMA_VARIANT=lite docker compose up -d
-
-# constrained host (e.g. Raspberry Pi 4 with 4 GB RAM)
-ALMA_VARIANT=lite ALMA_CPUS=2.0 ALMA_MEMORY=1G docker compose up -d
 ```
 
-Open [http://localhost:8000](http://localhost:8000).
+That's it. The container binds to `127.0.0.1` only; if you want to
+expose ALMa beyond your own machine, put a reverse proxy in front and
+set `API_KEY` in `.env`.
 
-Lifecycle:
-
-```bash
-docker compose logs -f alma                       # follow logs
-docker compose ps                                 # status + healthcheck
-docker compose down                               # stop + remove (host data persists)
-docker compose build --no-cache                   # rebuild normal
-ALMA_VARIANT=lite docker compose build --no-cache # rebuild lite
-```
-
-The container binds to `127.0.0.1:8000` only — put a reverse proxy
-in front for remote access. Personal state (`.env`, `settings.json`,
-`data/`, `config/`) is bind-mounted from the host and **never baked
-into the image**, so you can rebuild or pull a fresh image without
-touching your library.
+Your data lives in the host folder you just created (`./data`,
+`./config`, `./settings.json`, `./.env`). Nothing personal goes into
+the image, so you can pull a newer version any time without losing
+your library.
 
 ---
 
-### Option C — bare metal (advanced, **not recommended**)
+## After it starts
 
-Skip Docker only if you have a specific reason. The AI stack
-(`torch`, `transformers`, `hdbscan`, `umap-learn`) has heavyweight
-native deps that are easy to mismatch in unmanaged Python
-environments — Docker pins everything for you.
+ALMa is empty on first launch — no library, no followed authors, no
+recommendations. Three things to do, in order, before it becomes
+useful:
 
-If you must:
+1. **Add your email.** Edit `.env` and set `OPENALEX_EMAIL=you@example.com`.
+   OpenAlex is free, no API key needed, but the email enrolls you in
+   their polite pool so requests don't hit anonymous rate limits. (You
+   can also set this from **Settings → External APIs** in the UI.)
 
-**Prerequisites**
-- Python 3.11+
-- Node.js 20+ (for the frontend build)
-- A clean virtual environment (`python -m venv` / `conda` / `uv`)
+2. **Follow a few authors.** Open **Discovery → Find & Add**, switch
+   the scope toggle to **Author**, and search by name (an ORCID or
+   OpenAlex ID also works if you have one). Pick three to five people
+   whose work you actually want to track. Each follow kicks off a
+   background backfill that pulls their recent papers into your
+   corpus — you'll see it run under **Activity**.
 
-**Install**
+3. **Wait one refresh.** Once the backfills finish, the **Feed**
+   surfaces new papers from those authors and **Discovery**
+   recommends related work. Save, like, or dismiss as you go — every
+   action teaches the ranker what you actually care about.
+
+Optional: if you have a BibTeX file or a Zotero library, import it
+from **Library → Imports**. Existing references give Discovery much
+better seed material from day one.
+
+---
+
+## Two image variants
+
+ALMa publishes two flavours of the Docker image. Both run the full
+app — Library, Discovery, Feed, Authors, Insights, the Insights graph,
+clustering, BibTeX/Zotero imports. They differ only in whether the
+local SPECTER2 encoder is bundled.
+
+**`normal`** (the default, `:0.9.1`) includes `torch` + `transformers`,
+so SPECTER2 embeddings can be computed locally on demand. Image size
+is around 1.4 GB, peak runtime memory ~2 GB. Pick this on a desktop
+or server with at least 4 GB RAM.
+
+**`lite`** (`:0.9.1-lite`) drops `torch`. Image size is around
+1.2 GB, runtime memory ~1 GB. You still get full embeddings via
+Semantic Scholar's pre-computed SPECTER2 vectors (most papers with a
+DOI have one) and you can configure OpenAI as the embedding provider
+from Settings if you want. Pick this on a Raspberry Pi or a smaller
+host where 1.5 GB of torch on disk is precious.
+
+Both variants are published for `linux/amd64` and `linux/arm64`, so
+Apple Silicon Macs and ARM servers (Pi, Graviton, Ampere) get native
+images.
+
+---
+
+## Bare metal install (advanced)
+
+Skip Docker only if you have a specific reason — the AI stack
+(`torch`, `transformers`, `hdbscan`, `umap-learn`) has heavy native
+dependencies that are easy to mismatch in unmanaged Python
+environments.
+
+You'll need Python 3.11+ and Node 20+. From a clean virtualenv:
 
 ```bash
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 
-# Lite-equivalent: core deps only
+# Lite-equivalent
 pip install -e ".[import]"
-
-# OR Normal-equivalent: core + AI stack
+# Or normal-equivalent (with the AI stack)
 pip install -e ".[ai,import]"
-```
 
-**Build the frontend**
-
-```bash
 (cd frontend && npm ci && npm run build)
-```
 
-**Run**
-
-```bash
-cp .env.example .env          # edit + chmod 600
+cp .env.example .env  # add your OpenAlex email
 mkdir -p data config
-[ -f settings.json ] || cp settings.example.json settings.json
 
 uvicorn alma.api.app:app --port 8000
 ```
 
-Open [http://localhost:8000](http://localhost:8000).
+Open `http://localhost:8000`.
 
 ---
 
-## Getting started after install
+## Configuration in one paragraph
 
-ALMa is empty on first launch — no library, no followed authors, no
-recommendations. The three things to do (in order) before the app
-becomes useful:
-
-1. **Set your OpenAlex contact email.** Edit `.env` and add
-   `OPENALEX_EMAIL=you@example.com`. OpenAlex is free, no key needed,
-   but the email enrolls you in the [polite pool](https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication)
-   so your requests don't get rate-limited under load.
-2. **Follow 3-5 authors.** Go to **Discovery → Find & Add**, switch
-   the scope toggle to **Author**, and search by name (or paste an
-   ORCID / OpenAlex ID). Click follow on the matches you want. Each
-   follow kicks off a background backfill that pulls their recent
-   papers into your corpus.
-3. **Import your own work (optional but recommended).** Go to
-   **Library → Imports**, upload a BibTeX file or a Zotero export, or
-   paste a list of DOIs. These become the seed for the Discovery
-   ranker.
-4. **Wait one refresh cycle.** The Feed inbox and Discovery
-   recommendations both populate from the backfill. You can force a
-   refresh from the Feed page (top-right) and from any lens in
-   Discovery.
-5. **Save / like / dismiss to teach the ranker.** Every action writes
-   a feedback signal. The more you triage, the better the next round
-   of recommendations.
-
-Polished onboarding (Apple-style first-run flow) lands with v1.0.0.
-
----
-
-## Configuration
-
-All settings live in `settings.json` (auto-created on first run).
-Environment variables override file settings:
-
-| Variable | Purpose |
-|----------|---------|
-| `DB_PATH` | Path to the SQLite database (default: `./data/scholar.db`) |
-| `OPENALEX_EMAIL` | Contact email for OpenAlex polite pool |
-| `OPENALEX_API_KEY` | OpenAlex API key (required for production use) |
-| `SLACK_TOKEN` | Slack Bot User OAuth Token |
-| `SLACK_CHANNEL` | Default Slack notification channel |
-| `API_KEY` | Optional API key to protect the REST API |
-
----
-
-## Project structure
-
-```
-alma/
-├── src/alma/       # Python backend
-│   ├── api/               #   FastAPI app, routes, models, deps
-│   ├── ai/                #   Embedding providers, clustering, tagging
-│   ├── discovery/         #   Recommendation engine, similarity
-│   ├── library/           #   Import, enrichment, deduplication
-│   ├── openalex/          #   OpenAlex API client
-│   ├── core/              #   Shared utilities
-│   └── config.py          #   Centralized configuration
-├── frontend/              # React 19 + Vite + TypeScript + Tailwind
-│   └── src/
-│       ├── pages/         #   Feed, Discovery, Authors, Library, ...
-│       ├── components/    #   Shared UI components
-│       └── api/           #   API client and types
-├── tests/                 # pytest test suite
-├── docs/                  # Architecture and API documentation
-├── settings.json          # Runtime configuration
-└── pyproject.toml         # Python project metadata
-```
+Most settings — Discovery weights, AI provider, clustering knobs —
+live in the SQLite database and are tuned from the **Settings** page.
+The `.env` file holds secrets (API keys, Slack tokens) and a few
+deployment knobs (`DB_PATH`, `API_KEY`). The committed
+`.env.example` is a fully-commented template; copy it to `.env` and
+fill in what you have. The full reference is in
+[docs/reference/configuration.md](docs/reference/configuration.md).
 
 ---
 
 ## Tech stack
 
-- **Backend**: Python 3.11+, FastAPI, SQLite (WAL mode), APScheduler
-- **Frontend**: React 19, Vite 6, TypeScript, Tailwind CSS 4, shadcn/ui
-- **Data**: OpenAlex (primary), Semantic Scholar (`/paper/batch`,
-  related-works, related-authors), Crossref + arXiv + bioRxiv
-- **AI** (opt-in): SPECTER2 via Semantic Scholar / local
-  `transformers` + `adapters`, optional OpenAI embeddings, HDBSCAN, UMAP
+Python 3.11 + FastAPI + SQLite (WAL) + APScheduler on the backend.
+React 19 + Vite + TypeScript + Tailwind + shadcn/ui on the frontend.
+Data comes from OpenAlex (primary), Semantic Scholar, Crossref, arXiv,
+and bioRxiv. Embeddings are SPECTER2 (local via `transformers` +
+`adapters`, or remote via Semantic Scholar / OpenAI). Clustering is
+HDBSCAN over those vectors with UMAP for the 2D Insights graph.
 
 ---
 
 ## License
 
-This project is licensed under
-[CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
-
-- **Personal use**: free
-- **Academic use**: free, but you **must cite** this software in any
-  resulting publications
-- **Commercial use**: **not permitted**
-
-See [LICENSE](LICENSE) for the full text and citation format.
-
----
-
-## Citation
-
-If you use ALMa in academic work, please cite:
-
-```bibtex
-@software{costantino2026alma,
-  author    = {Costantino, Andrea Ivan},
-  title     = {{ALMa} --- {A}nother {L}ibrary {M}anager},
-  year      = {2026},
-  url       = {https://github.com/costantinoai/alma-library-manager},
-  license   = {CC-BY-NC-4.0}
-}
-```
+Licensed under [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) —
+a software-specific source-available license. Personal use, academic
+research, hobby projects, and use by nonprofits or educational
+institutions are all permitted. Commercial use is not. Attribution
+(this `LICENSE` file and the copyright notice) must be preserved in
+copies and derivative works. See [LICENSE](LICENSE) for the full text.
 
 ---
 
 ## Author
 
-**Andrea Ivan Costantino**
-KU Leuven — andreaivan.costantino@kuleuven.be
+**Andrea Ivan Costantino** · [github.com/costantinoai](https://github.com/costantinoai)

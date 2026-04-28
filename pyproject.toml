@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alma"
-version = "0.9.0"
+version = "0.9.1"
 description = "ALMa — Another Library Manager: personal academic library management with AI-powered discovery"
-authors = [{name = "Andrea Ivan Costantino", email = "andreaivan.costantino@kuleuven.be"}]
+authors = [{name = "Andrea Ivan Costantino"}]
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["academic", "library", "publications", "openalex", "discovery", "recommendations", "research"]
-license = {text = "CC-BY-NC-4.0"}
+license = {text = "PolyForm-Noncommercial-1.0.0"}
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",

@@ -7,9 +7,8 @@ AI-powered discovery recommendations, and sends notifications via
 configurable messaging channels.
 """
 
-__version__ = "2.0.0"
+__version__ = "0.9.1"
 __author__ = "Andrea Ivan Costantino"
-__email__ = "andreaivan.costantino@kuleuven.be"
 
 # Package metadata
-__all__ = ["__version__", "__author__", "__email__"]
+__all__ = ["__version__", "__author__"]
