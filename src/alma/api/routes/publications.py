@@ -664,7 +664,6 @@ def get_paper_details(
 
 
 _NETWORK_CACHE_TTL_HOURS = 24
-_LOCAL_SUFFICIENCY_THRESHOLD = 8  # below this, trigger S2 fallback
 
 
 def _network_cache_read(
@@ -717,304 +716,292 @@ def _network_cache_write(
         logger.debug("paper_network_cache write failed: %s", exc)
 
 
-def _s2_candidate_to_related_work(cand: dict) -> dict:
-    """Shape an S2-hydrated candidate into the `RelatedWork` envelope.
+def _decode_openalex_abstract(inv_index: dict | None) -> str | None:
+    """Reconstruct an abstract from an OpenAlex inverted index.
 
-    Distinct from `_related_work_row_to_model` which reads local
-    `papers` rows. S2 rows carry `paper_id=None` (the paper isn't in
-    our corpus) unless a later join matches via DOI / openalex_id.
+    OpenAlex returns abstracts as ``{token: [position, ...]}`` rather
+    than plain text. This walks the index back into a string. Returns
+    ``None`` for missing or malformed input.
     """
-    return {
-        "paper_id": None,
-        "title": (cand.get("title") or "").strip() or "Untitled",
-        "authors": (cand.get("authors") or None),
-        "year": cand.get("year"),
-        "doi": (cand.get("doi") or None),
-        "url": (cand.get("url") or None),
-        "journal": (cand.get("journal") or None),
-        "abstract": (cand.get("abstract") or None),
-        "tldr": (cand.get("tldr") or None),
-        "cited_by_count": int(cand.get("cited_by_count") or 0),
-        "influential_citation_count": int(cand.get("influential_citation_count") or 0),
-        "openalex_id": None,
-        "semantic_scholar_id": (cand.get("semantic_scholar_id") or None),
-        "status": None,
-        "rating": None,
-        "is_influential": bool(cand.get("is_influential") or False),
-        "source": "s2_remote",
-    }
+    if not isinstance(inv_index, dict) or not inv_index:
+        return None
+    positions: list[tuple[int, str]] = []
+    for token, idx_list in inv_index.items():
+        if not isinstance(idx_list, list):
+            continue
+        for idx in idx_list:
+            try:
+                positions.append((int(idx), str(token)))
+            except (TypeError, ValueError):
+                continue
+    if not positions:
+        return None
+    positions.sort(key=lambda kv: kv[0])
+    return " ".join(token for _idx, token in positions)
 
 
-def _merge_related_works(
-    local_works: list[dict], s2_works: list[dict], *, limit: int
-) -> list[dict]:
-    """Merge local + S2 rows, dedupe, prefer local (it has paper_id).
+def _openalex_work_to_related_work(
+    work: dict,
+    *,
+    local_index: dict[str, sqlite3.Row],
+) -> dict:
+    """Shape a raw OpenAlex work dict into the ``RelatedWork`` envelope.
 
-    Dedup keys: DOI first, then S2 paper id. Local rows always come
-    first in the output so the Pivot button (which needs a local
-    `paper_id`) appears on the strongest-match copy.
+    Looks up ``local_index`` (keyed by bare W-id) to fill in ``paper_id``,
+    ``status`` and ``rating`` for in-library matches. Non-matches keep
+    ``paper_id=None`` so the frontend's "Pivot" button gracefully
+    degrades to a no-op for papers we don't yet hold.
     """
-    local_dois = {
-        (w.get("doi") or "").strip().lower()
-        for w in local_works
-        if (w.get("doi") or "").strip()
-    }
-    local_oa = {
-        (w.get("openalex_id") or "").strip().lower()
-        for w in local_works
-        if (w.get("openalex_id") or "").strip()
-    }
-    local_s2 = {
-        (w.get("semantic_scholar_id") or "").strip()
-        for w in local_works
-        if (w.get("semantic_scholar_id") or "").strip()
-    }
+    raw_id = (work.get("id") or "").rstrip("/").split("/")[-1]
+    bare_w = raw_id if raw_id.startswith("W") else None
+    title = (work.get("display_name") or "").strip() or "Untitled"
+    year = work.get("publication_year")
+    primary_location = work.get("primary_location") or {}
+    src_obj = primary_location.get("source") if isinstance(primary_location, dict) else {}
+    journal = (src_obj or {}).get("display_name") if isinstance(src_obj, dict) else None
+    url = (
+        primary_location.get("landing_page_url")
+        if isinstance(primary_location, dict)
+        else None
+    ) or (work.get("doi") and f"https://doi.org/{(work['doi'] or '').replace('https://doi.org/', '')}") or work.get("id")
+    doi_raw = (work.get("doi") or "").replace("https://doi.org/", "").strip() or None
 
-    merged = list(local_works)
-    for w in s2_works:
-        doi = (w.get("doi") or "").strip().lower()
-        s2_id = (w.get("semantic_scholar_id") or "").strip()
-        # Skip any S2 row that matches a local row by DOI / openalex / s2 id.
-        if doi and doi in local_dois:
-            continue
-        if s2_id and s2_id in local_s2:
-            continue
-        # OpenAlex IDs aren't emitted by the S2 edge fetch, so no
-        # openalex dedup possible here — fine, DOI + S2 id cover it.
-        _ = local_oa  # kept for future tightening
-        merged.append(w)
-    return merged[:limit]
+    authorships = work.get("authorships") or []
+    authors_str = ", ".join(
+        (a.get("author") or {}).get("display_name", "")
+        for a in authorships
+        if isinstance(a, dict)
+    ) or None
 
+    abstract = _decode_openalex_abstract(work.get("abstract_inverted_index"))
+    cited_by = int(work.get("cited_by_count") or 0)
 
-def _related_work_row_to_model(row: sqlite3.Row) -> dict:
-    """Project a `papers` row into the trimmed `RelatedWork` shape."""
+    local: sqlite3.Row | None = local_index.get(bare_w) if bare_w else None
+    if local is None and doi_raw:
+        local = local_index.get(f"doi:{doi_raw.lower()}")
+    in_library = local is not None
     return {
-        "paper_id": str(row["id"] or "").strip() or None,
-        "title": str(row["title"] or "").strip() or "Untitled",
-        "authors": (row["authors"] or None),
-        "year": row["year"],
-        "doi": (row["doi"] or None),
-        "url": (row["url"] or None),
-        "journal": (row["journal"] or None),
-        "abstract": (row["abstract"] or None),
-        "tldr": (row["tldr"] or None) if "tldr" in row.keys() else None,
-        "cited_by_count": int(row["cited_by_count"] or 0),
-        "influential_citation_count": (
-            int(row["influential_citation_count"] or 0)
-            if "influential_citation_count" in row.keys()
-            else 0
-        ),
-        "openalex_id": (row["openalex_id"] or None),
-        "semantic_scholar_id": (
-            (row["semantic_scholar_id"] or None)
-            if "semantic_scholar_id" in row.keys()
-            else None
-        ),
-        "status": (row["status"] or None),
-        "rating": row["rating"] if "rating" in row.keys() else None,
+        "paper_id": str(local["id"]) if local is not None else None,
+        "title": title,
+        "authors": authors_str,
+        "year": year,
+        "doi": doi_raw,
+        "url": url,
+        "journal": journal,
+        "abstract": abstract,
+        "tldr": None,
+        "cited_by_count": cited_by,
+        "influential_citation_count": 0,
+        "openalex_id": bare_w,
+        "semantic_scholar_id": None,
+        "status": (local["status"] if (local is not None and "status" in local.keys()) else None),
+        "rating": (local["rating"] if (local is not None and "rating" in local.keys()) else None),
         "is_influential": False,
-        "source": "local",
+        "in_library": in_library,
+        "source": "openalex",
     }
 
 
-def _anchor_s2_seed_id(anchor: sqlite3.Row) -> Optional[str]:
-    """Return the best S2-acceptable seed id for an anchor paper, or None.
+def _build_local_index(
+    db: sqlite3.Connection,
+    *,
+    openalex_ids: list[str],
+    dois: list[str],
+) -> dict[str, sqlite3.Row]:
+    """Bulk-look-up local papers for an OpenAlex result set.
 
-    Order: native `paperId` > `DOI:{doi}` > `CorpusID:{corpus}`. S2's
-    recommendation/reference/citation endpoints accept all three forms
-    interchangeably.
+    Indexes by bare W-id and (lowercased) DOI so
+    ``_openalex_work_to_related_work`` can flag in-library hits in O(1).
     """
-    s2_id = str(anchor["semantic_scholar_id"] or "").strip() \
-        if "semantic_scholar_id" in anchor.keys() else ""
-    if s2_id:
-        return s2_id
-    doi = str(anchor["doi"] or "").strip() if "doi" in anchor.keys() else ""
-    if doi:
-        return f"DOI:{doi}"
-    corpus = str(anchor["semantic_scholar_corpus_id"] or "").strip() \
-        if "semantic_scholar_corpus_id" in anchor.keys() else ""
-    if corpus:
-        return f"CorpusID:{corpus}"
-    return None
+    out: dict[str, sqlite3.Row] = {}
+    if openalex_ids:
+        placeholders = ",".join("?" for _ in openalex_ids)
+        try:
+            rows = db.execute(
+                f"SELECT * FROM papers WHERE openalex_id IN ({placeholders}) "
+                "AND COALESCE(status, '') != 'removed'",
+                openalex_ids,
+            ).fetchall()
+            for row in rows:
+                oa = str(row["openalex_id"] or "").strip()
+                if oa:
+                    out[oa] = row
+        except sqlite3.OperationalError as exc:
+            logger.debug("local_index W-id lookup failed: %s", exc)
+    if dois:
+        normalized = [d.lower() for d in dois if d]
+        placeholders = ",".join("?" for _ in normalized)
+        try:
+            rows = db.execute(
+                f"SELECT * FROM papers WHERE LOWER(doi) IN ({placeholders}) "
+                "AND COALESCE(status, '') != 'removed'",
+                normalized,
+            ).fetchall()
+            for row in rows:
+                d = str(row["doi"] or "").strip().lower()
+                if d:
+                    out.setdefault(f"doi:{d}", row)
+        except sqlite3.OperationalError as exc:
+            logger.debug("local_index DOI lookup failed: %s", exc)
+    return out
+
+
+def _anchor_openalex_id(anchor: sqlite3.Row) -> str | None:
+    """Return the bare ``Wxxx`` OpenAlex id of an anchor row, or None."""
+    raw = str(anchor["openalex_id"] or "").strip() if "openalex_id" in anchor.keys() else ""
+    if not raw:
+        return None
+    bare = raw.rstrip("/").split("/")[-1]
+    return bare if bare and bare[0] in ("W", "w") else None
 
 
 @router.get(
     "/{paper_id}/prior-works",
-    summary="Papers referenced by this paper (corpus + S2 fallback)",
+    summary="Papers referenced by this paper (full OpenAlex graph)",
 )
 def list_prior_works(
     paper_id: str,
     limit: int = 30,
-    include_remote: bool = True,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Return papers this paper references (outgoing graph edges).
+    """Return every paper this paper references, fetched from OpenAlex.
 
-    Local-first SQL over `publication_references`; falls back to S2
-    `/paper/{id}/references` when the local count is thin (and
-    `include_remote` is set; default true). S2 results are merged,
-    deduped against local by DOI / S2 id, and cached for 24 h in
-    `paper_network_cache` so repeat dialog opens are instant.
+    The OpenAlex graph is the source of truth — local
+    ``publication_references`` is no longer queried for this view, so
+    the user sees the full bibliography rather than a corpus-only
+    subset. Local matches are looked up in bulk and surfaced via
+    ``in_library=true`` plus an attached ``paper_id`` so the Pivot
+    button still works for in-library hits.
+
+    Cached for 24 h in ``paper_network_cache`` so repeat opens are
+    instant; cache key is ``paper_id + 'prior'``.
     """
     bounded = max(1, min(int(limit or 30), 100))
     anchor = db.execute(
-        "SELECT id, openalex_id, doi, semantic_scholar_id, "
-        "semantic_scholar_corpus_id FROM papers WHERE id = ?",
+        "SELECT id, openalex_id, doi FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone()
     if anchor is None:
         raise HTTPException(status_code=404, detail="Paper not found")
-    try:
-        rows = db.execute(
-            """
-            SELECT DISTINCT p.*
-            FROM publication_references pr
-            JOIN papers p ON p.openalex_id = pr.referenced_work_id
-            WHERE pr.paper_id = ?
-              AND COALESCE(p.status, '') != 'removed'
-            ORDER BY COALESCE(p.cited_by_count, 0) DESC,
-                     COALESCE(p.year, 0) DESC,
-                     p.title COLLATE NOCASE ASC
-            LIMIT ?
-            """,
-            (paper_id, bounded),
-        ).fetchall()
-    except sqlite3.OperationalError as exc:
-        logger.debug("prior-works query failed: %s", exc)
-        rows = []
-    local_works = [_related_work_row_to_model(r) for r in rows]
 
-    remote_works: list[dict] = []
-    remote_count = 0
-    # T6b — fall back to S2 when local coverage is thin. Cache hits
-    # skip the network entirely (24h TTL, keyed on paper_id +
-    # direction).
-    if include_remote and len(local_works) < _LOCAL_SUFFICIENCY_THRESHOLD:
-        cached = _network_cache_read(db, paper_id, "prior")
-        if cached is not None:
-            remote_works = cached.get("s2_works") or []
-            remote_count = int(cached.get("remote_count") or 0)
-        else:
-            seed = _anchor_s2_seed_id(anchor)
-            if seed:
-                try:
-                    from alma.discovery import semantic_scholar as _s2
+    seed_oa = _anchor_openalex_id(anchor)
+    if not seed_oa:
+        # No OpenAlex id on the anchor — there's no remote graph to
+        # fetch. Return an empty envelope rather than guessing.
+        return {
+            "direction": "prior",
+            "source_paper_id": paper_id,
+            "works": [],
+            "remote_count": 0,
+            "in_library_count": 0,
+        }
 
-                    s2_raw = _s2.fetch_references_for_paper(seed, limit=bounded)
-                except Exception as exc:
-                    logger.debug("S2 references fallback failed: %s", exc)
-                    s2_raw = []
-                remote_works = [_s2_candidate_to_related_work(c) for c in s2_raw]
-                remote_count = len(remote_works)
-                _network_cache_write(
-                    db, paper_id, "prior",
-                    {"s2_works": remote_works, "remote_count": remote_count},
-                )
+    cached = _network_cache_read(db, paper_id, "prior")
+    if cached is not None:
+        oa_works = cached.get("oa_works") or []
+    else:
+        from alma.openalex.client import fetch_referenced_works_for_openalex_id
 
-    merged = _merge_related_works(local_works, remote_works, limit=bounded)
+        oa_works = fetch_referenced_works_for_openalex_id(seed_oa, limit=bounded)
+        _network_cache_write(db, paper_id, "prior", {"oa_works": oa_works})
+
+    oa_ids = [
+        (w.get("id") or "").rstrip("/").split("/")[-1]
+        for w in oa_works
+        if w.get("id")
+    ]
+    oa_ids = [oid for oid in oa_ids if oid.startswith("W")]
+    dois = [
+        (w.get("doi") or "").replace("https://doi.org/", "").strip()
+        for w in oa_works
+        if w.get("doi")
+    ]
+    local_index = _build_local_index(db, openalex_ids=oa_ids, dois=dois)
+    works = [
+        _openalex_work_to_related_work(w, local_index=local_index)
+        for w in oa_works
+    ]
+    in_library_count = sum(1 for w in works if w.get("in_library"))
     return {
         "direction": "prior",
         "source_paper_id": paper_id,
-        "works": merged,
-        "local_count": len(local_works),
-        "remote_count": remote_count,
+        "works": works[:bounded],
+        "remote_count": len(oa_works),
+        "in_library_count": in_library_count,
     }
 
 
 @router.get(
     "/{paper_id}/derivative-works",
-    summary="Papers that cite this paper (corpus + S2 fallback)",
+    summary="Papers that cite this paper (full OpenAlex graph)",
 )
 def list_derivative_works(
     paper_id: str,
     limit: int = 30,
-    include_remote: bool = True,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Return papers that cite this paper (incoming graph edges).
+    """Return every paper that cites this paper, fetched from OpenAlex.
 
-    Local-first SQL over `publication_references`, ordered by
-    influential-citation count. Falls back to S2
-    `/paper/{id}/citations` when the local count is thin (and
-    `include_remote` is set). S2 per-edge `isInfluential` lights up
-    the amber ★ chip on the frontend row.
+    Uses OpenAlex's ``filter=cites:Wxxx`` query, sorted by
+    ``cited_by_count desc`` so high-impact citing papers surface
+    first. Local-corpus matches are flagged via ``in_library=true``;
+    the user sees the full forward-citation graph rather than only
+    locally-known citers.
+
+    Cached for 24 h in ``paper_network_cache``.
     """
     bounded = max(1, min(int(limit or 30), 100))
     anchor = db.execute(
-        "SELECT id, openalex_id, doi, semantic_scholar_id, "
-        "semantic_scholar_corpus_id FROM papers WHERE id = ?",
+        "SELECT id, openalex_id, doi FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone()
     if anchor is None:
         raise HTTPException(status_code=404, detail="Paper not found")
-    anchor_openalex_id = str(anchor["openalex_id"] or "").strip()
-    local_works: list[dict] = []
-    if anchor_openalex_id:
-        try:
-            rows = db.execute(
-                """
-                SELECT DISTINCT p.*
-                FROM publication_references pr
-                JOIN papers p ON p.id = pr.paper_id
-                WHERE pr.referenced_work_id = ?
-                  AND p.id != ?
-                  AND COALESCE(p.status, '') != 'removed'
-                ORDER BY COALESCE(p.influential_citation_count, 0) DESC,
-                         COALESCE(p.year, 0) DESC,
-                         COALESCE(p.cited_by_count, 0) DESC,
-                         p.title COLLATE NOCASE ASC
-                LIMIT ?
-                """,
-                (anchor_openalex_id, paper_id, bounded),
-            ).fetchall()
-        except sqlite3.OperationalError as exc:
-            logger.debug("derivative-works query failed: %s", exc)
-            rows = []
-        local_works = [_related_work_row_to_model(r) for r in rows]
 
-    remote_works: list[dict] = []
-    remote_count = 0
-    if include_remote and len(local_works) < _LOCAL_SUFFICIENCY_THRESHOLD:
-        cached = _network_cache_read(db, paper_id, "derivative")
-        if cached is not None:
-            remote_works = cached.get("s2_works") or []
-            remote_count = int(cached.get("remote_count") or 0)
-        else:
-            seed = _anchor_s2_seed_id(anchor)
-            if seed:
-                try:
-                    from alma.discovery import semantic_scholar as _s2
+    seed_oa = _anchor_openalex_id(anchor)
+    if not seed_oa:
+        return {
+            "direction": "derivative",
+            "source_paper_id": paper_id,
+            "works": [],
+            "remote_count": 0,
+            "in_library_count": 0,
+        }
 
-                    s2_raw = _s2.fetch_citations_for_paper(seed, limit=bounded)
-                except Exception as exc:
-                    logger.debug("S2 citations fallback failed: %s", exc)
-                    s2_raw = []
-                remote_works = [_s2_candidate_to_related_work(c) for c in s2_raw]
-                # Sort derivative remote rows by influential first, then
-                # by citation count so the best evidence bubbles up
-                # alongside any local rows (local already sorted).
-                remote_works.sort(
-                    key=lambda w: (
-                        -int(bool(w.get("is_influential"))),
-                        -int(w.get("influential_citation_count") or 0),
-                        -int(w.get("cited_by_count") or 0),
-                    )
-                )
-                remote_count = len(remote_works)
-                _network_cache_write(
-                    db, paper_id, "derivative",
-                    {"s2_works": remote_works, "remote_count": remote_count},
-                )
+    cached = _network_cache_read(db, paper_id, "derivative")
+    if cached is not None:
+        oa_works = cached.get("oa_works") or []
+    else:
+        from alma.openalex.client import fetch_citing_works_for_openalex_id
 
-    merged = _merge_related_works(local_works, remote_works, limit=bounded)
+        oa_works = fetch_citing_works_for_openalex_id(seed_oa, limit=bounded)
+        _network_cache_write(db, paper_id, "derivative", {"oa_works": oa_works})
+
+    oa_ids = [
+        (w.get("id") or "").rstrip("/").split("/")[-1]
+        for w in oa_works
+        if w.get("id")
+    ]
+    oa_ids = [oid for oid in oa_ids if oid.startswith("W")]
+    dois = [
+        (w.get("doi") or "").replace("https://doi.org/", "").strip()
+        for w in oa_works
+        if w.get("doi")
+    ]
+    local_index = _build_local_index(db, openalex_ids=oa_ids, dois=dois)
+    works = [
+        _openalex_work_to_related_work(w, local_index=local_index)
+        for w in oa_works
+    ]
+    in_library_count = sum(1 for w in works if w.get("in_library"))
     return {
         "direction": "derivative",
         "source_paper_id": paper_id,
-        "works": merged,
-        "local_count": len(local_works),
-        "remote_count": remote_count,
+        "works": works[:bounded],
+        "remote_count": len(oa_works),
+        "in_library_count": in_library_count,
     }
 
 
