@@ -267,6 +267,14 @@ export function Sidebar({
                 <span className="text-alma-100">A</span>·<span className="text-alma-100">L</span>·<span className="text-alma-100">Ma</span>
               </div>
               <div className="mt-0.5 text-[10px] text-alma-400">Another Library Manager</div>
+              <a
+                href="https://costantinoai.github.io/alma-library-manager/"
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1 text-[10px] text-alma-400 hover:text-alma-cream"
+              >
+                Documentation ↗
+              </a>
             </>
           )}
           <button
