@@ -405,14 +405,14 @@ class SlackNotifier:
         # Prefer a YYYY-MM-DD when we have one; fall back to bare year.
         pub_date = str(paper.get("publication_date") or "").strip()
         journal = paper.get("journal") or paper.get("venue") or ""
-        citations = paper.get("citations")
-        if citations is None:
-            citations = paper.get("cited_by_count")
         abstract = str(paper.get("abstract") or "").strip()
-        # Provenance: which rule (monitor / keyword / etc.) triggered this
-        # paper. Set by _evaluate_rule. Multiple sources are pre-joined
-        # with ", " by _deduplicate_papers when the same paper matches
-        # several rules in the same alert.
+        # Match: the entities inside the monitor(s) that triggered this
+        # paper (e.g., author names, keywords, topic). Set by
+        # _evaluate_rule. _deduplicate_papers joins multiple sources with
+        # ", " when the same paper matches more than one rule in the alert.
+        # Citations are intentionally NOT rendered: these are new papers
+        # by construction (publication_date >= now - 30d), so the count is
+        # always 0 / near-0 and adds noise.
         alert_source = str(paper.get("alert_source") or "").strip()
 
         # Title as clickable link if URL is available
@@ -443,17 +443,11 @@ class SlackNotifier:
             meta_parts.append(str(year))
         if journal:
             meta_parts.append(str(journal))
-        if citations is not None and str(citations).strip() not in ("", "None"):
-            try:
-                citation_count = int(citations)
-                meta_parts.append(f"{citation_count} citation(s)")
-            except (TypeError, ValueError):
-                pass
         if meta_parts:
             lines.append(" | ".join(meta_parts))
 
         if alert_source:
-            lines.append(f"_{alert_source}_")
+            lines.append(f"Match: {alert_source}")
 
         if abstract:
             # Slack section text caps at 3000 chars; keep abstracts tight so

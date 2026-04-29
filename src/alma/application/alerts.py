@@ -1157,24 +1157,29 @@ def _evaluate_rule(
         monitor_id = _resolve_feed_monitor_id(db, config)
         if not monitor_id:
             return []
-        # Resolve a human-readable label up front so each returned paper
-        # carries its own provenance (which monitor triggered the match).
-        # The Slack render uses this to add a "Source: ..." line per paper,
-        # which is essential when one alert spans multiple monitors.
+        # Resolve a human-readable "what inside the monitor did this paper
+        # match" string. Per D-AL-10: when an alert covers multiple rules
+        # (e.g., two follow-author monitors + a keyword monitor) and the
+        # same paper triggers more than one of them, the Slack card needs
+        # to list ALL the matched entities -- not the abstract monitor
+        # type / id -- so the user can see at a glance why the paper
+        # surfaced.
+        #
+        # For an `author` monitor the matched entity is the author name.
+        # For other monitor types we fall back to the monitor's label,
+        # which is the human display string the user picked for it.
+        # `_deduplicate_papers` joins these with ", " when one paper
+        # matches multiple rules in the same alert.
         monitor_label_row = db.execute(
             "SELECT label, monitor_type, monitor_key FROM feed_monitors WHERE id = ?",
             (monitor_id,),
         ).fetchone()
         if monitor_label_row is not None:
             label = str(monitor_label_row["label"] or "").strip()
-            monitor_type_str = str(monitor_label_row["monitor_type"] or "").strip()
             display_label = label or monitor_label_row["monitor_key"] or monitor_id
-            if monitor_type_str:
-                alert_source = f"Monitor ({monitor_type_str}): {display_label}"
-            else:
-                alert_source = f"Monitor: {display_label}"
+            alert_source = display_label
         else:
-            alert_source = f"Monitor: {monitor_id}"
+            alert_source = monitor_id
 
         statuses = [
             str(status_value).strip().lower()
