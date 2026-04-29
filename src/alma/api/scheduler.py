@@ -753,6 +753,16 @@ def evaluate_scheduled_alerts() -> None:
                 result = asyncio.run(
                     alerts_app.evaluate_digest(conn, alert_id, trigger_source="scheduler")
                 )
+                # `open_db_connection` does NOT auto-commit (unlike the
+                # request-scoped `get_db` dependency).  `evaluate_digest`
+                # writes to `alerted_publications`, `alert_history`, and
+                # `alerts.last_evaluated_at`; without an explicit commit
+                # the connection close at the end of the sweep rolls them
+                # back -- the Slack DM goes out (network side-effect) but
+                # the dedup record is lost, so the same paper re-fires on
+                # the next sweep.  Same class of fix as
+                # `routes/alerts.py:evaluate_alert` in v0.10.0.
+                conn.commit()
                 if result is None:
                     continue
                 sent_total += int(result.get("papers_sent") or 0)
@@ -760,6 +770,10 @@ def evaluate_scheduled_alerts() -> None:
                 evaluated_count += 1
 
             except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.exception("Error evaluating alert %s", alert_id)
 
         conn.close()
