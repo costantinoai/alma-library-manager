@@ -343,11 +343,12 @@ def score_papers_batch(
             ).fetchall()
         except sqlite3.OperationalError:
             emb_rows = []
+        from alma.core.vector_blob import decode_vector
         for row in emb_rows:
             blob = row["embedding"]
             if not blob:
                 continue
-            vec = np.frombuffer(blob, dtype=np.float32)
+            vec = decode_vector(blob)
             norm = float(np.linalg.norm(vec))
             if norm <= 0.0:
                 continue

@@ -923,7 +923,8 @@ def get_cached_embedding(
     ).fetchone()
 
     if row is not None:
-        return np.frombuffer(row["embedding"], dtype=np.float32).copy()
+        from alma.core.vector_blob import decode_vector
+        return decode_vector(row["embedding"])
 
     return None
 
