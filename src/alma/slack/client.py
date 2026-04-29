@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 _MAX_PAPERS_PER_MESSAGE = 15
 
 
+class SlackResolveError(RuntimeError):
+    """Raised when a Slack channel/user name cannot be resolved to an ID."""
+
+
 class SlackNotifier:
     """Send rich Block Kit messages to Slack channels.
 
@@ -44,6 +48,9 @@ class SlackNotifier:
         self._token = token
         self._default_channel = default_channel
         self._client = None  # lazy-initialized WebClient
+        # Cache: user-supplied name (channel name OR display name) → Slack channel ID.
+        # Avoids re-listing on every send within a single process lifetime.
+        self._resolved_channel_cache: Dict[str, str] = {}
 
         if self._token:
             logger.info(
@@ -91,7 +98,12 @@ class SlackNotifier:
         return bool(self._token)
 
     def resolve_channel(self, channel: Optional[str] = None) -> str:
-        """Return the effective channel, falling back to *default_channel*.
+        """Return the effective channel string, falling back to *default_channel*.
+
+        This returns the user-supplied label (which may be a channel name like
+        ``general``, a Slack ID like ``C0123…``, or a display name like
+        ``Andrea Costantino``). Resolution to a concrete Slack ID happens at
+        send time via :meth:`_resolve_target`.
 
         Raises:
             ValueError: If no channel can be determined.
@@ -102,6 +114,103 @@ class SlackNotifier:
                 "No Slack channel specified and no default_channel configured"
             )
         return ch
+
+    # ------------------------------------------------------------------
+    # Channel-name / display-name resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_target(self, target: str) -> str:
+        """Resolve a Slack channel name or user display name to a channel ID.
+
+        Mirrors ``scholar-slack-bot``'s ``send_to_slack`` semantics: try the
+        input as a channel name first; if that misses, try it as a user
+        display name and open a DM. Already-formed Slack IDs (``C…`` /
+        ``D…`` / ``G…``) and explicitly prefixed names (``#general``) pass
+        straight through.
+
+        Resolved IDs are cached on the notifier instance so a long-lived
+        process doesn't re-list workspace members on every send.
+
+        Raises:
+            SlackResolveError: When the target cannot be resolved.
+        """
+        if not target:
+            raise SlackResolveError("empty Slack target")
+
+        # Cache hit — fastest path.
+        if target in self._resolved_channel_cache:
+            return self._resolved_channel_cache[target]
+
+        # Already a Slack ID (channel C…, group G…, DM D…). Use directly.
+        if len(target) >= 9 and target[0] in {"C", "D", "G"} and target[1:].isalnum():
+            self._resolved_channel_cache[target] = target
+            return target
+
+        # Pre-prefixed channel names (#general): chat.postMessage accepts them
+        # but `conversations_open` won't, so still pass-through.
+        if target.startswith("#"):
+            self._resolved_channel_cache[target] = target
+            return target
+
+        bare = target.lstrip("@").strip()
+        if not bare:
+            raise SlackResolveError(f"empty Slack target after strip: {target!r}")
+
+        client = self._get_client()
+
+        # Try as channel name first.
+        try:
+            resp = client.conversations_list(
+                types="public_channel,private_channel",
+                limit=1000,
+            )
+            for ch in resp.get("channels", []) or []:
+                name = str(ch.get("name") or "").strip().lower()
+                if name and name == bare.lower():
+                    resolved = str(ch.get("id"))
+                    self._resolved_channel_cache[target] = resolved
+                    logger.info(
+                        "Resolved %r via conversations.list -> %s", target, resolved
+                    )
+                    return resolved
+        except Exception as exc:  # pragma: no cover - network failures
+            logger.warning(
+                "conversations.list lookup for %r failed: %s", target, exc
+            )
+
+        # Fall back to user display name -> open DM.
+        try:
+            resp = client.users_list(limit=1000)
+            for user in resp.get("members", []) or []:
+                if user.get("deleted") or user.get("is_bot"):
+                    continue
+                profile = user.get("profile") or {}
+                candidates = {
+                    str(user.get("name") or "").strip(),
+                    str(user.get("real_name") or "").strip(),
+                    str(profile.get("display_name") or "").strip(),
+                    str(profile.get("real_name") or "").strip(),
+                }
+                if any(c and c.lower() == bare.lower() for c in candidates):
+                    user_id = str(user.get("id") or "")
+                    if not user_id:
+                        continue
+                    dm = client.conversations_open(users=user_id)
+                    if dm.get("ok"):
+                        channel_obj = dm.get("channel") or {}
+                        resolved = str(channel_obj.get("id") or "")
+                        if resolved:
+                            self._resolved_channel_cache[target] = resolved
+                            logger.info(
+                                "Resolved %r via users.list -> DM %s",
+                                target,
+                                resolved,
+                            )
+                            return resolved
+        except Exception as exc:  # pragma: no cover - network failures
+            logger.warning("users.list lookup for %r failed: %s", target, exc)
+
+        raise SlackResolveError(f"channel_not_found: {target!r}")
 
     # ---- Paper alert -------------------------------------------------
 
@@ -131,11 +240,37 @@ class SlackNotifier:
             return True
 
         target = self.resolve_channel(channel)
-        blocks = self._build_paper_alert_blocks(papers, alert_name)
-        fallback_text = (
-            f"Alert: {alert_name} -- {len(papers)} new paper(s) found"
-        )
-        return await self._post_message(target, blocks, fallback_text)
+
+        # Chunk into runs of _MAX_PAPERS_PER_MESSAGE so a 16+ paper fire
+        # produces multiple Slack messages instead of silently truncating.
+        # All-or-nothing semantics: return True only when every chunk
+        # delivers; the alert evaluator commits `alerted_publications`
+        # only on True, so a partial failure leaves the un-acked papers
+        # eligible for retry next fire.
+        total = len(papers)
+        chunk_size = _MAX_PAPERS_PER_MESSAGE
+        chunks = [papers[i : i + chunk_size] for i in range(0, total, chunk_size)]
+        for index, chunk in enumerate(chunks, start=1):
+            start = (index - 1) * chunk_size + 1
+            end = start + len(chunk) - 1
+            header = (
+                f"Alert: {alert_name} -- papers {start}-{end} of {total}"
+                if len(chunks) > 1
+                else f"Alert: {alert_name} -- {total} new paper(s) found"
+            )
+            blocks = self._build_paper_alert_blocks(chunk, header)
+            fallback_text = header
+            ok = await self._post_message(target, blocks, fallback_text)
+            if not ok:
+                logger.error(
+                    "Slack chunk %d/%d failed for alert '%s'; aborting "
+                    "remaining sends",
+                    index,
+                    len(chunks),
+                    alert_name,
+                )
+                return False
+        return True
 
     # ---- Recommendations ---------------------------------------------
 
@@ -187,7 +322,7 @@ class SlackNotifier:
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "Scholar Slack Bot -- Connection Test",
+                    "text": "ALMa -- Connection Test",
                     "emoji": True,
                 },
             },
@@ -197,58 +332,45 @@ class SlackNotifier:
                 "text": {
                     "type": "mrkdwn",
                     "text": (
-                        "If you can see this message, the Slack integration "
-                        "is working correctly.\n\n"
+                        "If you can see this message, the ALMa Slack "
+                        "integration is working correctly.\n\n"
                         f"*Timestamp:* {now}\n"
-                        f"*Channel:* {target}"
+                        f"*Target:* {target}"
                     ),
                 },
             },
         ]
-        return await self._post_message(
-            target, blocks, "Scholar Slack Bot test message"
-        )
+        return await self._post_message(target, blocks, "ALMa connectivity test")
 
     # ------------------------------------------------------------------
     # Block Kit builders
     # ------------------------------------------------------------------
 
     def _build_paper_alert_blocks(
-        self, papers: List[dict], alert_name: str
+        self, papers: List[dict], header_text: str
     ) -> List[dict]:
-        """Build Block Kit blocks for a paper alert message."""
-        count = len(papers)
+        """Build Block Kit blocks for a paper alert message.
+
+        ``header_text`` is the exact string rendered as the message header.
+        Chunking semantics live in :meth:`send_paper_alert`; this builder
+        renders whatever subset of papers it is handed, no slicing or
+        overflow note.
+        """
         blocks: List[dict] = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Alert: {alert_name} -- {count} new paper(s) found",
+                    "text": header_text,
                     "emoji": True,
                 },
             },
             {"type": "divider"},
         ]
 
-        for paper in papers[:_MAX_PAPERS_PER_MESSAGE]:
+        for paper in papers:
             blocks.append(self._format_paper_block(paper))
             blocks.append({"type": "divider"})
-
-        if count > _MAX_PAPERS_PER_MESSAGE:
-            blocks.append(
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": (
-                                f"_...and {count - _MAX_PAPERS_PER_MESSAGE} "
-                                f"more paper(s) not shown._"
-                            ),
-                        }
-                    ],
-                }
-            )
 
         # Footer with timestamp
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -258,7 +380,7 @@ class SlackNotifier:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Sent by Scholar Slack Bot | {now}",
+                        "text": f"Sent by ALMa | {now}",
                     }
                 ],
             }
@@ -270,14 +392,28 @@ class SlackNotifier:
         """Create a Block Kit section for a single paper.
 
         Expected paper dict keys (all optional except title):
-            title, authors, year, journal, url, citations, doi
+            title, authors, year, journal, url, citations, doi, abstract,
+            publication_date.
         """
-        title = paper.get("title", "Untitled")
-        url = paper.get("url") or paper.get("pub_url") or ""
+        title = paper.get("title") or "Untitled"
+        url = paper.get("url") or paper.get("pub_url") or paper.get("doi") or ""
+        if url and url.startswith("10."):
+            # Bare DOI -> resolvable link
+            url = f"https://doi.org/{url}"
         authors = paper.get("authors", "")
-        year = paper.get("year", "")
-        journal = paper.get("journal", "")
+        year = paper.get("year") or ""
+        # Prefer a YYYY-MM-DD when we have one; fall back to bare year.
+        pub_date = str(paper.get("publication_date") or "").strip()
+        journal = paper.get("journal") or paper.get("venue") or ""
         citations = paper.get("citations")
+        if citations is None:
+            citations = paper.get("cited_by_count")
+        abstract = str(paper.get("abstract") or "").strip()
+        # Provenance: which rule (monitor / keyword / etc.) triggered this
+        # paper. Set by _evaluate_rule. Multiple sources are pre-joined
+        # with ", " by _deduplicate_papers when the same paper matches
+        # several rules in the same alert.
+        alert_source = str(paper.get("alert_source") or "").strip()
 
         # Title as clickable link if URL is available
         if url:
@@ -286,28 +422,47 @@ class SlackNotifier:
             title_line = f"*{title}*"
 
         # Build detail lines
-        lines = [title_line]
+        lines: List[str] = [title_line]
         if authors:
-            # Abbreviate long author lists
-            author_list = [a.strip() for a in authors.split(",")]
+            # Abbreviate long author lists, mirroring scholar-slack-bot's
+            # "First, [+N], Last" shape.
+            author_list = [a.strip() for a in str(authors).split(",") if a.strip()]
             if len(author_list) > 4:
                 authors_text = (
-                    f"{author_list[0]}, ... (+{len(author_list) - 2}), "
+                    f"{author_list[0]}, [+{len(author_list) - 2}], "
                     f"{author_list[-1]}"
                 )
             else:
-                authors_text = authors
+                authors_text = ", ".join(author_list)
             lines.append(f"Authors: {authors_text}")
 
-        meta_parts = []
-        if year:
+        meta_parts: List[str] = []
+        if pub_date:
+            meta_parts.append(pub_date)
+        elif year:
             meta_parts.append(str(year))
         if journal:
-            meta_parts.append(journal)
-        if citations is not None:
-            meta_parts.append(f"{citations} citations")
+            meta_parts.append(str(journal))
+        if citations is not None and str(citations).strip() not in ("", "None"):
+            try:
+                citation_count = int(citations)
+                meta_parts.append(f"{citation_count} citation(s)")
+            except (TypeError, ValueError):
+                pass
         if meta_parts:
             lines.append(" | ".join(meta_parts))
+
+        if alert_source:
+            lines.append(f"_{alert_source}_")
+
+        if abstract:
+            # Slack section text caps at 3000 chars; keep abstracts tight so
+            # 15 papers in one message stay well under the limit, and so
+            # the inbox doesn't read like a full-text dump.
+            snippet = abstract.replace("\n", " ").strip()
+            if len(snippet) > 280:
+                snippet = snippet[:280].rstrip() + "..."
+            lines.append(snippet)
 
         return {
             "type": "section",
@@ -361,7 +516,7 @@ class SlackNotifier:
                 "elements": [
                     {
                         "type": "mrkdwn",
-                        "text": f"Sent by Scholar Slack Bot | {now}",
+                        "text": f"Sent by ALMa | {now}",
                     }
                 ],
             }
@@ -422,16 +577,21 @@ class SlackNotifier:
         failures through the return value.
         """
         try:
+            target = self._resolve_target(channel)
+        except SlackResolveError as exc:
+            logger.error("Failed to resolve Slack target %r: %s", channel, exc)
+            return False
+        try:
             client = self._get_client()
             response = client.chat_postMessage(
-                channel=channel,
+                channel=target,
                 blocks=blocks,
                 text=fallback_text,
             )
             if response.get("ok"):
                 logger.info(
                     "Slack message sent to %s (ts=%s)",
-                    channel,
+                    target,
                     response.get("ts"),
                 )
                 return True
@@ -445,7 +605,7 @@ class SlackNotifier:
             # Token not configured
             raise
         except Exception as e:
-            logger.error("Failed to send Slack message to %s: %s", channel, e)
+            logger.error("Failed to send Slack message to %s: %s", target, e)
             return False
 
 

@@ -51,6 +51,25 @@ def get_rule(db: sqlite3.Connection, rule_id: str) -> Optional[dict]:
     return _to_rule_dict(row) if row else None
 
 
+def _validate_rule_config(rule_type: str, rule_config: dict) -> None:
+    """Validate that ``rule_config`` carries the keys this rule_type needs.
+
+    Raises ``ValueError`` on missing required fields. The route layer
+    converts the ValueError into a 400 response so the user sees a
+    precise error rather than a silently-empty rule that matches nothing.
+    """
+    if rule_type == "feed_monitor":
+        # Either monitor_id or monitor_name must be present so
+        # _resolve_feed_monitor_id can target a specific monitor.
+        monitor_id = str((rule_config or {}).get("monitor_id") or "").strip()
+        monitor_name = str((rule_config or {}).get("monitor_name") or "").strip()
+        if not monitor_id and not monitor_name:
+            raise ValueError(
+                "feed_monitor rules require rule_config.monitor_id "
+                "(or rule_config.monitor_name)"
+            )
+
+
 def create_rule(
     db: sqlite3.Connection,
     *,
@@ -63,6 +82,7 @@ def create_rule(
     """Create a new rule."""
     if rule_type not in VALID_RULE_TYPES:
         raise ValueError(f"Unsupported rule_type: {rule_type}")
+    _validate_rule_config(rule_type, rule_config)
     rid = uuid.uuid4().hex
     now = datetime.utcnow().isoformat()
     db.execute(
@@ -96,6 +116,7 @@ def update_rule(
     """Update a rule by ID."""
     if rule_type not in VALID_RULE_TYPES:
         raise ValueError(f"Unsupported rule_type: {rule_type}")
+    _validate_rule_config(rule_type, rule_config)
     existing = get_rule(db, rule_id)
     if existing is None:
         return None
@@ -603,9 +624,16 @@ async def evaluate_digest(
     channels = _loads(alert["channels"]) or []
     rule_rows = _get_assigned_enabled_rules(digest_id, db)
 
+    # Cold-start watermark (D-AL-9): the alert "starts caring" from the
+    # moment it was created. Combined with the per-rule 30-day publication-
+    # date window (D-AL-3), this ensures a brand-new alert never floods
+    # the user with backfilled papers that were already in the feed before
+    # the alert opted in.
+    alert_created_at = str(alert.get("created_at") or "").strip() or None
+
     all_papers: list = []
     for rule in rule_rows:
-        all_papers.extend(_evaluate_rule(rule, db))
+        all_papers.extend(_evaluate_rule(rule, db, alert_created_at=alert_created_at))
 
     unique_papers = _deduplicate_papers(all_papers)
     already_alerted = _get_already_alerted_keys(digest_id, db)
@@ -710,9 +738,10 @@ def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> Optional[dict]:
     alert = dict(alert_row)
     channels = _loads(alert["channels"]) or []
     rule_rows = _get_assigned_enabled_rules(digest_id, db)
+    alert_created_at = str(alert.get("created_at") or "").strip() or None
     all_papers: list = []
     for rule in rule_rows:
-        all_papers.extend(_evaluate_rule(rule, db))
+        all_papers.extend(_evaluate_rule(rule, db, alert_created_at=alert_created_at))
     unique_papers = _deduplicate_papers(all_papers)
     already_alerted = _get_already_alerted_keys(digest_id, db)
     new_papers = [(key, paper) for key, paper in unique_papers if key not in already_alerted]
@@ -722,6 +751,7 @@ def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> Optional[dict]:
             "title": paper.get("title", ""),
             "authors": paper.get("authors", ""),
             "year": paper.get("year"),
+            "publication_date": paper.get("publication_date"),
             "url": paper.get("url", ""),
         }
         for key, paper in new_papers
@@ -792,13 +822,36 @@ def _get_assigned_enabled_rules(digest_id: str, db: sqlite3.Connection) -> list[
 
 
 def _deduplicate_papers(all_papers: list[dict]) -> list[tuple[str, dict]]:
-    seen_ids: set[str] = set()
-    unique_papers: list[tuple[str, dict]] = []
+    """Dedupe papers by id, preserving every distinct ``alert_source``.
+
+    When the same paper matches more than one assigned rule (e.g., it
+    appears in two monitors covered by one alert), the user still wants
+    to know all the sources that triggered the match. The first
+    encountered paper dict wins for general fields, but its
+    ``alert_source`` is rewritten to the comma-joined union of every
+    source seen for that id.
+    """
+    seen_ids: dict[str, dict] = {}
+    seen_sources: dict[str, list[str]] = {}
+    order: list[str] = []
     for paper in all_papers:
         paper_id = str((paper or {}).get("id") or "").strip()
-        if not paper_id or paper_id in seen_ids:
+        if not paper_id:
             continue
-        seen_ids.add(paper_id)
+        source = str((paper or {}).get("alert_source") or "").strip()
+        if paper_id not in seen_ids:
+            seen_ids[paper_id] = paper
+            seen_sources[paper_id] = [source] if source else []
+            order.append(paper_id)
+        elif source and source not in seen_sources[paper_id]:
+            seen_sources[paper_id].append(source)
+
+    unique_papers: list[tuple[str, dict]] = []
+    for paper_id in order:
+        paper = seen_ids[paper_id]
+        sources = seen_sources.get(paper_id) or []
+        if sources:
+            paper["alert_source"] = ", ".join(sources)
         unique_papers.append((paper_id, paper))
     return unique_papers
 
@@ -865,7 +918,25 @@ def _library_workflow_counts(db: sqlite3.Connection) -> dict[str, int]:
     }
 
 
-def _evaluate_rule(rule_row: dict, db: sqlite3.Connection) -> list[dict]:
+def _evaluate_rule(
+    rule_row: dict,
+    db: sqlite3.Connection,
+    *,
+    alert_created_at: Optional[str] = None,
+) -> list[dict]:
+    """Run a single rule's match query and return the matching paper rows.
+
+    Args:
+        rule_row: A row from ``alert_rules``.
+        db: Open SQLite connection.
+        alert_created_at: When the rule is being evaluated as part of an
+            alert (digest), this is the alert's ``created_at`` timestamp.
+            For the ``feed_monitor`` rule type it gates Layer 2 of the
+            cold-start filter (D-AL-9): only feed_items fetched after
+            the alert opted in are eligible. Pass ``None`` from
+            ``test_fire_rule`` so the test reports the broader pre-
+            watermark match set.
+    """
     rule_type = str(rule_row.get("rule_type") or "").strip()
     config = _loads(rule_row.get("rule_config")) if isinstance(rule_row.get("rule_config"), str) else rule_row.get("rule_config")
     if not isinstance(config, dict):
@@ -1086,14 +1157,51 @@ def _evaluate_rule(rule_row: dict, db: sqlite3.Connection) -> list[dict]:
         monitor_id = _resolve_feed_monitor_id(db, config)
         if not monitor_id:
             return []
+        # Resolve a human-readable label up front so each returned paper
+        # carries its own provenance (which monitor triggered the match).
+        # The Slack render uses this to add a "Source: ..." line per paper,
+        # which is essential when one alert spans multiple monitors.
+        monitor_label_row = db.execute(
+            "SELECT label, monitor_type, monitor_key FROM feed_monitors WHERE id = ?",
+            (monitor_id,),
+        ).fetchone()
+        if monitor_label_row is not None:
+            label = str(monitor_label_row["label"] or "").strip()
+            monitor_type_str = str(monitor_label_row["monitor_type"] or "").strip()
+            display_label = label or monitor_label_row["monitor_key"] or monitor_id
+            if monitor_type_str:
+                alert_source = f"Monitor ({monitor_type_str}): {display_label}"
+            else:
+                alert_source = f"Monitor: {display_label}"
+        else:
+            alert_source = f"Monitor: {monitor_id}"
+
         statuses = [
             str(status_value).strip().lower()
             for status_value in (config.get("include_statuses") or ["new"])
             if str(status_value).strip()
         ] or ["new"]
+        # Existing per-rule "lookback" gates which feed_items rows are
+        # eligible by `fetched_at`. Kept for back-compat (test-fire et al).
         lookback_days = max(1, int(config.get("lookback_days", 14) or 14))
         since = (datetime.utcnow() - timedelta(days=lookback_days)).isoformat()
         status_placeholders = ", ".join("?" for _ in statuses)
+
+        # Layer 1 (D-AL-3): publication-date window. Default 30 days.
+        # Drops historical backfill that's recent in fetch terms but old
+        # in world terms. NULL pub_date papers are excluded — per
+        # `lessons.md:260`, we don't fabricate timestamps.
+        max_age_days = max(1, int(config.get("max_age_days", 30) or 30))
+
+        # Layer 2 (D-AL-9): cold-start watermark. Only fires for digest
+        # evaluations that pass an `alert_created_at`; test-fire skips it
+        # so the user sees the broader pre-watermark match set.
+        watermark_clause = ""
+        params: list[object] = [monitor_id, since, max_age_days, *statuses]
+        if alert_created_at:
+            watermark_clause = " AND fi.fetched_at >= ?"
+            params.append(alert_created_at)
+
         rows = db.execute(
             f"""
             SELECT DISTINCT p.*
@@ -1101,13 +1209,22 @@ def _evaluate_rule(rule_row: dict, db: sqlite3.Connection) -> list[dict]:
             JOIN papers p ON p.id = fi.paper_id
             WHERE fi.monitor_id = ?
               AND fi.fetched_at >= ?
+              AND p.publication_date IS NOT NULL
+              AND TRIM(p.publication_date) != ''
+              AND p.publication_date >= date('now', '-' || ? || ' days')
               AND lower(COALESCE(fi.status, 'new')) IN ({status_placeholders})
-            ORDER BY fi.fetched_at DESC, COALESCE(fi.signal_value, 0) DESC
+              {watermark_clause}
+            ORDER BY p.publication_date DESC, fi.fetched_at DESC
             LIMIT 500
             """,
-            [monitor_id, since, *statuses],
+            params,
         ).fetchall()
-        return [dict(r) for r in rows]
+        results: list[dict] = []
+        for r in rows:
+            paper = dict(r)
+            paper["alert_source"] = alert_source
+            results.append(paper)
+        return results
 
     if rule_type == "branch":
         branch_id = str(config.get("branch_id") or "").strip()

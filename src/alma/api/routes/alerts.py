@@ -512,49 +512,126 @@ def unassign_rule(
 
 @router.post(
     "/{alert_id}/evaluate",
-    response_model=AlertEvaluationResult,
-    summary="Evaluate and send alert",
+    summary="Evaluate and send alert (async-enveloped)",
 )
-async def evaluate_alert(
+def evaluate_alert(
     alert_id: str,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Run all assigned rules, merge papers, filter already-alerted, send via channels.
+    """Queue a digest evaluation and return the canonical activity envelope.
 
-    Stays ``async def`` because ``alerts_app.evaluate_digest`` is a coroutine
-    (it awaits the Slack / channel delivery HTTP round-trips). The sync
-    ``runner.run`` call afterwards persists operation lifecycle to SQLite and
-    is dispatched through ``asyncio.to_thread`` so the commit does not block
-    the event loop while another request is mid-flight.
+    The actual rule matching, deduplication, and Slack delivery run on the
+    scheduler thread pool so the request thread is released in ~100 ms.
+    Progress flows into ``operation_status``; the frontend polls
+    ``GET /activity/{job_id}`` and reads ``result`` once the job completes.
+
+    Conforms to the activity-envelope pattern (`lessons.md:1027`):
+    1. Validate input synchronously -> fast 4xx for missing alert.
+    2. Dedupe with ``find_active_job`` so concurrent clicks don't double-send.
+    3. ``_runner`` opens its own connection (per `lessons.md:1042`).
+    4. Returns the envelope; result lands in ``operation_status.result``.
     """
-    runner = OperationRunner(db)
+    import uuid as _uuid
+    from datetime import datetime as _dt
 
-    try:
-        evaluated = await alerts_app.evaluate_digest(db, alert_id, trigger_source="user")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise_internal("Failed to evaluate alert", exc)
-    if evaluated is None:
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+
+    alert_row = db.execute("SELECT id, name FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+    if alert_row is None:
         raise HTTPException(status_code=404, detail="Alert not found")
-    result = evaluated
+    alert_name = str(alert_row["name"] or alert_id)
 
-    def _handler(_ctx):
-        return OperationOutcome(
-            status="completed",
-            message=f"Evaluated alert {alert_id}",
-            result=result,
+    operation_key = f"alerts.evaluate:{alert_id}"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            existing["job_id"],
+            status=str(existing.get("status") or "running"),
+            operation_key=operation_key,
+            message=f"Alert '{alert_name}' is already being evaluated",
+            already_running=True,
         )
 
-    await asyncio.to_thread(
-        runner.run,
-        operation_key=f"alerts.evaluate:{alert_id}",
-        handler=_handler,
+    job_id = f"alerts_evaluate_{alert_id[:10]}_{_uuid.uuid4().hex[:8]}"
+    actor = str(user.get("username") or "api_user")
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
         trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
+        actor=actor,
+        started_at=_dt.utcnow().isoformat(),
+        message=f"Evaluating alert '{alert_name}'",
     )
-    return AlertEvaluationResult(**result)
+
+    def _runner() -> dict:
+        # Open a fresh connection for the worker thread. Reusing the
+        # request-scoped handle from the scheduler thread is the bug
+        # `lessons.md:1042` warns about.
+        worker_db = open_db_connection()
+        try:
+            set_job_status(
+                job_id,
+                status="running",
+                message=f"Querying rules for '{alert_name}'",
+            )
+            evaluated = asyncio.run(
+                alerts_app.evaluate_digest(worker_db, alert_id, trigger_source="user")
+            )
+            if evaluated is None:
+                return {
+                    "ok": False,
+                    "message": f"Alert '{alert_name}' not found",
+                }
+            sent = int(evaluated.get("papers_sent") or 0)
+            new = int(evaluated.get("papers_new") or 0)
+            channel_results = evaluated.get("channel_results") or {}
+            slack_status = (channel_results.get("slack") or {}).get("status") if isinstance(channel_results, dict) else None
+
+            if slack_status == "sent":
+                msg = f"Sent {sent} new paper(s) for '{alert_name}'"
+            elif slack_status == "empty":
+                msg = f"No new papers for '{alert_name}'"
+            elif slack_status == "skipped":
+                msg = f"Slack skipped: {(channel_results.get('slack') or {}).get('error')}"
+            elif slack_status == "failed":
+                msg = f"Slack delivery failed for '{alert_name}': {(channel_results.get('slack') or {}).get('error')}"
+            else:
+                msg = f"Evaluated alert '{alert_name}': {new} new, {sent} sent"
+
+            # `open_db_connection` does NOT auto-commit (unlike `get_db`).
+            # `evaluate_digest` writes to `alerted_publications`,
+            # `alert_history`, and `alerts.last_evaluated_at`; without an
+            # explicit commit those writes vanish when the connection
+            # closes, breaking per-alert dedup.
+            worker_db.commit()
+            return {**evaluated, "ok": slack_status in ("sent", "empty"), "message": msg}
+        except Exception:
+            try:
+                worker_db.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                worker_db.close()
+            except Exception:
+                pass
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message=f"Evaluation queued for '{alert_name}'",
+    )
 
 
 @router.post(

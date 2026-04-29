@@ -264,64 +264,52 @@ def update_plugin_config(
 
 @router.post(
     "/{plugin_name}/test",
-    response_model=PluginTestResult,
     summary="Test plugin connection",
-    description="Test if the plugin can connect to its service.",
+    description=(
+        "Test if the plugin can connect to its service. For Slack, this "
+        "runs the test asynchronously through the Activity envelope so the "
+        "exact code path that delivers real alerts is what gets exercised."
+    ),
 )
 def test_plugin_connection(
     plugin_name: str,
     registry: PluginRegistry = Depends(_get_registry),
     user: dict = Depends(get_current_user),
 ):
-    """Test plugin connection and configuration.
+    """Test plugin connection.
 
-    This will attempt to connect to the plugin's service and verify
-    that it's properly configured.
+    For ``slack``: validate configuration, then queue an Activity-enveloped
+    job that calls :class:`~alma.slack.client.SlackNotifier.send_test_message`
+    (the same path used by real alert delivery). Returns the canonical
+    activity envelope so the frontend can poll progress.
 
-    Args:
-        plugin_name: Name of the plugin to test
-
-    Returns:
-        PluginTestResult: Test result with success status and message
-
-    Raises:
-        HTTPException: If plugin is not found or not configured
-
-    Example:
-        ```bash
-        curl -X POST http://localhost:8000/api/v1/plugins/slack/test
-        ```
+    For other plugin names: fall back to the legacy synchronous
+    ``test_connection()`` against the plugin instance for backwards
+    compatibility. Slack is the only registered plugin today.
     """
+    if plugin_name == "slack":
+        return _slack_test_envelope(user)
+
     try:
-        # Load configuration
         config = load_plugin_config(plugin_name)
         if not config:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Plugin '{plugin_name}' is not configured"
+                detail=f"Plugin '{plugin_name}' is not configured",
             )
 
-        # Create or get instance
         instance = registry.create_instance(plugin_name, config, cache=True)
-
-        # Run connection test
         success = instance.test_connection()
         instance.record_test_result(success)
-
-        message = "Connection test successful" if success else "Connection test failed"
-
-        logger.info(f"Plugin {plugin_name} test: {'success' if success else 'failure'}")
-
         return PluginTestResult(
             success=success,
-            message=message,
-            timestamp=datetime.now().isoformat()
+            message="Connection test successful" if success else "Connection test failed",
+            timestamp=datetime.now().isoformat(),
         )
-
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Plugin '{plugin_name}' not found"
+            detail=f"Plugin '{plugin_name}' not found",
         )
     except HTTPException:
         raise
@@ -334,8 +322,121 @@ def test_plugin_connection(
         return PluginTestResult(
             success=False,
             message="Connection test failed",
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
         )
+
+
+def _slack_test_envelope(user: dict) -> dict:
+    """Queue a Slack connectivity test through the Activity envelope.
+
+    Validates the token + channel synchronously (so the user gets a 4xx
+    immediately when nothing is configured) and runs the actual
+    ``chat.postMessage`` call on the scheduler thread pool.
+    """
+    import asyncio
+    import uuid
+    from datetime import datetime as _dt
+
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+    from alma.slack.client import get_slack_notifier
+
+    operation_key = "alerts.slack.test"
+
+    # Synchronous validation -> fast 4xx for misconfiguration.
+    notifier = get_slack_notifier()
+    if not notifier.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Slack token not configured. Set it in Settings -> Channels.",
+        )
+    try:
+        notifier.resolve_channel(None)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    # Coalesce duplicate clicks while a test is already in flight.
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            existing["job_id"],
+            status=str(existing.get("status") or "running"),
+            operation_key=operation_key,
+            message="Slack test already in progress",
+            already_running=True,
+        )
+
+    job_id = f"alerts_slack_test_{uuid.uuid4().hex[:10]}"
+    actor = str(user.get("username") or "api_user")
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        actor=actor,
+        started_at=_dt.utcnow().isoformat(),
+        message="Sending Slack test message",
+    )
+
+    def _runner() -> dict:
+        from alma.slack.client import SlackResolveError
+
+        # Open a fresh notifier inside the worker thread so the cache is
+        # not shared with the request thread (per `lessons.md:1042`).
+        local_notifier = get_slack_notifier()
+        target = local_notifier.resolve_channel(None)
+
+        # Resolve eagerly so a bad channel name surfaces with a precise
+        # "channel_not_found" message instead of a generic "API ok=false".
+        try:
+            resolved_id = local_notifier._resolve_target(target)
+        except SlackResolveError as exc:
+            return {
+                "ok": False,
+                "target": target,
+                "error": str(exc),
+                "message": f"Could not resolve Slack target {target!r}: {exc}",
+            }
+
+        try:
+            ok = asyncio.run(local_notifier.send_test_message())
+        except Exception as exc:  # pragma: no cover - network failures
+            return {
+                "ok": False,
+                "target": target,
+                "error": str(exc),
+                "message": f"Slack test failed: {exc}",
+            }
+        if ok:
+            return {
+                "ok": True,
+                "target": target,
+                "resolved_id": resolved_id,
+                "message": f"Slack test message delivered to {target}",
+            }
+        return {
+            "ok": False,
+            "target": target,
+            "message": (
+                "Slack API rejected the test message "
+                f"(resolved to {resolved_id}) -- check the bot's chat:write scope."
+            ),
+        }
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="Slack test queued",
+    )
 
 
 @router.post(

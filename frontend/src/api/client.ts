@@ -1844,12 +1844,63 @@ export function getInsightsDiagnostics(): Promise<InsightsDiagnostics> {
   return api.get<InsightsDiagnostics>('/insights/diagnostics')
 }
 
-export function evaluateAlert(alertId: string): Promise<AlertEvaluationResult> {
-  return api.post<AlertEvaluationResult>(`/alerts/${encodeURIComponent(alertId)}/evaluate`)
+/**
+ * Evaluate (and send) an alert digest. Returns the AlertEvaluationResult
+ * after polling the Activity envelope to completion.
+ *
+ * The endpoint now runs the full evaluation -- including the Slack send --
+ * on the scheduler thread pool, so the user can also watch progress in the
+ * Activity tab via `operation_key="alerts.evaluate:<id>"`.
+ */
+export async function evaluateAlert(alertId: string): Promise<AlertEvaluationResult> {
+  const resp = await api.post<JobEnvelope | AlertEvaluationResult>(
+    `/alerts/${encodeURIComponent(alertId)}/evaluate`,
+  )
+  if (isJobEnvelope(resp)) {
+    if (resp.status === 'already_running') {
+      // Surface an interpretable error for callers; matches what the user
+      // sees if they double-click "Evaluate".
+      throw new Error('Alert is already being evaluated; check Activity for progress.')
+    }
+    return waitForJob<AlertEvaluationResult>(resp.job_id, { timeoutMs: 120_000 })
+  }
+  // Backwards-compat path (shouldn't trigger after Phase D).
+  return resp as AlertEvaluationResult
 }
 
-export function testPluginConnection(pluginName: string): Promise<{ success: boolean; message: string; timestamp: string }> {
-  return api.post(`/plugins/${encodeURIComponent(pluginName)}/test`)
+export interface SlackTestResult {
+  ok: boolean
+  message: string
+  target?: string
+  error?: string
+}
+
+/**
+ * Test a messaging plugin connection.
+ *
+ * For Slack the backend returns an Activity envelope and runs the actual
+ * `chat.postMessage` on the scheduler thread pool — so the test exercises
+ * the exact code path that delivers real alerts. We unwrap the envelope
+ * via `waitForJob`. For other plugins the legacy synchronous shape is
+ * preserved.
+ */
+export async function testPluginConnection(
+  pluginName: string,
+): Promise<SlackTestResult> {
+  const resp = await api.post<JobEnvelope | { success: boolean; message: string; timestamp: string }>(
+    `/plugins/${encodeURIComponent(pluginName)}/test`,
+  )
+  if (isJobEnvelope(resp)) {
+    if (resp.status === 'already_running') {
+      return { ok: false, message: 'A Slack test is already in progress; try again in a moment.' }
+    }
+    return waitForJob<SlackTestResult>(resp.job_id, { timeoutMs: 30_000 })
+  }
+  // Legacy shape (non-slack plugins).
+  return {
+    ok: Boolean((resp as { success?: boolean }).success),
+    message: String((resp as { message?: string }).message ?? ''),
+  }
 }
 
 export function runGraphReferenceBackfill(): Promise<{ operation?: Record<string, unknown>; result?: Record<string, unknown> }> {

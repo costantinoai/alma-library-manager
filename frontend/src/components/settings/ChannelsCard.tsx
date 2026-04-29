@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { useMutation } from '@tanstack/react-query'
 import { MessageSquare, Zap } from 'lucide-react'
 
-import { api, type Settings } from '@/api/client'
+import { testPluginConnection, type Settings } from '@/api/client'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import {
   Form,
@@ -21,11 +21,10 @@ import { useToast, errorToast } from '@/hooks/useToast'
 
 const channelsSchema = z.object({
   slack_token: z.string(),
-  slack_channel: z
-    .string()
-    .refine((v) => !v || v.startsWith('#') || v.startsWith('@'), {
-      message: 'Channel must start with # (channel) or @ (user/group).',
-    }),
+  // Accept any non-empty string: a channel name (`general`, `#general`),
+  // a user display name (`Andrea Costantino`), or a Slack ID (`C…`/`U…`).
+  // Resolution happens server-side in SlackNotifier._resolve_target.
+  slack_channel: z.string(),
   check_interval_hours: z
     .number()
     .int()
@@ -75,12 +74,27 @@ export function ChannelsCard({ formData, onFormDataChange }: ChannelsCardProps) 
   }, [form, onFormDataChange])
 
   const testSlackMutation = useMutation({
-    mutationFn: () => api.post('/plugins/slack/test'),
-    onSuccess: () => {
-      toast({ title: 'Success', description: 'Slack test message sent successfully.' })
+    mutationFn: () => testPluginConnection('slack'),
+    onSuccess: (result) => {
+      if (result.ok) {
+        toast({
+          title: 'Slack test sent',
+          description: result.target
+            ? `Delivered to ${result.target}.`
+            : result.message,
+        })
+      } else {
+        errorToast(
+          'Slack test failed',
+          result.error || result.message || 'Check your token and channel.',
+        )
+      }
     },
-    onError: () => {
-      errorToast('Error', 'Failed to send Slack test message. Check your token and channel.')
+    onError: (err) => {
+      errorToast(
+        'Slack test failed',
+        err instanceof Error ? err.message : 'Check your token and channel.',
+      )
     },
   })
 

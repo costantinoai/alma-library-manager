@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import {
   api,
+  evaluateAlert,
   type AlertRule,
   type Alert,
   type AlertEvaluationResult,
@@ -125,15 +126,22 @@ export function AlertsDeliverySection() {
   })
 
   const evaluateMutation = useMutation({
-    mutationFn: (id: string) => api.post<AlertEvaluationResult>(`/alerts/${id}/evaluate`),
+    // `evaluateAlert` posts to the envelope endpoint and waits for the
+    // background job (Slack send included) to complete -- so the modal
+    // sees the same shape it always saw, and the user can also watch the
+    // job progress live in the Activity tab.
+    mutationFn: (id: string) => evaluateAlert(id),
     onSuccess: async (data) => {
       setEvalResult(data)
       setEvalResultOpen(true)
       await invalidateQueries(queryClient, ['alerts'], ['alert-history'])
       toast({ title: 'Digest evaluated', description: 'Digest evaluation completed.' })
     },
-    onError: () => {
-      errorToast('Error', 'Failed to evaluate alert.')
+    onError: (err) => {
+      errorToast(
+        'Error',
+        err instanceof Error ? err.message : 'Failed to evaluate alert.',
+      )
     },
   })
 
