@@ -44,8 +44,9 @@ The app has five views:
 
 ## Quick start (one Docker command — suggested)
 
-Replace `you@example.com` with the email you want to identify yourself
-to OpenAlex (free, no signup required) and run:
+Run this exact command, replacing only `you@example.com` with the
+email you want to identify yourself to OpenAlex (free, no signup
+required):
 
 ```bash
 docker run -d --name alma --restart unless-stopped \
@@ -57,6 +58,22 @@ docker run -d --name alma --restart unless-stopped \
 ```
 
 Then open <http://localhost:8000>. That's the whole install.
+
+> **You don't pick a directory.** `alma-data` and `alma-config` are
+> *Docker volume names*, not host paths. Docker creates the volumes
+> automatically the first time you run the command and stores the
+> bytes itself (on Linux: under `/var/lib/docker/volumes/`; on Docker
+> Desktop: inside the managed VM). You don't need to `mkdir` anything
+> first. To inspect what's inside or copy a file out:
+>
+> ```bash
+> docker volume ls                              # list volumes
+> docker run --rm -v alma-data:/d alpine ls /d  # peek inside
+> ```
+>
+> If you'd rather have a normal host folder (e.g. `~/alma/`) so you
+> can browse the SQLite file directly, use the *Compose* path below
+> — it's the right tool for that.
 
 <details>
 <summary>What each line of that command does</summary>
