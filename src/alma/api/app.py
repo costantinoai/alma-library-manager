@@ -435,13 +435,29 @@ if os.path.exists(_frontend_dist):
     if os.path.exists(_assets_dir):
         app.mount("/assets", StaticFiles(directory=_assets_dir), name="frontend-assets")
 
-    # Catch-all: serve index.html for SPA client-side routing.
-    # This MUST be registered after all other routes so it does not shadow them.
+    # Catch-all: serve real static files from dist when they exist, then
+    # fall back to index.html for SPA client-side routing. Vite puts
+    # files from frontend/public/ at the root of dist (favicon.svg,
+    # manifest.webmanifest, mask-icon.svg, brand/, ...), so an
+    # explicit per-prefix mount per asset would be brittle. Resolving
+    # by file existence covers every public asset uniformly.
+    #
+    # Path-traversal guard: rebuild the requested path under
+    # _frontend_dist with realpath and verify it stays inside.
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        """Serve the React SPA for any path not matched by API/web routes."""
+        """Serve a real dist file if it exists, else the SPA index."""
         if full_path.startswith(("api/", "docs", "redoc", "openapi", "static")):
             raise HTTPException(status_code=404, detail="Not found")
+
+        if full_path:
+            candidate = os.path.realpath(os.path.join(_frontend_dist, full_path))
+            dist_root = os.path.realpath(_frontend_dist)
+            if (
+                candidate.startswith(dist_root + os.sep)
+                and os.path.isfile(candidate)
+            ):
+                return FileResponse(candidate)
 
         index_path = os.path.join(_frontend_dist, "index.html")
         if os.path.exists(index_path):

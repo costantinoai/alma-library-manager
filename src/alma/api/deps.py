@@ -86,12 +86,36 @@ API_KEY = _api_key_raw.strip() if _api_key_raw else None
 # Database Schema Initialisation (run once at startup)
 # ============================================================================
 
+def _detect_default_python_env() -> tuple[str, str]:
+    """Pick a sensible default Python environment for AI dependencies.
+
+    The Docker images bundle a fully-populated venv at ``/opt/venv``;
+    when that's present, point the AI dependency resolver at it so the
+    UI shows a green-light environment out of the box. Bare-metal
+    installs fall back to whatever Python is invoking us.
+    """
+    docker_venv = "/opt/venv"
+    if os.path.isfile(os.path.join(docker_venv, "bin", "python")):
+        return ("venv", docker_venv)
+    return ("system", "")
+
+
+_default_env_type, _default_env_path = _detect_default_python_env()
+
 _DEFAULT_DISCOVERY_SETTINGS = dict(DISCOVERY_SETTINGS_DEFAULTS)
 _DEFAULT_DISCOVERY_SETTINGS.update(
     {
+        # ai.provider gates LOCAL embedding computation. "none" means
+        # "don't compute locally" — Semantic Scholar's pre-computed
+        # SPECTER2 vectors still get fetched for any paper with a DOI
+        # via the separate fetch_source layer, which is the zero-config
+        # default. Users who want local encoding for missing papers
+        # flip this to "local" in Settings → AI & embeddings (requires
+        # the normal Docker variant or a local install with the AI
+        # extras).
         "ai.provider": "none",
-        "ai.python_env_type": "system",
-        "ai.python_env_path": "",
+        "ai.python_env_type": _default_env_type,
+        "ai.python_env_path": _default_env_path,
     }
 )
 

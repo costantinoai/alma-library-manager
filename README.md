@@ -1,24 +1,46 @@
-# ALMa — Another Library Manager
+<p align="center">
+  <img src="branding/logo/alma-logo-horizontal.svg" alt="ALMa — Another Library Manager" width="640">
+</p>
+
+<p align="center">
+  <em>Your personal academic research feed.</em>
+</p>
 
 > **Early preview (`v0.9.1`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
 
-ALMa is a personal academic research feed. You follow a handful of
-authors and topics; ALMa watches OpenAlex (the open citation graph)
-and Semantic Scholar for new work, builds a local SQLite library of
-the things you save, and uses SPECTER2 embeddings to surface papers
-related to what you already care about. It runs on your own machine —
-nothing about your reading list leaves the box you put it on.
+ALMa watches [OpenAlex](https://openalex.org/) (the open citation
+graph) and Semantic Scholar for new work from authors and topics you
+follow, builds a local SQLite library of the things you save, and uses
+SPECTER2 embeddings to surface papers related to what you already care
+about. It runs on your own machine — nothing about your reading list
+leaves the box you put it on.
 
-The app has five views: a chronological **Feed** of new publications
-from the people you follow, a **Library** for the things you've saved
-and the notes you've taken on them, **Authors** for the people whose
-work you track, **Discovery** for "things related to your library that
-aren't in your feed yet", and **Insights** for a 30,000-foot view of
-your collection (timelines, topics, a clustered map of what you read).
+**Documentation:** <https://costantinoai.github.io/alma-library-manager/>
 
-Full docs: **<https://costantinoai.github.io/alma-library-manager/>**
+The app has five views:
+
+- **Feed** — a chronological inbox of new publications from the
+  authors and topics you follow.
+- **Library** — every paper you've saved, with notes, ratings, tags,
+  collections, and a reading list.
+- **Authors** — the researchers you track, plus suggested authors
+  whose work overlaps with what you read.
+- **Discovery** — papers related to your library that haven't shown
+  up in the Feed yet, ranked by topical and citation similarity.
+- **Insights** — charts and a clustered map of your library: how it's
+  spread across years, topics, journals, and which papers cluster
+  together by content.
+
+<p align="center">
+  <img src="docs/screenshots/desktop-library.png" alt="Library" width="49%">
+  <img src="docs/screenshots/desktop-discovery.png" alt="Discovery" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/desktop-insights.png" alt="Insights" width="49%">
+  <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
+</p>
 
 ---
 
