@@ -6,16 +6,22 @@ Settings are stored in the repository's `settings.json` file.
 IMPORTANT: All settings access goes through alma.config module.
 This ensures all path values are relative and properly resolved.
 
-Secret handling (2026-04-24):
-- OpenAlex API key lives only in `.env` at the project root. The
-  Settings GET reads it from `os.environ` (which `config.py` loads
-  via `dotenv.load_dotenv` at startup), masks all but the last 4
-  characters, and returns the masked form. PUT rotates the value
-  via `dotenv.set_key` and preserves the previous value as
-  `OPENALEX_API_KEY_OLD_<utc-timestamp>` so nothing is lost.
-- `data/secrets.json` is no longer read or written by app routes.
-  It remains a local-only file (gitignored) that users can clean up
-  manually.
+Secret handling (2026-04-29):
+- The OpenAlex API key is persisted in two places: `data/secrets.json`
+  (always-writable, the canonical store) and the project-root `.env`
+  (best-effort, for users who want their host `.env` to remain the
+  source of truth). The dual write avoids the failure mode that
+  blocked Docker named-volume installs entirely — `/app/.env` lives
+  in the read-only image layer there, so a `.env`-only rotation
+  raised a `PermissionError` and 500'd the entire PUT /settings,
+  taking the Slack save with it.
+- The Settings GET reads from env first, secret store as fallback,
+  and masks all but the last 4 characters.
+- PUT rotation: writes secret store, updates the in-process env so
+  the change takes effect immediately, and best-effort writes to
+  `.env` (preserving the previous value under
+  `OPENALEX_API_KEY_OLD_<utc-timestamp>`) — `.env` write failures
+  are logged at INFO and do not propagate.
 """
 
 import logging
@@ -33,6 +39,7 @@ from alma.config import (
     DEFAULT_SETTINGS,
     get_all_settings,
     get_db_path,
+    get_openalex_api_key,
     update_settings as config_update_settings,
     delete_settings_keys as config_delete_settings_keys,
     reload_settings,
@@ -43,6 +50,7 @@ from alma.slack.client import get_slack_notifier
 from alma.plugins.config import save_plugin_config
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
+    SECRET_OPENALEX_API_KEY,
     SECRET_SLACK_BOT_TOKEN,
     delete_secret,
     get_secret,
@@ -56,63 +64,110 @@ _DOTENV_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / ".e
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
 
 
-def _rotate_openalex_env_key(new_value: str) -> None:
-    """Write `new_value` as OPENALEX_API_KEY in `.env`, backing up any
-    existing value under `OPENALEX_API_KEY_OLD_<utc-timestamp>`.
+logger = logging.getLogger(__name__)
 
-    Uses `python-dotenv.set_key` so formatting, quoting, and key
-    ordering are handled correctly. Also updates the live process env
-    so the change takes effect without a restart.
+
+def _archive_timestamp() -> str:
+    """Microsecond-precision UTC timestamp for OPENALEX_API_KEY_OLD_<ts>
+    archive keys — two rotations in the same wall-clock second otherwise
+    share a key and silently lose the intermediate value.
     """
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
 
+
+def _try_write_dotenv_rotation(new_value: str, previous: str) -> None:
+    """Best-effort `.env` write. Mirrors the secret-store rotation onto
+    the project-root `.env` so users with a writable host `.env` (Path 2
+    bind-mount or a native install) see the new value reflected there.
+
+    Logs and swallows write failures: in Docker named-volume installs
+    `/app/.env` lives in the read-only image layer and `set_key` raises
+    OSError/PermissionError. The secret-store write has already happened
+    by the time this is called, so a failure here is non-fatal — the new
+    key is still persisted in `data/secrets.json` and live in the
+    process env.
+    """
     try:
         from dotenv import set_key
     except ImportError:  # pragma: no cover — required dependency
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="python-dotenv is required for secret rotation",
+        return
+
+    try:
+        _DOTENV_PATH.touch(exist_ok=True)
+    except (PermissionError, OSError) as exc:
+        logger.info(
+            "Skipping `.env` rotation for OpenAlex key (`%s` not writable: %s) — "
+            "value is still persisted in the secret store",
+            _DOTENV_PATH, exc,
         )
+        return
 
-    _DOTENV_PATH.touch(exist_ok=True)
-    previous = os.environ.get(_OPENALEX_ENV_KEY, "")
-    if previous and previous != new_value:
-        # Microsecond precision so two rotations in the same wall-clock
-        # second don't share an archive key (set_key would overwrite
-        # the earlier one and silently lose the intermediate value).
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-        archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{ts}"
-        set_key(str(_DOTENV_PATH), archive_key, previous)
-        os.environ[archive_key] = previous
-    set_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY, new_value)
-    os.environ[_OPENALEX_ENV_KEY] = new_value
+    try:
+        if previous and previous != new_value:
+            archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
+            set_key(str(_DOTENV_PATH), archive_key, previous)
+            os.environ[archive_key] = previous
+        set_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY, new_value)
+    except (PermissionError, OSError) as exc:
+        logger.info("`.env` write skipped for OpenAlex rotation: %s", exc)
 
 
-def _delete_openalex_env_key() -> None:
-    """Remove OPENALEX_API_KEY from `.env` (after archiving any value)."""
-
+def _try_delete_dotenv() -> None:
+    """Best-effort `.env` removal of OPENALEX_API_KEY. Same rationale as
+    `_try_write_dotenv_rotation` — the secret-store delete has already
+    happened, so swallow filesystem errors.
+    """
     try:
         from dotenv import set_key, unset_key
     except ImportError:
         return
 
+    if not _DOTENV_PATH.exists():
+        return
+
     previous = os.environ.get(_OPENALEX_ENV_KEY, "")
-    if previous:
-        # Microsecond precision so two rotations in the same wall-clock
-        # second don't share an archive key (set_key would overwrite
-        # the earlier one and silently lose the intermediate value).
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
-        archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{ts}"
-        _DOTENV_PATH.touch(exist_ok=True)
-        set_key(str(_DOTENV_PATH), archive_key, previous)
-        os.environ[archive_key] = previous
-    if _DOTENV_PATH.exists():
-        try:
-            unset_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY)
-        except Exception:
-            logger.debug("unset_key failed for %s", _OPENALEX_ENV_KEY, exc_info=True)
+    try:
+        if previous:
+            archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
+            set_key(str(_DOTENV_PATH), archive_key, previous)
+            os.environ[archive_key] = previous
+        unset_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY)
+    except (PermissionError, OSError) as exc:
+        logger.info("`.env` delete skipped for OpenAlex rotation: %s", exc)
+
+
+def _rotate_openalex_env_key(new_value: str) -> None:
+    """Persist a new OpenAlex API key.
+
+    Writes to two locations:
+      1. The secret store (`data/secrets.json`) — the always-writable
+         canonical persistence path. Survives container restart and
+         works under Docker named volumes where `/app/.env` is in the
+         read-only image layer.
+      2. The project-root `.env` — best-effort, archives the previous
+         value under `OPENALEX_API_KEY_OLD_<timestamp>`. Failures are
+         logged at INFO and swallowed.
+
+    Always updates the in-process env so the change takes effect
+    without a restart.
+    """
+    previous = os.environ.get(_OPENALEX_ENV_KEY, "")
+
+    # Canonical persistent write — must succeed, propagates errors.
+    set_secret(SECRET_OPENALEX_API_KEY, new_value)
+
+    os.environ[_OPENALEX_ENV_KEY] = new_value
+    _try_write_dotenv_rotation(new_value, previous)
+
+
+def _delete_openalex_env_key() -> None:
+    """Remove the OpenAlex API key from secret store, in-process env,
+    and (best-effort) `.env`.
+    """
+    delete_secret(SECRET_OPENALEX_API_KEY)
+    _try_delete_dotenv()
     os.environ.pop(_OPENALEX_ENV_KEY, None)
 
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/settings",
@@ -197,9 +252,10 @@ def _export_settings_sanitized(raw: dict) -> dict:
     """Return settings safe for export payloads."""
     out = dict(raw or {})
     out["slack_token"] = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
-    out["openalex_api_key"] = mask_secret(
-        os.environ.get(_OPENALEX_ENV_KEY) or None, suffix=4
-    )
+    # `get_openalex_api_key` resolves env-then-secret-store, so the
+    # masked display reflects whichever location actually holds the
+    # value — consistent with how the OpenAlex client itself reads it.
+    out["openalex_api_key"] = mask_secret(get_openalex_api_key(), suffix=4)
     return out
 
 
@@ -224,9 +280,7 @@ def get_settings():
     """
     raw = _read_settings()
     slack_token_masked = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
-    openalex_api_key_masked = mask_secret(
-        os.environ.get(_OPENALEX_ENV_KEY) or None, suffix=4
-    )
+    openalex_api_key_masked = mask_secret(get_openalex_api_key(), suffix=4)
 
     return SettingsModel(
         backend=raw.get("backend", "openalex"),

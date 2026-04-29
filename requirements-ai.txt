@@ -2,9 +2,21 @@
 # variant. Mirrors `pyproject.toml` `[project.optional-dependencies].ai`.
 #
 # Embedding-side only; LLM features were removed in 2026-04 (see
-# tasks/01_LLM_PRODUCTION_EXIT.md). This file pulls torch transitively
-# via `adapters` — that's the ~1.5 GB image growth excluded from the
-# `lite` variant.
+# tasks/01_LLM_PRODUCTION_EXIT.md).
+#
+# torch is pinned EXPLICITLY. Older `transformers` releases used to
+# pull torch transitively, but since the 4.x line torch is an optional
+# extra (`transformers[torch]`) and `adapters` doesn't require it
+# either — so without an explicit pin the `normal` image silently
+# shipped without torch and the local SPECTER2 encoder failed at
+# runtime with "torch not detected". See `tasks/lessons.md` if you're
+# tempted to drop the pin again.
+#
+# `--index-url` flips pip to PyTorch's CPU-only wheelhouse for this
+# install so torch resolves to the CPU build (~200 MB) instead of the
+# CUDA build (~2 GB of nvidia-* wheels we never use — ALMa runs
+# SPECTER2 inference on CPU). PyPI is re-added as `--extra-index-url`
+# because transformers / adapters and their deps live there.
 #
 # What this enables on top of core:
 #   - Local SPECTER2 encoder (compute embeddings without an API key)
@@ -19,5 +31,9 @@
 # Every import in src/alma that touches transformers/adapters is
 # lazy-loaded inside the function that needs it, so the `lite` image
 # boots cleanly and only fails the local-encoder code path.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+
+torch>=2.2,<3.0
 transformers~=4.51.3
 adapters>=1.0.0

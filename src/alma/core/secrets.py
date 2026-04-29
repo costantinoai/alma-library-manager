@@ -19,8 +19,14 @@ SECRET_SLACK_BOT_TOKEN = "slack.bot_token"
 SECRET_SEMANTIC_SCHOLAR_API_KEY = "semantic_scholar.api_key"
 SECRET_OPENAI_API_KEY = "openai.api_key"
 SECRET_ZOTERO_API_KEY = "zotero.api_key"
-# `SECRET_OPENALEX_API_KEY` constant removed 2026-04-24 —
-# OpenAlex key now lives only in `.env` (see `alma.config.get_openalex_api_key`).
+# OpenAlex was briefly removed from the secret store (2026-04-24) over a
+# test-isolation concern (shared store stomping on real keys). Re-added
+# 2026-04-29: the Docker named-volume install needs a writable persistence
+# path because `/app/.env` is in a read-only image layer there, and the
+# existing test-isolation fix is the `ALMA_SECRETS_PATH` env-var override
+# that already exists in `_resolve_store_path` — tests can point the
+# store at a tmpdir without touching the shared file.
+SECRET_OPENALEX_API_KEY = "openalex.api_key"
 # `SECRET_ANTHROPIC_API_KEY` constant removed 2026-04-27 with the LLM
 # exit (see `tasks/01_LLM_PRODUCTION_EXIT.md`).
 
@@ -29,6 +35,7 @@ _SECRET_KEYS = {
     SECRET_SEMANTIC_SCHOLAR_API_KEY,
     SECRET_OPENAI_API_KEY,
     SECRET_ZOTERO_API_KEY,
+    SECRET_OPENALEX_API_KEY,
 }
 
 _LOCK = threading.RLock()

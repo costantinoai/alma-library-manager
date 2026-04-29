@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alma"
-version = "0.10.3"
+version = "0.11.0"
 description = "ALMa — Another Library Manager: personal academic library management with AI-powered discovery"
 authors = [{name = "Andrea Ivan Costantino"}]
 readme = "README.md"
@@ -55,11 +55,20 @@ import = [
     "bibtexparser>=1.4.0",
     "pyzotero>=1.5.0",
 ]
-# Heavyweight AI extras — local SPECTER2 encoder. Pulls torch
-# transitively via `adapters` (~1.5 GB), excluded from the `lite`
-# Docker variant. LLM features removed in 2026-04 (see
-# tasks/01_LLM_PRODUCTION_EXIT.md).
+# Heavyweight AI extras — local SPECTER2 encoder. torch is pinned
+# explicitly: modern `transformers` (>=4.x) and `adapters` no longer
+# require torch transitively, so without this pin a `pip install
+# .[ai]` succeeds but leaves the SPECTER2 encoder unusable at runtime.
+# Excluded from the `lite` Docker variant. LLM features removed in
+# 2026-04 (see tasks/01_LLM_PRODUCTION_EXIT.md).
+#
+# For the smaller CPU-only torch wheel (~200 MB vs ~2 GB CUDA), install
+# from PyTorch's CPU index:
+#   pip install --index-url https://download.pytorch.org/whl/cpu \
+#               --extra-index-url https://pypi.org/simple .[ai]
+# The Dockerfile already does this via `requirements-ai.txt`.
 ai = [
+    "torch>=2.2,<3.0",
     "transformers~=4.51.3",
     "adapters>=1.0.0",
 ]

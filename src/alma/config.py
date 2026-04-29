@@ -496,17 +496,32 @@ def get_openalex_email() -> Optional[str]:
 def get_openalex_api_key() -> Optional[str]:
     """Get the OpenAlex API key.
 
-    Single source of truth: the `OPENALEX_API_KEY` env var (populated
-    from `.env` at startup via `dotenv.load_dotenv`). No fallback to
-    `data/secrets.json` — that path was deprecated on 2026-04-24 to
-    stop test fixtures from stomping on real keys through a shared
-    secret store. The Settings UI reads this same env var and, on
-    rotation, preserves the previous value under
-    `OPENALEX_API_KEY_OLD_<timestamp>` inside `.env` itself.
+    Resolution order:
+      1. `OPENALEX_API_KEY` env var (populated from `.env` at startup
+         via `dotenv.load_dotenv`, or injected by `docker --env-file` /
+         compose `env_file:`). Used by tests and any host install with
+         a writable `.env`.
+      2. `data/secrets.json` via the namespaced secret store. This is
+         the canonical persistence path for Docker named-volume
+         installs where `/app/.env` lives in the read-only image layer
+         and can't be rotated through the Settings UI.
+
+    The Settings UI rotation flow writes to BOTH (best-effort `.env`,
+    always secret store), so a rotation made via the UI takes effect
+    immediately and survives restart regardless of deployment shape.
     """
 
     raw = os.getenv("OPENALEX_API_KEY")
-    return raw.strip() if raw and raw.strip() else None
+    if raw and raw.strip():
+        return raw.strip()
+
+    try:
+        from alma.core.secrets import SECRET_OPENALEX_API_KEY, get_secret
+
+        stored = get_secret(SECRET_OPENALEX_API_KEY)
+        return stored if stored else None
+    except Exception:
+        return None
 
 
 def get_contact_email() -> Optional[str]:
