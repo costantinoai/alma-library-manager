@@ -126,7 +126,7 @@ Settings page.
 | Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.strategies.*`, `discovery.limits.*`) |
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
-| Settings → Integrations → Slack | `.env`, `settings.json`, and `config/slack.config` |
+| Settings → Channels | `data/secrets.json` (Slack bot token, key `slack.bot_token`) and `settings.json` (`slack_channel`, `check_interval_hours`) |
 | Settings → Data & system → Corpus Explorer | (no setting; opens modal) |
 | Settings → Data & system → Backup / restore | (no setting; runs operations) |
 

@@ -1,107 +1,261 @@
 ---
 title: Alerts
-description: Composable rules that turn Library / Feed / Discovery state into Slack digests on manual, daily, or weekly schedules.
+description: Scheduled (or manual) Slack digests of new papers from a chosen subset of feed monitors. Two-layer cold-start filter, per-alert dedup, async-enveloped delivery.
 ---
 
 # Alerts
 
-**Alerts** are scheduled digests delivered to Slack. They turn rule
-sets like "every Monday morning, send me the new papers in topics X,
-Y, and Z that I haven't seen yet" into automatic posts.
+**Alerts** turn the Feed into a push channel. You pick a subset of your
+feed monitors (or all of them), pick a schedule (daily / weekly /
+manual), and ALMa drops a Slack DM with the new papers each time it
+fires.
 
-## Rule types
+The model is intentionally close to the older `scholar-slack-bot`
+script — small, opinionated, and bounded. Alerts are not a generic
+notifier; they are "the new-papers digest for the things I told ALMa
+to watch."
 
-A rule is one of:
+## Mental model
 
-| Type | What it matches |
-|---|---|
-| `author` | Recent works from a specific followed author. |
-| `keyword` | Free-text search across recent papers. |
-| `topic` | OpenAlex topic / concept ID. |
-| `similarity` | Papers with high SPECTER2 cosine to a seed paper. |
-| `discovery_lens` | Top-N recommendations from a saved [Lens](lenses.md). |
+```
+   feed_monitors ─┐
+                  ├─► Alert (digest) ─► schedule fires ─► Slack DM
+   alert_rules  ──┘
+```
 
-A single Alert can compose multiple rules — for example, "any new
-work matching topic `interpretability` OR cited by my saved paper
-`xyz`".
+Three primitives:
+
+| Concept | Table | What it is |
+|---|---|---|
+| **Monitor** | `feed_monitors` | A "thing ALMa watches." Today this means a followed author, but the schema is open to keyword / topic monitors as the Feed grows. |
+| **Rule** | `alert_rules` | The matching predicate that selects papers from one monitor (or other source). For v1 the only UI-supported rule type is `feed_monitor`. |
+| **Alert (digest)** | `alerts` | The delivery config: name, schedule, channels, plus a list of assigned rules. One alert can compose many rules. |
+
+A paper is delivered when **all** of these hold:
+
+1. It matches at least one rule assigned to the alert.
+2. Its `publication_date` is within the rolling 30-day window
+   (`max_age_days`, configurable per rule, default 30).
+3. Its `feed_items.fetched_at` is **after** `alert.created_at` —
+   the cold-start watermark (see below).
+4. It has not already been sent by **this same alert** in a previous
+   fire (`alerted_publications` per-alert dedup).
+
+## Why these filters?
+
+Two specific failure modes the filters prevent:
+
+### 1. Backfill spam (Layer 1: 30-day publication-date window)
+
+When you add a new monitor, ALMa backfills the author's recent
+publications into `feed_items`. Without a publication-date filter,
+the first alert fire would dump every recent backfill into Slack —
+papers that are new TO THE MONITOR but not new TO THE WORLD.
+
+The 30-day window means: "only papers published in the last 30 days
+are eligible." Older papers stay in the Feed where you can browse
+them; they do not become Slack notifications.
+
+Papers with no `publication_date` (rare on OpenAlex; common on
+imports) are **dropped**, not back-filled with `fetched_at`. Per the
+project's "don't fabricate timestamps" rule, a missing pub date is
+not the same as "today."
+
+### 2. Cold-start floods (Layer 2: alert.created_at watermark)
+
+If you create an alert covering a monitor that already has a few
+weeks of papers in the Feed, Layer 1 alone would still send the
+recent-but-already-seen ones on the first fire.
+
+Layer 2 says: "the alert starts caring from the moment it was
+created." Anything fetched into the Feed *before* `alert.created_at`
+is treated as historical and skipped, even if its `publication_date`
+is recent.
+
+This mirrors `scholar-slack-bot`'s cache semantics — a brand-new
+author starts with everything already in the cache, so nothing
+fires until truly new papers arrive.
+
+## Per-alert dedup, NOT global
+
+`alerted_publications` is keyed on `(alert_id, paper_id)`. The same
+paper can deliver through two distinct alerts — once each. This is
+deliberate: each alert is its own deliberate subscription with its
+own scope, and collapsing across alerts would let a noisy
+"follow-this-author" alert silence a more curated topic alert for
+the same paper.
+
+Inside a single alert, the same paper is sent at most once.
+
+## Slack message format
+
+Each fire posts one Slack message (or several, if there are more
+than 15 papers — see *Chunking* below). Per paper:
+
+```
+*<https://doi.org/…|Title of paper>*
+Authors: First, [+N], Last
+2026-04-26 | Nature Machine Intelligence
+Match: Alice Smith, Bob Jones
+The first ~280 chars of the abstract, truncated …
+```
+
+- **Title** is bold and links out (DOI > url > pub_url).
+- **Authors** abbreviate to `First, [+N], Last` past four authors.
+- The metadata line is `publication_date | journal`. Citations are
+  intentionally omitted — these are new papers by construction, so
+  the count is always 0 / near-0 and adds noise.
+- **Match** lists the entities inside the rule(s) that triggered
+  this paper — author names, topic labels, keywords. When one paper
+  matches multiple rules in the same alert, the entries are joined
+  with `, ` so you see all the reasons it surfaced.
+- **Abstract** is truncated to 280 chars; missing abstracts produce
+  no line.
+
+The footer reads `Sent by ALMa | YYYY-MM-DD HH:MM UTC`.
+
+## Chunking past 15 papers
+
+A single Slack Block-Kit message has a 50-block limit, which works
+out to ~15 papers. When a fire produces more than that, ALMa splits
+into multiple messages with headers like:
+
+```
+Alert: Weekly digest -- papers 1-15 of 23
+…
+Alert: Weekly digest -- papers 16-23 of 23
+…
+```
+
+The dispatch is **all-or-nothing**: papers are only marked
+delivered (`alerted_publications`) after every chunk has succeeded.
+A partial Slack outage leaves the un-acked papers eligible for the
+next fire.
 
 ## Schedules
 
-| Schedule | When it runs |
+| Schedule | When it fires |
 |---|---|
-| **Manual** | Only when you trigger it. Useful for one-shot digests. |
-| **Daily** | Every day at a configurable hour. |
-| **Weekly** | Once per week on a configurable day. |
+| **Manual** | Only when you click "Evaluate" on the Alerts page (or POST `/alerts/{id}/evaluate`). |
+| **Daily** | Each day at a configurable hour, evaluated by the in-process scheduler sweep. |
+| **Weekly** | Once per week on a configurable day + hour. |
 
-Each Alert has its own schedule. Daily and weekly Alerts are
-dispatched by the APScheduler background loop.
+The scheduler sweep checks every hour by default
+(`ALERT_CHECK_INTERVAL_HOURS`) and fires every alert whose
+`_is_due()` predicate returns true. Schedule times are stored as
+naive UTC; users in non-UTC time zones will see the local fire
+time shift by their offset.
 
-## Delivery
+## Async + Activity envelope
 
-Currently: **Slack** via a Slack bot token. The plugin layer is
-designed to grow more channels (email, RSS, webhook), but Slack is
-the only first-class delivery target today.
+Every Slack-touching call runs through the canonical
+[activity envelope](../operations/background-jobs.md):
 
-Configuration lives in:
+| Endpoint | Operation key |
+|---|---|
+| `POST /alerts/{id}/evaluate` | `alerts.evaluate:<alert_id>` |
+| `POST /plugins/slack/test` | `alerts.slack.test` |
+| Periodic sweep | `alerts.evaluate_scheduled` |
 
-* `.env` — `SLACK_TOKEN`, default `SLACK_CHANNEL`.
-* `config/slack.config` — per-channel overrides.
-* **Settings → Integrations → Slack** — UI configuration.
+The HTTP request returns in ~100 ms with a `JobEnvelope`
+(`{ job_id, status: "queued", operation_key, … }`). The actual
+evaluation runs on the scheduler thread pool; progress lands in
+`operation_status` so the **Activity** tab shows the job moving
+from queued → running → completed (or failed) with a punch-line
+terminal message like *"Sent 7 new paper(s) for 'Weekly digest'"*.
 
-## Anatomy of a Slack digest
+Concurrent re-fires of the same alert dedupe via `find_active_job`:
+clicking "Evaluate" twice returns the same `job_id` on the second
+call, with `status: "already_running"`.
+
+## Delivery channels
+
+Today: **Slack only** via a Slack Bot User OAuth Token. The
+`MessagingPlugin` interface in `alma.plugins.base` was designed for
+email / Discord / webhook follow-ons, but only Slack has a working
+implementation. The "Test Connection" button in
+**Settings → Channels** runs through the same `SlackNotifier` path
+as real alert delivery — a green test proves the production path
+works.
+
+The bot token is stored in the unified secret store
+(`data/secrets.json`, key `slack.bot_token`). The DM target lives
+in `data/settings.json` under `slack_channel`. Both are editable
+from **Settings → Channels**; no environment variable hand-edits
+needed.
+
+`slack_channel` accepts:
+
+- a public/private channel name (`general`, `#general`),
+- a user display name (`Andrea Costantino`),
+- a Slack ID (`C0123…`, `U0123…`).
+
+Resolution to a channel ID happens at send time and the result is
+cached for the lifetime of the process. A wrong name produces a
+precise `channel_not_found` error in the Activity row, not a
+generic "API failed."
+
+## Current limits (v0.10.x)
+
+- Single global Slack DM target. Per-alert channel override is on
+  the roadmap — today every alert delivers to whatever
+  `slack_channel` is set in Settings.
+- Schedule times are timezone-naive (UTC). A daily 09:00 alert
+  fires at 09:00 UTC, which is 11:00 in CET / 10:00 in CEST.
+- Only `feed_monitor` rules are exposed in the v1 dialog. Other
+  rule types (`author`, `keyword`, `topic`, `similarity`,
+  `discovery_lens`, `branch`, `library_workflow`) exist in code
+  and accept API calls, but the new-alert form centres on monitors.
+
+## Schema
+
+```sql
+alert_rules               (id, name, rule_type, rule_config, channels,
+                           enabled, created_at)
+alerts                    (id, name, channels, schedule, schedule_config,
+                           format, enabled, created_at, last_evaluated_at)
+alert_rule_assignments    (alert_id, rule_id)               -- M:N
+alert_history             (id, alert_id, channel, sent_at, status,
+                           publications, publication_count,
+                           message_preview, error_message)
+alerted_publications      (id, alert_id, paper_id, alerted_at)
+                          -- UNIQUE(alert_id, paper_id)
+```
+
+`rule_config` is a JSON blob; for `feed_monitor` rules it must
+include `monitor_id` (or `monitor_name`). `max_age_days` (default
+`30`) is the only other key that affects matching.
+
+## API surface
 
 ```
-📚 ALMa daily digest · 2026-04-25
+# Rules (the matching predicates)
+GET    /api/v1/alerts/rules
+POST   /api/v1/alerts/rules
+PUT    /api/v1/alerts/rules/{rule_id}
+DELETE /api/v1/alerts/rules/{rule_id}
+POST   /api/v1/alerts/rules/{rule_id}/toggle
+POST   /api/v1/alerts/test/{rule_id}        # dry-match, no Slack send
 
-3 new papers matching "interpretability":
-  • Paper A — Authors et al. (Nature, 2026) ★★★★
-  • Paper B — Authors et al. (NeurIPS, 2026)
-  • Paper C — Authors et al. (arXiv, 2026)
+# Alerts (the delivery configs)
+GET    /api/v1/alerts/
+POST   /api/v1/alerts/
+GET    /api/v1/alerts/{alert_id}
+PUT    /api/v1/alerts/{alert_id}
+DELETE /api/v1/alerts/{alert_id}
+POST   /api/v1/alerts/{alert_id}/rules      # assign rules
+DELETE /api/v1/alerts/{alert_id}/rules/{rule_id}
 
-Top recommendations from your global lens:
-  • Paper D — Authors et al. — score 0.87
-  • Paper E — Authors et al. — score 0.81
+# Evaluation (async-enveloped)
+POST   /api/v1/alerts/{alert_id}/evaluate   # returns JobEnvelope
+POST   /api/v1/alerts/{alert_id}/dry-run    # sync; returns matched papers
 
-Tap a paper to open it in ALMa.
-```
-
-Each paper line links back to the ALMa instance running on your
-machine (or behind your reverse proxy).
-
-## Rule evaluation
-
-When an Alert fires:
-
-1. Each rule runs against the database in the order defined.
-2. Results are deduplicated across rules (a single paper matching
-   two rules appears once).
-3. The combined list is filtered against `alerted_publications` so
-   you don't get the same paper twice across runs.
-4. The digest is rendered with the configured template and posted.
-
-The `alert_history` table records every dispatch with the digest
-content for audit.
-
-## Usefulness scoring
-
-Each Alert tracks four counters:
-
-* `total_runs` / `failed_runs`
-* `empty_runs` (digest had zero papers)
-* `papers_sent` / `sent_runs`
-
-These feed a per-alert **usefulness score** (0–100) that surfaces in
-the Alerts page so you can see which rules are noise and which are
-producing signal.
-
-## API
-
-```
-GET    /api/v1/alerts                   # list rules
-POST   /api/v1/alerts                   # create
-PUT    /api/v1/alerts/{id}              # update
-DELETE /api/v1/alerts/{id}              # delete
-
-POST   /api/v1/alerts/{id}/run          # trigger manually
+# History
 GET    /api/v1/alerts/history
+GET    /api/v1/alerts/templates             # one-click suggestions
+
+# Slack channel test
+POST   /api/v1/plugins/slack/test           # returns JobEnvelope
 ```
+
+For the request/response shapes see the [API reference](../reference/api.md).
