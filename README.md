@@ -1,3 +1,5 @@
+# ALMa — **A**nother **L**ibrary **Ma**nager
+
 > **Early preview (`v0.9.1`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
