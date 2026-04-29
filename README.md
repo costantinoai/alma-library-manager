@@ -1,11 +1,3 @@
-<p align="center">
-  <img src="branding/logo/alma-logo-horizontal.svg" alt="ALMa — Another Library Manager" width="640">
-</p>
-
-<p align="center">
-  <em>Your personal academic research feed.</em>
-</p>
-
 > **Early preview (`v0.9.1`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
