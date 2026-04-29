@@ -46,6 +46,12 @@ class SourcePolicy:
     default_headers: tuple[tuple[str, str], ...] = ()
     auth_header_factory: Optional[Callable[[], dict[str, str]]] = None
     auth_param_factory: Optional[Callable[[], dict[str, str]]] = None
+    # Factories return the *current* rate budget per request. They let
+    # polite-pool eligibility (e.g. a contact email added through the
+    # Settings UI after startup) take effect immediately, instead of
+    # being frozen at import time.
+    min_interval_factory: Optional[Callable[[], float]] = None
+    max_concurrency_factory: Optional[Callable[[], int]] = None
 
 
 class SourceDiagnosticsCollector:
@@ -178,6 +184,14 @@ def _crossref_params() -> dict[str, str]:
     return {"mailto": mailto}
 
 
+def _crossref_min_interval() -> float:
+    return 0.12 if get_crossref_mailto() else 0.25
+
+
+def _crossref_max_concurrency() -> int:
+    return 3 if get_crossref_mailto() else 1
+
+
 def _orcid_headers() -> dict[str, str]:
     return {"Accept": "application/json"}
 
@@ -195,11 +209,16 @@ _POLICIES: dict[str, SourcePolicy] = {
     "crossref": SourcePolicy(
         name="crossref",
         base_url="https://api.crossref.org",
-        min_interval_seconds=0.12 if get_crossref_mailto() else 0.25,
-        max_concurrency=3 if get_crossref_mailto() else 1,
+        # Static fields are the anonymous-pool fallback; the factories
+        # below are consulted per request so the polite pool kicks in
+        # the moment a contact email is configured at runtime.
+        min_interval_seconds=0.25,
+        max_concurrency=1,
         max_retries=3,
         default_headers=(("Accept", "application/json"),),
         auth_param_factory=_crossref_params,
+        min_interval_factory=_crossref_min_interval,
+        max_concurrency_factory=_crossref_max_concurrency,
     ),
     "arxiv": SourcePolicy(
         name="arxiv",
@@ -237,7 +256,12 @@ class SourceHttpClient:
         self._local = threading.local()
         self._rate_lock = threading.RLock()
         self._next_request_at = 0.0
-        self._semaphore = threading.BoundedSemaphore(max(1, policy.max_concurrency))
+        # Concurrency is gated dynamically (see `_concurrency_slot`) so
+        # the limit can grow/shrink with runtime config — e.g. Crossref
+        # moving between anonymous and polite pool when a contact email
+        # is added or removed from the Settings UI.
+        self._concurrency_cond = threading.Condition()
+        self._active_requests = 0
 
     def _session(self) -> requests.Session:
         session = getattr(self._local, "session", None)
@@ -267,13 +291,43 @@ class SourceHttpClient:
             merged.update(self._policy.auth_param_factory() or {})
         return merged
 
+    def _current_min_interval(self) -> float:
+        if self._policy.min_interval_factory is not None:
+            try:
+                return max(0.0, float(self._policy.min_interval_factory()))
+            except Exception:
+                pass
+        return max(0.0, float(self._policy.min_interval_seconds))
+
+    def _current_max_concurrency(self) -> int:
+        if self._policy.max_concurrency_factory is not None:
+            try:
+                return max(1, int(self._policy.max_concurrency_factory()))
+            except Exception:
+                pass
+        return max(1, int(self._policy.max_concurrency))
+
+    @contextmanager
+    def _concurrency_slot(self) -> Iterator[None]:
+        with self._concurrency_cond:
+            while self._active_requests >= self._current_max_concurrency():
+                self._concurrency_cond.wait()
+            self._active_requests += 1
+        try:
+            yield
+        finally:
+            with self._concurrency_cond:
+                self._active_requests -= 1
+                self._concurrency_cond.notify_all()
+
     def _wait_for_slot(self) -> None:
+        interval = self._current_min_interval()
         with self._rate_lock:
             now = time.monotonic()
             wait = max(0.0, self._next_request_at - now)
             if wait > 0:
                 time.sleep(wait)
-            self._next_request_at = time.monotonic() + max(0.0, self._policy.min_interval_seconds)
+            self._next_request_at = time.monotonic() + interval
 
     def _retry_wait(self, response: Optional[requests.Response], attempt: int) -> float:
         if response is not None:
@@ -310,7 +364,7 @@ class SourceHttpClient:
         last_exc: Optional[Exception] = None
         last_resp: Optional[requests.Response] = None
         for attempt in range(max(0, self._policy.max_retries) + 1):
-            with self._semaphore:
+            with self._concurrency_slot():
                 self._wait_for_slot()
                 started_at = time.monotonic()
                 try:
