@@ -47,17 +47,11 @@ Open the most recent lens refresh; the **Per-source timing** sub-
 panel breaks down the external retrieval phase per channel. Slow
 channels are the place to start.
 
-For deeper profiling, the `scripts/probe_*.py` directory has
-in-process probes that exercise specific paths:
-
-```bash
-python scripts/probe_activity_overlap.py    # page-mount reads under refresh
-python scripts/probe_lens_refresh.py        # full refresh timing
-python scripts/probe_authors_deep_refresh.py
-```
-
-Each script writes timings to stdout and a JSON summary to
-`/tmp/alma-probe-*.json`.
+For deeper profiling, run the slow operation again with the browser
+DevTools Network panel open and read both the per-source timing in
+**Activity → Operations** and the overall request waterfall. Most
+slow refreshes resolve to a single misbehaving channel; the per-
+source breakdown points at it directly.
 
 ## When something is slow
 
@@ -73,22 +67,6 @@ Common patterns:
 | Feed refresh > 10 minutes | A single monitor is pulling thousands of works | Tighten the monitor's filters or cap `feed.monitor_defaults.daily_max`. |
 | Page mount reads slow | Embedding fetch running synchronously | Move it to AI compute background job (the default). |
 | Backfill S2 vectors crawling | Public S2 rate limits | Set `SEMANTIC_SCHOLAR_API_KEY` for higher quotas. |
-
-## Regression probes
-
-Critical perf paths are pinned by probes the codebase keeps in
-`scripts/probe_*.py`. The two worth knowing:
-
-1. **`probe_activity_overlap.py`** — measures page-mount read
-   latency while a feed refresh is in progress. Catches regressions
-   in the "feed refresh blocks reads" failure mode.
-2. **`probe_lens_refresh.py`** — measures end-to-end lens refresh
-   on a real `scholar.db`. Catches regressions in the multi-source
-   retrieval phase.
-
-Run them before and after any change that touches the recommender
-or the scheduler. Compare timings and look at the per-source
-breakdown for unexplained shifts.
 
 ## Database size
 

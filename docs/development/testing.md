@@ -59,28 +59,18 @@ fixtures). For day-to-day development, prefer running:
 
 Skip the full suite until you push.
 
-## In-process probes
+## Real-load behaviour
 
-For perf and behaviour-under-load that pytest doesn't capture
-well, the codebase uses **in-process probes** in `scripts/`:
+For perf and behaviour-under-load that pytest doesn't capture well,
+exercise the path against a running instance and read **Activity →
+Operations**. The per-source timing sub-panel breaks down each
+external retrieval lane and is the single best signal for refresh
+regressions.
 
-```bash
-python scripts/probe_activity_overlap.py
-python scripts/probe_lens_refresh.py
-```
-
-A probe boots the app in-process (no subprocess, no real HTTP),
-exercises the path being measured, and prints / writes timings.
-Faster than Playwright, more representative than a unit test.
-
-Use probes when you need:
-
-* Real timings (perf budget validation).
-* Multi-step interaction (refresh during read).
-* End-to-end shape verification (response field actually reaches
-  the client).
-
-Use unit tests for everything else.
+Use unit tests for pure-function logic and the integration suite for
+route + DB interactions; reach for live load only when you need real
+timings, multi-step interaction (e.g. refresh during read), or
+end-to-end shape verification.
 
 ## Frontend type check
 
@@ -123,7 +113,7 @@ interactive debugging.
 |---|---|---|
 | **Unit** | pytest | Pure-function logic. Fast, isolated. |
 | **Integration** | pytest + `lib_db` fixture | Route + DB + side effects. Most ALMa tests live here. |
-| **Probe** | `scripts/probe_*.py` | Perf budgets, interaction patterns, shape verification. |
+| **Live load** | Activity → Operations UI | Perf budgets, interaction patterns, shape verification — driven against a running instance. |
 | **E2E** | Playwright | Visual regressions, complex flows that span multiple surfaces. |
 | **Type check** | `npx tsc --noEmit` | After any frontend change. |
 

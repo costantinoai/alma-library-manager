@@ -40,7 +40,6 @@ alma/
 │       └── api/client.ts         # Single API client + type definitions
 │
 ├── tests/                        # pytest test suite
-├── scripts/                      # Probe / migration / debug scripts
 ├── docs/                         # This documentation
 ├── data/                         # SQLite + caches (gitignored)
 ├── settings.json                 # Runtime preferences

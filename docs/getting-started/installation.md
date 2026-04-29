@@ -74,10 +74,19 @@ npm run build      # writes to frontend/dist
 cd ..
 ```
 
-For active frontend development, use `npm run dev` instead and let
-Vite serve on `http://localhost:5173` while the backend serves API on
-`http://localhost:8000`. The provided
-`scripts/start-dev.sh` orchestrates both processes.
+For active frontend development, run Vite and the backend in
+separate terminals:
+
+```bash
+# Terminal 1 — backend with auto-reload
+python -m uvicorn alma.api.app:app --reload
+
+# Terminal 2 — Vite dev server (proxies /api/* to :8000)
+cd frontend && npm run dev
+```
+
+Vite serves on `http://localhost:5173`; the backend serves API on
+`http://localhost:8000`.
 
 ## 4. Configuration
 

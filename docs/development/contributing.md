@@ -99,13 +99,10 @@ npm run build
 cd ..
 ```
 
-For changes to the recommender or scheduler, run the relevant
-probe:
-
-```bash
-python scripts/probe_lens_refresh.py
-python scripts/probe_activity_overlap.py
-```
+For changes to the recommender or scheduler, exercise a real
+refresh and inspect **Activity → Operations** for per-source timing.
+Compare against the previous run on the same lens — unexplained
+shifts are the regression signal.
 
 For UI changes, capture screenshots at three viewports
 (1440×900, 1024×768, 390×844) and look at them. Static review
