@@ -38,25 +38,33 @@ The app has five views:
 
 ---
 
-## Quick start (Docker)
+## Quick start (Docker — suggested)
 
 The fastest way to run ALMa, and what you should pick unless you have
 a strong reason not to. Docker pins Python, the AI stack, and every
 native dependency into one image so you don't have to.
 
+The `:latest` tag tracks the newest stable release on `main`. Once
+you're set up you only ever need `docker compose pull && docker
+compose up -d` to upgrade.
+
 ```bash
+# 1. make a folder for ALMa to live in, with the bind-mount targets
 mkdir alma && cd alma
 mkdir -p data config
 touch .env settings.json
 chmod 600 .env
+
+# 2. (optional) pre-pull the image so the first `up` is instant
+docker pull ghcr.io/costantinoai/alma-library-manager:latest
 ```
 
-Drop a `docker-compose.yml` next to those files:
+Save this `docker-compose.yml` next to those files:
 
 ```yaml
 services:
   alma:
-    image: ghcr.io/costantinoai/alma-library-manager:0.9.1
+    image: ghcr.io/costantinoai/alma-library-manager:latest
     container_name: alma
     restart: unless-stopped
     ports: ["127.0.0.1:8000:8000"]
@@ -68,15 +76,27 @@ services:
       - ./.env:/app/.env
 ```
 
-Then bring it up and open `http://localhost:8000`:
+Then start it and open <http://localhost:8000>:
 
 ```bash
 docker compose up -d
+docker compose logs -f alma   # watch the boot, Ctrl+C to detach
 ```
 
 That's it. The container binds to `127.0.0.1` only; if you want to
 expose ALMa beyond your own machine, put a reverse proxy in front and
 set `API_KEY` in `.env`.
+
+To update later:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+If you'd rather pin to a specific release (recommended for shared
+servers), swap `:latest` for a versioned tag — e.g.
+`:0.9.2`, `:0.9`, or `:0`. The lite variant uses `-lite` suffixes:
+`:latest-lite`, `:0.9.2-lite`, etc.
 
 Your data lives in the host folder you just created (`./data`,
 `./config`, `./settings.json`, `./.env`). Nothing personal goes into
