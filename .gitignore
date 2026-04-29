@@ -102,3 +102,9 @@ site/
 storybook-static
 frontend/screenshot.mjs
 frontend/snap.mjs
+
+# ── Dev-only scripts (start-dev, probes, restart helpers) ──
+# These are local-only orchestration / profiling helpers; not part of
+# the shipped runtime, so they're untracked to keep the public repo
+# focused on what users actually run via Docker.
+scripts/

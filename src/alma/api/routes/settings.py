@@ -123,7 +123,7 @@ router = APIRouter(
 
 
 class SettingsModel(BaseModel):
-    backend: str = Field("scholar", pattern="^(scholar|openalex)$", description="Publication backend")
+    backend: str = Field("openalex", pattern="^(scholar|openalex)$", description="Publication backend")
     openalex_email: Optional[str] = Field(None, description="Optional contact email sent with OpenAlex requests")
     fetch_full_history: Optional[bool] = Field(False, description="Fetch full author history (OpenAlex)")
     from_year: Optional[int] = Field(None, description="Fetch from this year onward; ignored if fetch_full_history is true")
@@ -229,7 +229,7 @@ def get_settings():
     )
 
     return SettingsModel(
-        backend=raw.get("backend", "scholar"),
+        backend=raw.get("backend", "openalex"),
         openalex_email=raw.get("openalex_email"),
         fetch_full_history=bool(raw.get("fetch_full_history", False)),
         from_year=raw.get("from_year"),

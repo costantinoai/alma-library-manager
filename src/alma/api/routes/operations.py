@@ -604,7 +604,7 @@ def hard_reset_publications_db(user: dict = Depends(get_current_user)):
             # Settings window
             from_year = get_fetch_year()
             cfg = _fb_settings()
-            backend = (cfg.get("backend") or "scholar").lower()
+            backend = (cfg.get("backend") or "openalex").lower()
 
             # Iterate authors
             adb = open_db_connection()

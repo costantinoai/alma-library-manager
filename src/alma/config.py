@@ -65,7 +65,13 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "database": "./data/scholar.db",
     "slack_config_path": "./config/slack.config",
     "api_call_delay": "1.0",
-    "backend": "scholar",
+    # OpenAlex is the primary source: open citation graph, polite-pool
+    # rate limits, no scraping, no auth wall. The legacy "scholar"
+    # backend (Google Scholar via the `scholarly` package) is kept as
+    # an option for users who explicitly opt in, but it must never be
+    # the first-run default — it ships disabled in the lite image and
+    # is the wrong shape for a public testing release.
+    "backend": "openalex",
     "openalex_email": None,
     "fetch_full_history": False,
     "from_year": None,
@@ -402,9 +408,9 @@ def get_backend() -> str:
     """Get the configured backend (scholar or openalex).
 
     Returns:
-        str: Backend name, defaults to 'scholar'
+        str: Backend name, defaults to 'openalex'
     """
-    return get_setting("backend", "scholar").lower()
+    return get_setting("backend", "openalex").lower()
 
 
 def get_from_year() -> Optional[int]:
