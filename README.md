@@ -1,6 +1,6 @@
 # ALMa — **A**nother **L**ibrary **Ma**nager
 
-> **Early preview (`v0.9.1`).** The three core jobs — Library, Discovery,
+> **Early preview (`v0.9.2`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
 
@@ -141,12 +141,12 @@ app — Library, Discovery, Feed, Authors, Insights, the Insights graph,
 clustering, BibTeX/Zotero imports. They differ only in whether the
 local SPECTER2 encoder is bundled.
 
-**`normal`** (the default, `:0.9.1`) includes `torch` + `transformers`,
+**`normal`** (the default, `:0.9.2`) includes `torch` + `transformers`,
 so SPECTER2 embeddings can be computed locally on demand. Image size
 is around 1.4 GB, peak runtime memory ~2 GB. Pick this on a desktop
 or server with at least 4 GB RAM.
 
-**`lite`** (`:0.9.1-lite`) drops `torch`. Image size is around
+**`lite`** (`:0.9.2-lite`) drops `torch`. Image size is around
 1.2 GB, runtime memory ~1 GB. You still get full embeddings via
 Semantic Scholar's pre-computed SPECTER2 vectors (most papers with a
 DOI have one) and you can configure OpenAI as the embedding provider
