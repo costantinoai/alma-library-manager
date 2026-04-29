@@ -8,6 +8,8 @@ description: Discovery is ALMa's recommendation engine — probabilistic, ranked
 **Discovery** answers: *given what I have saved, liked, disliked, or
 followed, which papers might I want to add next?*
 
+![Discovery page with the Find & Add bar, lenses, and Branch Studio](../screenshots/desktop-discovery.png)
+
 It is explicitly different from [Feed](feed.md):
 
 | Feed | Discovery |

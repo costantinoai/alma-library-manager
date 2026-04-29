@@ -9,12 +9,19 @@ After installing and starting the backend, work through this short
 checklist. Everything below assumes you have <http://localhost:8000>
 open in a browser.
 
+![Library on first run, before any saves](../screenshots/desktop-library.png)
+
 ## 1. Set your OpenAlex email
 
 Go to **Settings → External APIs → OpenAlex** and enter the email you
 want to identify with. ALMa will start using OpenAlex's polite pool
 immediately. You should see a green "OK" indicator next to OpenAlex
 in the **Settings → Status** card.
+
+If you started the container with `-e OPENALEX_EMAIL=...` (or
+`env_file:`), this is already set — no UI step needed.
+
+![Settings page — External APIs / Backend tab](../screenshots/desktop-settings.png)
 
 ## 2. Follow your first author
 

@@ -38,10 +38,20 @@ try:
     from dotenv import load_dotenv as _load_dotenv
     # Walk up looking for `.env`, then load. `override=False` keeps any
     # pre-existing shell env vars — useful for CI where a test suite
-    # wants to inject a key without touching `.env`.
+    # wants to inject a key without touching `.env`. Failures (file
+    # missing, mode 600 owned by a different uid in a Docker bind mount,
+    # encoding glitch) are demoted to a warning: env vars passed into
+    # the process from the runtime (docker `--env-file`, compose
+    # `env_file:`, the user's shell) still apply.
     _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     if _env_path.exists():
-        _load_dotenv(_env_path, override=False)
+        try:
+            _load_dotenv(_env_path, override=False)
+        except (PermissionError, OSError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "Could not load .env at %s (%s) — using environment vars only",
+                _env_path, exc,
+            )
 except ImportError:
     logger.debug("python-dotenv not installed — skipping .env load")
 
@@ -71,11 +81,26 @@ def _looks_like_project_root(candidate: Path) -> bool:
     return any((candidate / marker).exists() for marker in _PROJECT_ROOT_MARKERS)
 
 
-def _write_default_settings_file(settings_path: Path) -> None:
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(DEFAULT_SETTINGS, f, indent=2)
-        f.write("\n")
+def _write_default_settings_file(settings_path: Path) -> bool:
+    """Write defaults to ``settings_path``. Returns False if the file
+    isn't writable from this process (typical for a Docker bind-mount
+    of a host file owned by a different uid) — the caller falls back
+    to in-memory defaults so the app boots regardless.
+    """
+    try:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_SETTINGS, f, indent=2)
+            f.write("\n")
+        return True
+    except (PermissionError, OSError) as exc:
+        logger.warning(
+            "Could not write default settings to %s (%s) — using "
+            "in-memory defaults; Settings UI changes will not persist "
+            "until the file is writable",
+            settings_path, exc,
+        )
+        return False
 
 
 def _find_project_root() -> Path:
@@ -119,9 +144,19 @@ def get_project_root() -> Path:
 def get_settings_path() -> Path:
     """Get the path to settings.json.
 
+    Priority:
+      1. ``ALMA_SETTINGS_PATH`` env var. Useful in containers where the
+         project root is read-only (no bind-mount of settings.json) but
+         the data volume is writable — point this at e.g.
+         ``/app/data/settings.json``.
+      2. ``settings.json`` next to the project root.
+
     Returns:
         Path: Absolute path to settings.json
     """
+    env_path = os.getenv("ALMA_SETTINGS_PATH")
+    if env_path:
+        return _resolve_path(env_path)
     return get_project_root() / "settings.json"
 
 

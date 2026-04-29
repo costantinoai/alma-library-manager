@@ -8,6 +8,8 @@ description: The Library is the curated saved collection — only papers you've 
 Your **Library** is the set of papers you have explicitly saved.
 Membership = `status='library'`. Nothing else.
 
+![Library page with saved papers, reading workflow, and tabs](../screenshots/desktop-library.png)
+
 The Library page is **action-oriented**: it surfaces what you need
 to do next (read, triage, organise), not analytics about the
 collection. Analytics live on [Insights](insights.md); the full

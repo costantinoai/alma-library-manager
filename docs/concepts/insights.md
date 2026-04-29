@@ -9,6 +9,8 @@ The **Insights** page projects your data into charts, maps, and a
 2D embedding graph. Read-only — Insights is for understanding your
 corpus, not editing it.
 
+![Insights page with the Stats / Diagnostics tabs](../screenshots/desktop-insights.png)
+
 ## Tabs
 
 ### Overview

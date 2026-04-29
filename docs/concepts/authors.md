@@ -11,6 +11,8 @@ publications flow into your [Feed](feed.md) automatically, and
 their identifiers (OpenAlex, Semantic Scholar, ORCID, optionally
 Google Scholar) are resolved and reconciled in the background.
 
+![Authors page with followed authors and the suggestions rail](../screenshots/desktop-authors.png)
+
 Most days, you'll spend time in the Feed; you'll come to the Authors
 page to follow / unfollow people, fix identifier mismatches, and
 review **author suggestions** (the people you don't follow yet that

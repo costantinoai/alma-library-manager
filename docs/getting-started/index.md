@@ -12,12 +12,14 @@ manage Python, Node, and AI packages themselves.
 
 <div class="grid cards" markdown>
 
--   :material-docker:{ .lg .middle } **Docker quick start**
+-   :material-docker:{ .lg .middle } **Docker (suggested)**
 
     ---
 
-    Pull or build the container, mount your local data, and open the
-    app at `localhost:8000`.
+    A single `docker run` command, named volumes that survive
+    upgrades, no compose file required. Compose is also available
+    for users who prefer host-side bind-mounts or want to build
+    from source.
 
     [:octicons-arrow-right-24: Docker](docker.md)
 
@@ -26,7 +28,7 @@ manage Python, Node, and AI packages themselves.
     ---
 
     Python virtualenv / conda / uv plus a Vite frontend build. Use this
-    only when you are developing ALMa or deliberately avoiding Docker.
+    only when you're developing ALMa or deliberately avoiding Docker.
 
     [:octicons-arrow-right-24: Installation](installation.md)
 

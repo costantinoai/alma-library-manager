@@ -19,13 +19,17 @@ cd alma-library-manager
 ## 2. Python environment
 
 ALMa is one Python package (`alma`) installable in editable mode.
+Pick `[import]` (BibTeX/Zotero support) for everyday installs;
+add `[ai]` if you want the local SPECTER2 encoder for embeddings.
 
 === "venv"
 
     ```bash
     python -m venv .venv
     source .venv/bin/activate
-    pip install -e .
+    pip install -e ".[import]"          # lite-equivalent
+    # or
+    pip install -e ".[ai,import]"       # normal-equivalent
     ```
 
 === "conda / mamba"
@@ -33,7 +37,7 @@ ALMa is one Python package (`alma`) installable in editable mode.
     ```bash
     conda create -n alma python=3.11 -y
     conda activate alma
-    pip install -e .
+    pip install -e ".[import]"
     ```
 
 === "uv"
@@ -41,21 +45,19 @@ ALMa is one Python package (`alma`) installable in editable mode.
     ```bash
     uv venv
     source .venv/bin/activate
-    uv pip install -e .
+    uv pip install -e ".[import]"
     ```
 
-### Optional: AI extras
+### What `[ai]` adds
 
-The AI stack (embeddings, LLMs, SPECTER2) is opt-in:
-
-```bash
-pip install -e ".[ai]"
-```
-
-This pulls `transformers`, `adapters`, `torch`, `sentence-transformers`,
-`scikit-learn`, `umap-learn`, and `hdbscan`. On Apple Silicon and
+`[ai]` pulls `transformers`, `adapters`, `torch`, `scikit-learn`,
+`umap-learn`, and `hdbscan` (~1.5 GB on disk). On Apple Silicon and
 Linux x86_64 the wheels install cleanly; on Windows expect to wait
-longer for `torch`.
+longer for `torch`. Without `[ai]`, embeddings still work — ALMa
+fetches Semantic Scholar's pre-computed SPECTER2 vectors, and you
+can configure OpenAI as an embedding provider from the Settings
+page. What you lose is the *local* encoder for papers Semantic
+Scholar doesn't have a vector for.
 
 You can install AI extras later — ALMa will detect them and light up
 the matching settings.
@@ -98,9 +100,9 @@ The most useful keys to set:
 | `OPENALEX_EMAIL` | Joins the [polite pool](https://docs.openalex.org/how-to-use-the-api/api-overview#the-polite-pool). Set this. |
 | `OPENALEX_API_KEY` | Optional, for higher quotas. |
 | `SEMANTIC_SCHOLAR_API_KEY` | Improves S2 batch/related rate limits. |
-| `OPENAI_API_KEY` | For OpenAI embeddings or LLM. |
-| `ANTHROPIC_API_KEY` | For Claude-backed LLM features. |
+| `OPENAI_API_KEY` | Optional OpenAI embedding provider. |
 | `SLACK_TOKEN` / `SLACK_CHANNEL` | Slack digest alerts. |
+| `API_KEY` | Optional shared key — if set, requires `X-API-Key` on every request. |
 
 See the [configuration reference](../reference/configuration.md) for
 the complete list.

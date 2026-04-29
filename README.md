@@ -35,36 +35,74 @@ The app has five views:
   <img src="docs/screenshots/desktop-insights.png" alt="Insights" width="49%">
   <img src="docs/screenshots/desktop-feed.png" alt="Feed" width="49%">
 </p>
+<p align="center">
+  <img src="docs/screenshots/desktop-authors.png" alt="Authors" width="49%">
+  <img src="docs/screenshots/desktop-settings.png" alt="Settings" width="49%">
+</p>
 
 ---
 
-## Quick start (Docker — suggested)
+## Quick start (one Docker command — suggested)
 
-The fastest way to run ALMa, and what you should pick unless you have
-a strong reason not to. Docker pins Python, the AI stack, and every
-native dependency into one image so you don't have to.
-
-The `:latest` tag tracks the newest stable release on `main`. Once
-you're set up you only ever need `docker compose pull && docker
-compose up -d` to upgrade.
+Replace `you@example.com` with the email you want to identify yourself
+to OpenAlex (free, no signup required) and run:
 
 ```bash
-# 1. make a folder for ALMa to live in, with the bind-mount targets
+docker run -d --name alma --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -v alma-data:/app/data \
+  -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest
+```
+
+Then open <http://localhost:8000>. That's the whole install.
+
+What this does: pulls the published image; uses Docker named volumes
+(`alma-data`, `alma-config`) so your library survives upgrades; binds
+only to `127.0.0.1` so nothing's exposed until you put a reverse proxy
+in front. `:latest` tracks the newest release on `main`.
+
+To upgrade:
+
+```bash
+docker pull ghcr.io/costantinoai/alma-library-manager:latest
+docker rm -f alma
+# rerun the same `docker run` command — your data lives in the volumes
+```
+
+To pin a specific version on a shared server, swap `:latest` for
+`:0.9.2`, `:0.9`, or `:0`. The lite variant (smaller image, no local
+SPECTER2 encoder; see *Two image variants* below) uses `-lite`
+suffixes: `:latest-lite`, `:0.9.2-lite`.
+
+> **More to configure?** Add `-e API_KEY=your-key` to require an
+> `X-API-Key` header on every request, `-e SLACK_TOKEN=…` for Slack
+> digests, etc. Full env-var reference:
+> [docs/reference/configuration.md](docs/reference/configuration.md).
+
+---
+
+## Quick start (Docker Compose — for local builds or stack management)
+
+If you're building the image from source, running ALMa alongside other
+services, or you'd rather have host-side bind-mounts so you can poke
+at `data/` directly:
+
+```bash
 mkdir alma && cd alma
 mkdir -p data config
 touch .env settings.json
-chmod 600 .env
-
-# 2. (optional) pre-pull the image so the first `up` is instant
-docker pull ghcr.io/costantinoai/alma-library-manager:latest
+chmod 666 .env settings.json   # so the container's appuser can read/write
 ```
 
-Save this `docker-compose.yml` next to those files:
+Save as `docker-compose.yml`:
 
 ```yaml
 services:
   alma:
     image: ghcr.io/costantinoai/alma-library-manager:latest
+    # build: .   # uncomment to build locally instead of pulling
     container_name: alma
     restart: unless-stopped
     ports: ["127.0.0.1:8000:8000"]
@@ -76,32 +114,16 @@ services:
       - ./.env:/app/.env
 ```
 
-Then start it and open <http://localhost:8000>:
+Edit `.env` with at least `OPENALEX_EMAIL=you@example.com`, then:
 
 ```bash
 docker compose up -d
-docker compose logs -f alma   # watch the boot, Ctrl+C to detach
+docker compose logs -f alma   # follow the boot, Ctrl+C to detach
 ```
 
-That's it. The container binds to `127.0.0.1` only; if you want to
-expose ALMa beyond your own machine, put a reverse proxy in front and
-set `API_KEY` in `.env`.
-
-To update later:
-
-```bash
-docker compose pull && docker compose up -d
-```
-
-If you'd rather pin to a specific release (recommended for shared
-servers), swap `:latest` for a versioned tag — e.g.
-`:0.9.2`, `:0.9`, or `:0`. The lite variant uses `-lite` suffixes:
-`:latest-lite`, `:0.9.2-lite`, etc.
-
-Your data lives in the host folder you just created (`./data`,
-`./config`, `./settings.json`, `./.env`). Nothing personal goes into
-the image, so you can pull a newer version any time without losing
-your library.
+Update with `docker compose pull && docker compose up -d`. Your data
+lives in the host folders next to the compose file; nothing personal
+is baked into the image.
 
 ---
 

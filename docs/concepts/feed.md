@@ -10,6 +10,8 @@ haven't seen yet from sources you've explicitly told ALMa to watch.
 Unlike Discovery (which is probabilistic and ranks by relevance),
 the Feed is deterministic and orders strictly by time.
 
+![Feed page with the empty-state when no monitors have produced items yet](../screenshots/desktop-feed.png)
+
 ## What populates the Feed
 
 A `feed_items` row is created when one of your **monitors** finds a

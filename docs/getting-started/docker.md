@@ -1,39 +1,99 @@
 ---
 title: Docker
-description: Run ALMa as a container with all personal data bind-mounted from the host.
+description: Run ALMa as a container — the suggested install path, with named volumes that persist across upgrades.
 ---
 
 # Docker
 
-ALMa ships with a hardened multi-stage `Dockerfile` and a
-`docker-compose.yml` that bind-mount **all** user-sensitive state
-from the host. Nothing personal is baked into the image — the image
-is reproducible and shareable; the host is where your data stays.
+Docker is how almost everyone should run ALMa. The published image
+includes the FastAPI backend, the built React frontend, the SPECTER2
+encoder (in the `normal` variant), and every native dependency
+already pinned and tested. You provide three things: a port, an
+OpenAlex email, and a place for ALMa to store your library.
 
-What lives on the host (mounted into the container):
+There are two install paths:
 
-| Path on host | Path in container | Contents |
-|---|---|---|
-| `.env` | `/app/.env` | API keys and secrets (OpenAlex, Semantic Scholar, OpenAI, Slack…) |
-| `settings.json` | `/app/settings.json` | Small bootstrap/runtime settings file |
-| `data/` | `/app/data/` | `scholar.db`, embedding caches, `secrets.json` |
-| `config/` | `/app/config/` | Plugin configs (Slack channel mappings, etc.) |
+1. **One-command `docker run`** with named volumes. Suggested for
+   single-user workstations, NAS boxes, and quick evaluation. No
+   compose file, no host-side bind-mounts, no permission tinkering.
+2. **`docker compose`** with host bind-mounts. For users who want to
+   build the image from source, manage ALMa alongside other
+   compose-managed services, or directly inspect `data/` on the host.
 
-What lives only in the image:
+Both paths use the same image; pick by ergonomics.
 
-* The Python `alma` package and its dependencies
-* The built frontend (`frontend/dist/`)
-* The `uvicorn` entry point
+## Path 1 — single `docker run` (suggested)
 
-## Quick start from the published image
+```bash
+docker run -d --name alma --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -v alma-data:/app/data \
+  -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest
+```
 
-Create a working directory for local state:
+Open <http://localhost:8000>.
+
+What this does:
+
+* Pulls the `:latest` image from GHCR (multi-arch — works on
+  `linux/amd64` and `linux/arm64`).
+* Creates two **Docker named volumes** (`alma-data`, `alma-config`)
+  that survive container removal and image upgrades. They live under
+  `/var/lib/docker/volumes/<name>/_data` on Linux, or under the
+  Docker Desktop VM elsewhere.
+* Binds the API to `127.0.0.1` only. Nothing is exposed to your
+  network until you put a reverse proxy in front and set `API_KEY`.
+* Sets the OpenAlex polite-pool email. ALMa runs without it, but
+  you'll be sharing rate limits with anonymous users.
+
+### What "persistent" actually means here
+
+The `alma-data` volume is the only thing that holds your library —
+`scholar.db` (SQLite) plus its WAL/SHM files, embedding caches, the
+backups directory, and any imported BibTeX/Zotero state. The
+`alma-config` volume holds plugin configs (e.g. Slack channel
+mappings). These survive:
+
+* `docker stop alma` / `docker rm alma`
+* `docker pull` of a newer image
+* Restarts and reboots
+
+They do **not** survive `docker volume rm alma-data` — that's the
+only command that wipes your library.
+
+If you ever want a copy on the host filesystem (for backup or
+inspection), the simplest way is the **Settings → Library
+Management → Backup** button, which writes a gzipped SQLite file into
+the volume's `backups/` subdirectory. You can also `docker run --rm
+-v alma-data:/d alpine cat /d/scholar.db > /tmp/scholar.db` to copy
+the live DB out.
+
+### Upgrade
+
+```bash
+docker pull ghcr.io/costantinoai/alma-library-manager:latest
+docker rm -f alma
+# rerun the original `docker run` command — your data lives in the volumes
+```
+
+`:latest` tracks the newest stable release on `main`. For shared
+servers or production-ish setups, pin a specific version
+(`:0.9.2`, `:0.9`, or `:0`) so an automatic refresh of `main` doesn't
+upgrade the running stack out from under you.
+
+## Path 2 — Docker Compose with host bind-mounts
+
+Use this when you want to build the image from source (`build: .`),
+manage ALMa alongside other compose-managed services, or have the
+SQLite file directly on your host filesystem.
 
 ```bash
 mkdir alma && cd alma
 mkdir -p data config
 touch .env settings.json
-chmod 600 .env
+chmod 666 .env settings.json   # see "File ownership" below
 ```
 
 Edit `.env` and set at least:
@@ -42,12 +102,13 @@ Edit `.env` and set at least:
 OPENALEX_EMAIL=you@example.com
 ```
 
-Then create `docker-compose.yml`:
+Save as `docker-compose.yml`:
 
 ```yaml
 services:
   alma:
-    image: ghcr.io/costantinoai/alma-library-manager:0.9.0
+    image: ghcr.io/costantinoai/alma-library-manager:latest
+    # build: .   # uncomment to build locally instead of pulling
     container_name: alma
     restart: unless-stopped
     ports:
@@ -61,7 +122,7 @@ services:
       - ./.env:/app/.env
 ```
 
-Start it:
+Start:
 
 ```bash
 docker compose up -d
@@ -70,72 +131,195 @@ docker compose logs -f alma
 
 Open <http://localhost:8000>.
 
-## First steps in the app
-
-1. Open **Settings → External APIs** and confirm OpenAlex is using your
-   email.
-2. Go to **Discovery → Find & Add**, switch to author search, and follow
-   3-5 authors.
-3. Open **Activity** and wait for the author backfills to finish.
-4. Open **Feed** and save / like a few relevant papers.
-5. Optional: go to **Library → Imports** and import BibTeX or Zotero
-   data to seed Discovery faster.
-6. Open **Discovery** and refresh the default lens.
-
-## Build locally with Docker
-
-Use this path only if you cloned the repository and want to build the
-image yourself:
+Updating:
 
 ```bash
-cp .env.example .env
-chmod 600 .env
-$EDITOR .env
-
-mkdir -p data config
-[ -f settings.json ] || cp settings.example.json settings.json
-
-docker compose up -d
+docker compose pull && docker compose up -d
 ```
 
-Open <http://localhost:8000>. The container binds to `127.0.0.1:8000`
-only; put a reverse proxy in front for remote access.
+### File ownership
 
-## Lifecycle
+The image runs as a non-root `appuser` (UID `10001`, GID `10001`).
+With **named volumes** (Path 1) Docker manages the perms — nothing to
+configure. With **host bind-mounts** (Path 2) the host file's UID
+needs to be readable/writable by the container's `appuser`. The
+simplest fix is `chmod 666 .env settings.json` before starting; the
+broader rules are in the [configuration reference](../reference/configuration.md).
+
+If you see boot-time warnings like
+`Could not load .env … using environment vars only`, that's the
+graceful fallback in action — env vars from the `env_file:` directive
+have already been passed into the container, so the app keeps
+working; it just can't *also* load the file from inside.
+
+## Two image variants
+
+ALMa publishes two flavours; both run every feature in the app, only
+the bundled embedding stack differs.
+
+| | `normal` (default) | `lite` |
+|---|---|---|
+| Image tag | `:latest`, `:0.9.2` | `:latest-lite`, `:0.9.2-lite` |
+| Image size | ~1.4 GB | ~1.2 GB |
+| Peak runtime memory | ~2 GB | ~1 GB |
+| Local SPECTER2 encoder | yes (`torch` + `transformers`) | no |
+| Semantic Scholar pre-computed vectors | yes | yes |
+| OpenAI / cloud embedding provider | configurable | configurable |
+| Discovery / Insights graph / clustering | yes | yes |
+| BibTeX / Zotero import | yes | yes |
+
+Pick `lite` on a Raspberry Pi or a host where 1.5 GB of `torch` on
+disk is precious. Most papers with a DOI come back from Semantic
+Scholar with a pre-computed SPECTER2 vector, so embedding coverage
+stays high even without the local encoder.
+
+Both variants are published for `linux/amd64` and `linux/arm64`, so
+Apple Silicon Macs and ARM servers (Pi 4/5, Graviton, Ampere) get
+native binaries.
+
+## Where everything lives on disk
+
+There are four pieces of state to track across an upgrade. Where each
+of them lives depends on which install path you took and which OS
+your Docker daemon is on.
+
+### 1. The library (`scholar.db`)
+
+The single SQLite file with every paper, author, lens, feedback
+event, and the on-disk citation graph. **The most important thing to
+back up** — losing this means losing your library.
+
+| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
+|---|---|
+| In the **`alma-data`** volume at `/app/data/scholar.db` (inside the container). On Linux Docker the volume's bytes live at `/var/lib/docker/volumes/alma-data/_data/scholar.db` (root-only, no need to touch directly). On Docker Desktop (macOS / Windows), inside the LinuxKit / WSL VM — accessible via `docker run --rm -v alma-data:/d alpine ls /d`. | At `./data/scholar.db` next to your `docker-compose.yml`. Owned by the container's `appuser` (UID 10001) on Linux; on macOS/Windows the host filesystem is shared via virtiofs/9P and ownership is mapped automatically. |
+
+### 2. Secrets and runtime knobs (`.env` values)
+
+API keys, polite-pool email, Slack tokens, optional `API_KEY` for
+the REST endpoint, etc.
+
+| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
+|---|---|
+| **Not on disk inside the container.** Each `-e KEY=value` flag is passed to the container's process environment by the Docker daemon at start. To add or remove a key you `docker rm -f alma` and rerun the `docker run` command. No file is written; no chmod games. | At `./.env` next to your `docker-compose.yml`. Read by Docker Compose (`env_file:`) and re-read by the app at startup. Strict perms (`chmod 600`) work on Linux only when the host UID matches `appuser`; otherwise use `chmod 644` and trust your filesystem ACLs. |
+
+### 3. Bootstrap settings (`settings.json`)
+
+A small JSON file with defaults like the OpenAlex polite-pool email
+and the SQLite path. Almost everything user-tunable from the UI
+(Discovery weights, AI provider selection, scheduler intervals) is
+written into the `discovery_settings` table inside `scholar.db`, not
+this file. So `settings.json` is mostly cosmetic.
+
+| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
+|---|---|
+| Auto-created at `/app/settings.json` on first boot, populated with built-in defaults. Lives **on the container's writable layer**, so it does *not* survive `docker rm -f alma` (data and config volumes do). To persist it across rebuilds, set `-e ALMA_SETTINGS_PATH=/app/data/settings.json` so the file lives inside the `alma-data` volume. | At `./settings.json` next to your `docker-compose.yml`. Persists with the rest of the bind-mount. Boot-time write-failures (mode-600 with mismatched UID) degrade to a warning — see *File ownership* above. |
+
+### 4. Plugin configs
+
+Slack channel mappings, etc. Used by the Slack notifier plugin.
+
+| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
+|---|---|
+| In the **`alma-config`** volume at `/app/config/`. Same Linux-vs-VM rules as the data volume. | At `./config/` next to your `docker-compose.yml`. |
+
+### Quick reference
+
+```
+container               Path 1 (named volumes)            Path 2 (bind-mounts)
+─────────────────────   ─────────────────────────────     ─────────────────────
+/app/data/scholar.db    alma-data volume                  ./data/scholar.db
+/app/data/backups/      alma-data volume                  ./data/backups/
+/app/config/            alma-config volume                ./config/
+/app/.env               not on disk (env vars only)       ./.env
+/app/settings.json      writable layer (ephemeral)        ./settings.json
+                        unless ALMA_SETTINGS_PATH set
+```
+
+What's **never** on the host (lives only inside the image, replaced on every `docker pull`):
+
+* Python dependencies — `/opt/venv/` (~1 GB on `normal`)
+* The frontend bundle — `/app/frontend/dist/`
+* The `alma` Python package source — `/app/src/`
+
+This is why `docker pull` of a newer image is safe: you're replacing
+the code, not your data.
+
+### Inspecting volumes from the host
+
+Even on Docker Desktop where the volume isn't directly mountable, you
+can always shell in:
 
 ```bash
-docker compose logs -f alma     # tail logs
-docker compose ps               # status + healthcheck
-docker compose down             # stop + remove (host data persists)
-docker compose build --no-cache # rebuild from scratch
+# list everything in the data volume
+docker run --rm -v alma-data:/d alpine ls -la /d
+
+# read a file out of the volume (e.g., latest backup)
+docker run --rm -v alma-data:/d -v "$PWD":/out alpine \
+  cp /d/backups/scholar_<timestamp>.db.gz /out/
+
+# disk usage
+docker run --rm -v alma-data:/d alpine du -sh /d
 ```
 
-## File ownership
+## After it starts
 
-By default the container runs as your host UID/GID (`${UID}:${GID}`)
-so that anything written into `data/` stays owned by you on the host.
-On rootless Docker this works without further setup; on rootful
-Docker make sure the IDs match.
+Open <http://localhost:8000>. The first run lands you on the Library
+page with no papers, no followed authors, nothing in the Feed. Three
+things, in order, before the app becomes useful — see the
+[first-run checklist](first-run.md).
 
-If you see permission errors writing to `data/scholar.db`, check that
-the host directory is owned by the UID your shell uses (`id -u`).
+![Library on first run, before any saves](../screenshots/desktop-library.png)
 
-## Updating
+## Lifecycle commands
 
 ```bash
-git pull
-docker compose build
-docker compose up -d
+docker logs -f alma                  # tail logs (Path 1)
+docker compose logs -f alma          # tail logs (Path 2)
+docker exec alma /opt/venv/bin/alma --help    # invoke CLI inside container
+docker stop alma                     # graceful stop
+docker rm -f alma                    # stop + remove (data persists in volumes)
+docker volume ls | grep alma         # check what's stored
 ```
-
-The migration step on container start brings any schema additions in
-without manual intervention. If a migration fails, the container will
-exit with a non-zero status — check `docker compose logs alma` for
-the specific error.
 
 ## Backups
 
-The `data/` directory is the source of truth. Back it up while ALMa
-is stopped (or use SQLite's online backup API via the **Settings →
-Library management → Backup** card while it runs). See
-[Backups](../operations/backups.md) for the full strategy.
+The `data/` directory is the source of truth. The fastest backup
+path is the **Settings → Library Management → Backup** button, which
+writes a gzipped, transactionally-consistent SQLite snapshot into
+`data/backups/scholar_<timestamp>.db.gz`. By default, only the last
+five snapshots are kept (override with `-e ALMA_BACKUP_RETAIN=20`).
+
+To pull a snapshot out of the volume to the host:
+
+```bash
+docker run --rm -v alma-data:/d -v "$PWD":/out alpine \
+  cp /d/backups/scholar_<timestamp>.db.gz /out/
+```
+
+See [Backups](../operations/backups.md) for the full strategy
+(retention, cron, restore round-trip).
+
+## Troubleshooting
+
+**Container exits immediately on first run.**
+Check logs for the actual error: `docker logs alma`. Common causes:
+
+* OpenAlex 503s during startup probe — usually clears within a
+  minute; the container has a healthcheck that retries.
+* Bind-mount perms (Path 2 only) — see *File ownership* above.
+
+**Browser shows "broken image" icons in the sidebar.**
+Pull `:latest` again — versions before v0.9.2 had a static-asset
+routing bug where `/brand/*.svg` returned the SPA index.
+
+**`docker pull` hangs or times out on arm64.**
+Multi-arch manifests can be slow to fetch over poor networks. Pin
+the architecture explicitly:
+
+```bash
+docker pull --platform linux/arm64 ghcr.io/costantinoai/alma-library-manager:latest
+```
+
+**`docker run` says "image not found" or "401 Unauthorized".**
+The package is public; if you see a 401 the most likely cause is a
+stale stored credential. Run `docker logout ghcr.io` and retry.

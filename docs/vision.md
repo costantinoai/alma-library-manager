@@ -13,8 +13,11 @@ Most academic literature tools fall into one of two camps:
    storing and citing what you've already collected. They do not
    surface anything new.
 2. **Discovery aggregators** (Semantic Scholar feeds, ResearchGate
-   alerts, Connected Papers) — surface new papers, but treat each
-   user as anonymous and re-index from zero on every visit.
+   alerts, Connected Papers) — surface new papers, but they don't
+   feel like a library. There's no place that holds *your* corpus,
+   no notes carrying forward, and no way to tune the ranker against
+   your specific reading patterns: your saved papers, your ratings,
+   the things you keep dismissing.
 
 A working researcher needs both, joined at the hip. The papers you
 have already chosen to keep are *the* most informative signal about
