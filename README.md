@@ -1,6 +1,6 @@
 # ALMa — **A**nother **L**ibrary **Ma**nager
 
-> **Early preview (`v0.9.3`).** The three core jobs — Library, Discovery,
+> **Early preview (`v0.9.4`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
 
@@ -87,7 +87,7 @@ Then open <http://localhost:8000>. That's the whole install.
 | `-e OPENALEX_EMAIL=you@example.com` | Set an environment variable inside the container. ALMa reads `OPENALEX_EMAIL` to enroll your requests in OpenAlex's polite pool — higher rate limits in exchange for being identified. |
 | `-v alma-data:/app/data` | Mount the **named volume** `alma-data` at `/app/data` inside the container. Docker creates the volume automatically on first run. This is where `scholar.db` (your library) and the backups directory live. The volume survives `docker rm -f alma` and `docker pull` of a new image — only `docker volume rm alma-data` deletes it. |
 | `-v alma-config:/app/config` | Same idea, but for plugin configs (Slack channel mappings, etc.). |
-| `ghcr.io/costantinoai/.../:latest` | The image to run. `ghcr.io/...` is the GitHub Container Registry path; `:latest` tracks the newest release on `main`. Pin to `:0.9.3`, `:0.9`, or `:0` on shared servers. |
+| `ghcr.io/costantinoai/.../:latest` | The image to run. `ghcr.io/...` is the GitHub Container Registry path; `:latest` tracks the newest release on `main`. Pin to `:0.9.4`, `:0.9`, or `:0` on shared servers. |
 
 </details>
 
@@ -100,9 +100,9 @@ docker rm -f alma
 ```
 
 To pin a specific version on a shared server, swap `:latest` for
-`:0.9.3`, `:0.9`, or `:0`. The lite variant (smaller image, no local
+`:0.9.4`, `:0.9`, or `:0`. The lite variant (smaller image, no local
 SPECTER2 encoder; see *Two image variants* below) uses `-lite`
-suffixes: `:latest-lite`, `:0.9.3-lite`.
+suffixes: `:latest-lite`, `:0.9.4-lite`.
 
 > **More to configure?** Add `-e API_KEY=your-key` to require an
 > `X-API-Key` header on every request, `-e SLACK_TOKEN=…` for Slack
@@ -191,12 +191,12 @@ app — Library, Discovery, Feed, Authors, Insights, the Insights graph,
 clustering, BibTeX/Zotero imports. They differ only in whether the
 local SPECTER2 encoder is bundled.
 
-**`normal`** (the default, `:0.9.3`) includes `torch` + `transformers`,
+**`normal`** (the default, `:0.9.4`) includes `torch` + `transformers`,
 so SPECTER2 embeddings can be computed locally on demand. Image size
 is around 1.4 GB, peak runtime memory ~2 GB. Pick this on a desktop
 or server with at least 4 GB RAM.
 
-**`lite`** (`:0.9.3-lite`) drops `torch`. Image size is around
+**`lite`** (`:0.9.4-lite`) drops `torch`. Image size is around
 1.2 GB, runtime memory ~1 GB. You still get full embeddings via
 Semantic Scholar's pre-computed SPECTER2 vectors (most papers with a
 DOI have one) and you can configure OpenAI as the embedding provider

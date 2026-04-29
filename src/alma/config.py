@@ -156,6 +156,16 @@ def get_settings_path() -> Path:
     """
     env_path = os.getenv("ALMA_SETTINGS_PATH")
     if env_path:
+        # Absolute paths are the documented form here (the env var
+        # exists precisely to point at writable locations outside the
+        # project root, e.g. /app/data/settings.json in containers),
+        # so don't route them through _resolve_path — that helper's
+        # "paths should be relative" warning is meant for settings
+        # values like ``database``, not for this escape hatch.
+        candidate = Path(env_path)
+        if candidate.is_absolute():
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            return candidate
         return _resolve_path(env_path)
     return get_project_root() / "settings.json"
 

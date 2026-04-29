@@ -158,6 +158,14 @@ RUN groupadd --gid 10001 appgroup && \
     chmod -R a+rX /app/src /app/frontend /app/pyproject.toml /opt/venv && \
     chmod 1777 /app/data /app/config /tmp/pycache
 
+# Settings file lives in the writable data volume, not /app/. The
+# project root is read-only at runtime (root:root 755) so appuser
+# cannot create /app/settings.json on first boot. config.py honours
+# ALMA_SETTINGS_PATH to override that location; pointing it at the
+# data volume means settings persist alongside scholar.db without
+# requiring a host bind-mount.
+ENV ALMA_SETTINGS_PATH=/app/data/settings.json
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -fsS http://localhost:8000/api/v1/health || exit 1
 
