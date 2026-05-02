@@ -15,6 +15,14 @@ from alma.application.followed_authors import (
     ensure_followed_author_contract,
     get_followed_author_backfill_status,
 )
+from alma.application.signal_projection import (
+    ProjectedPaperSignals,
+    load_projected_paper_signals,
+)
+from alma.core.scoring_math import (
+    consensus_bonus as _shared_consensus_bonus,
+    log_prevalence_weights,
+)
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
 from . import feed_monitors as monitor_app
@@ -1561,26 +1569,13 @@ def _dismissal_overlap_penalty(
 def _build_prevalence_weights(counts: dict[str, float]) -> dict[str, float]:
     """Map raw library topic/venue counts to log-normalized weights ∈ (0, 1].
 
-    The user's library is rarely flat: a few topics dominate, the
-    rest are long-tail. The old `len(shared_topics) × 5` formula
-    treated sharing your #1 topic identically to sharing your #30,
-    which lets a candidate working on a fringe topic look as good
-    as one working in your core area. Log-normalization smooths the
-    head while still letting the top topic carry ~5× the weight of
-    a topic that only appears in 2–3 library papers.
-
-    The mapping: weight(t) = log(1 + count(t)) / max_log. Top entry
-    always = 1.0 by construction; a topic with count=1 in a library
-    where the top topic has count=20 gets log(2)/log(21) ≈ 0.23.
-    Returns an empty dict if `counts` is empty (callers must
-    tolerate this).
+    Thin wrapper around `alma.core.scoring_math.log_prevalence_weights`,
+    kept for legacy call sites in this module. The shared helper is
+    sign-preserving (so paper-Discovery signed weights work on the same
+    code path); for the all-positive counts the author rail produces,
+    output is identical to the prior local implementation.
     """
-    if not counts:
-        return {}
-    max_log = max((math.log1p(c) for c in counts.values()), default=0.0)
-    if max_log <= 0:
-        return {term: 1.0 for term in counts}
-    return {term: math.log1p(c) / max_log for term, c in counts.items()}
+    return log_prevalence_weights(counts)
 
 
 def _weighted_overlap_score(
@@ -1609,6 +1604,142 @@ def _weighted_overlap_score(
             continue
         total += weights.get(key, fallback)
     return total * scale
+
+
+def _projected_author_signal_adjustment(
+    db: sqlite3.Connection,
+    openalex_id: str,
+    projected: ProjectedPaperSignals,
+) -> tuple[float, dict[str, float]]:
+    """Score bump/penalty from paper feedback projected onto this author."""
+
+    oid = _normalize_openalex_id(openalex_id).lower()
+    if not oid:
+        return 0.0, {}
+
+    direct = float(projected.author.get(oid, 0.0)) * 18.0
+    topic = sum(float(projected.topic.get(term, 0.0)) for term in _candidate_projection_topics(db, oid)) * 5.0
+    venue = sum(float(projected.venue.get(venue, 0.0)) for venue in _candidate_projection_venues(db, oid)) * 4.0
+    keyword = sum(float(projected.keyword.get(keyword, 0.0)) for keyword in _candidate_projection_keywords(db, oid)) * 3.0
+    tag = sum(float(projected.tag.get(tag_name, 0.0)) for tag_name in _candidate_projection_tags(db, oid)) * 4.0
+    total = max(-24.0, min(24.0, direct + topic + venue + keyword + tag))
+    parts = {
+        "author": round(direct, 3),
+        "topic": round(topic, 3),
+        "venue": round(venue, 3),
+        "keyword": round(keyword, 3),
+        "tag": round(tag, 3),
+    }
+    return total, parts
+
+
+def _candidate_projection_topics(db: sqlite3.Connection, openalex_id: str, *, limit: int = 12) -> list[str]:
+    if not _table_exists(db, "publication_topics") or not _table_exists(db, "publication_authors"):
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT lower(trim(pt.term)) AS term, COUNT(DISTINCT pt.paper_id) AS papers
+            FROM publication_topics pt
+            JOIN publication_authors pa ON pa.paper_id = pt.paper_id
+            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+              AND COALESCE(TRIM(pt.term), '') <> ''
+            GROUP BY lower(trim(pt.term))
+            ORDER BY papers DESC, term ASC
+            LIMIT ?
+            """,
+            (_normalize_openalex_id(openalex_id), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [str(row["term"] or "").strip() for row in rows if str(row["term"] or "").strip()]
+
+
+def _candidate_projection_venues(db: sqlite3.Connection, openalex_id: str, *, limit: int = 8) -> list[str]:
+    if not _table_exists(db, "papers") or not _table_exists(db, "publication_authors"):
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT lower(trim(p.journal)) AS venue, COUNT(DISTINCT p.id) AS papers
+            FROM papers p
+            JOIN publication_authors pa ON pa.paper_id = p.id
+            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+              AND COALESCE(TRIM(p.journal), '') <> ''
+            GROUP BY lower(trim(p.journal))
+            ORDER BY papers DESC, venue ASC
+            LIMIT ?
+            """,
+            (_normalize_openalex_id(openalex_id), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [str(row["venue"] or "").strip() for row in rows if str(row["venue"] or "").strip()]
+
+
+def _candidate_projection_keywords(db: sqlite3.Connection, openalex_id: str, *, limit: int = 12) -> list[str]:
+    if not _table_exists(db, "papers") or not _table_exists(db, "publication_authors"):
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT p.keywords
+            FROM papers p
+            JOIN publication_authors pa ON pa.paper_id = p.id
+            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+              AND COALESCE(TRIM(p.keywords), '') <> ''
+            LIMIT 50
+            """,
+            (_normalize_openalex_id(openalex_id),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    seen: list[str] = []
+    for row in rows:
+        raw = row["keywords"] if isinstance(row, sqlite3.Row) else row[0]
+        values: list[object]
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:
+            parsed = raw
+        if isinstance(parsed, list):
+            values = parsed
+        else:
+            values = re.split(r"[,;]", str(parsed or ""))
+        for value in values:
+            keyword = str(value or "").strip().lower()
+            if keyword and keyword not in seen:
+                seen.append(keyword)
+            if len(seen) >= limit:
+                return seen
+    return seen
+
+
+def _candidate_projection_tags(db: sqlite3.Connection, openalex_id: str, *, limit: int = 12) -> list[str]:
+    if (
+        not _table_exists(db, "tags")
+        or not _table_exists(db, "publication_tags")
+        or not _table_exists(db, "publication_authors")
+    ):
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT lower(trim(t.name)) AS tag_name, COUNT(DISTINCT pt.paper_id) AS papers
+            FROM publication_tags pt
+            JOIN tags t ON t.id = pt.tag_id
+            JOIN publication_authors pa ON pa.paper_id = pt.paper_id
+            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+              AND COALESCE(TRIM(t.name), '') <> ''
+            GROUP BY lower(trim(t.name))
+            ORDER BY papers DESC, tag_name ASC
+            LIMIT ?
+            """,
+            (_normalize_openalex_id(openalex_id), limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [str(row["tag_name"] or "").strip() for row in rows if str(row["tag_name"] or "").strip()]
 
 
 def _shared_library_authors_for_candidate(
@@ -2241,6 +2372,7 @@ def list_author_suggestions(
     library_venue_weights = _build_prevalence_weights(_top_venues_for_library(db, limit=8))
     library_topics = set(library_topic_weights.keys())
     library_venues = set(library_venue_weights.keys())
+    projected_paper_signals = load_projected_paper_signals(db)
 
     # Dismissal cluster signature — recently dismissed authors'
     # topic / venue / coauthor / institution profiles. Candidates
@@ -2453,52 +2585,52 @@ def list_author_suggestions(
         feedback = get_missing_author_feedback_state(db, openalex_id)
         if feedback.get("suppressed"):
             continue
-            citing_library = int(row.get("citing_library_count") or 0)
-            cited_papers = int(row.get("cited_paper_count") or 0)
-            weighted_endorsement = float(row.get("weighted_endorsement") or 0.0)
-            # Cited-by-high-signal is a strong positive, but the raw
-            # citation count over-rewards middle authors of consortium
-            # papers cited once by a 4★. `weighted_endorsement`
-            # already folds (citing-paper rating × candidate position
-            # × 1/sqrt(N)) — a sole/lead author of a paper cited by a
-            # 5★ is worth ~30 points; a middle author of a 30-person
-            # consortium cited by a 4★ is worth ~5. The small
-            # `cited_papers` term keeps a tiebreak-style bonus for
-            # candidates whose cited footprint spans multiple distinct
-            # papers (a wider endorsement, not just one paper hit).
-            score = min(_MAX_SUGGESTION_SCORE, (weighted_endorsement * 30.0) + (cited_papers * 4.0))
-            shared_library_authors = _shared_library_authors_for_candidate(db, openalex_id)
-            existing = existing_lookup.get(openalex_id)
-            suggestions.append(
-                {
-                    "key": f"cited_by_high_signal:{openalex_id}",
-                    "name": str(row.get("candidate_name") or "").strip() or openalex_id,
-                    "openalex_id": openalex_id,
-                    "existing_author_id": existing.get("id") if existing else None,
-                    "known_author_type": existing.get("author_type") if existing else None,
-                    "suggestion_type": "cited_by_high_signal",
-                    "score": round(score, 1),
-                    "weighted_endorsement": round(weighted_endorsement, 3),
-                    "shared_paper_count": citing_library,
-                    "shared_followed_count": len(shared_library_authors),
-                    "local_paper_count": 0,
-                    "recent_paper_count": 0,
-                    "shared_followed_authors": shared_library_authors,
-                    "shared_topics": [],
-                    "shared_venues": [],
-                    "sample_titles": _sample_titles_for_openalex_author(
-                        db, openalex_id,
-                        topic_whitelist=library_topics,
-                        venue_whitelist=library_venues,
-                    ),
-                    "citing_library_count": citing_library,
-                    "cited_paper_count": cited_papers,
-                    "negative_signal": float(feedback.get("score") or 0.0),
-                    "last_removed_at": feedback.get("last_removed_at"),
-                }
-            )
-            seen_candidates.add(openalex_id)
-            cited_added += 1
+        citing_library = int(row.get("citing_library_count") or 0)
+        cited_papers = int(row.get("cited_paper_count") or 0)
+        weighted_endorsement = float(row.get("weighted_endorsement") or 0.0)
+        # Cited-by-high-signal is a strong positive, but the raw
+        # citation count over-rewards middle authors of consortium
+        # papers cited once by a 4★. `weighted_endorsement`
+        # already folds (citing-paper rating × candidate position
+        # × 1/sqrt(N)) — a sole/lead author of a paper cited by a
+        # 5★ is worth ~30 points; a middle author of a 30-person
+        # consortium cited by a 4★ is worth ~5. The small
+        # `cited_papers` term keeps a tiebreak-style bonus for
+        # candidates whose cited footprint spans multiple distinct
+        # papers (a wider endorsement, not just one paper hit).
+        score = min(_MAX_SUGGESTION_SCORE, (weighted_endorsement * 30.0) + (cited_papers * 4.0))
+        shared_library_authors = _shared_library_authors_for_candidate(db, openalex_id)
+        existing = existing_lookup.get(openalex_id)
+        suggestions.append(
+            {
+                "key": f"cited_by_high_signal:{openalex_id}",
+                "name": str(row.get("candidate_name") or "").strip() or openalex_id,
+                "openalex_id": openalex_id,
+                "existing_author_id": existing.get("id") if existing else None,
+                "known_author_type": existing.get("author_type") if existing else None,
+                "suggestion_type": "cited_by_high_signal",
+                "score": round(score, 1),
+                "weighted_endorsement": round(weighted_endorsement, 3),
+                "shared_paper_count": citing_library,
+                "shared_followed_count": len(shared_library_authors),
+                "local_paper_count": 0,
+                "recent_paper_count": 0,
+                "shared_followed_authors": shared_library_authors,
+                "shared_topics": [],
+                "shared_venues": [],
+                "sample_titles": _sample_titles_for_openalex_author(
+                    db, openalex_id,
+                    topic_whitelist=library_topics,
+                    venue_whitelist=library_venues,
+                ),
+                "citing_library_count": citing_library,
+                "cited_paper_count": cited_papers,
+                "negative_signal": float(feedback.get("score") or 0.0),
+                "last_removed_at": feedback.get("last_removed_at"),
+            }
+        )
+        seen_candidates.add(openalex_id)
+        cited_added += 1
 
     adjacent_rows: list[dict] = []
     if len(suggestions) < limit:
@@ -2816,12 +2948,15 @@ def list_author_suggestions(
     # signal (e.g. lead author of a 5★), but a moderately scored
     # candidate confirmed by 3+ independent sources reliably climbs
     # the rail.
-    consensus_unit = _CONSENSUS_BONUS_FRACTION * _MAX_SUGGESTION_SCORE
     for item in suggestions:
         buckets = item.get("consensus_buckets") or [item.get("suggestion_type") or ""]
         n = len(buckets)
-        if n > 1:
-            bonus = consensus_unit * math.sqrt(n - 1)
+        bonus = _shared_consensus_bonus(
+            n,
+            fraction=_CONSENSUS_BONUS_FRACTION,
+            max_score=_MAX_SUGGESTION_SCORE,
+        )
+        if bonus > 0:
             item["score"] = round(
                 min(_MAX_SUGGESTION_SCORE, float(item.get("score") or 0.0) + bonus),
                 1,
@@ -2831,6 +2966,26 @@ def list_author_suggestions(
         # badge without recomputing.
         item["consensus_buckets"] = buckets
         item["consensus_count"] = n
+
+    # ── Paper-feedback projection bump/penalty ──────────────────────
+    # Paper feedback should generalize to the local graph: authors and
+    # co-authors, their topics, venues, keywords, and user tags. Apply
+    # this before the explicit dismissed-author cluster penalty so a
+    # positive paper cannot fully rescue an author cluster the user has
+    # directly removed.
+    for item in suggestions:
+        oid = str(item.get("openalex_id") or "")
+        if not oid:
+            continue
+        adjustment, parts = _projected_author_signal_adjustment(db, oid, projected_paper_signals)
+        if adjustment == 0.0:
+            continue
+        item["score"] = round(
+            max(0.0, min(_MAX_SUGGESTION_SCORE, float(item.get("score") or 0.0) + adjustment)),
+            1,
+        )
+        item["paper_signal_adjustment"] = round(adjustment, 1)
+        item["paper_signal_adjustment_parts"] = parts
 
     # ── Dismissal cluster penalty ───────────────────────────────────
     # Apply AFTER consensus so multi-source agreement can't entirely
@@ -2899,6 +3054,17 @@ def list_author_suggestions(
     # overwrites the `score` field so every surface reads the same
     # final number; raw bucket math is a helper intermediate.
     bucket_weights = _load_author_suggestion_weights(db)
+    # Phase 4 #3 — per-bucket outcome calibration. Computed once per
+    # call. Empty on a fresh DB (no follow / reject events with bucket
+    # attribution yet) → multiplier 1.0 → no behavior change. After
+    # enough rail-side feedback accumulates, buckets the user
+    # consistently follows from get pushed toward 1.5x; buckets they
+    # consistently reject get pulled toward 0.5x. Composes
+    # multiplicatively with the static `bucket_weights` knob.
+    from alma.application.outcome_calibration import (
+        compute_author_bucket_calibration,
+    )
+    bucket_calibration = compute_author_bucket_calibration(db)
     _type_priority = {
         "library_core": 0,
         "cited_by_high_signal": 1,
@@ -2910,8 +3076,14 @@ def list_author_suggestions(
     for item in suggestions:
         bucket = str(item.get("suggestion_type") or "")
         weight = float(bucket_weights.get(bucket, 1.0))
+        bucket_multiplier = float(
+            bucket_calibration.multipliers.get(bucket.lower(), 1.0)
+        )
         raw = float(item.get("score") or 0.0)
-        item["score"] = round(min(_MAX_SUGGESTION_SCORE, raw * weight), 1)
+        item["score"] = round(
+            min(_MAX_SUGGESTION_SCORE, raw * weight * bucket_multiplier), 1
+        )
+        item["bucket_calibration_multiplier"] = round(bucket_multiplier, 4)
 
     suggestions.sort(
         key=lambda item: (
