@@ -317,18 +317,18 @@ def compute_preference_profile(
         logger.debug("followed-author background venue priors unavailable")
 
     # -- Normalize accumulated weights to [0, 1] --
-    # Topic and venue weights use log-prevalence: log(1 + count) / max_log.
-    # Mirrors the author-rail prevalence pattern. Linear max-normalization
-    # was over-collapsing the long tail — a topic appearing in 5/109 of
-    # the user's papers got weight 0.046, which made secondary interests
-    # functionally invisible in scoring. Log-prevalence boosts that same
-    # topic to ~0.38, so candidates in long-tail areas now compete on
-    # merit instead of being drowned by the user's #1 topic.
-    # `author_affinity` keeps linear max normalization because it's an
-    # identity match (you wrote with this author or you didn't), not a
-    # prevalence question.
+    # All three preference dictionaries (topic, author, journal) now go
+    # through log-prevalence: log(1 + count) / max_log. The original
+    # rationale for keeping authors on linear max-normalization
+    # ("identity match, not prevalence") falls apart on heavily skewed
+    # libraries — when one author appears on >50% of saved papers, the
+    # linear scheme floors every other author at <0.1 and the
+    # dominant author crowds out the long tail. Long-tail co-authors
+    # still register as "this is someone you've worked with"; they
+    # just compete with the dominant author on log-curve terms instead
+    # of being drowned by the linear max.
     topic_weights = log_prevalence_weights(topic_weights)
-    author_affinity = _normalize_weights(author_affinity)
+    author_affinity = log_prevalence_weights(author_affinity)
     journal_affinity = log_prevalence_weights(journal_affinity)
 
     # -- Feedback centroids from past recommendations --
@@ -631,10 +631,32 @@ def score_candidate(
     journal_score = min(1.0, max(0.0, j_affinity.get(journal, 0))) if journal else 0.0
 
     # -- 6. Recency boost --
-    year = candidate.get("year")
-    if year:
+    # Resolve the candidate's year. External-lane candidates often
+    # arrive with `year=None` because the merge step drops the int but
+    # keeps the ISO `publication_date` — fall back to the date string
+    # so corpus rehydration (which fills publication_date but not year
+    # on every code path) still drives recency.
+    year_value: int | None = None
+    raw_year = candidate.get("year")
+    if raw_year not in (None, "", 0):
         try:
-            recency = max(0.0, 1.0 - ((current_year - int(year)) / recency_window))
+            year_value = int(raw_year)
+        except (TypeError, ValueError):
+            year_value = None
+    if year_value is None:
+        pub_date = str(candidate.get("publication_date") or "").strip()
+        if len(pub_date) >= 4 and pub_date[:4].isdigit():
+            year_value = int(pub_date[:4])
+    if year_value:
+        try:
+            # Clamp to [0, 1]. A future-dated paper (year_value >
+            # current_year, common when OpenAlex back-fills a
+            # forthcoming paper with next year's `publication_year`)
+            # must not produce recency > 1.0 — that would let a single
+            # signal silently overshoot its weight bucket and bias the
+            # 10-signal weighted sum.
+            recency = 1.0 - ((current_year - year_value) / max(1, recency_window))
+            recency = min(1.0, max(0.0, recency))
         except (TypeError, ValueError):
             recency = 0.0
     else:

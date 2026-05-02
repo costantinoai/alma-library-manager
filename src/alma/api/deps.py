@@ -927,6 +927,15 @@ def init_db_schema() -> None:
                     PRIMARY KEY (paper_id, referenced_work_id)
                 ) WITHOUT ROWID"""
             )
+            # The PK is (paper_id, referenced_work_id) so paper-side
+            # lookups use it directly. The corpus-overlap query in the
+            # graph retrieval lane filters by referenced_work_id IN
+            # (subquery), which without this index becomes O(N²) on a
+            # 5k+ paper corpus with dense reference graphs.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_publication_references_ref "
+                "ON publication_references(referenced_work_id)"
+            )
 
             # ==============================================================
             # AI/ML: Embeddings + Clustering

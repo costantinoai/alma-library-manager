@@ -8,7 +8,7 @@ import logging
 import math
 import sqlite3
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from time import perf_counter
@@ -805,10 +805,17 @@ def _compute_branch_auto_weight(
     The math: blend the observed positive share with a 50/50 prior of strength
     PRIOR_STRENGTH, then map deviations from 0.5 linearly into the [floor, ceil]
     range (0.5 -> 1.0, 1.0 -> CEIL, 0.0 -> FLOOR).
+
+    Brand-new branches (no signal yet) get a small visibility lift —
+    1.15× — so they're guaranteed enough surface area on their first
+    couple of refreshes to actually accumulate save/dismiss feedback.
+    Without it, a new branch competes with established ones at neutral
+    1.0 and may never accumulate the ~6–10 actions needed before the
+    smoothed share moves meaningfully.
     """
     weighted_total = weighted_positive + weighted_dismissed
     if weighted_total <= 0.0 or raw_total <= 0:
-        return 1.0, "no signal yet"
+        return 1.15, "new branch — surfacing for early feedback"
 
     smoothed_share = (weighted_positive + 0.5 * _AUTO_WEIGHT_PRIOR_STRENGTH) / (
         weighted_total + _AUTO_WEIGHT_PRIOR_STRENGTH
@@ -1295,15 +1302,78 @@ def refresh_lens_recommendations(
     candidate_embedding_map: dict[str, Any] = {}
     reused_embedding_count = 0
     if cached_embeddings_available and candidate_text_map:
-        # First: load existing embeddings from DB for candidates that already have paper IDs
-        candidate_paper_ids: dict[str, str] = {}  # key -> paper_id
+        # Map each candidate key to a real DB paper_id for the
+        # embedding lookup. External / graph lane candidates carry a
+        # fresh UUID `id` rather than a paper_id — look them up via
+        # openalex_id / doi / semantic_scholar_id so we can reuse the
+        # existing embedding instead of treating them as embedding-less.
+        # Without this, `text_similarity_mode` collapses to "lexical"
+        # for every external candidate and semantic ranking goes dark.
+        candidate_paper_ids: dict[str, str] = {}
+        unresolved_keys: list[str] = []
+        external_lookup_terms: dict[str, dict[str, str]] = {}
         for key, candidate in merged.items():
-            pid = str(candidate.get("paper_id") or candidate.get("id") or "").strip()
-            if pid and key in candidate_text_map:
+            if key not in candidate_text_map:
+                continue
+            pid = str(candidate.get("paper_id") or "").strip()
+            if pid:
                 candidate_paper_ids[key] = pid
+                continue
+            # Best-effort identity resolution for keys that have no
+            # paper_id yet. The candidate may already exist in `papers`
+            # under a different surrogate key.
+            terms: dict[str, str] = {}
+            oa = str(candidate.get("openalex_id") or "").strip()
+            if oa:
+                terms["openalex_id"] = oa
+            doi = str(candidate.get("doi") or "").strip().lower()
+            if doi:
+                terms["doi"] = doi
+            s2 = str(candidate.get("semantic_scholar_id") or "").strip()
+            if s2:
+                terms["semantic_scholar_id"] = s2
+            if terms:
+                external_lookup_terms[key] = terms
+                unresolved_keys.append(key)
+
+        if external_lookup_terms:
+            for col in ("openalex_id", "doi", "semantic_scholar_id"):
+                values = [
+                    (k, terms[col])
+                    for k, terms in external_lookup_terms.items()
+                    if col in terms and k not in candidate_paper_ids
+                ]
+                if not values:
+                    continue
+                value_to_keys: dict[str, list[str]] = defaultdict(list)
+                for k, v in values:
+                    if col == "doi":
+                        v = v.lower()
+                    value_to_keys[v].append(k)
+                for chunk in _chunked(list(value_to_keys.keys()), 200):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    if col == "doi":
+                        rows = db.execute(
+                            f"SELECT id, LOWER(doi) AS lookup FROM papers "
+                            f"WHERE LOWER(doi) IN ({placeholders})",
+                            chunk,
+                        ).fetchall()
+                    else:
+                        rows = db.execute(
+                            f"SELECT id, {col} AS lookup FROM papers "
+                            f"WHERE {col} IN ({placeholders})",
+                            chunk,
+                        ).fetchall()
+                    for row in rows:
+                        for matched_key in value_to_keys.get(str(row["lookup"] or ""), []):
+                            if matched_key not in candidate_paper_ids:
+                                candidate_paper_ids[matched_key] = str(row["id"])
+
         if candidate_paper_ids:
-            pid_to_key = {pid: key for key, pid in candidate_paper_ids.items()}
-            for chunk in _chunked(list(pid_to_key.keys()), 200):
+            pid_to_keys: dict[str, list[str]] = defaultdict(list)
+            for key, pid in candidate_paper_ids.items():
+                pid_to_keys[pid].append(key)
+            for chunk in _chunked(list(pid_to_keys.keys()), 200):
                 placeholders = ", ".join("?" for _ in chunk)
                 rows = db.execute(
                     f"SELECT paper_id, embedding FROM publication_embeddings "
@@ -1312,13 +1382,15 @@ def refresh_lens_recommendations(
                 ).fetchall()
                 from alma.core.vector_blob import decode_vector
                 for row in rows:
-                    key = pid_to_key.get(str(row["paper_id"]))
-                    if key and row["embedding"]:
-                        try:
-                            candidate_embedding_map[key] = decode_vector(row["embedding"])
-                            reused_embedding_count += 1
-                        except Exception:
-                            pass
+                    if not row["embedding"]:
+                        continue
+                    try:
+                        decoded = decode_vector(row["embedding"])
+                    except Exception:
+                        continue
+                    for matched_key in pid_to_keys.get(str(row["paper_id"]), []):
+                        candidate_embedding_map[matched_key] = decoded
+                        reused_embedding_count += 1
     timings_ms["candidate_embedding_batch"] = int(round((perf_counter() - phase_started) * 1000))
     _log(
         "scoring_inputs",
@@ -1856,12 +1928,20 @@ def refresh_lens_recommendations(
         ).fetchall()
         for row in status_rows:
             status_by_paper[str(row["id"])] = str(row["status"] or "tracked")
+        # Only block re-surfacing on *negative* prior actions. Saves and
+        # likes already drive the paper to status='library' which is
+        # caught by the status filter above; double-blocking them here
+        # was creating the "0 staged" cliff because every healthy
+        # candidate the user ever interacted with was permanently
+        # excluded — including tracked corpus papers that never made it
+        # to Library. Tracked papers (corpus, status='tracked') are
+        # legitimate re-surfacing candidates per user direction.
         action_rows = db.execute(
             f"""
             SELECT DISTINCT paper_id
             FROM recommendations
             WHERE paper_id IN ({placeholders})
-              AND user_action IS NOT NULL
+              AND user_action IN ('dismiss', 'dismissed', 'dislike', 'disliked', 'remove', 'removed')
             """,
             chunk,
         ).fetchall()
@@ -2111,49 +2191,85 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
     return []
 
 
-def _extract_keywords(seeds: list[dict], explicit: Optional[list[str]] = None, max_keywords: int = 12) -> list[str]:
-    stop = {
-        "the",
-        "and",
-        "for",
-        "with",
-        "from",
-        "using",
-        "towards",
-        "into",
-        "between",
-        "study",
-        "analysis",
-        "approach",
-        "model",
-        "data",
-        "this",
-        "that",
-        "these",
-        "those",
-        "paper",
-        "papers",
-        "method",
-        "methods",
-        "result",
-        "results",
-        "research",
-        "study",
-        "studies",
-        "review",
-        "reviews",
-        "library",
-        "scientific",
-    }
+_KEYWORD_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "with", "from", "using", "towards", "into", "between",
+    "study", "studies", "analysis", "approach", "model", "models", "data",
+    "this", "that", "these", "those", "paper", "papers", "method", "methods",
+    "result", "results", "research", "review", "reviews", "library",
+    "scientific",
+})
+
+
+def _tokenize_for_keywords(text: str) -> list[str]:
+    """Split a title+abstract blob into lowercase alnum tokens worth ≥4 chars."""
+    out: list[str] = []
+    for token in text.lower().replace("/", " ").replace("-", " ").split():
+        t = "".join(ch for ch in token if ch.isalnum())
+        if len(t) < 4 or t in _KEYWORD_STOP_WORDS:
+            continue
+        out.append(t)
+    return out
+
+
+def _seed_token_set(seed: dict) -> set[str]:
+    """Distinct kept tokens for a seed's title + abstract (memoised per call)."""
+    return set(_tokenize_for_keywords(f"{seed.get('title', '')} {seed.get('abstract', '')}"))
+
+
+def _extract_keywords(
+    seeds: list[dict],
+    explicit: Optional[list[str]] = None,
+    max_keywords: int = 12,
+    *,
+    background: Optional[list[dict]] = None,
+) -> list[str]:
+    """Return the top distinctive keywords for `seeds`.
+
+    Two-mode behaviour:
+
+    * **Plain frequency mode** (when `background` is None): the historical
+      bag-of-words most-common-N. Used for one-shot extractors that just
+      want "what does this seed set talk about" without a comparison
+      corpus (e.g. cluster query planning when there's only one cluster).
+    * **TF-IDF mode** (when `background` is provided): per-token frequency
+      inside `seeds` is divided by the document-frequency that token
+      reaches across the broader `background` corpus. Tokens that show
+      up in *every* background document score near 0; tokens that are
+      common in `seeds` but rare elsewhere score highest. This is the
+      mode `_build_seed_branches` uses to pick *distinctive* per-cluster
+      `core_topics` so labels stop converging on the same handful of
+      universal words ("learning / cortex" everywhere).
+    """
     counts: dict[str, int] = {}
     for seed in seeds:
-        text = f"{seed.get('title', '')} {seed.get('abstract', '')}".lower()
-        for token in text.replace("/", " ").replace("-", " ").split():
-            t = "".join(ch for ch in token if ch.isalnum())
-            if len(t) < 4 or t in stop:
-                continue
+        for t in _tokenize_for_keywords(f"{seed.get('title', '')} {seed.get('abstract', '')}"):
             counts[t] = counts.get(t, 0) + 1
-    words = [w for w, _ in sorted(counts.items(), key=lambda x: x[1], reverse=True)]
+    if not counts:
+        return list(explicit or [])[:max_keywords]
+
+    if background:
+        # Document frequency across the broader corpus (background may
+        # itself include `seeds` — that's fine; the score is monotonic
+        # in the ratio).
+        bg_doc_freq: dict[str, int] = {}
+        bg_total_docs = max(1, len(background))
+        for bg_seed in background:
+            for t in _seed_token_set(bg_seed):
+                bg_doc_freq[t] = bg_doc_freq.get(t, 0) + 1
+
+        scored: list[tuple[float, str]] = []
+        seed_total = sum(counts.values()) or 1
+        for token, freq in counts.items():
+            df = bg_doc_freq.get(token, 0)
+            # IDF with +1 smoothing in both numerator and denominator.
+            idf = math.log((bg_total_docs + 1) / (df + 1)) + 1.0
+            tf = freq / seed_total
+            scored.append((tf * idf, token))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        words = [token for _, token in scored]
+    else:
+        words = [w for w, _ in sorted(counts.items(), key=lambda x: (x[1], x[0]), reverse=True)]
+
     if explicit:
         for item in explicit:
             s = (item or "").strip().lower()
@@ -2206,9 +2322,49 @@ def _top_preferred_authors(
     db: sqlite3.Connection,
     *,
     limit: int,
+    library_dominance_cap: float = 0.4,
 ) -> list[tuple[str, float]]:
+    """Return the top N authors to fan external taste-author queries
+    out to. Excludes authors who appear on more than
+    `library_dominance_cap` of the library — sending an explicit
+    `"<dominant author>"` query to OpenAlex/S2 just amplifies the same
+    author and starves the secondary tail. The dominant author is
+    still picked up by author_affinity scoring on candidates pulled
+    via topic / keyword / journal lanes; we just don't make him the
+    explicit search query.
+    """
     scores: dict[str, float] = {}
     display_names: dict[str, str] = {}
+
+    # Library author prevalence (count of library papers each author
+    # appears on, divided by library size) — used to cap dominance.
+    library_size = 0
+    library_author_share: dict[str, float] = {}
+    try:
+        size_row = db.execute(
+            "SELECT COUNT(*) AS n FROM papers WHERE status = 'library'"
+        ).fetchone()
+        library_size = int(size_row["n"] or 0) if size_row else 0
+        if library_size > 0:
+            share_rows = db.execute(
+                """
+                SELECT pa.display_name AS display_name, COUNT(DISTINCT pa.paper_id) AS n
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                WHERE p.status = 'library'
+                  AND COALESCE(TRIM(pa.display_name), '') != ''
+                GROUP BY LOWER(TRIM(pa.display_name))
+                """
+            ).fetchall()
+            for row in share_rows:
+                key = str(row["display_name"] or "").strip().lower()
+                if not key:
+                    continue
+                share = float(row["n"] or 0) / float(library_size)
+                library_author_share[key] = max(library_author_share.get(key, 0.0), share)
+    except sqlite3.OperationalError:
+        pass
+
     try:
         rows = db.execute(
             """
@@ -2254,6 +2410,14 @@ def _top_preferred_authors(
             display_names[key] = display_name
     except sqlite3.OperationalError:
         pass
+
+    # Drop dominant authors from the explicit-query list. Keep them
+    # available as scoring boosts (handled elsewhere) but don't fan
+    # external API queries at them.
+    if library_size >= 5:
+        for key in list(scores.keys()):
+            if library_author_share.get(key, 0.0) > library_dominance_cap:
+                scores.pop(key, None)
 
     ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
     return [
@@ -2601,6 +2765,49 @@ def _cluster_seed_papers_vector(
         group_seeds.sort(key=_seed_strength, reverse=True)
         clusters.append({"seeds": group_seeds, "centroid": centers[i]})
 
+    # Data-driven K: merge any two clusters whose centroid cosine
+    # similarity exceeds 0.85 — i.e. K-means produced "near-duplicate"
+    # clusters because the library is more cohesive than `sqrt(N)`
+    # suggests. The hard `K = round(sqrt(N))` was producing 4-5
+    # near-duplicate clusters on coherent libraries; merging here
+    # naturally yields fewer-but-distinct branches when the data
+    # supports it. Repeats until no pair clears the threshold.
+    merge_threshold = 0.85
+    changed = True
+    while changed and len(clusters) > 2:
+        changed = False
+        best_pair: Optional[tuple[int, int]] = None
+        best_sim = merge_threshold
+        for i in range(len(clusters)):
+            ci = clusters[i].get("centroid")
+            if ci is None:
+                continue
+            for j in range(i + 1, len(clusters)):
+                cj = clusters[j].get("centroid")
+                if cj is None:
+                    continue
+                sim = float(np.dot(ci, cj))
+                if sim > best_sim:
+                    best_sim = sim
+                    best_pair = (i, j)
+        if best_pair is None:
+            break
+        i, j = best_pair
+        merged_seeds = clusters[i]["seeds"] + clusters[j]["seeds"]
+        merged_seeds.sort(key=_seed_strength, reverse=True)
+        # Recompute centroid as the mean of all member vectors.
+        merged_vecs = [vectors[str(s.get("id"))] for s in merged_seeds if str(s.get("id")) in vectors]
+        if merged_vecs:
+            stack = np.vstack(merged_vecs)
+            new_centroid = np.mean(stack, axis=0)
+            norm = float(np.linalg.norm(new_centroid))
+            new_centroid = new_centroid / norm if norm > 0 else clusters[i]["centroid"]
+        else:
+            new_centroid = clusters[i]["centroid"]
+        clusters[i] = {"seeds": merged_seeds, "centroid": new_centroid}
+        clusters.pop(j)
+        changed = True
+
     clusters.sort(
         key=lambda c: (
             sum(_seed_strength(s) for s in c["seeds"]) / max(1, len(c["seeds"])),
@@ -2615,18 +2822,61 @@ def _cluster_seed_papers_lexical(
     seeds: list[dict],
     max_clusters: int,
 ) -> list[dict[str, Any]]:
+    """Cluster seeds when no embeddings exist (small / fresh libraries).
+
+    The previous implementation assigned each seed to its first keyword
+    that also appeared in the global top-N — which collapsed every seed
+    whose top word was "neural" into the same cluster regardless of the
+    paper's actual topic. The replacement uses TF-IDF: for each seed we
+    pick the token with the highest `seed_freq * idf` against the rest
+    of the corpus, so the *distinctive* term anchors the seed, not the
+    *most-common* one.
+    """
     if not seeds:
         return []
-    global_terms = _extract_keywords(seeds, max_keywords=max(16, max_clusters * 4))
-    if not global_terms:
-        ranked = sorted(seeds, key=_seed_strength, reverse=True)
-        return [{"seeds": ranked, "centroid": None}]
+    if len(seeds) == 1:
+        return [{"seeds": list(seeds), "centroid": None}]
 
+    seed_token_sets = [(seed, _seed_token_set(seed)) for seed in seeds]
+    seed_total = max(1, len(seeds))
+
+    # Document frequency across the whole seed set.
+    doc_freq: dict[str, int] = {}
+    for _, tokens in seed_token_sets:
+        for tok in tokens:
+            doc_freq[tok] = doc_freq.get(tok, 0) + 1
+
+    # Pick each seed's most distinctive token: highest tf*idf within
+    # the seed itself, with a floor on idf so a token that appears in
+    # every seed (idf≈0) cannot be an anchor — those tokens get pushed
+    # below any halfway-distinctive runner-up.
     groups: dict[str, list[dict]] = defaultdict(list)
-    for idx, seed in enumerate(seeds):
-        paper_terms = _extract_keywords([seed], max_keywords=5)
-        anchor = next((t for t in paper_terms if t in global_terms), global_terms[idx % len(global_terms)])
-        groups[anchor].append(seed)
+    for seed, tokens in seed_token_sets:
+        token_counts = Counter(_tokenize_for_keywords(
+            f"{seed.get('title', '')} {seed.get('abstract', '')}"
+        ))
+        if not token_counts:
+            groups["__misc__"].append(seed)
+            continue
+        seed_total_tokens = max(1, sum(token_counts.values()))
+        best_token = "__misc__"
+        best_score = -1.0
+        for token, freq in token_counts.items():
+            df = doc_freq.get(token, 0)
+            # Skip tokens that appear in every seed (common to everyone) —
+            # those are exactly the "neural / cortex" universal words
+            # the user wants the clusterer to look past.
+            if df >= seed_total:
+                continue
+            idf = math.log((seed_total + 1) / (df + 1)) + 1.0
+            tf = freq / seed_total_tokens
+            score = tf * idf
+            # Stable tiebreak by alphabetical order — keeps clusters
+            # from re-shuffling between refreshes when scores tie.
+            if score > best_score or (score == best_score and token < best_token):
+                best_token = token
+                best_score = score
+        groups[best_token].append(seed)
 
     clusters: list[dict[str, Any]] = []
     for anchor, group in groups.items():
@@ -2675,12 +2925,27 @@ def _build_seed_branches(
         return []
 
     global_terms = _extract_keywords(seeds, max_keywords=40)
+    # Build a "background corpus" of all *other* clusters' seeds so the
+    # TF-IDF call below picks tokens that are distinctive to *this*
+    # cluster, not common across the whole library. Without this every
+    # cluster's `core_topics` converged on the same universal terms
+    # ("learning / cortex / model") and every branch label looked the
+    # same — defeating the entire point of clustering.
     branches: list[dict] = []
     for i, cluster in enumerate(clusters[:effective_max], start=1):
         cluster_seeds = cluster.get("seeds") or []
         if not cluster_seeds:
             continue
-        cluster_terms = _extract_keywords(cluster_seeds, max_keywords=14)
+        background_seeds: list[dict] = []
+        for j, other in enumerate(clusters[:effective_max]):
+            if j == i - 1:
+                continue
+            background_seeds.extend(other.get("seeds") or [])
+        cluster_terms = _extract_keywords(
+            cluster_seeds,
+            max_keywords=14,
+            background=background_seeds or None,
+        )
         if not cluster_terms:
             cluster_terms = global_terms
 
@@ -2694,10 +2959,20 @@ def _build_seed_branches(
         neighbor_terms: list[str] = []
         direction_hint: Optional[str] = None
 
+        # explore_topics neighbour selection is temperature-gated:
+        #   - cold lens (temperature < 0.5)  → nearest cluster, gradient
+        #     discovery: explore terms are a small step away from core.
+        #   - hot lens  (temperature ≥ 0.5)  → farthest cluster, leap
+        #     discovery: explore terms come from the most-different
+        #     cluster on the seed-embedding manifold, surfacing
+        #     genuinely orthogonal threads.
+        # Either way the user has full control via the temperature
+        # setting (and per-lens override).
+        prefer_far_neighbour = effective_temp >= 0.5
         own_centroid = cluster.get("centroid")
         if _NUMPY_AVAILABLE and own_centroid is not None and len(clusters) > 1:
             best_idx: Optional[int] = None
-            best_sim = -2.0
+            best_sim = -2.0 if prefer_far_neighbour else float("-inf")
             for j, other in enumerate(clusters):
                 if other is cluster:
                     continue
@@ -2705,9 +2980,16 @@ def _build_seed_branches(
                 if other_centroid is None:
                     continue
                 sim = float(np.dot(own_centroid, other_centroid))
-                if sim > best_sim:
-                    best_sim = sim
-                    best_idx = j
+                if prefer_far_neighbour:
+                    # We want the lowest similarity (= farthest direction).
+                    # Initialise best_sim to +inf and pick min.
+                    if best_idx is None or sim < best_sim:
+                        best_sim = sim
+                        best_idx = j
+                else:
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_idx = j
             if best_idx is not None:
                 neighbor_terms = _extract_keywords(clusters[best_idx].get("seeds") or [], max_keywords=12)
                 if neighbor_terms:
@@ -2813,9 +3095,14 @@ def preview_lens_branches(
         temperature=effective_temp,
         lens_id=lens_id,
     )
-    branches = _apply_branch_controls(branches, controls)
+    branches = _apply_branch_controls(branches, controls, db=db, lens_id=lens_id)
     branch_outcomes = _load_branch_outcome_map(db, lens_id=lens_id, days=60)
-    enriched_branches = _enrich_branches_with_outcomes(branches, branch_outcomes)
+    enriched_branches = _enrich_branches_with_outcomes(
+        branches,
+        branch_outcomes,
+        db=db,
+        lens_id=lens_id,
+    )
     return {
         "lens_id": lens_id,
         "lens_name": lens.get("name"),
@@ -2903,17 +3190,20 @@ def _retrieve_vector_channel(
         [active_model],
     ).fetchall()
 
+    # Score every embedded paper against the centroid — there used to
+    # be a `max_scan` cap that stopped after `limit*20` rows in
+    # arbitrary SQLite row order, which meant the lane returned the
+    # best-N-of-an-arbitrary-1000 rather than the best-N-of-the-
+    # corpus. With float16-encoded vectors and numpy dot, scoring 5–10k
+    # rows takes well under a second; the previous "performance" cap
+    # was actively producing worse retrieval at noticeable cost to
+    # quality.
     seed_set = set(seed_ids)
     scored: list[tuple[float, dict]] = []
-    max_scan = max(limit * 20, 400)
-    scanned = 0
     for row in rows:
-        if scanned >= max_scan:
-            break
         paper_id = str(row["paper_id"] or "").strip()
         if not paper_id or paper_id in seed_set:
             continue
-        scanned += 1
         try:
             vec = decode_vector(row["embedding"])
             if vec.shape != centroid.shape:
@@ -2930,6 +3220,25 @@ def _retrieve_vector_channel(
                 (
                     score,
                     {
+                        # paper_id MUST be carried so the downstream
+                        # embedding lookup can short-circuit (the lookup
+                        # falls back to openalex_id/doi/s2_id resolution
+                        # but those won't match for purely-internal
+                        # corpus papers that haven't been backfilled
+                        # with their OpenAlex ID yet). Without this the
+                        # vector lane's own candidates couldn't get
+                        # their cached embeddings reused at scoring,
+                        # collapsing text_similarity_mode to "lexical".
+                        "paper_id": paper_id,
+                        # `source_type` drives the diversity_interleave
+                        # round-robin so the vector lane gets fair air
+                        # time. We deliberately leave `source_key` unset
+                        # — the per-source-key cap is meant for
+                        # external-query identifiers (taste_author:smith,
+                        # taste_topic:visual_cortex), not for lane
+                        # labels. With `source_key=""` the diversity
+                        # cap skips these candidates entirely.
+                        "source_type": "vector",
                         "title": row["title"] or "",
                         "authors": row["authors"] or "",
                         "url": row["url"] or "",
@@ -3037,16 +3346,41 @@ def _retrieve_graph_channel(
         seed_ids = [str(seed["id"]) for seed in seeds if seed.get("id")]
         if not seed_ids:
             return []
-        placeholders = ", ".join("?" for _ in seed_ids)
+        seed_placeholders = ", ".join("?" for _ in seed_ids)
         try:
+            # Lens-adjacency guarantee: a reference must be cited by at
+            # least one seed paper to be considered. Within that pool,
+            # rank by how many papers in the **entire local corpus**
+            # cite it (not just seeds), tie-break by seed_overlap.
+            #
+            # Why corpus-wide instead of seeds-only: pure seed_overlap
+            # systematically penalizes recent references — a 2024 paper
+            # cited by 1 seed and 4 other corpus papers (corpus_overlap=5)
+            # otherwise loses to a 2010 paper cited by 1 seed and 0
+            # others (corpus_overlap=1) when both have seed_overlap=1.
+            # Widening the count to the corpus gives newer references a
+            # fair shot at the top-K. The scorer's recency_boost takes
+            # over from there once OpenAlex enrichment supplies the
+            # publication_date.
             rows = db.execute(
                 f"""
-                SELECT DISTINCT referenced_work_id
-                FROM publication_references
-                WHERE paper_id IN ({placeholders})
+                SELECT
+                    pr.referenced_work_id,
+                    COUNT(DISTINCT pr.paper_id) AS corpus_overlap,
+                    SUM(CASE WHEN pr.paper_id IN ({seed_placeholders}) THEN 1 ELSE 0 END) AS seed_overlap
+                FROM publication_references pr
+                WHERE pr.referenced_work_id IS NOT NULL
+                  AND pr.referenced_work_id IN (
+                      SELECT DISTINCT referenced_work_id
+                      FROM publication_references
+                      WHERE paper_id IN ({seed_placeholders})
+                        AND referenced_work_id IS NOT NULL
+                  )
+                GROUP BY pr.referenced_work_id
+                ORDER BY corpus_overlap DESC, seed_overlap DESC, pr.referenced_work_id ASC
                 LIMIT ?
                 """,
-                [*seed_ids, limit],
+                [*seed_ids, *seed_ids, limit],
             ).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -3368,7 +3702,12 @@ def _retrieve_external_channel(
             temperature=temperature,
             lens_id=str(lens.get("id") or "") or None,
         )
-        branches = _apply_branch_controls(branches, effective_branch_controls)
+        branches = _apply_branch_controls(
+            branches,
+            effective_branch_controls,
+            db=db,
+            lens_id=str(lens.get("id") or "").strip() or None,
+        )
         # Enrich each branch with its outcome history so the budget allocator
         # can read `auto_weight` (continuous multiplier derived from past
         # save/dismiss patterns) alongside the manual pin/boost/mute flags.
@@ -3377,7 +3716,12 @@ def _retrieve_external_channel(
             lens_id=str(lens.get("id") or "").strip() or None,
             days=60,
         )
-        branches = _enrich_branches_with_outcomes(branches, branch_outcome_map)
+        branches = _enrich_branches_with_outcomes(
+            branches,
+            branch_outcome_map,
+            db=db,
+            lens_id=str(lens.get("id") or "").strip() or None,
+        )
         active_branches = [branch for branch in branches if branch.get("is_active")]
         if active_branches:
             prioritized = active_branches[:max_active]
@@ -3396,12 +3740,22 @@ def _retrieve_external_channel(
                 branch_budget_weights.append(weight)
             core_ratio = _clamp(0.82 - (0.36 * temperature), 0.42, 0.82)
             total_branch_weight = sum(branch_budget_weights) or 1.0
+            # Absolute minimum per-branch budget. A branch starved
+            # below this floor never gets enough recommendations to
+            # generate calibration signal — making its weakness
+            # self-fulfilling. The proportional share still applies on
+            # top, but no active branch drops below `min_budget`.
+            min_per_branch = max(
+                4,
+                _setting_int("branches.min_budget_per_branch", 8, 1, 32),
+            )
             for branch, branch_weight in zip(prioritized, branch_budget_weights):
                 branch_id = str(branch.get("id") or "")
                 branch_label = str(branch.get("label") or branch_id)
                 core_topics = list(branch.get("core_topics") or [])
                 explore_topics = list(branch.get("explore_topics") or [])
-                per_branch = max(4, int(round((limit * branch_weight) / total_branch_weight)))
+                proportional = int(round((limit * branch_weight) / total_branch_weight))
+                per_branch = max(min_per_branch, proportional)
                 branch_score_bonus = 0.0
                 if branch.get("is_pinned"):
                     branch_score_bonus = 0.1
@@ -4197,14 +4551,29 @@ def _resolve_lens_branch_controls(lens: Optional[dict]) -> dict[str, Any]:
 def _enrich_branches_with_outcomes(
     branches: list[dict],
     outcome_map: dict[str, dict[str, Any]],
+    *,
+    db: Optional[sqlite3.Connection] = None,
+    lens_id: Optional[str] = None,
 ) -> list[dict]:
     """Merge per-branch outcome stats (incl. auto_weight) into each branch dict.
 
-    Looks up by branch_id first, then falls back to `label:<lower-label>` so a
-    branch that lost its stable id still picks up its outcome history when the
-    label survives across refreshes.
+    Three-tier lookup so a long-running user's calibration history is not
+    silently orphaned every time K-means reshuffles a single seed:
+
+    1. **Exact branch_id match** — the common path; same cluster identity
+       across refreshes.
+    2. **Label fallback** — `label:<lower-label>` for cases where the
+       seed set didn't drift but the id derivation differs (legacy rows).
+    3. **Lineage match** — when `db` and `lens_id` are provided, look up
+       past branch_ids in `recommendations` for this lens and find any
+       previous branch whose seed set overlaps ≥ 70 % with the current
+       cluster's seed set. Inherit that branch's outcome history. This
+       is what catches the "user added 5 papers, K-means reshuffled,
+       branch got a new id, calibration reset" failure mode.
     """
     enriched: list[dict] = []
+    lineage_lookup_cache: Optional[list[dict]] = None
+    LINEAGE_OVERLAP_THRESHOLD = 0.70
     for branch in branches:
         branch_id = str(branch.get("id") or "").strip()
         branch_label = str(branch.get("label") or "").strip()
@@ -4213,8 +4582,94 @@ def _enrich_branches_with_outcomes(
             or outcome_map.get(f"label:{branch_label.lower()}")
             or {}
         )
+        if not outcome and db is not None and lens_id and branch.get("seed_context"):
+            current_seed_ids = {
+                str(s.get("paper_id") or "").strip()
+                for s in (branch.get("seed_context") or [])
+                if str(s.get("paper_id") or "").strip()
+            }
+            if current_seed_ids:
+                if lineage_lookup_cache is None:
+                    lineage_lookup_cache = _load_branch_seed_history(db, lens_id=lens_id)
+                best_overlap = 0.0
+                best_outcome: dict[str, Any] = {}
+                for prior in lineage_lookup_cache:
+                    prior_seed_ids = prior.get("seed_ids") or set()
+                    if not prior_seed_ids:
+                        continue
+                    overlap = len(current_seed_ids & prior_seed_ids) / max(
+                        len(current_seed_ids | prior_seed_ids), 1
+                    )
+                    if overlap >= LINEAGE_OVERLAP_THRESHOLD and overlap > best_overlap:
+                        prior_id = prior.get("branch_id") or ""
+                        prior_label = prior.get("branch_label") or ""
+                        candidate_outcome = (
+                            outcome_map.get(prior_id)
+                            or outcome_map.get(f"label:{str(prior_label).lower()}")
+                            or {}
+                        )
+                        if candidate_outcome:
+                            best_overlap = overlap
+                            best_outcome = {
+                                **candidate_outcome,
+                                "auto_weight_reason": (
+                                    str(candidate_outcome.get("auto_weight_reason") or "")
+                                    + f" (inherited via {overlap:.0%} seed overlap)"
+                                ).strip(),
+                            }
+                outcome = best_outcome
         enriched.append({**branch, **outcome})
     return enriched
+
+
+def _load_branch_seed_history(
+    db: sqlite3.Connection,
+    *,
+    lens_id: str,
+    limit: int = 200,
+) -> list[dict]:
+    """Snapshot of past `(branch_id, seed_ids)` for one lens.
+
+    The recommendations table records each rec's `branch_id` and the
+    seed paper_ids it sprang from indirectly through co-occurrence —
+    we approximate the past branch's seed set by collecting the
+    `paper_id`s of recommendations that carried that branch_id from
+    library-status seeds. This is good enough for the lineage match
+    in `_enrich_branches_with_outcomes`.
+    """
+    if not _table_exists(db, "recommendations"):
+        return []
+    try:
+        rows = db.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(branch_id, ''), '') AS branch_id,
+                COALESCE(NULLIF(branch_label, ''), '') AS branch_label,
+                paper_id
+            FROM recommendations
+            WHERE COALESCE(lens_id, '') = ?
+              AND COALESCE(NULLIF(branch_id, ''), '') <> ''
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (str(lens_id), int(limit)),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        bid = str(row["branch_id"] or "").strip()
+        if not bid:
+            continue
+        bucket = grouped.setdefault(bid, {
+            "branch_id": bid,
+            "branch_label": str(row["branch_label"] or "").strip(),
+            "seed_ids": set(),
+        })
+        pid = str(row["paper_id"] or "").strip()
+        if pid:
+            bucket["seed_ids"].add(pid)
+    return list(grouped.values())
 
 
 def _branch_control_state(branch_id: str, controls: dict[str, Any]) -> str:
@@ -4227,25 +4682,95 @@ def _branch_control_state(branch_id: str, controls: dict[str, Any]) -> str:
     return "normal"
 
 
+def _resolve_branch_control_via_lineage(
+    branch: dict,
+    pinned: set[str],
+    muted: set[str],
+    boosted: set[str],
+    history: list[dict],
+) -> tuple[bool, bool, bool]:
+    """Recover pin/mute/boost via seed-set overlap when branch_id drifted.
+
+    Mirrors the calibration-history lineage match in
+    `_enrich_branches_with_outcomes`. Returns (pinned, boosted, muted).
+    """
+    if not history or not (branch.get("seed_context") or []):
+        return False, False, False
+    current_seed_ids = {
+        str(s.get("paper_id") or "").strip()
+        for s in (branch.get("seed_context") or [])
+        if str(s.get("paper_id") or "").strip()
+    }
+    if not current_seed_ids:
+        return False, False, False
+    LINEAGE_OVERLAP_THRESHOLD = 0.70
+    out_pinned = out_boosted = out_muted = False
+    for prior in history:
+        prior_seed_ids = prior.get("seed_ids") or set()
+        if not prior_seed_ids:
+            continue
+        overlap = len(current_seed_ids & prior_seed_ids) / max(
+            len(current_seed_ids | prior_seed_ids), 1
+        )
+        if overlap < LINEAGE_OVERLAP_THRESHOLD:
+            continue
+        prior_id = prior.get("branch_id") or ""
+        if not prior_id:
+            continue
+        if prior_id in pinned:
+            out_pinned = True
+        if prior_id in boosted:
+            out_boosted = True
+        if prior_id in muted:
+            out_muted = True
+    return out_pinned, out_boosted, out_muted
+
+
 def _apply_branch_controls(
     branches: list[dict],
     controls: dict[str, Any],
+    *,
+    db: Optional[sqlite3.Connection] = None,
+    lens_id: Optional[str] = None,
 ) -> list[dict]:
     pinned = set(controls.get("pinned") or [])
     muted = set(controls.get("muted") or [])
     boosted = set(controls.get("boosted") or [])
 
+    history: list[dict] = []
+    if db is not None and lens_id and (pinned or muted or boosted):
+        history = _load_branch_seed_history(db, lens_id=str(lens_id))
+
     annotated: list[dict] = []
     for branch in branches:
         branch_id = str(branch.get("id") or "").strip()
         state = _branch_control_state(branch_id, controls)
+        is_pinned = branch_id in pinned
+        is_boosted = branch_id in boosted
+        is_muted = branch_id in muted
+        # Lineage fallback: if the branch_id changed because K-means
+        # reshuffled, recover the user's pin/mute/boost via seed-set
+        # overlap with past branches.
+        if not (is_pinned or is_boosted or is_muted) and history:
+            inh_pinned, inh_boosted, inh_muted = _resolve_branch_control_via_lineage(
+                branch, pinned, muted, boosted, history
+            )
+            if inh_pinned and not is_muted:
+                is_pinned = True
+                state = "pinned"
+            elif inh_boosted and not is_muted:
+                is_boosted = True
+                state = "boosted"
+            if inh_muted:
+                is_muted = True
+                state = "muted"
         item = {
             **branch,
             "control_state": state,
-            "is_pinned": branch_id in pinned,
-            "is_boosted": branch_id in boosted,
-            "is_muted": branch_id in muted,
-            "is_active": branch_id not in muted,
+            "is_pinned": is_pinned,
+            "is_boosted": is_boosted,
+            "is_muted": is_muted,
+            "is_active": not is_muted,
         }
         annotated.append(item)
 

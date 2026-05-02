@@ -50,6 +50,12 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "branches.max_active_for_retrieval": "4",
     "branches.query_core_variants": "2",
     "branches.query_explore_variants": "2",
+    # Absolute minimum per-branch budget for the external retrieval
+    # lane. Without a floor, a low-auto_weight branch can be starved
+    # to 4-5 recommendations — too few to ever accumulate enough
+    # save/dismiss signal to recover. 8 keeps an "underexplored"
+    # branch viable while the user evaluates it.
+    "branches.min_budget_per_branch": "8",
     "lens.max_seeds": "500",
     "sources.openalex.enabled": "true",
     "sources.semantic_scholar.enabled": "true",

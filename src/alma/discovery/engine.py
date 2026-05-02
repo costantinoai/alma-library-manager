@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from collections import defaultdict
@@ -142,8 +143,52 @@ def score_discovery_candidate(
     )
 
 
-def diversity_interleave(candidates: List[dict], max_results: int) -> List[dict]:
-    """Interleave candidates from different source types for diversity."""
+_AUTHOR_SPLIT_RE = re.compile(r"\s*(?:[;,]|\band\b|\&)\s*", re.IGNORECASE)
+
+
+def _candidate_authors_for_diversity(candidate: dict) -> set[str]:
+    """Return the first + last author keys we use to detect dominance.
+
+    Author strings arrive in inconsistent shapes — semicolon-separated
+    from S2, comma-separated from OpenAlex normalisation, sometimes
+    "et al" or " and " conjoined. Split on any of those delimiters so
+    the cap actually catches dominant first/last authors.
+    """
+    authors_str = str(candidate.get("authors") or "").strip()
+    if not authors_str:
+        return set()
+    parts = [p.strip().lower() for p in _AUTHOR_SPLIT_RE.split(authors_str) if p.strip()]
+    parts = [p for p in parts if p and p != "et al" and p != "et al."]
+    if not parts:
+        return set()
+    out = {parts[0]}
+    if len(parts) > 1:
+        out.add(parts[-1])
+    return out
+
+
+def diversity_interleave(
+    candidates: List[dict],
+    max_results: int,
+    *,
+    max_per_author: int = 2,
+    max_per_source_key: int | None = None,
+) -> List[dict]:
+    """Interleave candidates from different source types for diversity,
+    then apply author and per-source-key caps so no single dominant
+    author or external query oversaturates the staged top-K. Candidates
+    that exceed a cap are not dropped — they're moved to an overflow
+    queue and appended after every other candidate has had a chance to
+    place. This way the lens always staffs `max_results` if the raw
+    pool is large enough; we only reorder.
+
+    `max_per_author` defaults to 2 (first/last author, individually).
+    `max_per_source_key` defaults to ceil(max_results / 4): no single
+    external search query can supply more than ~25% of the staged set.
+    """
+    if max_per_source_key is None:
+        max_per_source_key = max(1, (max_results + 3) // 4)
+
     groups: Dict[str, List[dict]] = defaultdict(list)
     for c in candidates:
         groups[c.get("source_type", "unknown")].append(c)
@@ -157,22 +202,64 @@ def diversity_interleave(candidates: List[dict], max_results: int) -> List[dict]
         reverse=True,
     )
 
-    result: List[dict] = []
+    primary: List[dict] = []
+    overflow: List[dict] = []
     group_idx: Dict[str, int] = {k: 0 for k in group_order}
+    author_counts: Dict[str, int] = {}
+    source_key_counts: Dict[str, int] = {}
 
-    while len(result) < max_results:
+    def _accept(cand: dict) -> bool:
+        # Per-author cap (first OR last author exceeding the cap blocks).
+        for author in _candidate_authors_for_diversity(cand):
+            if author_counts.get(author, 0) >= max_per_author:
+                return False
+        # Per-source-key cap. The key is an external query identifier
+        # (`taste_author:smith`, `taste_topic:visual cortex`, …) — a
+        # generic lane label like "vector" or "lexical" is not a source
+        # key in this sense and shouldn't share a 25% bucket. We skip
+        # the cap when only the lane label is available so the vector /
+        # lexical lanes don't artificially throttle each other.
+        raw_source_key = (cand.get("source_key") or "").strip()
+        cap_source_key = raw_source_key if raw_source_key not in {"", "lens_retrieval"} else None
+        if cap_source_key and source_key_counts.get(cap_source_key, 0) >= max_per_source_key:
+            return False
+        for author in _candidate_authors_for_diversity(cand):
+            author_counts[author] = author_counts.get(author, 0) + 1
+        if cap_source_key:
+            source_key_counts[cap_source_key] = source_key_counts.get(cap_source_key, 0) + 1
+        return True
+
+    # Round-robin across source_types so each lane gets representation,
+    # but only commit a candidate if it doesn't violate the diversity
+    # caps. Caps-violators land in overflow and backfill at the end.
+    while len(primary) < max_results:
         added_this_round = False
         for key in group_order:
-            if group_idx[key] < len(groups[key]):
-                result.append(groups[key][group_idx[key]])
-                group_idx[key] += 1
-                added_this_round = True
-                if len(result) >= max_results:
+            if group_idx[key] >= len(groups[key]):
+                continue
+            cand = groups[key][group_idx[key]]
+            group_idx[key] += 1
+            added_this_round = True
+            if _accept(cand):
+                primary.append(cand)
+                if len(primary) >= max_results:
                     break
+            else:
+                overflow.append(cand)
         if not added_this_round:
             break
 
-    return result
+    # Backfill from overflow (still ranked by original score) if the
+    # diversity pass left empty slots — better to seat dominant-author
+    # papers than to return fewer recs.
+    if len(primary) < max_results:
+        overflow.sort(key=lambda x: x.get("score", 0), reverse=True)
+        for cand in overflow:
+            if len(primary) >= max_results:
+                break
+            primary.append(cand)
+
+    return primary
 
 
 def get_existing_recommendation_titles(conn: sqlite3.Connection) -> Set[str]:
