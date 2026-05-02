@@ -192,3 +192,323 @@ per-signal contribution for one recommendation:
 
 The UI's "why this paper?" hover surfaces this breakdown so you can
 see which signals pushed each recommendation up.
+
+---
+
+# Author suggestions
+
+The Authors page rail (`GET /api/v1/authors/suggestions`,
+implemented in `alma.application.authors.list_author_suggestions`)
+runs a separate scoring pipeline from Discovery. Same band,
+different formulas.
+
+The pipeline has four phases:
+
+1. **Six bucket scans** populate a candidate list, each emitting
+   a per-bucket raw score in 0…`_MAX_SUGGESTION_SCORE` (= 100).
+2. **Multi-source consensus pass** boosts candidates that
+   appeared in more than one bucket.
+3. **Dismissal cluster pass** subtracts a penalty from candidates
+   whose attributes overlap recently dismissed authors'.
+4. **Per-bucket weight + sort** applies the
+   `discovery_settings.author_suggestion_weights.*` multipliers
+   and orders the rail.
+
+All scoring constants are at the top of `application/authors.py`:
+
+```python
+_MAX_SUGGESTION_SCORE = 100.0                           # band ceiling
+_CONSENSUS_BONUS_FRACTION = 0.12                        # 5-bucket → ~24% of band
+_DISMISSAL_TOPIC_PENALTY_PER_HIT = 0.020 * _MAX        # = 2.0
+_DISMISSAL_VENUE_PENALTY_PER_HIT = 0.015 * _MAX        # = 1.5
+_DISMISSAL_COAUTHOR_PENALTY_PER_HIT = 0.008 * _MAX     # = 0.8 (intentionally light: see rationale)
+_DISMISSAL_INSTITUTION_PENALTY_PER_HIT = 0.010 * _MAX  # = 1.0
+_DISMISSAL_PENALTY_CAP = 0.30 * _MAX                   # = 30.0
+```
+
+Penalties / bonuses are expressed as fractions of the band so
+they stay calibrated if the band ever rescales — change
+`_MAX_SUGGESTION_SCORE` and every formula stays proportional.
+
+## Bucket-level formulas
+
+### `library_core`
+
+Authors who appear on papers in your saved Library.
+
+For each (candidate, library-paper) pair, contribute:
+
+$$
+\frac{\text{rating\_w}(p) \times \text{position\_w}(\text{pa}) \times \text{recency\_w}(p)}{\sqrt{N_{\text{authors}}(p)}}
+$$
+
+with:
+
+| Factor | Mapping |
+|---|---|
+| `rating_w(p)` | 0:1.0 (unrated = neutral) · 1:0.2 · 2:0.5 · 3:1.0 · 4:2.0 · 5:3.0 |
+| `position_w(pa)` | first/last:1.5 · middle:1.0 |
+| `recency_w(p)` | 1.3 if year ≥ current_year - 3 else 1.0 |
+| `N` | author count of `p` from `publication_authors` |
+
+Sum over the candidate's library papers gives
+`weighted_contribution`. Per-bucket score:
+
+$$
+\text{score} = \min\left(_{\max},\ 24 \cdot wc + \sum_{t \in T} 8 \cdot \text{prevalence}(t) + \sum_{v \in V} 6 \cdot \text{prevalence}(v)\right)
+$$
+
+`24` is the outer multiplier that puts the band around 0–100;
+topic / venue overlap contributions are prevalence-weighted
+(see [topic / venue weighting](#topic-venue-prevalence-weighting)
+below).
+
+A 5★ first-author of a 1-person paper saturates near 100; a
+middle author of a 30-person consortium paper rated neutrally
+lands around 7.
+
+### `cited_by_high_signal`
+
+Authors whose works are cited by your Library papers rated ≥ 4★.
+
+For each (candidate, library-citing-paper) pair, contribute:
+
+$$
+\frac{\text{citing\_rating\_w} \times \text{position\_w}(\text{pa}) }{\sqrt{N_{\text{cited\_authors}}}}
+$$
+
+with `citing_rating_w` = 1.5 if 5★ else 1.0 (the `min_rating=4`
+gate already drops 1-3★). Sum gives `weighted_endorsement`.
+Per-bucket score:
+
+$$
+\text{score} = \min\left(_{\max},\ 30 \cdot we + 4 \cdot c\right)
+$$
+
+where `c` is the count of distinct cited papers (a small
+breadth tiebreaker).
+
+### `adjacent`
+
+Two SQL passes, OR'd:
+
+1. **Citation-graph proximity** — authors whose papers are
+   directly cited by your Library papers (joined via
+   `publication_references`).
+2. **Topic / venue overlap fallback** — authors whose
+   publication record shares ≥ 2 of your top 12 library topics
+   OR ≥ 1 of your top 8 library venues.
+
+Per-bucket score:
+
+$$
+\text{score} = \min\left(_{\max},\ 20 sp + 8 lp + 4 rp + 8 \sum \text{topic\_prev} + 6 \sum \text{venue\_prev} + 5 |\text{shared\_lib\_authors}|\right)
+$$
+
+with `sp` = shared papers, `lp` = candidate's local paper count,
+`rp` = recent local paper count.
+
+### `semantic_similar`
+
+SPECTER2 cosine of the candidate's paper-embedding centroid
+against your Library centroid (helper:
+`_semantic_similar_candidates`).
+
+$$
+\text{score} = \min\left(_{\max},\ 90 \cdot \text{cos} + \min(\text{embedded}, 10)\right)
+$$
+
+A 0.9 cosine maps to 90; the small `embedded` term is a tiebreak
+for candidates with more than one embedded paper.
+
+### `openalex_related` / `s2_related`
+
+Pure cache reads from `author_suggestion_cache`, populated
+asynchronously by `POST /authors/suggestions/refresh-network`.
+Each cached row carries a `composite_score` ∈ [0, 1] computed
+externally; the bucket simply rescales:
+
+$$
+\text{score} = \min\left(_{\max},\ 100 \cdot \text{composite}\right)
+$$
+
+Each network bucket gets `network_slot_cap = max(2, ⌈limit/3⌉)`
+*new* slots so that even a Library that saturates `library_core`
+still sees external suggestions. Overlap with prior buckets
+feeds the consensus pass, not the slot cap.
+
+## Topic / venue prevalence weighting
+
+`_top_topics_for_library(db, limit=12)` and
+`_top_venues_for_library(db, limit=8)` return
+`{label: paper_count}`. `_build_prevalence_weights` converts to
+log-normalized weights:
+
+$$
+\text{prevalence}(t) = \frac{\log(1 + \text{count}(t))}{\log(1 + \text{count}_{\max})}
+$$
+
+so the top library topic = 1.0 and a topic with count=1 in a
+library where the max is 20 gets ≈0.23.
+
+`_weighted_overlap_score(shared, weights, scale)` sums prevalence
+weights for the candidate's overlap × scale. This is what the
+`8 ∑ topic_prev` / `6 ∑ venue_prev` terms in the bucket formulas
+above mean. Multipliers were bumped from the pre-2026-05 values
+of 5 / 4 so a top-topic match is *more* valuable than the old
+equal-count scheme, not just redistributed.
+
+## Multi-source consensus bonus
+
+After all buckets run, each candidate's `consensus_buckets` list
+contains the labels of every bucket that surfaced them. The
+post-pass adds:
+
+$$
+\text{bonus}(N) = _{\text{frac}} \cdot _{\max} \cdot \sqrt{N - 1}
+$$
+
+where `_frac = _CONSENSUS_BONUS_FRACTION = 0.12` and `N =
+len(consensus_buckets)`.
+
+| N | Bonus today |
+|---|---|
+| 1 | 0 |
+| 2 | 12 |
+| 3 | ~17 |
+| 4 | ~21 |
+| 5 | ~24 |
+| 6 | ~27 |
+
+Diminishing returns are intentional: 5+ buckets agreeing is
+strong evidence but should never trivially saturate the band
+against a high-confidence single-bucket signal.
+
+For overlap to even be detected, each bucket helper passes only
+`followed_ids` to its SQL `exclude_ids` parameter (NOT
+`followed_ids | seen_candidates`). The loop body's
+`if oid in seen_candidates: _record_consensus(...)` then captures
+the multi-bucket appearance instead of dropping the row.
+
+## Dismissal cluster penalty
+
+`_load_dismissal_signature(db, lookback_days=100)` builds four
+dicts from authors with `signal_value < 0` in
+`missing_author_feedback` over the lookback window:
+
+| Signature | Shape | Built from |
+|---|---|---|
+| `topic_sig` | `{topic: dismissed_author_count}` | `publication_topics` join |
+| `venue_sig` | `{venue: dismissed_author_count}` | `papers.journal` join |
+| `coauthor_sig` | `{coauthor_oid: shared_paper_count}` | `publication_authors` self-join |
+| `institution_sig` | `{institution: dismissed_author_count}` | `publication_authors.institution` |
+
+Coauthor signature uses **paper count, not dismissed-author
+count** — collaboration depth is the relevant signal: a candidate
+on 5 papers with one dismissed author is more cluster-bound than
+one on 1 paper each with 5 dismissed authors. The per-hit penalty
+is intentionally low (`0.008 × _MAX = 0.8` per shared paper)
+because dismissing an author often means "not this person", NOT
+"none of their co-authors". Only deep collaboration (10+ shared
+papers) climbs to a meaningful penalty (≥ 8 points); a single
+co-authorship barely registers.
+
+`_dismissal_overlap_penalty` computes the per-candidate penalty:
+
+$$
+\text{penalty} = \min\left(_{\text{cap}},\ \sum_t \text{topic\_sig}[t] \cdot p_t + \sum_v \text{venue\_sig}[v] \cdot p_v + \text{coauthor\_sig}[c_{oid}] \cdot p_c + \sum_i \text{inst\_sig}[i] \cdot p_i \right)
+$$
+
+with per-hit constants from the top of `authors.py`. Topic /
+venue / institution use list-overlap; coauthor is a single-ID
+match against the candidate's own `openalex_id`.
+
+The cap (`_DISMISSAL_PENALTY_CAP = 30.0`) is load-bearing: it
+prevents the rail from permanently zeroing a candidate based on
+cluster overlap alone. Explicit dismissal is the only mechanism
+that fully removes someone.
+
+Penalties land on each entry as a `dismissal_penalty` field for
+debugging / UI, and are subtracted from the per-bucket score
+**after** the consensus bonus, **before** the per-bucket weight
+multiplier. Ordering rationale: consensus is positive evidence
+about the bucket signal; dismissal is a learned negative that
+must attenuate even confirmed candidates; bucket weight is the
+final tunable normalization.
+
+## Per-bucket weights
+
+Stored under `discovery_settings.author_suggestion_weights.*`.
+Defaults from `alma.discovery.defaults`:
+
+| Bucket | Default weight | Rationale |
+|---|---|---|
+| `library_core` | 1.0 | Strongest evidence — direct co-authorship. |
+| `cited_by_high_signal` | 0.9 | Uses ratings end-to-end now; nearly equal to library_core. |
+| `openalex_related` | 0.9 | External discovery; equal-footing-ish so the rail isn't dominated by local data. |
+| `s2_related` | 0.9 | Same as openalex_related; independent source. |
+| `semantic_similar` | 0.8 | Less interpretable than the others, so slightly lower. |
+| `adjacent` | 0.7 | Citation/topic adjacency is a weaker primary signal than direct co-authorship. |
+
+The weight applies to the per-bucket raw score AFTER the
+consensus bonus and dismissal penalty:
+
+```
+final = weight × min(_MAX, raw_bucket_score + consensus_bonus - dismissal_penalty)
+```
+
+## Final sort and trim
+
+After weighting, candidates are sorted by:
+
+1. `-score` (highest first)
+2. bucket priority (`library_core` < `cited_by_high_signal` ==
+   `adjacent` < `semantic_similar` < network buckets) — only
+   matters as a tiebreak between equal scores.
+3. `-local_paper_count`, `-recent_paper_count`, then name.
+
+Then **same-human dedup** collapses entries whose normalized
+display names match (handles OpenAlex split profiles for the same
+human; the highest-scoring row wins, dropped IDs go to
+`alt_openalex_ids` on the survivor).
+
+Finally, `_diversify_final` trims to the requested limit while
+guaranteeing at least one slot per populated bucket so a
+high-volume bucket cannot crowd out the others.
+
+## Per-suggestion fields
+
+Each entry returned by `list_author_suggestions` carries:
+
+| Field | Purpose |
+|---|---|
+| `score` | Final 0–100 number after consensus + dismissal + weight. |
+| `suggestion_type` | The primary bucket label (used for the UI chip). |
+| `weighted_contribution` | Raw `library_core` SUM (when applicable). |
+| `weighted_endorsement` | Raw `cited_by_high_signal` SUM (when applicable). |
+| `consensus_buckets` | List of bucket labels that surfaced this candidate. |
+| `consensus_count` | `len(consensus_buckets)`. |
+| `dismissal_penalty` | Subtracted points from cluster penalty (only set when > 0). |
+| `signals` | Priority-ordered evidence chips for the UI ("co-author of X", "SPECTER 0.83", …). |
+| `shared_topics` / `shared_venues` / `shared_followed_authors` | Display-side overlap lists. |
+
+## Tests pinning the contract
+
+`tests/test_author_suggestions_scoring.py` covers:
+
+- Consortium middle-author down-weight via `1/√N`.
+- Rating-based separation of co-authors (5★ vs 1★).
+- Cited-by-high-signal lead vs consortium-middle.
+- Top-topic match outranking rare-topic match
+  (prevalence weighting).
+- Dismissal penalty firing on topic, coauthor, and institution
+  cluster overlap.
+- Multi-source consensus bumping above single-source.
+- Unrated rating=0 treated as neutral (=3), not negative.
+
+When changing any constant or formula above, update or add a
+test there. The project-internal lessons file (`tasks/lessons.md`,
+gitignored) captures the rationale and gotchas under the headings
+"Author suggestion scoring: weight, don't count", "Author
+suggestion buckets must collect consensus", "Topic / venue
+overlap is not a count", and "Dismissal propagation".

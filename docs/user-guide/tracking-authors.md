@@ -76,16 +76,67 @@ All three are Activity-backed and report per-author progress.
 
 ## Author suggestions
 
-Below the Followed list, the page surfaces **Author suggestions** —
-candidates you don't follow yet. Each suggestion carries a
-`suggestion_type` chip showing where the signal came from
-(library_core, library_reference, semantic_similar, openalex_related,
-s2_related, cited_by_high_signal). See
-[Authors](../concepts/authors.md#author-suggestions) for the full
-list.
+Below the Followed list, the page surfaces **Author suggestions**
+— candidates you don't follow yet. Each suggestion carries a
+`suggestion_type` chip (`library_core`, `cited_by_high_signal`,
+`adjacent`, `semantic_similar`, `openalex_related`, `s2_related`)
+showing the bucket it primarily came from, plus a `Suggested by N
+sources` indicator when multiple buckets independently agreed.
 
-Reject a suggestion to write a negative signal — the recommender
-will down-weight that author across all sources.
+See [Authors → Author suggestions](../concepts/authors.md#author-suggestions)
+for what each bucket means and how scoring works.
+
+### Getting better suggestions
+
+The rail is built fresh on every visit by combining six
+independent buckets. The signals that drive ranking are entirely
+fed by your actions, so a few small habits make a big difference:
+
+1. **Rate your Library papers.** Each star on a paper amplifies
+   its co-authors in the rail:
+   - **5★** → co-authors carry **3×** the weight of an unrated
+     paper's co-authors.
+   - **4★** → 2×.
+   - **3★ / unrated** → 1× (neutral).
+   - **2★** → 0.5×.
+   - **1★** → 0.2× (still in the pool but barely contributes).
+   First / last authors on a rated paper get an additional 1.5×
+   on top — they're the lead and senior author signals.
+2. **Dismiss authors you don't want.** Rejecting a suggestion
+   does two things:
+   - Suppresses that exact author for ~250 days.
+   - Adds their profile (topics, venues, co-authors, institution)
+     to a learned **dismissal cluster** — future candidates whose
+     attributes overlap that cluster lose up to 30 points (out of
+     100). So dismissing 2-3 authors from a sub-area you don't
+     care about will start filtering similar authors automatically.
+   The cluster has a 100-day lookback so old dismissals decay out
+   as your interests shift. Co-authorship overlap counts as a very
+   light penalty (≈0.8/paper) — you stay free to follow people the
+   dismissed author wrote with.
+3. **Refresh network buckets.** The `openalex_related` and
+   `s2_related` buckets read from a cache that's refreshed
+   asynchronously. Use **Authors → ⋯ → Refresh network buckets**
+   when you want fresh external candidates beyond what your
+   Library co-author / citation graph already shows.
+4. **Tune bucket weights** in
+   **Settings → Discovery → Author suggestion weights** if you
+   want to tilt the rail toward discovery (boost
+   `openalex_related` / `s2_related`) or toward your existing
+   reading (boost `library_core` / `cited_by_high_signal`).
+   Defaults are deliberately tilted toward `library_core`
+   because it's the strongest evidence; equal-weight network
+   buckets at 0.9 give external sources real airtime without
+   overrunning your Library signal.
+
+A candidate working in your **#1 library topic** will rank far
+higher than one sharing a fringe topic — the system weights
+shared topics by how prevalent they are in your Library, so your
+core area dominates naturally.
+
+If a suggestion repeatedly surfaces a category of author you
+don't want, dismiss them — the rail will learn the cluster and
+stop bothering you.
 
 ## Removing
 

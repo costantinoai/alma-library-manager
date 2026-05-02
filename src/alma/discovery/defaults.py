@@ -116,12 +116,24 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # bucket score in list_author_suggestions. Priority-based dedup
     # still runs first so `cited_by_high_signal > adjacent` label
     # precedence stays intact; weights only reorder the final list.
+    #
+    # External-network buckets (openalex_related / s2_related) carry
+    # the discovery value of the rail — they surface authors the user
+    # has NOT already co-authored with or cited. Library_core /
+    # adjacent / cited_by_high_signal will always have evidence the
+    # network buckets cannot match (raw co-authorship, citation graph
+    # presence) so a flat 0.5 weight against library_core's 1.0 was
+    # silently starving the discovery side. Equal-footing 0.9 lets a
+    # well-scored OpenAlex/S2-related candidate compete for the rail
+    # without overtaking a candidate who is literally a library
+    # co-author of a 5★ paper. cited_by_high_signal also bumped (it
+    # uses ratings now, same trust level as library_core).
     "author_suggestion_weights.library_core": "1.0",
-    "author_suggestion_weights.cited_by_high_signal": "0.7",
+    "author_suggestion_weights.cited_by_high_signal": "0.9",
     "author_suggestion_weights.adjacent": "0.7",
-    "author_suggestion_weights.semantic_similar": "0.6",
-    "author_suggestion_weights.openalex_related": "0.5",
-    "author_suggestion_weights.s2_related": "0.5",
+    "author_suggestion_weights.semantic_similar": "0.8",
+    "author_suggestion_weights.openalex_related": "0.9",
+    "author_suggestion_weights.s2_related": "0.9",
     # TTL for `author_suggestion_cache` rows (network bucket payloads).
     "author_suggestion_cache_ttl_hours": "24",
 }
