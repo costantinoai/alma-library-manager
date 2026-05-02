@@ -7,7 +7,6 @@ import hashlib
 import logging
 import math
 import sqlite3
-import struct
 import uuid
 from collections import defaultdict
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -15,9 +14,8 @@ from datetime import datetime, timedelta
 from time import perf_counter
 from typing import Any, Callable, Optional
 
-from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.discovery import openalex_related
-from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+from alma.discovery.semantic_scholar import upsert_specter2_embedding
 from alma.discovery import similarity as sim_module
 from alma.discovery import source_search
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
@@ -1033,35 +1031,6 @@ def default_channel_weights(context_type: str) -> dict[str, float]:
     return {k: float(v) / total for k, v in weights.items()}
 
 
-def _upsert_s2_specter2_embedding(
-    db: sqlite3.Connection,
-    paper_id: str,
-    candidate: dict,
-) -> bool:
-    vector = candidate.get("specter2_embedding")
-    if not isinstance(vector, list) or not vector:
-        return False
-    try:
-        values = [float(value) for value in vector]
-        blob = struct.pack(f"<{len(values)}f", *values)
-    except (TypeError, ValueError, struct.error):
-        return False
-    cursor = db.execute(
-        """
-        INSERT OR IGNORE INTO publication_embeddings (paper_id, embedding, model, source, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            paper_id,
-            blob,
-            S2_SPECTER2_MODEL,
-            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-            datetime.utcnow().isoformat(),
-        ),
-    )
-    return cursor.rowcount > 0
-
-
 def refresh_lens_recommendations(
     db: sqlite3.Connection,
     lens_id: str,
@@ -1757,7 +1726,7 @@ def refresh_lens_recommendations(
             status="tracked",
             added_from="discovery",
         )
-        _upsert_s2_specter2_embedding(db, paper_id, candidate)
+        upsert_specter2_embedding(db, paper_id, candidate)
         staged_candidates.append((idx, candidate, paper_id))
         staged_paper_ids.append(paper_id)
     timings_ms["paper_upsert"] = int(round((perf_counter() - phase_started) * 1000))

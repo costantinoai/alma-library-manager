@@ -229,6 +229,69 @@ def _heal_papers_blank_identifiers(conn: sqlite3.Connection) -> None:
         logger.debug("papers blank-identifier heal skipped", exc_info=True)
 
 
+def _migrate_publication_embeddings_to_float16(conn: sqlite3.Connection) -> int:
+    """Re-encode any float32 ``publication_embeddings`` blobs as float16.
+
+    For each ``model``, the modal blob length is taken as the canonical
+    (float16) length. Rows with a blob exactly twice that length and
+    divisible by 4 are interpreted as the legacy float32 encoding from
+    writers that bypassed ``core.vector_blob.encode_vector``; they are
+    decoded as float32 and re-encoded through the canonical helper.
+    Returns the number of rows fixed. Idempotent.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT model, length(embedding) AS n, COUNT(*) AS c "
+            "FROM publication_embeddings GROUP BY model, length(embedding)"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    counts: dict[tuple[str, int], int] = {
+        (str(r["model"]), int(r["n"])): int(r["c"]) for r in rows
+    }
+    if not counts:
+        return 0
+
+    modal_len: dict[str, int] = {}
+    for (model, n), c in counts.items():
+        if model not in modal_len or c > counts[(model, modal_len[model])]:
+            modal_len[model] = n
+
+    import numpy as np
+    from alma.core.vector_blob import encode_vector
+
+    fixed = 0
+    for model, mod_len in modal_len.items():
+        target_len = mod_len * 2
+        if target_len % 4 != 0 or counts.get((model, target_len), 0) == 0:
+            continue
+        broken = conn.execute(
+            "SELECT paper_id, embedding FROM publication_embeddings "
+            "WHERE model = ? AND length(embedding) = ?",
+            (model, target_len),
+        ).fetchall()
+        for row in broken:
+            try:
+                vec = np.frombuffer(row["embedding"], dtype=np.float32)
+                new_blob = encode_vector(vec)
+            except Exception:
+                continue
+            conn.execute(
+                "UPDATE publication_embeddings SET embedding = ? "
+                "WHERE paper_id = ? AND model = ?",
+                (new_blob, row["paper_id"], model),
+            )
+            fixed += 1
+
+    if fixed:
+        logger.info(
+            "Re-encoded %d publication_embeddings rows from float32 to float16",
+            fixed,
+        )
+    return fixed
+
+
 def init_db_schema() -> None:
     """Create all tables and seed defaults.
 
@@ -937,6 +1000,26 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_publication_embeddings_model_source "
                 "ON publication_embeddings(model, source)"
             )
+
+            # One-shot dtype migration: prior writers in
+            # ``services/s2_vectors`` and ``application/discovery`` packed
+            # SPECTER2 vectors as float32 instead of going through
+            # ``core.vector_blob.encode_vector`` (float16). The reader
+            # decodes as float16 — so a 768-dim float32 row (3072 bytes)
+            # came back looking like a 1536-dim vector and broke any
+            # ``np.stack`` over a mixed-encoding pool. Detection is
+            # per-model: rows whose blob length is exactly twice the
+            # modal length (and divisible by 4) are float32-encoded;
+            # decode and re-encode through the canonical helper. Once
+            # every row matches the canonical length the modal-doubling
+            # check stops finding anything, so this is idempotent.
+            try:
+                _migrate_publication_embeddings_to_float16(conn)
+            except Exception:
+                logger.warning(
+                    "publication_embeddings dtype migration skipped",
+                    exc_info=True,
+                )
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS publication_embedding_fetch_status (

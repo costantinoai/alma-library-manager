@@ -5,24 +5,19 @@ from __future__ import annotations
 import logging
 import json
 import sqlite3
-import struct
 import time
 from datetime import datetime
 from typing import Callable
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.utils import normalize_doi
+from alma.core.vector_blob import encode_vector
 from alma.discovery import semantic_scholar
 
 logger = logging.getLogger(__name__)
 
 FETCH_SOURCE = EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 TERMINAL_FETCH_STATUSES = {"unmatched", "missing_vector", "lookup_error"}
-
-
-def _vector_blob(vector: list[float]) -> bytes:
-    values = [float(value) for value in vector]
-    return struct.pack(f"<{len(values)}f", *values)
 
 
 def _doi_from_s2(row: dict) -> str:
@@ -469,7 +464,7 @@ def run_s2_vector_backfill(
                         """,
                         (
                             paper_id,
-                            _vector_blob(vector),
+                            encode_vector(vector),
                             model,
                             EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
                             datetime.utcnow().isoformat(),

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_doi
+from alma.core.vector_blob import encode_vector
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,44 @@ def extract_specter2_vector(paper: dict) -> list[float] | None:
     except (TypeError, ValueError):
         return None
     return vector or None
+
+
+def upsert_specter2_embedding(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    candidate: dict,
+) -> bool:
+    """INSERT OR IGNORE the SPECTER2 vector for ``paper_id``.
+
+    Reads ``candidate["specter2_embedding"]`` (list-of-floats produced
+    by ``extract_specter2_vector``) and stores it via the canonical
+    float16 blob encoder so every writer path agrees with the reader's
+    decode dtype. Returns ``True`` on insert, ``False`` when the
+    candidate has no vector or a row already exists for this
+    (paper_id, model) pair.
+    """
+    vector = candidate.get("specter2_embedding")
+    if not isinstance(vector, list) or not vector:
+        return False
+    try:
+        blob = encode_vector(vector)
+    except (TypeError, ValueError):
+        return False
+    cursor = conn.execute(
+        """
+        INSERT OR IGNORE INTO publication_embeddings
+            (paper_id, embedding, model, source, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            paper_id,
+            blob,
+            S2_SPECTER2_MODEL,
+            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+            datetime.utcnow().isoformat(),
+        ),
+    )
+    return cursor.rowcount > 0
 
 
 def fetch_papers_batch(

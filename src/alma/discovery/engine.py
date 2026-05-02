@@ -25,15 +25,13 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import struct
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.discovery import openalex_related
-from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+from alma.discovery.semantic_scholar import upsert_specter2_embedding
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.discovery.scoring import (
@@ -49,30 +47,6 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULTS: Dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
-
-
-def _upsert_s2_specter2_embedding(conn: sqlite3.Connection, paper_id: str, rec: dict) -> None:
-    vector = rec.get("specter2_embedding")
-    if not isinstance(vector, list) or not vector:
-        return
-    try:
-        values = [float(value) for value in vector]
-        blob = struct.pack(f"<{len(values)}f", *values)
-    except (TypeError, ValueError, struct.error):
-        return
-    conn.execute(
-        """
-        INSERT OR IGNORE INTO publication_embeddings (paper_id, embedding, model, source, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            paper_id,
-            blob,
-            S2_SPECTER2_MODEL,
-            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-            datetime.utcnow().isoformat(),
-        ),
-    )
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -305,7 +279,7 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
                             paper_id,
                         ),
                     )
-                _upsert_s2_specter2_embedding(conn, paper_id, rec)
+                upsert_specter2_embedding(conn, paper_id, rec)
             except sqlite3.OperationalError:
                 pass
 
