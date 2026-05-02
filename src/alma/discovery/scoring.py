@@ -27,15 +27,41 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from alma.core.scoring_math import (
+    clamp as _shared_clamp,
+    consensus_bonus as _shared_consensus_bonus,
+    log_prevalence_weights,
+)
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
+from alma.application.signal_projection import (
+    ProjectedPaperSignals,
+    load_projected_paper_signals,
+)
 from alma.services.signal_lab import get_preference_affinity_signal
 
 logger = logging.getLogger(__name__)
 
 
+# Multi-source consensus bonus. Math + diminishing-returns shape live in
+# `alma.core.scoring_math.consensus_bonus`; we keep the calibration
+# constants here so the band ceiling and bonus fraction are visible at
+# the call site.
+_MAX_DISCOVERY_SCORE = 100.0
+_CONSENSUS_BONUS_FRACTION = 0.12
+
+
 def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
+    return _shared_clamp(value, lo, hi)
+
+
+def _consensus_bonus(consensus_count: int) -> float:
+    """Band-relative bonus for N>1 independent retrieval-source confirmations."""
+    return _shared_consensus_bonus(
+        consensus_count,
+        fraction=_CONSENSUS_BONUS_FRACTION,
+        max_score=_MAX_DISCOVERY_SCORE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +182,8 @@ def compute_preference_profile(
     - Past recommendation feedback (liked/dismissed)
 
     Returns a dict with topic_weights, author_affinity, journal_affinity,
-    feedback_topics, feedback_authors, feedback centroids.
+    feedback positive / negative semantic centroids, and the projected
+    paper-feedback graph from `signal_projection`.
     """
     if settings is None:
         settings = load_settings(conn)
@@ -290,26 +317,35 @@ def compute_preference_profile(
         logger.debug("followed-author background venue priors unavailable")
 
     # -- Normalize accumulated weights to [0, 1] --
-    # Without normalization, large libraries saturate all signals to 1.0
-    # because raw counts (e.g. topic appearing in 109/260 papers → weight 109)
-    # dwarf the [0,1] scale used by score_candidate.
-    topic_weights = _normalize_weights(topic_weights)
+    # Topic and venue weights use log-prevalence: log(1 + count) / max_log.
+    # Mirrors the author-rail prevalence pattern. Linear max-normalization
+    # was over-collapsing the long tail — a topic appearing in 5/109 of
+    # the user's papers got weight 0.046, which made secondary interests
+    # functionally invisible in scoring. Log-prevalence boosts that same
+    # topic to ~0.38, so candidates in long-tail areas now compete on
+    # merit instead of being drowned by the user's #1 topic.
+    # `author_affinity` keeps linear max normalization because it's an
+    # identity match (you wrote with this author or you didn't), not a
+    # prevalence question.
+    topic_weights = log_prevalence_weights(topic_weights)
     author_affinity = _normalize_weights(author_affinity)
-    journal_affinity = _normalize_weights(journal_affinity)
+    journal_affinity = log_prevalence_weights(journal_affinity)
 
-    # -- Feedback from past recommendations --
-    feedback_topics, feedback_authors, feedback_pos_centroid, feedback_neg_centroid = (
-        _incorporate_feedback(conn, settings)
-    )
+    # -- Feedback centroids from past recommendations --
+    # Structured per-author / per-topic / per-venue / per-keyword / per-tag
+    # signal flows through `load_projected_paper_signals` instead — the
+    # `_incorporate_feedback` helper now only produces the embedding
+    # centroids that semantic feedback similarity needs.
+    feedback_pos_centroid, feedback_neg_centroid = _incorporate_feedback(conn, settings)
+    projected_feedback = load_projected_paper_signals(conn)
 
     return {
         "topic_weights": topic_weights,
         "author_affinity": author_affinity,
         "journal_affinity": journal_affinity,
-        "feedback_topics": feedback_topics,
-        "feedback_authors": feedback_authors,
         "feedback_positive_centroid": feedback_pos_centroid,
         "feedback_negative_centroid": feedback_neg_centroid,
+        "projected_feedback": projected_feedback,
     }
 
 
@@ -327,79 +363,47 @@ def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
     return {k: v / max_abs for k, v in weights.items()}
 
 
+
+
 def _incorporate_feedback(
     conn: sqlite3.Connection, settings: Dict[str, str]
-) -> Tuple[Dict[str, float], Dict[str, float], Any, Any]:
-    """Read past recommendation feedback and convert into preference signals."""
-    decay_days_full = int(settings.get("limits.feedback_decay_days_full", "90"))
-    decay_days_half = int(settings.get("limits.feedback_decay_days_half", "180"))
+) -> Tuple[Any, Any]:
+    """Build positive / negative semantic centroids from past recommendation feedback.
 
-    feedback_topics: Dict[str, float] = {}
-    feedback_authors: Dict[str, float] = {}
+    Centroids are computed by averaging the cached active-model
+    embeddings of papers the user previously saved / liked vs.
+    dismissed. They feed `score_candidate`'s `feedback_adj` directly
+    via cosine similarity. Structured signal (authors / topics /
+    venues / keywords / tags) flows through `signal_projection`
+    instead — see `load_projected_paper_signals`. The legacy
+    title-word + comma-split-author fallback that used to live here
+    has been removed: it was a coarse last-resort path, the structured
+    projection layer covers the same ground far more accurately, and
+    keeping a fallback that reads `recommendations.title` produced
+    spurious matches on common stopword-like tokens.
+    """
     liked_paper_ids: List[str] = []
     dismissed_paper_ids: List[str] = []
 
     try:
         rows = conn.execute(
-            """SELECT r.paper_id, p.title, p.authors, r.user_action, r.action_at
+            """SELECT r.paper_id, r.user_action
                FROM recommendations r
-               LEFT JOIN papers p ON r.paper_id = p.id
                WHERE r.user_action IN ('save', 'like', 'dismiss', 'liked', 'dismissed')"""
         ).fetchall()
     except sqlite3.OperationalError:
         logger.warning("recommendations table not available for feedback incorporation")
-        return feedback_topics, feedback_authors, None, None
-
-    now = datetime.utcnow()
+        return None, None
 
     for row in rows:
-        title = (row["title"] or "").strip()
-        authors_str = (row["authors"] or "").strip()
-        user_action = row["user_action"]
-        action_at_str = row["action_at"] or ""
         paper_id = row["paper_id"] or ""
-
-        is_positive = user_action in {"save", "like", "liked"}
-        if paper_id:
-            if is_positive:
-                liked_paper_ids.append(paper_id)
-            else:
-                dismissed_paper_ids.append(paper_id)
-
-        # Compute time decay
-        decay = 1.0
-        try:
-            action_at = datetime.fromisoformat(action_at_str)
-            age_days = (now - action_at).days
-            if age_days > decay_days_half:
-                decay = 0.25
-            elif age_days > decay_days_full:
-                decay = 0.5
-        except (ValueError, TypeError):
-            pass
-
-        if user_action == "save":
-            topic_weight = 0.35 * decay
-            author_weight = 0.2 * decay
-        elif is_positive:
-            topic_weight = 0.5 * decay
-            author_weight = 0.3 * decay
+        if not paper_id:
+            continue
+        if row["user_action"] in {"save", "like", "liked"}:
+            liked_paper_ids.append(paper_id)
         else:
-            topic_weight = -0.3 * decay
-            author_weight = -0.2 * decay
+            dismissed_paper_ids.append(paper_id)
 
-        for word in title.lower().split():
-            word = word.strip(".,;:!?()[]{}\"'")
-            if len(word) >= 3:
-                feedback_topics[word] = feedback_topics.get(word, 0) + topic_weight
-
-        if authors_str:
-            for a in authors_str.split(","):
-                a = a.strip().lower()
-                if a:
-                    feedback_authors[a] = feedback_authors.get(a, 0) + author_weight
-
-    # Compute embedding centroids
     pos_centroid = None
     neg_centroid = None
     if liked_paper_ids:
@@ -413,7 +417,7 @@ def _incorporate_feedback(
         except Exception as exc:
             logger.warning("Failed to compute negative feedback centroid: %s", exc)
 
-    return feedback_topics, feedback_authors, pos_centroid, neg_centroid
+    return pos_centroid, neg_centroid
 
 
 # ---------------------------------------------------------------------------
@@ -660,9 +664,25 @@ def score_candidate(
     )
 
     # -- 8. Feedback adjustment --
+    # Two complementary inputs:
+    #   1. Semantic centroid similarity — cosine of the candidate's
+    #      embedding against the average liked / dismissed paper
+    #      centroid. Captures full-document meaning that structured
+    #      tags cannot.
+    #   2. Structured projected signal (`signal_projection`) — per
+    #      author / topic / venue / keyword / tag / semantic-neighbour /
+    #      citation-neighbour signals from `feedback_events`,
+    #      `papers.rating`, and `recommendations.user_action`.
+    # Both contribute additively, then clamp to [-1, 1].
     feedback_adj = 0.0
     fb_pos_centroid = preference_profile.get("feedback_positive_centroid")
     fb_neg_centroid = preference_profile.get("feedback_negative_centroid")
+    projected_adj = _projected_feedback_adjustment(
+        candidate,
+        paper_topics,
+        authors_str,
+        preference_profile.get("projected_feedback"),
+    )
 
     if fb_pos_centroid is not None and candidate_embedding is not None:
         try:
@@ -672,25 +692,10 @@ def score_candidate(
             semantic_fb = sim_module.calibrate_similarity_score(semantic_fb_raw, mode="semantic")
             feedback_adj = (semantic_fb * 2.0) - 1.0
         except Exception as exc:
-            logger.debug("Semantic feedback failed, falling back to word matching: %s", exc)
-            fb_pos_centroid = None  # fall through to word matching
+            logger.debug("Semantic feedback centroid failed: %s", exc)
+            feedback_adj = 0.0
 
-    if fb_pos_centroid is None:
-        fb_topics = preference_profile.get("feedback_topics", {})
-        fb_authors = preference_profile.get("feedback_authors", {})
-
-        title_text = (candidate.get("title") or "").lower()
-        for word in title_text.split():
-            word = word.strip(".,;:!?()[]{}\"'")
-            if len(word) >= 3 and word in fb_topics:
-                feedback_adj += fb_topics[word]
-
-        if authors_str:
-            for a in authors_str.split(","):
-                a = a.strip().lower()
-                if a and a in fb_authors:
-                    feedback_adj += fb_authors[a]
-
+    feedback_adj += projected_adj
     feedback_adj = max(-1.0, min(1.0, feedback_adj))
     feedback_adj_norm = (feedback_adj + 1.0) / 2.0  # Shift to [0, 1]
 
@@ -785,7 +790,22 @@ def score_candidate(
     }
 
     final = sum(values[k] * weights[k] for k in weights)
-    final_score = max(0.0, min(100.0, final * 100))
+    weighted_score = max(0.0, min(_MAX_DISCOVERY_SCORE, final * _MAX_DISCOVERY_SCORE))
+
+    # Multi-source consensus bonus. `consensus_buckets` is populated by
+    # `_merge_channel_candidates`; ad-hoc callers (tests, single-channel
+    # scoring) can omit it without penalty. The pre-bonus weighted score
+    # is preserved in the breakdown for provenance.
+    consensus_buckets = candidate.get("consensus_buckets") or []
+    if not isinstance(consensus_buckets, list):
+        consensus_buckets = list(consensus_buckets)
+    consensus_count = (
+        int(candidate.get("consensus_count") or len(consensus_buckets))
+        if consensus_buckets
+        else int(candidate.get("consensus_count") or 0)
+    )
+    consensus_bonus = _consensus_bonus(consensus_count)
+    final_score = min(_MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus)
 
     breakdown: Dict[str, Any] = {}
     for signal in weights:
@@ -797,6 +817,10 @@ def score_candidate(
             "weighted": round(v * w, 4),
         }
     breakdown["final_score"] = round(final_score, 4)
+    breakdown["weighted_score_pre_consensus"] = round(weighted_score, 4)
+    breakdown["consensus_buckets"] = list(consensus_buckets)
+    breakdown["consensus_count"] = consensus_count
+    breakdown["consensus_bonus"] = round(consensus_bonus, 4)
     breakdown["source_type"] = candidate.get("source_type", "")
     breakdown["source_key"] = candidate.get("source_key", "")
     breakdown["text_similarity_mode"] = text_similarity_mode
@@ -822,5 +846,86 @@ def score_candidate(
     breakdown["text_similarity_lexical_weight"] = round(float(lexical_blend_weight), 3)
     breakdown["candidate_embedding_ready"] = bool(semantic_details.get("candidate_embedding_ready"))
     breakdown["topic_match_mode"] = topic_match_mode
+    breakdown["projected_feedback_raw"] = round(float(projected_adj or 0.0), 4)
 
     return final_score, breakdown
+
+
+def _projected_feedback_adjustment(
+    candidate: dict,
+    paper_topics: List[dict],
+    authors_str: str,
+    projected: Any,
+) -> float:
+    """Signed adjustment from paper-feedback projections.
+
+    The adjustment is intentionally bounded before it enters
+    `feedback_adj`, so one dismissed paper can pull down related
+    authors/topics/venues without overwhelming direct similarity and
+    retrieval signals.
+    """
+
+    if not isinstance(projected, ProjectedPaperSignals):
+        return 0.0
+
+    adjustment = 0.0
+    paper_id = str(candidate.get("id") or "").strip().lower()
+    if paper_id:
+        adjustment += 0.65 * float(projected.paper.get(paper_id, 0.0))
+        adjustment += 0.55 * float(projected.semantic_neighbor.get(paper_id, 0.0))
+        adjustment += 0.45 * float(projected.citation_neighbor.get(paper_id, 0.0))
+
+    journal = str(candidate.get("journal") or "").strip().lower()
+    if journal:
+        adjustment += 0.35 * float(projected.venue.get(journal, 0.0))
+
+    for topic in paper_topics or []:
+        term = str(topic.get("term") or topic.get("name") or "").strip().lower()
+        if not term:
+            continue
+        try:
+            topic_strength = float(topic.get("score") or 0.5)
+        except (TypeError, ValueError):
+            topic_strength = 0.5
+        adjustment += 0.45 * _clamp(topic_strength, 0.1, 1.0) * float(projected.topic.get(term, 0.0))
+
+    for keyword in _candidate_keywords(candidate):
+        adjustment += 0.30 * float(projected.keyword.get(keyword, 0.0))
+        adjustment += 0.30 * float(projected.tag.get(keyword, 0.0))
+
+    for author_id in _candidate_author_ids(candidate):
+        adjustment += 0.40 * float(projected.author.get(author_id, 0.0))
+
+    for author_name in parse_author_names(authors_str):
+        adjustment += 0.30 * float(projected.author_name.get(author_name.strip().lower(), 0.0))
+
+    return _clamp(adjustment, -0.6, 0.6)
+
+
+def _candidate_author_ids(candidate: dict) -> list[str]:
+    out: list[str] = []
+    for key in ("author_openalex_ids", "openalex_author_ids", "author_ids"):
+        raw = candidate.get(key)
+        values: list[Any]
+        if isinstance(raw, list):
+            values = raw
+        elif isinstance(raw, str):
+            values = re.split(r"[,;]", raw)
+        else:
+            values = []
+        for value in values:
+            normalized = str(value or "").strip().lower()
+            if normalized:
+                out.append(normalized)
+    return out
+
+
+def _candidate_keywords(candidate: dict) -> list[str]:
+    raw = candidate.get("keywords") or candidate.get("tags") or []
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, str):
+        values = re.split(r"[,;]", raw)
+    else:
+        values = []
+    return [str(value or "").strip().lower() for value in values if str(value or "").strip()]

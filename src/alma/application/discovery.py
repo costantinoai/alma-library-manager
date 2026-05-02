@@ -29,6 +29,7 @@ from alma.openalex.client import (
     batch_fetch_referenced_works_for_openalex_ids,
     batch_fetch_works_by_openalex_ids,
 )
+from alma.core.scoring_math import clamp
 from alma.core.utils import normalize_doi
 from . import library as library_app
 from .feed import _commit_if_pending
@@ -43,7 +44,20 @@ def _safe_div(numerator: float, denominator: float) -> float:
 
 def _planner_clamp(value: float, lo: float, hi: float) -> float:
     """Bound `value` into [lo, hi]. Used by the deterministic branch planner."""
-    return max(lo, min(hi, value))
+    return clamp(value, lo, hi)
+
+
+def _calibration_block(cal) -> dict:
+    """Serialize an `OutcomeCalibration` into the retrieval_summary
+    diagnostic shape — multipliers, quality, raw counts, impressions.
+    Empty fields on a fresh DB: caller's contract."""
+    return {
+        "multipliers": dict(cal.multipliers),
+        "quality": {k: round(v, 4) for k, v in cal.quality.items()},
+        "positive_counts": {k: round(v, 2) for k, v in cal.positive_counts.items()},
+        "negative_counts": {k: round(v, 2) for k, v in cal.negative_counts.items()},
+        "impressions": dict(cal.impressions),
+    }
 
 
 def _planner_sanitize_queries(values: list[Any], max_items: int) -> list[str]:
@@ -1053,7 +1067,7 @@ def refresh_lens_recommendations(
         return None
 
     lens_name = lens.get("name") or lens_id[:12]
-    seeds = _load_seed_papers_for_lens(db, lens)
+    seeds = _attach_signal_scores_to_seeds(db, _load_seed_papers_for_lens(db, lens))
     timings_ms["seed_load"] = int(round((perf_counter() - phase_started) * 1000))
     if not seeds:
         return {
@@ -1436,6 +1450,26 @@ def refresh_lens_recommendations(
         )
     timings_ms["preference_profile_preload"] = int(round((perf_counter() - phase_started) * 1000))
 
+    # Outcome calibration: per-dimension multipliers on `source_relevance`
+    # based on observed save/dismiss outcomes from prior refreshes. Three
+    # calibration axes compose multiplicatively per candidate:
+    #   - source_api  (which API surfaced it: openalex / s2 / …)
+    #   - branch_mode (which retrieval lane: core / explore / safe)
+    #   - branch_id   (which specific branch within the lens)
+    # On a fresh DB all three return empty maps → multiplier 1.0 (no
+    # behavior change). After enough events accumulate, axes where
+    # dismisses dominate get pulled toward 0.5x, axes where saves
+    # dominate get pushed toward 1.5x. Composite is clamped to the
+    # same band so three positives can't push past 1.5x.
+    from alma.application.outcome_calibration import (
+        calibration_multiplier_for,
+        compose_calibration_multipliers,
+        compute_outcome_calibration,
+    )
+    calibration_source = compute_outcome_calibration(db, dimension="source_api")
+    calibration_branch_mode = compute_outcome_calibration(db, dimension="branch_mode")
+    calibration_branch_id = compute_outcome_calibration(db, dimension="branch_id")
+
     # Score each candidate with full 10-signal system
     phase_started = perf_counter()
     signal_names = (
@@ -1466,8 +1500,39 @@ def refresh_lens_recommendations(
     compressed_similarity_count = 0
     low_similarity_count = 0
     for key, candidate in merged.items():
-        # Channel score becomes source_relevance (normalized to 0-1)
-        candidate["source_relevance"] = min(1.0, candidate["score"] / 100.0)
+        # Channel score becomes source_relevance (normalized to 0-1).
+        # Then scale by the calibration multiplier for this candidate's
+        # source. The clamp at 1.0 stays — a 1.5x multiplier on a 0.8
+        # source_relevance lifts to 1.2 → clamped to 1.0; multipliers
+        # below 1.0 just shrink. The pre-calibration value is kept on
+        # the candidate so the breakdown can show the adjustment.
+        raw_source_relevance = min(1.0, candidate["score"] / 100.0)
+        source_mul = calibration_multiplier_for(
+            calibration_source,
+            candidate.get("source_api"),
+            candidate.get("source_type"),
+        )
+        branch_mode_mul = calibration_multiplier_for(
+            calibration_branch_mode,
+            candidate.get("branch_mode"),
+            None,
+        )
+        branch_id_mul = calibration_multiplier_for(
+            calibration_branch_id,
+            candidate.get("branch_id"),
+            None,
+        )
+        multiplier = compose_calibration_multipliers(
+            source_mul, branch_mode_mul, branch_id_mul
+        )
+        candidate["source_relevance"] = min(1.0, raw_source_relevance * multiplier)
+        candidate["source_calibration_multiplier"] = multiplier
+        candidate["source_calibration_components"] = {
+            "source_api": round(source_mul, 4),
+            "branch_mode": round(branch_mode_mul, 4),
+            "branch_id": round(branch_id_mul, 4),
+        }
+        candidate["source_relevance_pre_calibration"] = raw_source_relevance
         final_score, breakdown = score_candidate(
             candidate, profile,
             positive_centroid, negative_centroid,
@@ -1496,6 +1561,19 @@ def refresh_lens_recommendations(
         branch_explore = [t for t in (candidate.get("branch_explore_topics") or []) if t]
         if branch_explore:
             breakdown["branch_explore_topics"] = branch_explore
+        # Outcome calibration provenance — composed multiplier + the
+        # per-axis components + the pre-calibration value, so the
+        # breakdown explains *which* axes pushed the candidate up or
+        # down rather than collapsing it into one opaque number.
+        breakdown["source_calibration_multiplier"] = round(
+            float(candidate.get("source_calibration_multiplier") or 1.0), 4
+        )
+        breakdown["source_calibration_components"] = candidate.get(
+            "source_calibration_components"
+        ) or {"source_api": 1.0, "branch_mode": 1.0, "branch_id": 1.0}
+        breakdown["source_relevance_pre_calibration"] = round(
+            float(candidate.get("source_relevance_pre_calibration") or 0.0), 4
+        )
 
         # T4: promote the "truthful provenance" numbers into a clean
         # sub-dict the UI can consume without inspecting the full 60+
@@ -1673,6 +1751,18 @@ def refresh_lens_recommendations(
         "negative_profile": external_summary.get("negative_profile") or {},
         "budgets": external_summary.get("budgets") or {},
         "lane_runs": external_summary.get("lane_runs") or [],
+        # Outcome calibration snapshot — three axes (source_api,
+        # branch_mode, branch_id), each empty on a fresh DB. Per-axis
+        # block carries quality `0..1`, the resulting `[0.5, 1.5]`
+        # multiplier, and the raw counts so a developer can read this
+        # and tell whether an estimate is grounded in real traffic
+        # or still mostly Bayesian prior. Composed multiplicatively in
+        # log-space at scoring time, see `compose_calibration_multipliers`.
+        "calibration": {
+            "source_api": _calibration_block(calibration_source),
+            "branch_mode": _calibration_block(calibration_branch_mode),
+            "branch_id": _calibration_block(calibration_branch_id),
+        },
     }
     cold_start_summary = _build_topic_keyword_cold_start_summary(
         lens,
@@ -1763,8 +1853,10 @@ def refresh_lens_recommendations(
 
     rec_rows: list[tuple] = []
     inserted_paper_ids: list[str] = []
+    seen_paper_ids: set[str] = set()
     skipped_library = 0
     skipped_actioned = 0
+    skipped_duplicate_paper = 0
     for idx, candidate, paper_id in staged_candidates:
         paper_status = status_by_paper.get(paper_id, "tracked")
         if paper_status in ("library", "dismissed", "removed"):
@@ -1773,6 +1865,16 @@ def refresh_lens_recommendations(
         if paper_id in actioned_paper_ids:
             skipped_actioned += 1
             continue
+        # Two distinct candidate keys (e.g. one matched by DOI, another
+        # by title) can resolve to the same DB paper_id after the
+        # candidate→paper upsert. The recommendations table has a
+        # UNIQUE (lens_id, paper_id, suggestion_set_id) constraint, so
+        # a second insert for the same paper would crash the whole
+        # batch. Keep the higher-ranked candidate (lower idx) only.
+        if paper_id in seen_paper_ids:
+            skipped_duplicate_paper += 1
+            continue
+        seen_paper_ids.add(paper_id)
         provenance = _derive_recommendation_provenance(candidate, lens_id)
         rec_rows.append(
             (
@@ -1800,6 +1902,7 @@ def refresh_lens_recommendations(
         "staged": len(staged_candidates),
         "skipped_library_or_sunk": skipped_library,
         "skipped_previously_actioned": skipped_actioned,
+        "skipped_duplicate_paper": skipped_duplicate_paper,
         "insertable": len(rec_rows),
     }
     _log(
@@ -2286,7 +2389,7 @@ def _candidate_negative_preference_penalty(
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
+    return clamp(value, lo, hi)
 
 
 def _resolve_branch_temperature(
@@ -2311,6 +2414,23 @@ def _resolve_branch_temperature(
 
 
 def _seed_strength(seed: dict) -> float:
+    """Seed-paper strength used to rank / cluster lens seeds.
+
+    Prefers the composite `paper_signal.score_papers_batch` value
+    when callers have stamped it on the seed via
+    `_attach_signal_scores_to_seeds` — that read-once batch covers
+    rating, topic alignment, embedding similarity, author alignment,
+    signal-lab swipes, and recency through one shared primitive.
+    Falls back to the legacy rating + citation + recency heuristic
+    when the stamp is missing (ad-hoc callers, tests, or pipelines
+    that have not yet been threaded through the batch).
+    """
+    stamped = seed.get("_signal_score")
+    if stamped is not None:
+        try:
+            return float(stamped)
+        except (TypeError, ValueError):
+            pass
     rating_raw = int(seed.get("rating") or 0)
     rating_score = 0.6 if rating_raw <= 0 else _clamp(rating_raw / 5.0, 0.0, 1.0)
     citations = float(seed.get("cited_by_count") or 0.0)
@@ -2319,6 +2439,35 @@ def _seed_strength(seed: dict) -> float:
     current_year = datetime.utcnow().year
     recency_score = _clamp((year_raw - (current_year - 12)) / 12.0, 0.0, 1.0)
     return (rating_score * 0.6) + (citation_score * 0.25) + (recency_score * 0.15)
+
+
+def _attach_signal_scores_to_seeds(
+    db: sqlite3.Connection, seeds: list[dict]
+) -> list[dict]:
+    """Stamp `_signal_score` on each seed via `paper_signal.score_papers_batch`.
+
+    One batched call per refresh; the per-seed sort key inside
+    `_seed_strength` then becomes a dict lookup. Seeds whose IDs
+    can't be scored (missing from papers, etc.) keep their existing
+    heuristic-only behavior.
+    """
+    if not seeds:
+        return seeds
+    paper_ids = [str(seed.get("id") or "").strip() for seed in seeds]
+    paper_ids = [pid for pid in paper_ids if pid]
+    if not paper_ids:
+        return seeds
+    try:
+        from alma.application.paper_signal import score_papers_batch
+        scores = score_papers_batch(db, paper_ids)
+    except Exception as exc:
+        logger.debug("score_papers_batch unavailable for seed strength: %s", exc)
+        return seeds
+    for seed in seeds:
+        pid = str(seed.get("id") or "").strip()
+        if pid in scores:
+            seed["_signal_score"] = scores[pid]
+    return seeds
 
 
 def _fetch_seed_embedding_vectors(
@@ -2630,7 +2779,7 @@ def preview_lens_branches(
     lens = get_lens(db, lens_id)
     if lens is None:
         return None
-    seeds = _load_seed_papers_for_lens(db, lens)
+    seeds = _attach_signal_scores_to_seeds(db, _load_seed_papers_for_lens(db, lens))
     settings = read_settings(db)
     controls = _resolve_lens_branch_controls(lens)
     effective_temp = _resolve_branch_temperature(
@@ -3865,6 +4014,7 @@ def _merge_channel_candidates(
         return False
 
     merged: dict[str, dict] = {}
+    bucket_sets: dict[str, set[str]] = {}
     for channel_name, items in channels.items():
         channel_weight = float(channel_weights.get(channel_name, 0.0) or 0.0)
         if channel_weight <= 0:
@@ -3897,6 +4047,7 @@ def _merge_channel_candidates(
                     "score_breakdown": {},
                     "_primary_weighted": 0.0,
                 }
+                bucket_sets[key] = set()
                 for field in provenance_fields:
                     if field in item:
                         merged[key][field] = item.get(field)
@@ -3914,14 +4065,30 @@ def _merge_channel_candidates(
                 "weight": channel_weight,
                 "weighted": weighted,
             }
+            # Consensus bucket: each non-external channel contributes one
+            # bucket per channel name; the external channel contributes one
+            # bucket per distinct `source_api` (openalex / semantic_scholar /
+            # …) so the same paper surfaced by both OpenAlex *and* S2 inside
+            # the external lane counts as 2 independent confirmations rather
+            # than 1. The post-score consensus bonus reads `consensus_buckets`
+            # and rewards multi-source agreement on a band-relative
+            # diminishing-returns curve (see scoring._consensus_bonus).
+            if channel_name == "external":
+                source_api = str(item.get("source_api") or "").strip().lower()
+                bucket_sets[key].add(f"external:{source_api or 'unknown'}")
+            else:
+                bucket_sets[key].add(f"channel:{channel_name}")
             if weighted >= float(merged[key].get("_primary_weighted", 0.0) or 0.0):
                 merged[key]["_primary_weighted"] = weighted
                 for field in provenance_fields:
                     if field in item:
                         merged[key][field] = item.get(field)
-    for value in merged.values():
+    for key, value in merged.items():
         value["score"] = round(value["score"] * 100.0, 4)
         value.pop("_primary_weighted", None)
+        buckets = sorted(bucket_sets.get(key) or set())
+        value["consensus_buckets"] = buckets
+        value["consensus_count"] = len(buckets)
     return merged
 
 
