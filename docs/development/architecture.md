@@ -78,6 +78,41 @@ flowchart TD
 * **Domain modules** — `discovery/`, `library/`, `ai/`, `openalex/`
   encapsulate their own state, helpers, and external-API contracts.
 
+## Shared Ranking Signals
+
+Paper Discovery and author suggestions share a feedback projection
+layer in `alma.application.signal_projection`.
+
+That module reads canonical `feedback_events` paper actions from both
+`entity_type='publication'` and older `entity_type='paper'` rows,
+normalizes each event into a signed value, applies time decay, and
+projects it onto related ranking dimensions:
+
+* paper id
+* author OpenAlex ids and author display names
+* topics
+* venues
+* extracted keywords
+* user tags
+* close semantic neighbours from active-model `publication_embeddings`
+* local incoming / outgoing citation neighbours from `publication_references`
+
+Consumers must treat these maps as ranking input only. They must not
+change paper lifecycle state, follow/unfollow authors, or write from a
+`GET` endpoint. Current consumers are:
+
+| Consumer | Use |
+|---|---|
+| `discovery.scoring.compute_preference_profile` / `score_candidate` | Adds `projected_feedback_raw` into the existing `feedback_adj` signal. |
+| `application.authors.list_author_suggestions` | Applies capped `paper_signal_adjustment` before dismissed-author cluster penalties. |
+| `application.paper_signal.score_papers_batch` | Reads the same canonical paper-action payloads for network author bucket seed scoring. |
+
+The projection layer also reads `followed_authors` as positive author
+signals and `missing_author_feedback` as negative author signals, then
+spills those author profiles weakly into paper-ranking topics, venues,
+keywords, and tags. This keeps author follow/reject behavior aligned
+with Discovery without making author actions mutate paper state.
+
 ## Single intent per action
 
 Every user action maps to exactly one canonical use-case. Examples:

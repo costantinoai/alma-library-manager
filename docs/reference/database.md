@@ -66,7 +66,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `lens_signals` | Per-lens positive / negative feedback counters. |
 | `recommendations` | Materialised recommendations from the last lens refresh. |
 | `suggestion_sets` | Each refresh produces a suggestion set; rows track which set produced which recommendation. |
-| `feedback_events` | The signal store. Every Save / Like / Dismiss / Signal-Lab event lands here with `context_json` (lens id, source bucket, surface, etc.). |
+| `feedback_events` | The append-only signal store. Every Save / Like / Dismiss / Signal-Lab event lands here with `context_json` (lens id, source bucket, surface, etc.). Paper actions are commonly stored as `event_type='paper_action'`, `entity_type='publication'`, `entity_id=<paper_id>`, with JSON `value` containing `action`, `rating`, and `signal_value`. Ranking code also tolerates older `entity_type='paper'` rows and direct event names like `like` / `dismiss`. |
 | `preference_profiles` | Materialised preference centroids derived from `feedback_events`. |
 | `scoring_cache` | Cached per-paper score breakdowns per lens. |
 | `similarity_cache` | Cached cosine-similarity lookups. |

@@ -69,9 +69,18 @@ Range: 0…1 (clamped).
 ### `journal_affinity`
 
 Does the candidate's venue (journal / conference) appear often in
-your Library? Computed as $\log(1 + n) / \log(1 + N)$ where
-$n$ is the count of saved papers in this venue and $N$ is the
-count in your most-saved venue.
+your Library? The user's preference profile stores per-venue
+prevalence weights via $\log(1 + n) / \log(1 + N)$ where $n$ is
+the count of saved papers in this venue and $N$ is the count in
+your most-saved venue. The candidate's venue is matched against
+this dict; the resulting weight is the signal value.
+
+This is a log-prevalence scheme — sharing the user's #1 venue gets
+weight 1.0, and a venue that only appears in 5/50 of the user's
+papers gets ~0.42 (versus ~0.10 under naive linear normalization).
+Long-tail venues stay visible in scoring instead of being drowned
+by the dominant outlet. Same shape as `topic_score` and the
+author-rail prevalence pattern.
 
 Range: 0…1.
 
@@ -105,8 +114,37 @@ Range: 0…1.
 ### `feedback_adj`
 
 Adjusts the score based on prior feedback on the candidate's
-attributes (topics, authors, venue). Each prior feedback event
-contributes:
+attributes (paper, topics, authors, venue, keywords, and tags). ALMa
+reads three canonical preference sources through
+`alma.application.signal_projection` and folds each into the same
+per-paper signal map before fanning out:
+
+| Source | Weight | What it captures |
+|---|---|---|
+| `feedback_events` (`paper_action` + legacy single-action types) | 1.0 | Canonical write path (save / like / love / dismiss / remove). |
+| `papers.rating` | 0.6 | Library star ratings. No time decay (a 5★ paper is still a 5★ paper). |
+| `recommendations.user_action` | 0.5 | Legacy per-recommendation actions, age-decayed like `feedback_events`. |
+
+Each signed paper signal then projects to the connected graph:
+
+| Target | Propagation rule |
+|---|---|
+| Paper | Direct signed signal |
+| Authors / co-authors | Position-weighted, damped by `1 / sqrt(author_count)` |
+| Topics | Topic score times the signed paper signal |
+| Venue | Weak, capped venue prior |
+| Keywords / tags | Tags stronger than extracted keywords |
+| Semantic neighbours | Close active-model embedding neighbours only |
+| Citation neighbours | Local incoming and outgoing citation edges |
+| Author follow / reject | Direct author signal plus weak profile spillover to topics, venues, keywords, tags, **direct coauthors**, and **same-institution colleagues** |
+
+The last row spreads followed-author signal slightly wider than the
+direct author: the followed author's frequent collaborators inherit a
+weak positive prior, and other authors at the same institution
+inherit a weaker one (capped to ≤400-author affiliations to skip
+mega-universities). Symmetric for `missing_author_feedback` rejects.
+
+Each prior feedback event contributes:
 
 * **Positive** (rating ≥ 4) → small boost.
 * **Negative** (rating ≤ 2) → small penalty.
@@ -120,7 +158,9 @@ Decayed over time using two windows:
 
 Beyond `_half` days, weight tapers to 0.
 
-Range: -1…+1.
+Range before normalization: -1…+1. The weighted scorer stores it as a
+0…1 value in the final score, and the explanation payload includes
+`projected_feedback_raw` so the signed contribution remains visible.
 
 ### `preference_affinity`
 
@@ -143,6 +183,109 @@ the UI exposes:
 * **`usefulness_boost`** — a small explicit per-source bonus that
   lets you say "I trust S2 recs more than topic search" without
   changing the channel weights.
+
+## Multi-source consensus bonus
+
+After the 10-signal weighted score is computed, candidates that were
+independently surfaced by more than one retrieval source get a
+band-relative bonus on top. This mirrors the author-suggestion
+consensus pattern and rewards multi-source agreement as a confidence
+signal — a paper found by SPECTER2 vector search *and* OpenAlex
+related-works *and* S2 recommendations is much stronger evidence than
+any one of those alone.
+
+Buckets are assembled in `_merge_channel_candidates`:
+
+* Each non-external retrieval channel (`lexical`, `vector`, `graph`)
+  contributes one bucket per channel name, e.g. `channel:lexical`.
+* The `external` channel contributes one bucket per **distinct
+  `source_api`**: a paper surfaced by both the OpenAlex lane *and*
+  the Semantic Scholar lane inside `external` counts as 2
+  confirmations, not 1. Buckets look like `external:openalex`,
+  `external:semantic_scholar`.
+
+The bonus formula matches the author rail:
+
+$$
+\text{bonus}(c) = 0.12 \times 100 \times \sqrt{N - 1}
+$$
+
+where $N$ is `consensus_count = len(consensus_buckets)` (only applied
+when $N > 1$). With the current calibration:
+
+| `consensus_count` | Bonus |
+|---:|---:|
+| 1 | 0 |
+| 2 | +12 |
+| 3 | ≈ +17 |
+| 4 | ≈ +21 |
+| 5 | +24 |
+
+The bonus is added to the weighted score and clamped at 100, so a
+saturated single-channel signal can't be doubled, but a moderately
+scored candidate confirmed by 3+ independent sources reliably climbs
+the rail. Pre-bonus value is preserved as
+`weighted_score_pre_consensus` in the breakdown for provenance.
+
+## Outcome calibration
+
+After consensus, every candidate's `source_relevance` is multiplied
+by an outcome-derived calibration multiplier. The multiplier is the
+composition of three independent axes:
+
+| Axis | Grouping key | Source |
+|---|---|---|
+| `source_api` | The API that surfaced the candidate (`openalex` / `semantic_scholar` / …) | `recommendations.source_api` × `feedback_events` |
+| `branch_mode` | The retrieval lane (`core` / `explore` / `safe`) | `recommendations.branch_mode` |
+| `branch_id` | The specific branch within the lens | `recommendations.branch_id` |
+
+Each axis runs the same Beta-Bernoulli posterior over a 180-day
+window with a 60-day half-life decay:
+
+$$
+\text{quality}(k) = \frac{\text{positives}(k) + \alpha}{\text{positives}(k) + \text{negatives}(k) + \alpha + \beta}
+$$
+
+with $\alpha = \beta = 2$. A fresh DB returns 0.5 → multiplier 1.0
+(no behavior change). A source where saves dominate climbs toward
+1.5×; one where dismisses dominate falls toward 0.5×. The three
+axes compose multiplicatively in log space, then the composite is
+clamped back to `[0.5, 1.5]` so three independent positive axes
+can't push past the per-axis ceiling.
+
+Per-candidate breakdown carries the composite as
+`source_calibration_multiplier` and the per-axis components as
+`source_calibration_components.{source_api, branch_mode, branch_id}`.
+The full snapshot — quality, multipliers, raw counts, impressions —
+also lives on `retrieval_summary.calibration.{source_api, branch_mode,
+branch_id}`.
+
+### Author rail bucket calibration
+
+The Suggested Authors rail uses the same machinery on a different
+grouping. Each rail card carries a `suggestion_type` (the bucket:
+`library_core` / `cited_by_high_signal` / `adjacent` /
+`semantic_similar` / `openalex_related` / `s2_related`). Two log
+tables capture per-bucket outcomes:
+
+- `author_suggestion_follow_log` — one row per rail-originated
+  follow, with the bucket label.
+- `missing_author_feedback` — one row per reject (`signal_value < 0`),
+  with the bucket label since Phase 4.
+
+`compute_author_bucket_calibration(db)` aggregates both into the
+same posterior shape, producing `{bucket: multiplier}`. Inside
+`list_author_suggestions` the multiplier is folded into the existing
+per-bucket weight pass:
+
+$$
+\text{score}(c) = \min\bigl(100, \text{raw}(c) \cdot w_{\text{bucket}} \cdot m_{\text{bucket}}\bigr)
+$$
+
+The card response carries `bucket_calibration_multiplier` for
+provenance. As with paper Discovery, a fresh DB returns no
+multipliers → 1.0 → no behavior change until follow / reject events
+accumulate.
 
 ## Defaults
 
@@ -202,15 +345,18 @@ implemented in `alma.application.authors.list_author_suggestions`)
 runs a separate scoring pipeline from Discovery. Same band,
 different formulas.
 
-The pipeline has four phases:
+The pipeline has five phases:
 
 1. **Six bucket scans** populate a candidate list, each emitting
    a per-bucket raw score in 0…`_MAX_SUGGESTION_SCORE` (= 100).
 2. **Multi-source consensus pass** boosts candidates that
    appeared in more than one bucket.
-3. **Dismissal cluster pass** subtracts a penalty from candidates
+3. **Paper-feedback projection pass** bumps or penalizes candidates
+   whose author, topics, venues, keywords, or tags are connected to
+   liked/dismissed papers.
+4. **Dismissal cluster pass** subtracts a penalty from candidates
    whose attributes overlap recently dismissed authors'.
-4. **Per-bucket weight + sort** applies the
+5. **Per-bucket weight + sort** applies the
    `discovery_settings.author_suggestion_weights.*` multipliers
    and orders the rail.
 

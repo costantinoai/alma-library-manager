@@ -69,14 +69,28 @@ The hybrid scorer combines (default weights configurable):
   your Library?
 * **Recency boost** — newer papers get a small boost.
 * **Citation quality** — log-scaled citation count.
-* **Feedback adjustment** — penalise candidates whose authors /
-  topics / venues you've previously dismissed.
+* **Feedback adjustment** — boosts or penalises candidates connected
+  to papers you've liked, loved, disliked, dismissed, or removed. The
+  signal propagates through the paper itself, its authors and
+  co-authors, topics, venue, keywords, and tags.
 * **Preference affinity** — distance from your `preference_profiles`
   centroid.
 * **Usefulness boost** — explicit per-source bonus.
 
+After the 10 weighted signals are summed, a **multi-source consensus
+bonus** rewards candidates that were independently surfaced by more
+than one retrieval source. Each non-external channel (`lexical`,
+`vector`, `graph`) counts as one source; the `external` channel
+counts each distinct source API (`openalex`, `semantic_scholar`, …)
+separately. With $N$ confirming sources, the bonus is
+$0.12 \times 100 \times \sqrt{N - 1}$ — a diminishing-returns curve
+that gives +12 / +17 / +21 / +24 for 2 / 3 / 4 / 5 sources agreeing,
+clamped at 100. See `docs/reference/scoring.md#multi-source-consensus-bonus`.
+
 Each candidate's `score_breakdown` is exposed in the API so the UI
-can show the signals that pushed a recommendation up or down.
+can show the signals that pushed a recommendation up or down. The
+breakdown also carries `consensus_buckets`, `consensus_count`, and
+`consensus_bonus` so multi-source agreement is auditable.
 
 ### Branches
 
@@ -100,6 +114,15 @@ controls feed back into the next lens refresh's ranking.
 | **Dismiss** | Hides the card from this lens **and** writes a negative signal. The recommender will not re-suggest it. |
 | **Pivot** | Treats the dismissed paper as a seed for a new branch (find more like this, but I haven't saved it). |
 | **Open details** | Opens the shared Paper detail panel — abstract, topics, prior / derivative works, full provenance. |
+
+Paper feedback is graph-shaped, not just paper-shaped. A 5★ paper
+raises nearby authors, topics, venues, keywords, tags, close semantic
+neighbours, and local citation neighbours; a dismissed or disliked
+paper lowers those connected signals. Following an author adds a
+positive author signal to Discovery, and rejecting an author adds a
+negative ranking signal through that author's profile. This changes
+ranking only. It does not delete papers, unfollow authors, or mutate
+paper lifecycle state.
 
 The Paper detail panel shows **Prior works** (papers this one cites)
 and **Derivative works** (papers that cite this one). For papers

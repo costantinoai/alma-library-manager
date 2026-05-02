@@ -102,7 +102,13 @@ fed by your actions, so a few small habits make a big difference:
    - **1★** → 0.2× (still in the pool but barely contributes).
    First / last authors on a rated paper get an additional 1.5×
    on top — they're the lead and senior author signals.
-2. **Dismiss authors you don't want.** Rejecting a suggestion
+2. **Give feedback on papers.** Paper feedback now also influences
+   author suggestions. Liking or loving a paper gives a capped bump
+   to its authors, nearby co-authors, topics, venues, keywords, and
+   tags. Dismissing, disliking, removing, or low-rating a paper gives
+   a capped negative signal to the same connected attributes. This is
+   ranking-only; it does not delete papers or unfollow anyone.
+3. **Dismiss authors you don't want.** Rejecting a suggestion
    does two things:
    - Suppresses that exact author for ~250 days.
    - Adds their profile (topics, venues, co-authors, institution)
@@ -114,12 +120,12 @@ fed by your actions, so a few small habits make a big difference:
    as your interests shift. Co-authorship overlap counts as a very
    light penalty (≈0.8/paper) — you stay free to follow people the
    dismissed author wrote with.
-3. **Refresh network buckets.** The `openalex_related` and
+4. **Refresh network buckets.** The `openalex_related` and
    `s2_related` buckets read from a cache that's refreshed
    asynchronously. Use **Authors → ⋯ → Refresh network buckets**
    when you want fresh external candidates beyond what your
    Library co-author / citation graph already shows.
-4. **Tune bucket weights** in
+5. **Tune bucket weights** in
    **Settings → Discovery → Author suggestion weights** if you
    want to tilt the rail toward discovery (boost
    `openalex_related` / `s2_related`) or toward your existing
@@ -143,6 +149,12 @@ stop bothering you.
 Removing an author **stops the monitor** but does not delete their
 papers from your Library. Saved papers stay saved; new works just
 stop flowing into your Feed.
+
+Follow and remove actions also feed Discovery ranking. Following an
+author gives their author profile a positive signal; removing or
+dismissing an author gives their profile a negative signal. Both are
+ranking-only effects: they help paper recommendations move up or down
+without changing any paper's Library or reading state.
 
 ## API
 

@@ -97,7 +97,7 @@ calls.
 ### How a candidate's score is built
 
 Every candidate gets a 0–100 score that drives the rail order.
-Four things go into it.
+Five things go into it.
 
 **1. Per-bucket evidence.** Each bucket computes its own raw
 score:
@@ -143,7 +143,15 @@ relevant" — strong confidence signal that a single bucket can't
 fake. The buckets that confirmed appear in the suggestion's
 `consensus_buckets` field.
 
-**4. Dismissal cluster penalty.** When you reject a suggestion
+**4. Paper-feedback projection.** Your paper actions also move
+author suggestions. A liked or loved paper boosts its authors,
+co-authors, topics, venues, keywords, and tags. A disliked,
+dismissed, or low-rated paper lowers those same connected signals.
+The effect is capped and explainable as `paper_signal_adjustment`,
+so one paper can nudge a candidate up or down without overwhelming
+strong direct evidence from the buckets above.
+
+**5. Dismissal cluster penalty.** When you reject a suggestion
 (or remove a followed author), ALMa records a negative signal on
 that person — but it doesn't stop there. It also remembers the
 **cluster of attributes** that author belonged to and penalizes
@@ -173,8 +181,9 @@ field showing how many points were subtracted.
 | **Save a paper to Library** | Adds the paper's co-authors to the `library_core` bucket. |
 | **Rate a Library paper 5★** | Triples the weight of every co-author on that paper; doubly amplifies first / last authors. |
 | **Rate a Library paper 1-2★** | Shrinks the weight of those co-authors (0.2× / 0.5×). The paper still feeds the model — it just barely contributes. |
-| **Follow an author** | Removes them from suggestions; their followed status seeds the network buckets on next refresh. |
-| **Dismiss / remove a suggested author** | (a) Suppresses that author for 250+ days. (b) Adds their topic / venue / coauthor / institution profile to the dismissal cluster — future similar candidates lose up to 30 points. |
+| **Like / Love / Dismiss / Dislike a paper** | Projects a signed ranking signal to the paper's authors, topics, venue, keywords, and tags. This can bump related author suggestions up or down. |
+| **Follow an author** | Removes them from suggestions; their followed status seeds the network buckets on next refresh and adds positive author-profile signal to Discovery ranking. |
+| **Dismiss / remove a suggested author** | (a) Suppresses that author for 250+ days. (b) Adds their topic / venue / coauthor / institution profile to the dismissal cluster — future similar candidates lose up to 30 points. (c) Adds negative author-profile signal to Discovery ranking. |
 | **Refresh network buckets** | Fetches fresh `openalex_related` and `s2_related` candidates from OpenAlex / S2 and writes them to the cache. The next rail visit reads them. |
 
 Each bucket has its own weight in the final merge (configurable

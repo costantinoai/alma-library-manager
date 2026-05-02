@@ -16,7 +16,9 @@ give the recommender clearer evidence.
    positive weight than a neutral save.
 3. Dismiss obviously wrong recommendations so the lens stops recycling
    them.
-4. Refresh after making changes. Weights and actions affect the next
+4. Use **Dislike** when the paper should stay visible in normal flows
+   but should teach the ranker "less like this".
+5. Refresh after making changes. Weights and actions affect the next
    refresh, not already-materialized rows.
 
 ## Weights
@@ -35,6 +37,23 @@ Common adjustments:
 
 The weights are stored in ALMa's `discovery_settings` store and apply on
 the next lens refresh.
+
+## What Feedback Teaches
+
+Paper feedback is projected onto the surrounding scholarly graph:
+
+| Signal you give | Ranking effect |
+|---|---|
+| Like / Love / high rating | Raises the paper, its main authors and co-authors, dominant topics, venue, keywords, tags, close semantic neighbours, and local citation neighbours. |
+| Dislike / Dismiss / low rating | Lowers the same connected signals without deleting papers or unfollowing authors. |
+| Follow author | Adds a positive author signal to Discovery and weakly boosts that author's profile. |
+| Dismiss / remove author | Adds a negative author signal to Discovery and weakly lowers that author's profile. |
+| Repeated feedback in one area | Accumulates into stronger topic / venue / author priors, decayed over time. |
+
+Author suggestions listen to the same paper-feedback projection. If
+you love papers by an author, that author and nearby candidates get a
+reasonable bump. If you dismiss papers from a topic or venue, authors
+connected to that pattern lose rank unless other evidence outweighs it.
 
 ## Retrieval strategies
 
