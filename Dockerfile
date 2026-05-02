@@ -166,6 +166,18 @@ RUN groupadd --gid 10001 appgroup && \
 # requiring a host bind-mount.
 ENV ALMA_SETTINGS_PATH=/app/data/settings.json
 
+# HuggingFace cache. Local SPECTER2 (transformers + adapters) downloads
+# config + tokenizer + model weights from HF on first use. The default
+# `~/.cache/huggingface` lives under root's home (`/root/.cache`) which
+# is part of the read-only image layer — `transformers.AutoConfig.
+# from_pretrained` blows up with "Read-only file system" before it can
+# parse the config, surfacing as a misleading "Unrecognized model in
+# allenai/specter2_base" error. Routing the cache to the writable data
+# volume lets the model download once and persist across restarts.
+ENV HF_HOME=/app/data/.hf-cache \
+    TRANSFORMERS_CACHE=/app/data/.hf-cache \
+    HF_HUB_CACHE=/app/data/.hf-cache
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -fsS http://localhost:8000/api/v1/health || exit 1
 

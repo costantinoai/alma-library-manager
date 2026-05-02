@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alma"
-version = "0.12.0"
+version = "0.12.1"
 description = "ALMa — Another Library Manager: personal academic library management with AI-powered discovery"
 authors = [{name = "Andrea Ivan Costantino"}]
 readme = "README.md"
