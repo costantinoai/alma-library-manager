@@ -110,8 +110,48 @@ change paper lifecycle state, follow/unfollow authors, or write from a
 The projection layer also reads `followed_authors` as positive author
 signals and `missing_author_feedback` as negative author signals, then
 spills those author profiles weakly into paper-ranking topics, venues,
-keywords, and tags. This keeps author follow/reject behavior aligned
-with Discovery without making author actions mutate paper state.
+keywords, and tags — plus the followed/rejected author's direct
+coauthors and same-institution colleagues (the latter capped to
+≤400-author institutions). It also folds `papers.rating` (Library
+star ratings, no time decay) and `recommendations.user_action`
+(legacy per-rec history, age-decayed) into `paper_events` before
+projection runs, so every per-paper preference statement reaches the
+same downstream graph.
+
+### Shared scoring primitives
+
+`alma.core.scoring_math` consolidates four primitives previously
+duplicated across `discovery.scoring`, `application.signal_projection`,
+`application.authors`, `application.discovery`, `application.feed`,
+`application.gap_radar`, `application.paper_signal`, and
+`discovery.source_search`:
+
+* `clamp(value, lo, hi)` — bounded projection
+* `age_decay(age_days, half_life_days)` — exponential half-life decay
+* `consensus_bonus(n, fraction, max_score)` — diminishing-returns
+  multi-source bonus, used by paper Discovery's per-candidate
+  consensus and the author rail's per-bucket consensus alike
+* `log_prevalence_weights(counts)` — sign-preserving log-prevalence
+  normalization, used by paper Discovery's topic / venue weighting
+  and the author rail's library prevalence
+
+Calibration constants live at the call site; the math lives once.
+A change to `consensus_bonus`'s curve takes effect on both Discovery
+and the author rail without extra plumbing.
+
+### Outcome calibration
+
+`alma.application.outcome_calibration` smooths observed save / dismiss
+outcomes into per-source quality multipliers via a Beta-Bernoulli
+posterior (α = β = 2) over a 180-day window with a 60-day half-life
+decay. Paper Discovery uses three independent axes — `source_api`,
+`branch_mode`, `branch_id` — composed multiplicatively in log space
+and clamped to `[0.5, 1.5]`, applied to `source_relevance` per
+candidate. The author rail uses a fourth axis — per-bucket calibration
+keyed on `suggestion_type`, fed by `author_suggestion_follow_log` and
+the `suggestion_bucket` column on `missing_author_feedback`. Empty
+maps on a fresh DB return 1.0 multipliers — no behavior change until
+real outcome data accumulates.
 
 ## Single intent per action
 

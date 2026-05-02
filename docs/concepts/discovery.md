@@ -92,6 +92,17 @@ can show the signals that pushed a recommendation up or down. The
 breakdown also carries `consensus_buckets`, `consensus_count`, and
 `consensus_bonus` so multi-source agreement is auditable.
 
+After consensus, a final **outcome-calibration multiplier** scales
+`source_relevance` per candidate. Three independent axes — the
+source API that surfaced the candidate, the retrieval lane mode,
+and the specific branch — each carry a Bayesian-smoothed quality
+estimate in `[0.5, 1.5]` based on observed save / dismiss rates.
+The three are composed multiplicatively in log space and clamped
+back to the same band. Empty on a fresh DB → 1.0 → no behavior
+change. Surfaced in the breakdown as `source_calibration_multiplier`
+and `source_calibration_components`. See `docs/reference/scoring.md
+#outcome-calibration`.
+
 ### Branches
 
 Recommendations are clustered into **Branches** — small themed

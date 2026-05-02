@@ -174,6 +174,22 @@ and your taste can shift.
 When this fires, the suggestion carries a `dismissal_penalty`
 field showing how many points were subtracted.
 
+**6. Bucket outcome calibration.** ALMa observes which buckets
+actually produce authors you keep. Every Follow on a rail card
+is logged with the bucket label that surfaced the author; every
+Dismiss is logged with the same attribution. Over time, the
+follow / dismiss rate per bucket smooths into a multiplier in
+`[0.5×, 1.5×]` (Beta-Bernoulli posterior, `α = β = 2`,
+180-day window with 60-day half-life decay). The multiplier
+applies on top of the static bucket weights from settings, so
+buckets that consistently produce keepers earn more airtime.
+
+The card surfaces this as `bucket_calibration_multiplier` and
+renders an **↑ bucket 1.18×** / **↓ bucket 0.74×** chip when the
+multiplier deviates ≥0.05 from 1.0. On a fresh DB nothing changes
+— the priors keep every bucket at 1.0× until enough rail-side
+events accumulate.
+
 ### How your actions shape the rail
 
 | Action | Effect on suggestions |

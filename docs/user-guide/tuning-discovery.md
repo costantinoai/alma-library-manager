@@ -55,6 +55,30 @@ you love papers by an author, that author and nearby candidates get a
 reasonable bump. If you dismiss papers from a topic or venue, authors
 connected to that pattern lose rank unless other evidence outweighs it.
 
+## Multi-source consensus
+
+A candidate found by more than one retrieval lane gets a small,
+diminishing-returns score bonus on top of its weighted-signal score.
+The "Why this surfaced" panel surfaces this as a **Suggested by N
+sources** chip when at least 2 lanes independently agreed. The chip
+is informational — the bonus is already in the score. It exists so
+you know *why* a card outranked another that looked similar in the
+ten signals.
+
+## Outcome calibration
+
+ALMa quietly tracks whether each retrieval source's recommendations
+end up Saved versus Dismissed and reweights the source on subsequent
+refreshes. A source where dismisses dominate gets pulled toward 0.5×;
+a source where saves dominate gets pushed toward 1.5×. Three axes
+calibrate independently — the API the candidate came from, the lane
+mode (`core`/`explore`/`safe`), and the specific branch — composed
+multiplicatively so a single hot axis can't push past the per-axis
+ceiling. On a fresh DB the multiplier is 1.0 (no behavior change);
+the system warms up over a few weeks of normal use. The score
+breakdown carries `source_calibration_multiplier` and per-axis
+components so you can audit what moved.
+
 ## Retrieval strategies
 
 The Settings card also lets you toggle retrieval lanes on and off.

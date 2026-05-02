@@ -211,7 +211,8 @@ parameters and response shapes.
 | `GET` | `/authors/lookup` | Look up by display name |
 | `GET` | `/authors/suggestions` | Multi-source author suggestions |
 | `POST` | `/authors/suggestions/refresh-network` | Refresh OA / S2 caches |
-| `POST` | `/authors/suggestions/reject` | Reject a suggestion |
+| `POST` | `/authors/suggestions/reject` | Reject a suggestion (optional `suggestion_bucket` for bucket-quality calibration) |
+| `POST` | `/authors/suggestions/track-follow` | Log a rail-originated follow with `suggestion_bucket` for bucket-quality calibration |
 | `POST` | `/authors/{id}/fetch-and-send` | Fetch + dispatch (Activity) |
 | `POST` | `/authors/{id}/fetch-preview` | Fetch preview (Activity) |
 | `POST` | `/authors/{id}/preview/save` | Save previewed publications |

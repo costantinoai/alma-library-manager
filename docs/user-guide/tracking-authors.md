@@ -144,6 +144,19 @@ If a suggestion repeatedly surfaces a category of author you
 don't want, dismiss them — the rail will learn the cluster and
 stop bothering you.
 
+### Bucket calibration
+
+Each Follow / Dismiss is logged with the bucket label that surfaced
+the author. Over time, ALMa learns which buckets actually produce
+authors you keep: a bucket where Follows dominate gets pushed
+toward 1.5×; one where Dismisses dominate gets pulled toward 0.5×.
+The chip on each card (e.g. **↑ bucket 1.18×** / **↓ bucket 0.74×**)
+shows the current multiplier — it appears only once the multiplier
+has moved meaningfully away from 1.0. The static **Author
+suggestion weights** above are the prior; this calibration is the
+posterior, multiplied in. On a fresh DB nothing changes — the
+system needs a few weeks of rail-side feedback to warm up.
+
 ## Removing
 
 Removing an author **stops the monitor** but does not delete their

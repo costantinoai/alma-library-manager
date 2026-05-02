@@ -55,7 +55,8 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `followed_authors` | Authors the user is actively monitoring. |
 | `author_centroids` | Per-author SPECTER2 centroid (mean of their papers' vectors). Materialised for the `semantic_similar` author suggestion source. |
 | `author_suggestion_cache` | Per-source cache of OpenAlex / S2 author suggestions. |
-| `missing_author_feedback` | "I rejected this suggestion" history. |
+| `missing_author_feedback` | "I rejected this suggestion" history. Carries `suggestion_bucket` (the rail bucket label that surfaced the rejected author) so per-bucket outcome calibration can attribute the negative event correctly. |
+| `author_suggestion_follow_log` | Positive-side counterpart of `missing_author_feedback`: one row per rail-originated follow with the `suggestion_bucket` attribution. Fed by `POST /authors/suggestions/track-follow`. Read by `compute_author_bucket_calibration` to compute per-bucket quality multipliers. |
 
 ### Discovery
 
