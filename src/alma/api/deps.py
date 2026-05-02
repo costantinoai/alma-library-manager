@@ -1041,6 +1041,48 @@ def init_db_schema() -> None:
             )
 
             conn.execute(
+                """CREATE TABLE IF NOT EXISTS paper_enrichment_status (
+                    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+                    source TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    lookup_key TEXT NOT NULL DEFAULT '',
+                    fields_key TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    fields_requested_json TEXT,
+                    fields_filled_json TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    next_retry_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (paper_id, source, purpose)
+                )"""
+            )
+            _ensure_columns(
+                conn,
+                "paper_enrichment_status",
+                {
+                    "lookup_key": "TEXT NOT NULL DEFAULT ''",
+                    "fields_key": "TEXT NOT NULL DEFAULT ''",
+                    "reason": "TEXT",
+                    "fields_requested_json": "TEXT",
+                    "fields_filled_json": "TEXT",
+                    "attempts": "INTEGER NOT NULL DEFAULT 0",
+                    "last_attempt_at": "TEXT",
+                    "next_retry_at": "TEXT",
+                    "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+                },
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_enrichment_status_lookup "
+                "ON paper_enrichment_status(source, purpose, lookup_key, fields_key, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_paper_enrichment_status_retry "
+                "ON paper_enrichment_status(source, purpose, status, next_retry_at)"
+            )
+
+            conn.execute(
                 """CREATE TABLE IF NOT EXISTS publication_clusters (
                     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
                     cluster_id INTEGER NOT NULL,

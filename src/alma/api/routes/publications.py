@@ -424,6 +424,124 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
 
 
 @router.get(
+    "/enrichment-status",
+    summary="Get paper metadata enrichment bookkeeping",
+    description=(
+        "Pure-read status for corpus metadata rehydration. Reports per-paper "
+        "ledger counts and current OpenAlex metadata repair eligibility without "
+        "performing any external API calls or writes."
+    ),
+)
+def get_paper_enrichment_status(
+    source: str = Query("openalex", description="Enrichment source; currently only openalex"),
+    purpose: str = Query("metadata", description="Enrichment purpose; currently only metadata"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Optional ledger status filter"),
+    paper_id: Optional[str] = Query(None, description="Optional paper id to inspect"),
+    limit: int = Query(20, ge=0, le=500, description="Number of per-paper ledger rows to include"),
+    offset: int = Query(0, ge=0, description="Per-paper ledger row offset"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    source_value = (source or "openalex").strip().lower()
+    purpose_value = (purpose or "metadata").strip().lower()
+    if source_value != "openalex" or purpose_value != "metadata":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only source=openalex&purpose=metadata is currently supported",
+        )
+    from alma.services.corpus_rehydrate import (
+        build_enrichment_status,
+        list_enrichment_status_items,
+    )
+
+    payload = build_enrichment_status(db)
+    payload["items"] = list_enrichment_status_items(
+        db,
+        status_filter=(status_filter or "").strip() or None,
+        paper_id=(paper_id or "").strip() or None,
+        limit=limit,
+        offset=offset,
+    )
+    payload["items_limit"] = limit
+    payload["items_offset"] = offset
+    return payload
+
+
+@router.post(
+    "/rehydrate-metadata",
+    summary="Rehydrate missing paper metadata from OpenAlex",
+    description=(
+        "Queues an Activity-backed corpus repair job. The job batches OpenAlex "
+        "work IDs, records one ledger row per paper/source/purpose, skips "
+        "already-covered lookup/projection pairs, and writes only improving "
+        "paper metadata."
+    ),
+)
+def rehydrate_paper_metadata(
+    limit: int = Query(500, ge=1, le=5000, description="Maximum papers to inspect in this run"),
+    force: bool = Query(False, description="Ignore terminal ledger rows and refetch matching lookup/projection pairs"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        is_cancellation_requested,
+        schedule_immediate,
+        set_job_status,
+    )
+    from alma.services.corpus_rehydrate import run_corpus_metadata_rehydration
+
+    operation_key = "papers.rehydrate_metadata:openalex:metadata"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="OpenAlex metadata rehydration already running",
+        )
+
+    job_id = f"paper_metadata_rehydrate_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=datetime.utcnow().isoformat(),
+        processed=0,
+        total=limit,
+        message=f"OpenAlex metadata rehydration queued for up to {limit} paper(s)",
+    )
+    add_job_log(
+        job_id,
+        "OpenAlex metadata rehydration queued",
+        step="queued",
+        data={"limit": limit, "force": force},
+    )
+
+    def _runner() -> dict:
+        return run_corpus_metadata_rehydration(
+            job_id,
+            limit=limit,
+            force=force,
+            set_job_status=set_job_status,
+            add_job_log=add_job_log,
+            is_cancellation_requested=is_cancellation_requested,
+        )
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="OpenAlex metadata rehydration queued",
+        total=limit,
+    )
+
+
+@router.get(
     "/stats",
     summary="Get paper statistics",
     description="Get aggregate statistics about papers in the database.",

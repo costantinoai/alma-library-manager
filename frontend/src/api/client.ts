@@ -1993,6 +1993,17 @@ export function dedupPreprints(body: {
   return api.post(`/papers/dedup-preprints?${qs.toString()}`)
 }
 
+export function rehydrateCorpusMetadata(body?: {
+  limit?: number
+  force?: boolean
+}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
+  const qs = new URLSearchParams({
+    limit: String(body?.limit ?? 500),
+    force: String(Boolean(body?.force)),
+  })
+  return api.post(`/papers/rehydrate-metadata?${qs.toString()}`)
+}
+
 export interface AuthorAlternateProfile {
   author_id: string
   openalex_id: string
@@ -2276,6 +2287,7 @@ export interface AIStatus {
       terminal_lookup_error?: number
       terminal_error?: number
       local_compute_candidates?: number
+      local_compute_blocked_missing_text?: number
       by_status?: Record<string, {
         total_missing: number
         eligible_missing: number

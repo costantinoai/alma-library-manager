@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Fingerprint, Hammer, Users2, GitMerge, Trash2 } from 'lucide-react'
+import { Fingerprint, Hammer, Users2, GitMerge, Trash2, RefreshCw } from 'lucide-react'
 
 import {
   dedupAuthorsByOrcid,
   dedupPreprints,
   garbageCollectOrphanAuthors,
+  rehydrateCorpusMetadata,
   refreshAllAuthors,
   type CorpusScope,
 } from '@/api/client'
@@ -43,6 +44,27 @@ export function CorpusMaintenanceCard() {
 
   const [resolveScope, setResolveScope] = useState<ResolveScope>('followed')
   const [dedupScope, setDedupScope] = useState<DedupScope>('library')
+
+  const rehydrateMutation = useMutation({
+    mutationFn: () => rehydrateCorpusMetadata({ limit: 500, force: false }),
+    onSuccess: (data) => {
+      void invalidateQueries(queryClient, ['papers'], ['ai-status'], ['activity-operations'])
+      if (data?.status === 'already_running') {
+        toast({
+          title: 'Already running',
+          description: 'A corpus metadata rehydration job is already in progress. Watch Activity.',
+        })
+        return
+      }
+      toast({
+        title: 'Rehydration queued',
+        description: data?.job_id
+          ? `Job ${data.job_id} started — per-batch status is in Activity.`
+          : 'Job queued.',
+      })
+    },
+    onError: () => errorToast('Error', 'Failed to queue corpus metadata rehydration.'),
+  })
 
   // Canonical bulk refresh — DRY with the popup card's "Refresh author"
   // button (2026-04-24 consolidation). Runs the full pipeline per author:
@@ -182,6 +204,31 @@ export function CorpusMaintenanceCard() {
       description="Bulk metadata repair jobs. Both queue via Activity with per-row commits so you can safely refresh the page."
     >
       <SettingsSections>
+      <SettingsSection
+        title={
+          <span className="inline-flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 text-slate-500" />
+            Rehydrate paper metadata
+          </span>
+        }
+        description="Batched OpenAlex repair for stored papers that already have a work ID but are missing DOI, abstract, URL, publication date, authorships, topics, or references. The ledger skips completed lookup/projection pairs and retries only transient failures after backoff."
+      >
+        <div className="space-y-3">
+          <p className="text-[11px] leading-snug text-slate-500">
+            Runs up to 500 eligible papers per pass, one OpenAlex request per 50 work IDs.
+            Re-run safely — unchanged and already-enriched papers are skipped automatically.
+          </p>
+          <AsyncButton
+            variant="outline"
+            icon={<RefreshCw className="h-4 w-4" />}
+            pending={rehydrateMutation.isPending}
+            onClick={() => rehydrateMutation.mutate()}
+          >
+            Rehydrate metadata
+          </AsyncButton>
+        </div>
+      </SettingsSection>
+
       <SettingsSection
         title={
           <span className="inline-flex items-center gap-2">
