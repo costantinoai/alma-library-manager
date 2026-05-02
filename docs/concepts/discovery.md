@@ -256,6 +256,27 @@ Two safety floors prevent self-fulfilling weakness:
 * Muted branches receive zero budget but stay in the cluster set,
   so unmuting recovers them instantly.
 
+#### Auto lifecycle: rotate, then auto-mute
+
+When a branch's auto_weight crosses meaningful thresholds, the
+system intervenes automatically before the next refresh:
+
+| auto_weight | What happens |
+|---|---|
+| ≥ 0.65 | Normal. Branch keeps its core_topics, gets its proportional budget. |
+| 0.55 < x ≤ 0.65 | **Rotated.** Branch keeps the same seed set (and its accumulated calibration history), but its `core_topics` and `explore_topics` are *swapped* for the next refresh. The system probes the explore-angle while the core angle has been accumulating dismisses. The label updates to reflect what the branch is actually probing. If the rotation pulls saves, auto_weight rises and the rotation reverses on the refresh after — fully self-correcting. |
+| ≤ 0.55 | **Auto-muted.** Branch's external lane budget drops to zero. The cluster's seeds still influence ranking through their centroid + the author / topic / venue affinities, but the system stops fanning external API queries off it. The user can manually unmute or pin in Branch Studio to override. |
+
+User-set pin and boost take precedence over both rotate and
+auto-mute — once you've explicitly endorsed a branch, the system
+defers to you. User-set mute is preserved.
+
+The thresholds (`0.65` and `0.55`) and the constants underneath
+them (`PRIOR_STRENGTH = 6.0`, `HALF_LIFE_DAYS = 30`) live in
+`application/discovery.py` near `_compute_branch_auto_weight`.
+They're tuned for "noticeable enough to act on, not so reactive
+that one bad day kills a branch."
+
 ## Actions on a Discovery card
 
 | Action | What it does |

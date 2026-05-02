@@ -790,6 +790,23 @@ _AUTO_WEIGHT_FLOOR = 0.3
 _AUTO_WEIGHT_CEIL = 1.8
 _AUTO_WEIGHT_HALF_LIFE_DAYS = 30.0
 
+# Branch auto-lifecycle thresholds. When a branch's auto_weight drops
+# meaningfully below neutral, the system intervenes:
+#   - At ROTATE_THRESHOLD, the branch's `core_topics` are swapped with
+#     its `explore_topics` for the next refresh — same seed set, but
+#     probing a different conceptual angle. If saves come in under the
+#     new angle, auto_weight rises and the rotation reverses
+#     automatically (everything is recomputed each refresh, so the
+#     mapping is deterministic and self-correcting).
+#   - At MUTE_THRESHOLD, the branch is auto-muted: external lane
+#     receives no budget for it. The cluster's seeds still influence
+#     ranking (centroid + author / topic affinity carry through), but
+#     the system stops asking external APIs for more like it.
+# The user can override with an explicit pin/boost; manual mute is
+# still respected. These thresholds are advisory, not a kill switch.
+_AUTO_WEIGHT_ROTATE_THRESHOLD = 0.65
+_AUTO_WEIGHT_MUTE_THRESHOLD = 0.55
+
 
 def _compute_branch_auto_weight(
     *,
@@ -3103,6 +3120,7 @@ def preview_lens_branches(
         db=db,
         lens_id=lens_id,
     )
+    enriched_branches = _apply_branch_auto_lifecycle(enriched_branches)
     return {
         "lens_id": lens_id,
         "lens_name": lens.get("name"),
@@ -3722,6 +3740,12 @@ def _retrieve_external_channel(
             db=db,
             lens_id=str(lens.get("id") or "").strip() or None,
         )
+        # Auto-lifecycle: branches whose auto_weight crossed the rotate
+        # or mute threshold get their topics rotated or get auto-muted.
+        # Self-correcting on the next refresh — if the rotation pulls
+        # saves, auto_weight rises and the branch returns to its core
+        # angle automatically.
+        branches = _apply_branch_auto_lifecycle(branches)
         active_branches = [branch for branch in branches if branch.get("is_active")]
         if active_branches:
             prioritized = active_branches[:max_active]
@@ -4620,6 +4644,67 @@ def _enrich_branches_with_outcomes(
                 outcome = best_outcome
         enriched.append({**branch, **outcome})
     return enriched
+
+
+def _apply_branch_auto_lifecycle(branches: list[dict]) -> list[dict]:
+    """Apply auto-rotation / auto-mute based on each branch's auto_weight.
+
+    Pure transformation — runs after `_enrich_branches_with_outcomes` so
+    every branch has its `auto_weight`, but before retrieval so the
+    rotated topics actually shape the external query plan.
+
+    User-set pin / boost / mute take precedence. A pinned or boosted
+    branch isn't auto-rotated (the user explicitly said it's good).
+    A user-muted branch stays muted. Rotation only fires when the
+    branch is otherwise normal AND auto_weight crossed the rotate
+    threshold.
+    """
+    out: list[dict] = []
+    for branch in branches:
+        if branch.get("is_pinned") or branch.get("is_boosted"):
+            out.append(branch)
+            continue
+        if branch.get("is_muted"):
+            out.append(branch)
+            continue
+
+        weight = float(branch.get("auto_weight") or 1.0)
+        item = dict(branch)
+        if weight <= _AUTO_WEIGHT_MUTE_THRESHOLD:
+            item["is_active"] = False
+            item["is_muted"] = True
+            item["control_state"] = "auto_muted"
+            item["auto_managed_state"] = "auto_muted"
+            reason = item.get("auto_weight_reason") or ""
+            item["auto_weight_reason"] = (
+                f"{reason} — auto-muted (auto_weight {weight:.2f} ≤ {_AUTO_WEIGHT_MUTE_THRESHOLD})"
+                .strip()
+            )
+        elif weight <= _AUTO_WEIGHT_ROTATE_THRESHOLD:
+            core = list(item.get("core_topics") or [])
+            explore = list(item.get("explore_topics") or [])
+            if core and explore:
+                item["core_topics"] = explore
+                item["explore_topics"] = core
+                item["auto_managed_state"] = "rotated"
+                item["rotation_note"] = (
+                    "Topics rotated: probing the explore-angle while the "
+                    "core angle accumulates dismisses. Will revert when "
+                    "auto_weight recovers above "
+                    f"{_AUTO_WEIGHT_ROTATE_THRESHOLD}."
+                )
+                # Refresh the human-readable label from the new core_topics
+                # so Branch Studio displays what the branch is actually
+                # probing this refresh.
+                item["label"] = " / ".join(item["core_topics"][:2]) or item.get("label")
+                reason = item.get("auto_weight_reason") or ""
+                item["auto_weight_reason"] = (
+                    f"{reason} — rotating to explore angle (auto_weight "
+                    f"{weight:.2f} ≤ {_AUTO_WEIGHT_ROTATE_THRESHOLD})"
+                    .strip()
+                )
+        out.append(item)
+    return out
 
 
 def _load_branch_seed_history(
