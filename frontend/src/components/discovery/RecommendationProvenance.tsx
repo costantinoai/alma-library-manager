@@ -31,6 +31,16 @@ export interface ProvenanceSignals {
    *  at the top of the card. Used only if the card caller wants to
    *  echo the ranking here too; usually omitted. */
   scorePct?: number | null
+  /** Number of independent retrieval sources that surfaced this
+   *  candidate (channels + distinct external source APIs). Renders as
+   *  a "Suggested by N sources" chip when N ≥ 2. */
+  consensusCount?: number | null
+  /** Signed projected-feedback adjustment in [-1, 1]: net pull from
+   *  the user's saved / dismissed papers, their authors, topics,
+   *  venues, etc. Positive → "matches what you keep"; negative →
+   *  "near things you've dismissed". Rendered only when the
+   *  magnitude clears a small noise floor. */
+  projectedFeedbackRaw?: number | null
 }
 
 interface Chip {
@@ -75,6 +85,34 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
       key: 'neg-hit',
       label: `Near a disliked paper (${signals.negativeHit.toFixed(2)})`,
       tone: 'warning',
+    })
+  }
+  // Multi-source consensus: a candidate found by N≥2 retrieval channels
+  // / source APIs gets a band-relative score bonus (see scoring docs).
+  // Surfacing the count makes the bonus legible; without it the chip
+  // would mean nothing.
+  if (typeof signals.consensusCount === 'number' && signals.consensusCount >= 2) {
+    chips.push({
+      key: 'consensus',
+      label: `Suggested by ${signals.consensusCount} sources`,
+      tone: 'positive',
+    })
+  }
+  // Projected feedback: the signed pull from the user's per-paper
+  // history (saves / ratings / dismisses → authors / topics / venues
+  // / keywords / tags / semantic + citation neighbours). Threshold of
+  // 0.05 keeps the chip silent when the signal is essentially zero.
+  if (
+    typeof signals.projectedFeedbackRaw === 'number' &&
+    Math.abs(signals.projectedFeedbackRaw) >= 0.05
+  ) {
+    const positive = signals.projectedFeedbackRaw > 0
+    chips.push({
+      key: 'projected',
+      label: positive
+        ? `+${signals.projectedFeedbackRaw.toFixed(2)} from your saves`
+        : `${signals.projectedFeedbackRaw.toFixed(2)} from past rejects`,
+      tone: positive ? 'positive' : 'warning',
     })
   }
 

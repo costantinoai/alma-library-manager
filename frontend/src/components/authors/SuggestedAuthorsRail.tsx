@@ -9,6 +9,7 @@ import {
   listAuthorSuggestions,
   refreshAuthorSuggestionNetwork,
   rejectAuthorSuggestion,
+  trackFollowedAuthorSuggestion,
   type Author,
   type AuthorSuggestion,
 } from '@/api/client'
@@ -99,8 +100,13 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
   }, [])
 
   const rejectMutation = useMutation({
-    mutationFn: (openalexId: string) => rejectAuthorSuggestion(openalexId),
-    onMutate: async (openalexId) => {
+    mutationFn: (suggestion: AuthorSuggestion) =>
+      rejectAuthorSuggestion(
+        suggestion.openalex_id ?? '',
+        suggestion.suggestion_type ?? null,
+      ),
+    onMutate: async (suggestion) => {
+      const openalexId = suggestion.openalex_id ?? ''
       // Optimistic removal keeps the animation snappy — no spinner gap.
       // Persist the openalex_id in the acted-on set so a subsequent
       // refetch (from this mutation OR from any unrelated invalidation)
@@ -174,6 +180,15 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
     },
     onSuccess: (_data, suggestion) => {
       toast({ title: 'Followed', description: `${suggestion.name} is now followed.` })
+      // Fire-and-forget bucket-attribution log for outcome calibration.
+      // Backend computes per-bucket follow rates from this; failures are
+      // ignored because the actual follow has already succeeded.
+      if (suggestion.openalex_id) {
+        trackFollowedAuthorSuggestion(
+          suggestion.openalex_id,
+          suggestion.suggestion_type ?? null,
+        ).catch(() => undefined)
+      }
     },
     onError: (_err, _suggestion, ctx) => {
       if (ctx?.prev) {
@@ -268,14 +283,15 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
                         errorToast('Error', 'Cannot dismiss: missing OpenAlex ID.')
                         return
                       }
-                      rejectMutation.mutate(s.openalex_id)
+                      rejectMutation.mutate(s)
                     }}
                     followPending={
                       followMutation.isPending &&
                       followMutation.variables?.openalex_id === s.openalex_id
                     }
                     rejectPending={
-                      rejectMutation.isPending && rejectMutation.variables === s.openalex_id
+                      rejectMutation.isPending &&
+                      rejectMutation.variables?.openalex_id === s.openalex_id
                     }
                   />
                 </motion.div>

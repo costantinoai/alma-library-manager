@@ -100,6 +100,56 @@ export function SuggestedAuthorCard({
             >
               {kindLabel(suggestion.suggestion_type)}
             </span>
+            {/* Consensus chip — only when ≥2 independent buckets agree.
+                The bonus is band-relative (+12 / +17 / +21 / +24 for
+                2 / 3 / 4 / 5 buckets) and is already folded into the
+                progress bar score; this chip explains *why* the score
+                climbed when no single bucket would justify it. */}
+            {suggestion.consensus_count && suggestion.consensus_count >= 2 ? (
+              <span
+                className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-alma-folio"
+                title={(suggestion.consensus_buckets ?? []).join(' · ')}
+              >
+                {suggestion.consensus_count} sources
+              </span>
+            ) : null}
+            {/* Bucket calibration — only when the multiplier deviates
+                meaningfully from 1.0 (fresh DB returns 1.0 for every
+                bucket; a chip there would be noise). The multiplier is
+                already folded into `score`, so this is purely
+                provenance: "this bucket's recommendations have worked
+                out for you in the past" / "haven't". */}
+            {typeof suggestion.bucket_calibration_multiplier === 'number' &&
+            Math.abs(suggestion.bucket_calibration_multiplier - 1.0) >= 0.05 ? (
+              <span
+                className={
+                  suggestion.bucket_calibration_multiplier > 1.0
+                    ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700'
+                    : 'inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700'
+                }
+                title="Per-bucket outcome calibration: how often you've followed vs rejected this bucket's suggestions"
+              >
+                {suggestion.bucket_calibration_multiplier > 1.0 ? '↑' : '↓'} bucket{' '}
+                {suggestion.bucket_calibration_multiplier.toFixed(2)}×
+              </span>
+            ) : null}
+            {/* Paper-feedback projection — surface only when the magnitude
+                cleared a small noise floor so neutral cards stay quiet. */}
+            {typeof suggestion.paper_signal_adjustment === 'number' &&
+            Math.abs(suggestion.paper_signal_adjustment) >= 1 ? (
+              <span
+                className={
+                  suggestion.paper_signal_adjustment > 0
+                    ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700'
+                    : 'inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700'
+                }
+                title="Net pull from your saved + dismissed papers in this area"
+              >
+                {suggestion.paper_signal_adjustment > 0
+                  ? `+${suggestion.paper_signal_adjustment.toFixed(1)} from saves`
+                  : `${suggestion.paper_signal_adjustment.toFixed(1)} from rejects`}
+              </span>
+            ) : null}
             {suggestion.local_paper_count ? (
               <span className="text-[11px] text-slate-500">
                 {suggestion.local_paper_count} in DB

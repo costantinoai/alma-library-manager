@@ -422,6 +422,8 @@ export function DiscoveryPage() {
           sharedAuthorsSample: readString(provenance?.shared_authors_sample),
           negativeHit: readNumber(provenance?.negative_hit),
           scorePct: readNumber(provenance?.score_pct),
+          consensusCount: readNumber(breakdown?.consensus_count),
+          projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
         }}
       />
     )

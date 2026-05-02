@@ -211,6 +211,17 @@ export interface AuthorSuggestion {
   alt_openalex_ids?: string[]
   negative_signal?: number
   last_removed_at?: string | null
+  /** Number of independent buckets that surfaced this author. Drives
+   *  the band-relative consensus bonus (+12 / +17 / +21 / +24 for
+   *  2 / 3 / 4 / 5 buckets) on the per-bucket score. */
+  consensus_count?: number
+  consensus_buckets?: string[]
+  /** Signed score adjustment from projected paper feedback (saves /
+   *  ratings / dismisses fanned out via the projection layer). */
+  paper_signal_adjustment?: number
+  /** Per-bucket outcome-calibration multiplier (1.0 = neutral / fresh
+   *  DB). Provenance only — already folded into `score`. */
+  bucket_calibration_multiplier?: number
 }
 
 export interface AuthorFollowFromPaperResult {
@@ -554,8 +565,28 @@ export function listAuthorSuggestions(limit = 5): Promise<AuthorSuggestion[]> {
   return api.get<AuthorSuggestion[]>(`/authors/suggestions?limit=${limit}`)
 }
 
-export function rejectAuthorSuggestion(openalexId: string): Promise<void> {
-  return api.post<void>('/authors/suggestions/reject', { openalex_id: openalexId })
+export function rejectAuthorSuggestion(
+  openalexId: string,
+  suggestionBucket?: string | null,
+): Promise<void> {
+  return api.post<void>('/authors/suggestions/reject', {
+    openalex_id: openalexId,
+    suggestion_bucket: suggestionBucket ?? null,
+  })
+}
+
+/** Fire-and-forget log for outcome calibration: records that the user
+ *  followed an author surfaced by the rail. The actual follow write
+ *  goes through `followAuthor` / `POST /authors`; this is the
+ *  attribution log only. */
+export function trackFollowedAuthorSuggestion(
+  openalexId: string,
+  suggestionBucket?: string | null,
+): Promise<void> {
+  return api.post<void>('/authors/suggestions/track-follow', {
+    openalex_id: openalexId,
+    suggestion_bucket: suggestionBucket ?? null,
+  })
 }
 
 /**
