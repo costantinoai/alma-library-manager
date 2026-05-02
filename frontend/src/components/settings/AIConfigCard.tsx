@@ -450,6 +450,19 @@ export function AIConfigCard() {
                           <StatusBadge tone={p.available ? 'positive' : 'negative'} size="sm">
                             {p.available ? 'Available' : 'Not available'}
                           </StatusBadge>
+                          {p.name === 'local' && p.available && p.device && (
+                            <StatusBadge
+                              tone={p.device === 'cuda' ? 'accent' : 'neutral'}
+                              size="sm"
+                              title={
+                                p.device === 'cuda'
+                                  ? 'Local SPECTER2 will run on the host GPU (torch.cuda.is_available() == True).'
+                                  : 'Local SPECTER2 will run on CPU. Pull the -gpu image and pass --gpus all to enable CUDA.'
+                              }
+                            >
+                              {p.device === 'cuda' ? 'GPU (CUDA)' : 'CPU'}
+                            </StatusBadge>
+                          )}
                         </>
                       }
                       description={p.description ?? undefined}

@@ -307,6 +307,19 @@ def list_available_providers(
         local_reason = None
     else:
         local_reason = "Local SPECTER2 requires adapters, transformers, torch, and numpy"
+    # Probe torch for the device the local SPECTER2 encoder will use.
+    # Match SpecterEmbedder._resolve_device() exactly: prefer CUDA when
+    # torch sees an available GPU, otherwise CPU. Done with a small
+    # try/except so missing torch (lite variant) just reports None.
+    local_device: Optional[str] = None
+    if local_available:
+        try:
+            import torch  # type: ignore
+
+            local_device = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            local_device = None
+
     providers_info.append({
         "name": "local",
         "display_name": "Local SPECTER2",
@@ -318,6 +331,7 @@ def list_available_providers(
         "dimension": local_provider.dimension,
         "available": local_available,
         "reason": local_reason,
+        "device": local_device,
         "local_models": [
             {
                 "key": m.key,

@@ -1869,6 +1869,7 @@ export interface AIProviderInfo {
   reason?: string
   local_models?: LocalModelInfo[]
   selected_model?: string
+  device?: 'cuda' | 'cpu' | null
 }
 
 export function getInsightsDiagnostics(): Promise<InsightsDiagnostics> {
