@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any, Dict, Optional
 
 from alma.core.http_sources import bind_source_diagnostics
+from alma.core.scoring_math import clamp as _shared_clamp
 from alma.core.utils import normalize_doi
 from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
 
@@ -41,7 +42,7 @@ DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
+    return _shared_clamp(value, lo, hi)
 
 
 def _is_blank(value: object) -> bool:

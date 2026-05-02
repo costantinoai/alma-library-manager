@@ -18,6 +18,7 @@ from alma.application.feed_query_language import (
 )
 from . import feed_monitors as monitor_app
 from . import library as library_app
+from alma.core.scoring_math import clamp
 from alma.core.http_sources import (
     openalex_usage_delta,
     openalex_usage_snapshot,
@@ -112,7 +113,7 @@ def _setting_int(settings: dict[str, str], key: str, default: int, lo: int, hi: 
         value = int(raw)
     except (TypeError, ValueError):
         return default
-    return max(lo, min(hi, value))
+    return int(clamp(value, lo, hi))
 
 
 def _setting_float(settings: dict[str, str], key: str, default: float, lo: float, hi: float) -> float:
@@ -123,7 +124,7 @@ def _setting_float(settings: dict[str, str], key: str, default: float, lo: float
         value = float(raw)
     except (TypeError, ValueError):
         return default
-    return max(lo, min(hi, value))
+    return clamp(value, lo, hi)
 
 
 def _setting_bool(settings: dict[str, str], key: str, default: bool) -> bool:

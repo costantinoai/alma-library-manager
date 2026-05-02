@@ -157,6 +157,17 @@ class AuthorSuggestionResponse(BaseModel):
     signals: List[AuthorSuggestionSignal] = Field(default_factory=list)
     negative_signal: float = 0.0
     last_removed_at: Optional[str] = None
+    # Multi-source consensus: how many independent buckets surfaced
+    # this candidate, plus the bucket labels for tooltip rendering.
+    consensus_count: int = 1
+    consensus_buckets: List[str] = Field(default_factory=list)
+    # Signed score adjustment from projected paper feedback (saves /
+    # ratings / dismisses propagated through `signal_projection`).
+    # Surfaced as a chip on the card when the magnitude clears 1 point.
+    paper_signal_adjustment: float = 0.0
+    # Per-bucket outcome-calibration multiplier (1.0 = neutral / fresh
+    # DB). Provenance only — already folded into `score`.
+    bucket_calibration_multiplier: float = 1.0
 
 
 class AuthorFollowFromPaperRequest(BaseModel):

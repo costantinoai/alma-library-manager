@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import math
 import sqlite3
 import uuid
 from datetime import datetime
 from typing import Any, Optional
 
 from alma.application.followed_authors import ensure_followed_author_contract
+from alma.core.scoring_math import age_decay
 from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
 
 logger = logging.getLogger(__name__)
@@ -45,11 +45,9 @@ def _normalize_openalex_author_id(value: str) -> str:
 
 
 def _decayed_signal(signal_value: float, age_days: float, half_life_days: float) -> float:
-    if half_life_days <= 0:
+    if half_life_days <= 0 or age_days <= 0:
         return signal_value
-    if age_days <= 0:
-        return signal_value
-    return signal_value * math.pow(0.5, age_days / half_life_days)
+    return signal_value * age_decay(age_days, half_life_days=half_life_days)
 
 
 def ensure_gap_feedback_tables(conn: sqlite3.Connection) -> None:
@@ -68,6 +66,35 @@ def ensure_gap_feedback_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_missing_author_feedback_author_time
         ON missing_author_feedback(openalex_id, created_at DESC)
+        """
+    )
+    # Bucket attribution for outcome calibration (Phase 4 #3). Added
+    # post-launch — guarded by try/except so existing DBs migrate
+    # silently. NULL on rows from before bucket attribution shipped.
+    try:
+        conn.execute(
+            "ALTER TABLE missing_author_feedback ADD COLUMN suggestion_bucket TEXT"
+        )
+    except sqlite3.OperationalError:
+        pass
+    # Follow-side attribution. Symmetric to `missing_author_feedback`
+    # for the reject side: one row per "user followed an author from
+    # the suggestion rail", carrying the originating bucket label so
+    # bucket-quality calibration can reweight the rail.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS author_suggestion_follow_log (
+            id TEXT PRIMARY KEY,
+            openalex_id TEXT NOT NULL,
+            suggestion_bucket TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_author_suggestion_follow_log_oid_time
+        ON author_suggestion_follow_log(openalex_id, created_at DESC)
         """
     )
 
@@ -144,6 +171,7 @@ def record_missing_author_remove(
     openalex_id: str,
     *,
     hard: bool = False,
+    suggestion_bucket: str | None = None,
 ) -> dict[str, Any]:
     """Record a remove signal against an OpenAlex author.
 
@@ -153,6 +181,11 @@ def record_missing_author_remove(
     suggestion rejections — a single click is enough to suppress for a
     cycle but the author can come back if they show up again later
     with new evidence.
+
+    `suggestion_bucket` carries the originating rail bucket label
+    (`library_core` / `cited_by_high_signal` / etc.) so outcome
+    calibration can reweight the rail per bucket. NULL when the
+    reject came from a non-rail surface (unfollow page, etc.).
     """
     ensure_gap_feedback_tables(conn)
     normalized = _normalize_openalex_author_id(openalex_id)
@@ -160,19 +193,50 @@ def record_missing_author_remove(
         raise ValueError("Invalid OpenAlex author ID")
 
     signal = _REMOVE_SIGNAL_HARD if hard else _REMOVE_SIGNAL_SOFT
+    bucket = (suggestion_bucket or "").strip().lower() or None
     conn.execute(
         """
-        INSERT INTO missing_author_feedback (id, openalex_id, action, signal_value, created_at)
-        VALUES (?, ?, 'remove', ?, ?)
+        INSERT INTO missing_author_feedback
+            (id, openalex_id, action, signal_value, created_at, suggestion_bucket)
+        VALUES (?, ?, 'remove', ?, ?, ?)
         """,
         (
             uuid.uuid4().hex,
             normalized,
             signal,
             _utcnow().isoformat(),
+            bucket,
         ),
     )
     return get_missing_author_feedback_state(conn, normalized)
+
+
+def record_followed_from_suggestion(
+    conn: sqlite3.Connection,
+    openalex_id: str,
+    suggestion_bucket: str | None,
+) -> None:
+    """Log that the user followed an author surfaced by the suggestion rail.
+
+    Symmetric to `record_missing_author_remove` for the positive side.
+    Called by the rail's track-follow route after the actual follow
+    write has succeeded — this row exists purely for outcome
+    calibration. Multiple rows per author are fine (the user might
+    refollow after an unfollow); calibration aggregates with time decay.
+    """
+    ensure_gap_feedback_tables(conn)
+    normalized = _normalize_openalex_author_id(openalex_id)
+    if not normalized:
+        raise ValueError("Invalid OpenAlex author ID")
+    bucket = (suggestion_bucket or "").strip().lower() or None
+    conn.execute(
+        """
+        INSERT INTO author_suggestion_follow_log
+            (id, openalex_id, suggestion_bucket, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (uuid.uuid4().hex, normalized, bucket, _utcnow().isoformat()),
+    )
 
 
 def clear_missing_author_feedback(

@@ -1537,6 +1537,15 @@ def list_author_suggestions(
 
 class RejectSuggestionRequest(BaseModel):
     openalex_id: str = Field(..., min_length=1, description="OpenAlex author ID of the suggestion to reject")
+    suggestion_bucket: str | None = Field(
+        default=None,
+        description=(
+            "Originating rail bucket (library_core / cited_by_high_signal / "
+            "adjacent / semantic_similar / openalex_related / s2_related). "
+            "Optional — used by outcome calibration to reweight per-bucket "
+            "scoring; NULL is fine for non-rail rejections."
+        ),
+    )
 
 
 @router.post(
@@ -1553,12 +1562,52 @@ def reject_author_suggestion(
     from alma.application.gap_radar import record_missing_author_remove
 
     try:
-        record_missing_author_remove(db, req.openalex_id)
+        record_missing_author_remove(
+            db, req.openalex_id, suggestion_bucket=req.suggestion_bucket
+        )
         db.commit()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
         raise_internal("Failed to reject author suggestion", e)
+
+
+class TrackFollowSuggestionRequest(BaseModel):
+    openalex_id: str = Field(..., min_length=1, description="OpenAlex author ID of the followed suggestion")
+    suggestion_bucket: str | None = Field(
+        default=None,
+        description="Originating rail bucket label (see RejectSuggestionRequest).",
+    )
+
+
+@router.post(
+    "/suggestions/track-follow",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Log a rail-originated author follow for outcome calibration",
+    description=(
+        "Fire-and-forget call from the Suggested Authors rail after a "
+        "follow succeeds, so per-bucket outcome calibration can attribute "
+        "the positive event to the bucket that surfaced the author. The "
+        "actual follow write goes through the existing follow / author-create "
+        "routes — this is the calibration log only."
+    ),
+)
+def track_followed_suggestion(
+    req: TrackFollowSuggestionRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.gap_radar import record_followed_from_suggestion
+
+    try:
+        record_followed_from_suggestion(
+            db, req.openalex_id, req.suggestion_bucket
+        )
+        db.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as e:
+        raise_internal("Failed to log followed suggestion", e)
 
 
 # ----------------------------------------------------------------------

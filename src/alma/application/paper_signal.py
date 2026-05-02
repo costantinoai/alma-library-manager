@@ -32,11 +32,13 @@ Signals blended:
 from __future__ import annotations
 
 import logging
-import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+
+from alma.application.signal_projection import normalize_feedback_event_value
+from alma.core.scoring_math import age_decay
 
 logger = logging.getLogger(__name__)
 
@@ -424,31 +426,22 @@ def score_papers_batch(
     try:
         fe_rows = db.execute(
             f"""
-            SELECT entity_id, event_type, created_at
+            SELECT entity_id, event_type, value, created_at
             FROM feedback_events
-            WHERE entity_type = 'paper' AND entity_id IN ({placeholders})
+            WHERE entity_type IN ('paper', 'publication') AND entity_id IN ({placeholders})
             """,
             paper_ids,
         ).fetchall()
     except sqlite3.OperationalError:
         fe_rows = []
     for row in fe_rows:
-        ev = str(row["event_type"] or "").strip().lower()
-        polarity = (
-            1.0 if ev in _POSITIVE_EVENTS
-            else -1.0 if ev in _NEGATIVE_EVENTS
-            else 0.0
-        )
-        if polarity == 0.0:
+        signal = normalize_feedback_event_value(row["event_type"], row["value"])
+        if signal == 0.0:
             continue
         age_days = _days_since(row["created_at"], now)
-        decay = (
-            math.pow(0.5, age_days / _SIGNAL_LAB_DECAY_HALF_LIFE_DAYS)
-            if age_days is not None
-            else 1.0
-        )
+        decay = age_decay(age_days, half_life_days=_SIGNAL_LAB_DECAY_HALF_LIFE_DAYS)
         sig_lab[str(row["entity_id"])] = (
-            sig_lab.get(str(row["entity_id"]), 0.0) + polarity * decay
+            sig_lab.get(str(row["entity_id"]), 0.0) + signal * decay
         )
 
     # --- assemble per-paper -----------------------------------------
@@ -482,7 +475,7 @@ def score_papers_batch(
         if meta["publication_date"]:
             age = _days_since(meta["publication_date"], now)
             if age is not None and age >= 0:
-                components["recency"] = math.pow(0.5, age / _RECENCY_HALF_LIFE_DAYS)
+                components["recency"] = age_decay(age, half_life_days=_RECENCY_HALF_LIFE_DAYS)
                 present["recency"] = True
 
         if not any(present.values()):
