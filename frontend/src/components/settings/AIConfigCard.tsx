@@ -527,6 +527,8 @@ export function AIConfigCard() {
                         {status.embeddings.s2_backfill.local_compute_candidates ??
                           status.embeddings.missing ??
                           0}{' '}
+                        · blocked missing title/abstract:{' '}
+                        {status.embeddings.s2_backfill.local_compute_blocked_missing_text ?? 0}{' '}
                         · S2 no-match: {status.embeddings.s2_backfill.terminal_unmatched ?? 0} · S2
                         no-vector: {status.embeddings.s2_backfill.terminal_missing_vector ?? 0}
                       </p>
@@ -612,7 +614,13 @@ export function AIConfigCard() {
                     size="sm"
                     icon={<Cpu className="h-4 w-4" />}
                     pending={computeEmbeddingsMutation.isPending || !!embeddingJobId}
-                    disabled={values.provider === 'none' || !!activeEmbeddingJobId}
+                    disabled={
+                      values.provider === 'none' ||
+                      !!activeEmbeddingJobId ||
+                      (values.provider === 'local' &&
+                        values.local_model === 'specter2-base' &&
+                        (status.embeddings.s2_backfill?.local_compute_candidates ?? 1) === 0)
+                    }
                     onClick={() => computeEmbeddingsMutation.mutate('missing')}
                   >
                     {embeddingJobId ? 'AI Compute In Progress' : 'AI Compute Missing'}

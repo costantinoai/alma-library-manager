@@ -546,6 +546,30 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     terminal_missing_vector = int((terminal_row["missing_vector"] if terminal_row else 0) or 0)
     terminal_lookup_error = int((terminal_row["lookup_error"] if terminal_row else 0) or 0)
     terminal_error = int((terminal_row["error"] if terminal_row else 0) or 0)
+    try:
+        local_compute_row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM papers p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM publication_embeddings pe
+                WHERE pe.paper_id = p.id AND pe.model = ?
+            )
+            AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
+            AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
+            """,
+            (model,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        local_compute_row = None
+    local_compute_candidates = int((local_compute_row["c"] if local_compute_row else 0) or 0)
+    all_missing_without_vector = (
+        total_missing + terminal_unmatched + terminal_missing_vector + terminal_lookup_error
+    )
+    local_compute_blocked_missing_text = max(
+        0,
+        all_missing_without_vector - local_compute_candidates,
+    )
     return {
         "model": model,
         "total_missing": total_missing,
@@ -555,9 +579,8 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
         "terminal_missing_vector": terminal_missing_vector,
         "terminal_lookup_error": terminal_lookup_error,
         "terminal_error": terminal_error,
-        "local_compute_candidates": (
-            terminal_unmatched + terminal_missing_vector + terminal_lookup_error + total_missing
-        ),
+        "local_compute_candidates": local_compute_candidates,
+        "local_compute_blocked_missing_text": local_compute_blocked_missing_text,
         "by_status": by_status,
     }
 

@@ -122,18 +122,27 @@ def run_embedding_computation(
         max_tokens = model_config.max_tokens if model_config else 256
         model_hf_id = provider.model_name
         is_local_specter2 = provider.name == "local" and model_hf_id == "allenai/specter2_base"
+        local_specter2_text_filter = (
+            """
+                AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
+                AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
+            """
+            if is_local_specter2
+            else ""
+        )
 
         if scope == "missing":
             # "Missing" means "no row for the active model", not "no row at all".
             # With the (paper_id, model) PK the paper may have a vector from
             # a previous model yet still need one for the current model.
             rows = conn.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.abstract
                 FROM papers p
                 LEFT JOIN publication_embeddings pe
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
+                {local_specter2_text_filter}
                 """,
                 (model_hf_id,),
             ).fetchall()
@@ -141,7 +150,7 @@ def run_embedding_computation(
             # A paper is "stale" for the active model if it has vectors under
             # some other model but no vector under the active one.
             rows = conn.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.abstract
                 FROM papers p
                 WHERE EXISTS (
@@ -152,24 +161,28 @@ def run_embedding_computation(
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                {local_specter2_text_filter}
                 """,
                 (model_hf_id, model_hf_id),
             ).fetchall()
         elif scope == "all":
             rows = conn.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.abstract
                 FROM papers p
+                WHERE 1 = 1
+                {local_specter2_text_filter}
                 """,
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.abstract
                 FROM papers p
                 LEFT JOIN publication_embeddings pe
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
+                {local_specter2_text_filter}
                 """,
                 (model_hf_id,),
             ).fetchall()
@@ -209,6 +222,7 @@ def run_embedding_computation(
                 data={
                     "candidate_papers": total,
                     "s2_terminal_misses": local_fill_counts,
+                    "requires_title_and_abstract": True,
                     "manual_user_action": True,
                 },
             )
