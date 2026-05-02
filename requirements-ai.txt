@@ -12,14 +12,31 @@
 # runtime with "torch not detected". See `tasks/lessons.md` if you're
 # tempted to drop the pin again.
 #
-# `--index-url` flips pip to PyTorch's CPU-only wheelhouse for this
-# install so torch resolves to the CPU build (~200 MB) instead of the
-# CUDA build (~2 GB of nvidia-* wheels we never use — ALMa runs
-# SPECTER2 inference on CPU). PyPI is re-added as `--extra-index-url`
-# because transformers / adapters and their deps live there.
+# `TORCH_VARIANT` (set as a Docker --build-arg) selects the torch
+# wheelhouse so users without a GPU don't pay for CUDA wheels they
+# can't use. Two values:
+#   - cuda  (default) — torch resolved from PyPI's default CUDA build
+#                       (~2 GB of nvidia-* deps). Works on CPU-only
+#                       machines too: `torch.cuda.is_available()`
+#                       just returns False and the SPECTER2 encoder
+#                       falls back to CPU automatically. Required if
+#                       you want to run local embeddings on a host
+#                       GPU passed through with `docker compose -f
+#                       docker-compose.yml -f docker-compose.gpu.yml
+#                       up`.
+#   - cpu             — torch resolved from PyTorch's CPU-only
+#                       wheelhouse (~200 MB). Choose this on hosts
+#                       that have no NVIDIA GPU and care about disk
+#                       footprint. The runtime device-resolver in
+#                       `discovery.similarity.SpecterEmbedder` reads
+#                       `torch.cuda.is_available()` regardless, so the
+#                       CPU build is functionally identical to the
+#                       CUDA build on a GPU-less host.
 #
 # What this enables on top of core:
 #   - Local SPECTER2 encoder (compute embeddings without an API key)
+#   - Optional GPU acceleration when the host exposes an NVIDIA
+#     device and `TORCH_VARIANT=cuda` (the default).
 #
 # What you LOSE in `lite`:
 #   - Local embeddings only. The lite variant can still use the
@@ -31,8 +48,6 @@
 # Every import in src/alma that touches transformers/adapters is
 # lazy-loaded inside the function that needs it, so the `lite` image
 # boots cleanly and only fails the local-encoder code path.
---index-url https://download.pytorch.org/whl/cpu
---extra-index-url https://pypi.org/simple
 
 torch>=2.2,<3.0
 transformers~=4.51.3

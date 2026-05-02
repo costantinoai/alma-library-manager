@@ -1,18 +1,29 @@
 # Build and publish ALMa Docker images to GitHub Container Registry.
 #
 # Triggers:
-#   - push to main           → publishes :latest (and :latest-lite)
-#   - push of a v* git tag   → publishes :X.Y.Z, :X.Y, :X (and -lite variants)
-#   - manual dispatch        → ad-hoc rebuild of latest from current main
+#   - push to main           publishes :latest, :latest-gpu, :latest-lite
+#   - push of a v* git tag   publishes :X.Y.Z and friends for every flavor
+#   - manual dispatch        ad-hoc rebuild of latest from current main
 #
-# Two image variants are produced from a single Dockerfile via the VARIANT
-# build-arg: `normal` (full AI stack) and `lite` (no torch/transformers).
-# The lite variant carries a `-lite` suffix on every tag.
+# Three image flavors are produced from a single Dockerfile:
+#   - normal (CPU torch, default)  no suffix; this is what `:latest` pulls.
+#   - normal (CUDA torch)          `-gpu` suffix; ~1.8 GB larger but
+#                                  accelerates SPECTER2 inference when
+#                                  the host has an NVIDIA GPU + the
+#                                  NVIDIA Container Toolkit.
+#   - lite                         `-lite` suffix; no torch / transformers
+#                                  / adapters; use on Raspberry Pi or
+#                                  other low-memory hosts.
 #
-# Multi-arch: linux/amd64 + linux/arm64 (QEMU emulation for arm64).
+# The CPU+normal default keeps `:latest` small for the common case
+# (no host GPU). GPU users explicitly opt in via `:latest-gpu` /
+# `:X.Y.Z-gpu`, or via `setup.sh` which autodetects.
 #
-# Auth uses the built-in GITHUB_TOKEN with packages:write — no extra secrets.
-# After the first successful publish, flip the GHCR package to public in the
+# Multi-arch: amd64+arm64 for the CPU/lite flavors; the GPU flavor is
+# amd64-only (Jetson-style ARM CUDA is out of scope for this repo).
+#
+# Auth uses the built-in GITHUB_TOKEN with packages:write. After the
+# first successful publish, flip the GHCR package to public in the
 # package settings page (one-time, manual).
 
 name: Publish Docker images to GHCR
@@ -37,7 +48,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [normal, lite]
+        include:
+          - variant: normal
+            torch: cpu
+            suffix: ""
+            platforms: linux/amd64,linux/arm64
+          - variant: normal
+            torch: cuda
+            suffix: "-gpu"
+            platforms: linux/amd64
+          - variant: lite
+            torch: cpu
+            suffix: "-lite"
+            platforms: linux/amd64,linux/arm64
 
     steps:
       - name: Checkout
@@ -65,7 +88,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
-            suffix=${{ matrix.variant == 'lite' && '-lite' || '' }},onlatest=true
+            suffix=${{ matrix.suffix }},onlatest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
@@ -78,11 +101,12 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: true
           build-args: |
             VARIANT=${{ matrix.variant }}
+            TORCH_VARIANT=${{ matrix.torch }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.torch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}-${{ matrix.torch }}

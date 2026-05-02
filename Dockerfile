@@ -60,6 +60,19 @@ FROM python:3.11-slim AS builder
 # Variant selector. `normal` includes the AI stack; `lite` skips it.
 ARG VARIANT=normal
 
+# Torch wheelhouse selector for the `normal` variant.
+#   cpu (default) → PyTorch's CPU-only wheelhouse; ~1.8 GB smaller
+#                   image, no GPU acceleration even with passthrough.
+#                   This is the default so `:latest` on GHCR is small
+#                   for the common host (no NVIDIA GPU).
+#   cuda          → PyPI default; ships a CUDA-built torch that works
+#                   on CPU when no GPU is present and accelerates
+#                   SPECTER2 inference automatically when the host
+#                   exposes an NVIDIA device. Published as the
+#                   `-gpu` tag flavor.
+# Ignored when VARIANT=lite (no torch installed in lite).
+ARG TORCH_VARIANT=cpu
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -87,7 +100,19 @@ RUN pip install --no-cache-dir -r requirements-core.txt
 
 COPY requirements-ai.txt ./
 RUN if [ "$VARIANT" = "normal" ]; then \
-        pip install --no-cache-dir -r requirements-ai.txt ; \
+        if [ "$TORCH_VARIANT" = "cpu" ]; then \
+            echo "[alma:normal] Installing torch from PyTorch CPU-only wheelhouse" ; \
+            pip install --no-cache-dir \
+                --index-url https://download.pytorch.org/whl/cpu \
+                --extra-index-url https://pypi.org/simple \
+                -r requirements-ai.txt ; \
+        elif [ "$TORCH_VARIANT" = "cuda" ]; then \
+            echo "[alma:normal] Installing torch from PyPI default (CUDA-capable; runs on CPU when no GPU)" ; \
+            pip install --no-cache-dir -r requirements-ai.txt ; \
+        else \
+            echo "ERROR: Unknown TORCH_VARIANT='$TORCH_VARIANT'. Expected 'cuda' or 'cpu'." >&2 ; \
+            exit 1 ; \
+        fi ; \
     elif [ "$VARIANT" = "lite" ]; then \
         echo "[alma:lite] Skipping local SPECTER2 encoder (transformers / adapters / torch)" ; \
     else \

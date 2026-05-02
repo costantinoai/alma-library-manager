@@ -1,0 +1,31 @@
+# =============================================================================
+# ALMa — GPU passthrough overlay
+# =============================================================================
+# Optional overlay that exposes the host's NVIDIA GPU to the alma
+# container so the local SPECTER2 encoder runs on CUDA instead of CPU.
+#
+# Requires:
+#   - An NVIDIA GPU on the host
+#   - The NVIDIA Container Toolkit installed and configured for Docker
+#     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+#   - `alma:normal` built with TORCH_VARIANT=cuda (the default — see
+#     docker-compose.yml's build args).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Verify the container saw the GPU:
+#   docker exec alma python -c "import torch; print(torch.cuda.is_available())"
+# Should print `True`. If False, the runtime device-resolver in
+# `discovery.similarity.SpecterEmbedder` falls back to CPU and the rest
+# of the app still works — GPU passthrough is purely an acceleration.
+# =============================================================================
+services:
+  alma:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

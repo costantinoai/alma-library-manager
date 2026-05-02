@@ -39,6 +39,13 @@ services:
       dockerfile: Dockerfile
       args:
         VARIANT: ${ALMA_VARIANT:-normal}
+        # `cpu` (default) installs PyTorch's CPU-only wheel — small,
+        # works everywhere, matches the published `:latest` tag.
+        # Set ALMA_TORCH_VARIANT=cuda to install the CUDA-capable wheel
+        # (~1.8 GB larger) so SPECTER2 can use a host GPU passed
+        # through with docker-compose.gpu.yml. `setup.sh` flips this
+        # to `cuda` automatically when it detects an NVIDIA GPU.
+        TORCH_VARIANT: ${ALMA_TORCH_VARIANT:-cpu}
     image: alma:${ALMA_VARIANT:-normal}
     container_name: alma
     restart: unless-stopped
