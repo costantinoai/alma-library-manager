@@ -25,11 +25,11 @@ def _doi_from_s2(row: dict) -> str:
     return normalize_doi(str(external.get("DOI") or "")) or ""
 
 
-def _lookup_ids_for_row(row: sqlite3.Row) -> list[str]:
-    """Return S2 Graph API lookup ids for one local paper."""
+def _lookup_ids_for_values(semantic_scholar_id: str, doi: str) -> list[str]:
+    """Return S2 Graph API lookup ids for one identifier pair."""
     out: list[str] = []
-    s2_id = str(row["semantic_scholar_id"] or "").strip()
-    doi = normalize_doi(str(row["doi"] or "")) or ""
+    s2_id = str(semantic_scholar_id or "").strip()
+    doi = normalize_doi(str(doi or "")) or ""
     if s2_id:
         out.append(s2_id)
     if doi:
@@ -37,10 +37,33 @@ def _lookup_ids_for_row(row: sqlite3.Row) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def _lookup_ids_for_row(row: sqlite3.Row) -> list[str]:
+    """Return S2 Graph API lookup ids for one local paper."""
+    return _lookup_ids_for_values(
+        str(row["semantic_scholar_id"] or ""),
+        str(row["doi"] or ""),
+    )
+
+
+def _lookup_key_for_values(semantic_scholar_id: str, doi: str) -> str:
+    s2_id = str(semantic_scholar_id or "").strip().lower()
+    doi_value = str(doi or "").strip().lower()
+    return f"{s2_id}|{doi_value}"
+
+
 def _lookup_key_for_row(row: sqlite3.Row) -> str:
-    s2_id = str(row["semantic_scholar_id"] or "").strip().lower()
-    doi = str(row["doi"] or "").strip().lower()
-    return f"{s2_id}|{doi}"
+    return _lookup_key_for_values(
+        str(row["semantic_scholar_id"] or ""),
+        str(row["doi"] or ""),
+    )
+
+
+def _lookup_status_for_s2_paper(row: sqlite3.Row, paper: dict, lookup_ids: list[str]) -> tuple[str, list[str]]:
+    """Return the post-fetch lookup key and lookup IDs for status writes."""
+    s2_id = str(row["semantic_scholar_id"] or "").strip() or str(paper.get("paperId") or "").strip()
+    doi = str(row["doi"] or "").strip() or _doi_from_s2(paper)
+    effective_lookup_ids = list(dict.fromkeys(lookup_ids + _lookup_ids_for_values(s2_id, doi)))
+    return _lookup_key_for_values(s2_id, doi), effective_lookup_ids
 
 
 def _ensure_fetch_status_table(conn: sqlite3.Connection) -> None:
@@ -72,6 +95,7 @@ def _upsert_fetch_status(
     status: str,
     reason: str,
     lookup_ids: list[str],
+    lookup_key: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -92,7 +116,7 @@ def _upsert_fetch_status(
             FETCH_SOURCE,
             status,
             reason,
-            _lookup_key_for_row(row),
+            lookup_key or _lookup_key_for_row(row),
             json.dumps(lookup_ids),
             datetime.utcnow().isoformat(),
         ),
@@ -106,6 +130,72 @@ def _clear_fetch_status(conn: sqlite3.Connection, *, paper_id: str, model: str) 
         WHERE paper_id = ? AND model = ? AND source = ?
         """,
         (paper_id, model, FETCH_SOURCE),
+    )
+
+
+def _apply_s2_metadata(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row, paper: dict) -> None:
+    """Fill local paper metadata from a successful S2 paper response."""
+    fetched_s2_id = str(paper.get("paperId") or "").strip()
+    corpus_id = str(paper.get("corpusId") or "").strip()
+    doi = _doi_from_s2(paper)
+    abstract = str(paper.get("abstract") or "").strip()
+    url = str(paper.get("url") or "").strip()
+    publication_date = str(paper.get("publicationDate") or "").strip()
+    try:
+        year = int(paper.get("year")) if paper.get("year") is not None else None
+    except (TypeError, ValueError):
+        year = None
+    try:
+        citation_count = int(paper.get("citationCount") or 0)
+    except (TypeError, ValueError):
+        citation_count = 0
+
+    # The S2 vector fetch already requests this metadata. Persist it as a
+    # fill-only enrichment so future local compute and source links are not
+    # starved by fields we threw away.
+    conn.execute(
+        """
+        UPDATE papers
+        SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
+            semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), ?),
+            doi = CASE WHEN COALESCE(doi, '') = '' AND ? != '' THEN ? ELSE doi END,
+            abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? != '' THEN ? ELSE abstract END,
+            url = CASE WHEN COALESCE(url, '') = '' AND ? != '' THEN ? ELSE url END,
+            publication_date = CASE
+                WHEN COALESCE(publication_date, '') = '' AND ? != '' THEN ?
+                ELSE publication_date
+            END,
+            year = COALESCE(year, ?),
+            cited_by_count = CASE
+                WHEN ? > COALESCE(cited_by_count, 0) THEN ?
+                ELSE cited_by_count
+            END,
+            source_id = COALESCE(NULLIF(source_id, ''), ?, ?, ?),
+            fetched_at = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            fetched_s2_id or None,
+            corpus_id or None,
+            doi,
+            doi,
+            abstract,
+            abstract,
+            url,
+            url,
+            publication_date,
+            publication_date,
+            year,
+            citation_count,
+            citation_count,
+            doi or None,
+            url or None,
+            str(row["title"] or "").strip() or None,
+            datetime.utcnow().isoformat(),
+            datetime.utcnow().isoformat(),
+            paper_id,
+        ),
     )
 
 
@@ -210,7 +300,7 @@ def run_s2_vector_backfill(
         # coverage for a paper we re-fetch and overwrite the local fill.
         rows = conn.execute(
             """
-            SELECT p.id, p.doi, p.semantic_scholar_id
+            SELECT p.id, p.title, p.doi, p.semantic_scholar_id
             FROM papers p
             LEFT JOIN publication_embedding_fetch_status fs
               ON fs.paper_id = p.id
@@ -393,18 +483,13 @@ def run_s2_vector_backfill(
                     )
                     continue
 
-                fetched_s2_id = str(paper.get("paperId") or "").strip()
-                corpus_id = str(paper.get("corpusId") or "").strip()
-                if fetched_s2_id or corpus_id:
-                    conn.execute(
-                        """
-                        UPDATE papers
-                        SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
-                            semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), ?)
-                        WHERE id = ?
-                        """,
-                        (fetched_s2_id or None, corpus_id or None, paper_id),
-                    )
+                lookup_ids_for_paper = batch_lookup_ids_by_paper.get(paper_id, [])
+                status_lookup_key, status_lookup_ids = _lookup_status_for_s2_paper(
+                    row,
+                    paper,
+                    lookup_ids_for_paper,
+                )
+                _apply_s2_metadata(conn, paper_id=paper_id, row=row, paper=paper)
 
                 # T5: piggy-back the SPECTER2 backfill to populate
                 # `papers.tldr` + `papers.influential_citation_count`
@@ -442,7 +527,8 @@ def run_s2_vector_backfill(
                         model=model,
                         status="missing_vector",
                         reason="Semantic Scholar returned the paper without embedding.specter_v2",
-                        lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
+                        lookup_ids=status_lookup_ids,
+                        lookup_key=status_lookup_key,
                     )
                     continue
                 try:
@@ -484,7 +570,8 @@ def run_s2_vector_backfill(
                         model=model,
                         status="error",
                         reason=str(exc),
-                        lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
+                        lookup_ids=status_lookup_ids,
+                        lookup_key=status_lookup_key,
                     )
             conn.commit()
             # Keep `author_centroids` coherent with the new embeddings.
