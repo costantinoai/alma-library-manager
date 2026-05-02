@@ -108,3 +108,8 @@ frontend/snap.mjs
 # the shipped runtime, so they're untracked to keep the public repo
 # focused on what users actually run via Docker.
 scripts/
+
+# Local docker-compose override (e.g. to use a published image instead of local build)
+docker-compose.override.yml
+data/.volume-settings.json
+/data/.hf-cache
