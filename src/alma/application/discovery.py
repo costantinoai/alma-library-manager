@@ -30,6 +30,22 @@ from alma.openalex.client import (
     batch_fetch_works_by_openalex_ids,
 )
 from alma.core.scoring_math import clamp
+
+
+def _jsonable_numeric(value: Any) -> Any:
+    """json.dumps default for numpy scalars / arrays.
+
+    Score breakdowns are built across many lanes; any numeric path that
+    forgets to call ``float()`` would otherwise crash lens refresh with
+    "Object of type float32 is not JSON serializable" at staging time.
+    """
+    item = getattr(value, "item", None)
+    if callable(item):
+        return item()
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from alma.core.utils import normalize_doi
 from . import library as library_app
 from .feed import _commit_if_pending
@@ -1884,7 +1900,10 @@ def refresh_lens_recommendations(
                 paper_id,
                 idx,
                 float(candidate["score"]),
-                json.dumps(candidate.get("score_breakdown", {})),
+                json.dumps(
+                    candidate.get("score_breakdown", {}),
+                    default=_jsonable_numeric,
+                ),
                 provenance.get("source_type"),
                 provenance.get("source_api"),
                 provenance.get("source_key"),

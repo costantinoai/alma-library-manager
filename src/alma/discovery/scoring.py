@@ -809,15 +809,19 @@ def score_candidate(
 
     breakdown: Dict[str, Any] = {}
     for signal in weights:
-        v = round(values[signal], 4)
-        w = weights[signal]
+        # Force Python float — semantic similarities arrive as numpy
+        # float32 from the cosine path and would otherwise propagate
+        # into json.dumps at staging time, blowing up lens refresh
+        # with "Object of type float32 is not JSON serializable".
+        v = round(float(values[signal]), 4)
+        w = float(weights[signal])
         breakdown[signal] = {
             "value": v,
             "weight": w,
             "weighted": round(v * w, 4),
         }
-    breakdown["final_score"] = round(final_score, 4)
-    breakdown["weighted_score_pre_consensus"] = round(weighted_score, 4)
+    breakdown["final_score"] = round(float(final_score), 4)
+    breakdown["weighted_score_pre_consensus"] = round(float(weighted_score), 4)
     breakdown["consensus_buckets"] = list(consensus_buckets)
     breakdown["consensus_count"] = consensus_count
     breakdown["consensus_bonus"] = round(consensus_bonus, 4)
