@@ -33,7 +33,8 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `publication_authors` | Many-to-many between papers and authors. |
 | `publication_topics` | Many-to-many between papers and topics, with score. |
 | `publication_institutions` | Author-institution links per paper. |
-| `publication_references` | Citation graph: who cites whom. |
+| `publication_references` | Citation graph: who cites whom. PK is `(paper_id, referenced_work_id)` for paper-side lookups; `idx_publication_references_ref` on `referenced_work_id` accelerates the graph lane's corpus-overlap query (which would otherwise be O(N²) on dense reference graphs). |
+| `paper_enrichment_status` | Per-paper, per-source, per-purpose ledger for the corpus metadata rehydration job. Records `status` (`enriched` / `unchanged` / `terminal_no_match` / `retryable_error`), `lookup_key`, `fields_key`, `attempts`, and `next_retry_at` so reruns skip what's already covered. |
 
 ### Curation
 

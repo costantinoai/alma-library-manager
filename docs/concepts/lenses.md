@@ -68,7 +68,27 @@ time.
 
 You can pin a branch (always include it), mute one (drop it
 entirely), or boost one (give it a higher rank). Those controls are
-saved per-lens and feed into the next refresh.
+saved per-lens and feed into the next refresh. They survive across
+seed-set drift via lineage matching: when K-means reshuffles a
+branch by even one paper, the new cluster gets a new `branch_id`
+but inherits any pin / mute / boost from a past branch whose seed
+set overlaps ≥ 70 %.
+
+The system also intervenes on branches automatically:
+
+* When a branch's `auto_weight` drops below ~0.65, its
+  `core_topics` and `explore_topics` are *swapped* for the next
+  refresh — the system probes the explore-angle while the core
+  angle has been accumulating dismisses. Self-correcting on the
+  refresh after.
+* When `auto_weight` drops below ~0.55, the branch is auto-muted
+  (zero external lane budget). Cluster seeds still influence
+  ranking through their centroid + author / topic affinities — the
+  system just stops asking external APIs for more like it.
+
+User-set pin / boost takes precedence over both. See
+[Discovery → Branches → Auto lifecycle](discovery.md#auto-lifecycle-rotate-then-auto-mute)
+for the full state machine.
 
 ## Signals on a lens
 

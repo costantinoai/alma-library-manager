@@ -93,7 +93,7 @@ cancel.
 | Author refresh-cache | Per-author manual + nightly scheduler. |
 | Author deep-refresh | Per-author manual; deep-refresh-all bulk. |
 | Feed refresh | Manual + scheduler (every few hours). |
-| Lens refresh | Manual per-lens. |
+| Lens refresh | Manual per-lens. Default `LENS_REFRESH_LIMIT = 100` per refresh; runs four parallel retrieval lanes (lexical, vector, graph, external), merges by candidate identity (so cross-lane hits accumulate `consensus_count`), scores with the 10-signal hybrid ranker, applies the diversity pass (per-author cap = 2, per-source-key cap ≈ 25 %), then stages survivors against the lens. Branches are rebuilt on every refresh, then go through the auto-lifecycle pass (rotate when `auto_weight ≤ 0.65`, auto-mute when `≤ 0.55`) before the external lane fans out. |
 | Discovery refresh (legacy global) | Manual. |
 | Backfill S2 vectors | Settings → AI. |
 | Compute embeddings (local SPECTER2) | Settings → AI. |

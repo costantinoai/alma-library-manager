@@ -132,12 +132,37 @@ duplicated across `discovery.scoring`, `application.signal_projection`,
   multi-source bonus, used by paper Discovery's per-candidate
   consensus and the author rail's per-bucket consensus alike
 * `log_prevalence_weights(counts)` — sign-preserving log-prevalence
-  normalization, used by paper Discovery's topic / venue weighting
-  and the author rail's library prevalence
+  normalization, used by paper Discovery's topic / venue / **author**
+  weighting (added 2026-05) and the author rail's library prevalence.
+  Author affinity used to be linear-max-normalized, which let one
+  dominant author crowd the long tail; log-prevalence flattens this.
 
 Calibration constants live at the call site; the math lives once.
 A change to `consensus_bonus`'s curve takes effect on both Discovery
 and the author rail without extra plumbing.
+
+### Branch auto-lifecycle
+
+`application.discovery._apply_branch_auto_lifecycle` runs after
+`_enrich_branches_with_outcomes` and before retrieval. It maps each
+branch's `auto_weight` to a state:
+
+* `auto_weight ≤ 0.65` → **rotated**: `core_topics` and
+  `explore_topics` swapped on the branch dict. Self-correcting on
+  the next refresh because the swap is recomputed every time.
+* `auto_weight ≤ 0.55` → **auto-muted**: `is_active=False`,
+  external lane skips it.
+
+User-set pin / boost wins over both. The transformation is pure
+(no DB writes), so retraction is instantaneous when the user
+adjusts a control or auto_weight recovers.
+
+`_enrich_branches_with_outcomes` and `_apply_branch_controls` both
+fall back to a **lineage match**: when the current cluster's seed
+set overlaps ≥ 70 % with a previous branch's seed set, the past
+branch's calibration history (and its pin / mute / boost flags)
+are inherited, so K-means reshuffles don't silently orphan a
+user's accumulated curation.
 
 ### Outcome calibration
 
