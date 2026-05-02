@@ -296,6 +296,8 @@ parameters and response shapes.
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
+| `GET` | `/papers/enrichment-status` | Pure-read corpus metadata rehydration ledger summary + per-paper rows |
+| `POST` | `/papers/rehydrate-metadata` | Queue an OpenAlex metadata repair job (Activity envelope) |
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |

@@ -85,9 +85,23 @@ and probes the selected environment for the packages ALMa needs.
 
 Heavy embedding work does not run inline. It goes through Activity:
 
-* **Backfill S2 vectors**
-* **Compute missing embeddings**
+* **Backfill S2 vectors** — also fills DOI, abstract, URL,
+  publication date, year, and citation count from the same
+  Semantic Scholar response, so a vector hit doubles as cheap
+  metadata repair.
+* **Compute missing embeddings** — local SPECTER2 only runs on
+  papers that already have both a title and an abstract. The
+  status card surfaces a separate **blocked missing
+  title/abstract** count for rows that still need metadata
+  repair before they are eligible.
 * **Rebuild graph projections**
+
+If the blocked count is large, run **Settings → Corpus maintenance
+→ Rehydrate metadata** first. That job batches OpenAlex by work ID
+to fill missing DOI / abstract / URL / publication date /
+authorships / topics / references on already-stored papers, with
+per-paper bookkeeping in `paper_enrichment_status` so reruns are
+cheap.
 
 You can keep using the app while those jobs run.
 

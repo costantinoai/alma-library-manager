@@ -104,6 +104,7 @@ cancel.
 | OpenAlex resolve | Library → Imports → Resolve. |
 | Enrich imports | Library → Imports → Enrich. |
 | Preprint dedup | Settings → Data & system. |
+| Corpus metadata rehydration | Settings → Corpus maintenance. Batched OpenAlex repair for stored papers missing DOI / abstract / URL / publication date / authorships / topics / references. Per-paper ledger (`paper_enrichment_status`) so reruns skip already-enriched rows. |
 | Alert evaluate-and-send | Per-alert manual + scheduler. |
 
 ## What "failed" means
