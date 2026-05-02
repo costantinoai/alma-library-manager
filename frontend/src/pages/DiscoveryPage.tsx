@@ -68,6 +68,7 @@ import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/l
 // what's new in the lens without losing the underlying scoring.
 type DiscoverySort = 'relevance' | 'recent'
 type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
+const LENS_REFRESH_LIMIT = 30
 
 export function DiscoveryPage() {
   const queryClient = useQueryClient()
@@ -514,7 +515,7 @@ export function DiscoveryPage() {
             <Button
               type="button"
               variant="default"
-              onClick={() => selectedLensId && refreshLensMutation.mutate({ lensId: selectedLensId, limit: 60 })}
+              onClick={() => selectedLensId && refreshLensMutation.mutate({ lensId: selectedLensId, limit: LENS_REFRESH_LIMIT })}
               disabled={!selectedLensId || refreshLensMutation.isPending}
               className="h-10 px-5"
             >
@@ -917,7 +918,7 @@ export function DiscoveryPage() {
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => refreshLensMutation.mutate({ lensId: selectedLensId, limit: 60 })}
+                  onClick={() => refreshLensMutation.mutate({ lensId: selectedLensId, limit: LENS_REFRESH_LIMIT })}
                   disabled={refreshLensMutation.isPending}
                 >
                   {refreshLensMutation.isPending ? (
