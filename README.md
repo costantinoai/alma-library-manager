@@ -44,9 +44,11 @@ The app has five views:
 
 ## Quick start
 
-Three paths, pick the one that matches your hardware. Replace
-`you@example.com` with the email you want to identify yourself to
-OpenAlex (free, no signup required).
+The suggested install is one `docker run` line that pulls the
+prebuilt image from GitHub Container Registry — no clone, no build,
+no compose file. Three paths, pick the one that matches your
+hardware. Replace `you@example.com` with the email you want to
+identify yourself to OpenAlex (free, no signup required).
 
 ### Most laptops / desktops / servers (CPU)
 
@@ -139,38 +141,6 @@ restarts the container, and removes the old image layer.
 
 ---
 
-## Quick start (Docker Compose — for local builds or stack management)
-
-For users who want to build the image from source, run ALMa alongside
-other services in a stack, or have host-side bind-mounts so they can
-poke at `data/` directly. Clone the repo, then:
-
-```bash
-cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
-docker compose up -d             # CPU build (default)
-```
-
-GPU build with passthrough — needs the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
-installed on the host (see the GPU box in the quick start above):
-
-```bash
-ALMA_TORCH_VARIANT=cuda \
-  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-```
-
-Lite build:
-
-```bash
-ALMA_VARIANT=lite docker compose up -d --build
-```
-
-Update with `docker compose pull && docker compose up -d`. Your data
-lives in `./data` next to the compose file; nothing personal is
-baked into the image.
-
----
-
 ## After it starts
 
 ALMa is empty on first launch — no library, no followed authors, no
@@ -232,9 +202,39 @@ disk is precious.
 The CPU + lite flavors are published for `linux/amd64` and
 `linux/arm64`. The GPU flavor is `amd64`-only.
 
-Not sure which one to pick? Run `./setup.sh` from a clone of this
-repo — it autodetects the host's GPU and toolkit and pulls the right
-tag for you.
+---
+
+## Build from source with Docker Compose (alternative)
+
+If you'd rather build the image from this checkout, run ALMa
+alongside other compose-managed services, or have a host folder you
+can browse directly instead of named volumes:
+
+```bash
+git clone https://github.com/costantinoai/alma-library-manager.git
+cd alma-library-manager
+cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
+docker compose up -d             # CPU build (default)
+```
+
+GPU build with passthrough — needs the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+installed on the host (see the GPU box in the quick start above):
+
+```bash
+ALMA_TORCH_VARIANT=cuda \
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+Lite build:
+
+```bash
+ALMA_VARIANT=lite docker compose up -d --build
+```
+
+Update with `docker compose pull && docker compose up -d`. Your data
+lives in `./data` next to the compose file; nothing personal is
+baked into the image.
 
 ---
 
