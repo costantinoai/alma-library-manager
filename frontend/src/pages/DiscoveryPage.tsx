@@ -68,7 +68,15 @@ import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/l
 // what's new in the lens without losing the underlying scoring.
 type DiscoverySort = 'relevance' | 'recent'
 type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
-const LENS_REFRESH_LIMIT = 30
+// Per-refresh staging cap. Drives both the per-channel candidate
+// budget (each retrieval lane aims for `limit` candidates, so the
+// raw pool is roughly 4 × limit before dedup + filters) and the
+// final top-K. 100 gives the diversity / author / source-key caps
+// substantial room to enforce themselves and significantly raises
+// the chance of cross-lane consensus hits — the same paper found
+// independently by lexical + vector + S2 will accumulate buckets
+// only when each lane's pool is large enough to overlap.
+const LENS_REFRESH_LIMIT = 100
 
 export function DiscoveryPage() {
   const queryClient = useQueryClient()

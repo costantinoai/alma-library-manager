@@ -21,22 +21,96 @@ give the recommender clearer evidence.
 5. Refresh after making changes. Weights and actions affect the next
    refresh, not already-materialized rows.
 
+## What gets shown vs hidden
+
+Two filters apply on top of all the ranking math, and only two:
+
+* **Saved papers never reappear.** Once a paper is in your Library
+  (`status='library'`), Discovery permanently excludes it. That's
+  the canonical "you already have this" signal.
+* **Dismissed and disliked papers never reappear.** Explicit negative
+  actions block re-surfacing.
+
+Everything else in your corpus is fair game on a refresh — including
+papers your other workflows already pulled in but that you haven't
+saved yet (status `tracked`). They might have been overshadowed by a
+dominant author or topic the first time around; with new feedback
+they can re-rank into the top-K and get a second look.
+
+If the same paper keeps re-appearing and you don't want it to,
+**Dismiss** it — that's the correct lever, not Save.
+
+## Single-author dominance
+
+If your library is heavily skewed toward one author (e.g. your PI),
+you'll feel two things without intervention:
+
+1. The author affinity signal would saturate around that one author
+   and bury everyone else.
+2. The "taste-author" external retrieval lane would fire explicit
+   author-name searches at OpenAlex and Semantic Scholar, which just
+   amplifies that same author back into the candidate pool.
+
+Discovery counters both:
+
+* **Log-prevalence affinity weighting.** A co-author appearing on 5
+  of 100 saved papers used to score `0.05` against the dominant
+  author's `1.0`; with log-prevalence they score around `0.4` —
+  meaningful enough to compete on merit when other signals agree.
+* **Dominant authors don't drive external queries.** Any author who
+  appears on more than 40% of your saved papers is excluded from the
+  taste-author lane's explicit search list. They still get full
+  ranking credit through `author_affinity` on candidates pulled in
+  by other lanes — they just stop being the explicit search query.
+* **Per-author cap in the staged top-K.** No single first/last
+  author is allowed more than two slots in a refresh. If the ranker
+  produces three, the third moves to an overflow queue and is only
+  shown if there are slots left after the rest of the top-K is
+  filled.
+* **Per-source-key cap.** No single external query (one taste-author,
+  one taste-topic, etc.) can supply more than ~25% of the staged
+  set. Forces lateral diversity across queries.
+
 ## Weights
 
-**Settings → Discovery weights** exposes the hybrid ranking signals
-documented in [Scoring formulas](../reference/scoring.md).
+Every signal that feeds the ranker is weighted, normalized to sum to
+1.0, and configurable. **Settings → Discovery weights** exposes the
+ten signals documented in [Scoring formulas](../reference/scoring.md).
+The defaults give roughly:
+
+| Signal | Default share |
+|---|---|
+| `topic_score` | ~17% |
+| `text_similarity` (SPECTER2 + lexical blend) | ~17% |
+| `source_relevance` | ~13% |
+| `author_affinity` | ~13% |
+| `recency_boost` | ~9% |
+| `feedback_adj` | ~9% |
+| `preference_affinity` | ~9% |
+| `usefulness_boost` | ~5% |
+| `journal_affinity` | ~4% |
+| `citation_quality` | ~4% |
+
+So a perfect SPECTER2 cosine of 1.00 contributes at most ~17% of the
+final score — it influences the ranking but does not dominate it.
+The other 83% comes from the eight other signals together. If you
+want SPECTER2 to influence less, lower `weights.text_similarity`;
+if you want it to dominate, raise it. The ranker re-normalizes
+against the budget every refresh.
 
 Common adjustments:
 
 | Goal | Adjustment |
 |---|---|
-| More recent papers | Raise `recency_boost`. |
+| More recent papers | Raise `recency_boost`. Or switch `recommendation_mode` to `explore`, which auto-multiplies `recency_boost` by 1.5×. |
 | Less old-hit citation bias | Lower `citation_quality`. |
 | Stronger influence from your ratings | Raise `feedback_adj` and `preference_affinity`. |
-| Fewer same-author recommendations | Lower `author_affinity`. |
+| Fewer same-author recommendations | Lower `author_affinity` (the diversity cap already prevents >2/author in the top-K, so usually no further tuning needed). |
+| Less semantic dominance | Lower `weights.text_similarity`. |
 
-The weights are stored in ALMa's `discovery_settings` store and apply on
-the next lens refresh.
+The weights are stored in ALMa's `discovery_settings` store and apply
+on the next lens refresh. Each lens can also carry its own override
+that merges on top of the global defaults.
 
 ## What Feedback Teaches
 

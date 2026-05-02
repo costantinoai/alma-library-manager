@@ -289,22 +289,47 @@ accumulate.
 
 ## Defaults
 
-The default weights err on the side of "balanced":
+The default weights err on the side of "balanced". Every signal is
+weighted, the weights are read from `discovery_settings.weights.*`,
+and the ranker normalizes them to sum to 1.0 before computing the
+final 0–100 score. Source of truth:
+`src/alma/discovery/scoring.py` (`weights = {...}` near the top of
+`score_candidate`):
 
-| Signal | Weight |
-|---|---|
-| `source_relevance` | 1.0 |
-| `text_similarity` | 1.0 |
-| `feedback_adj` | 1.0 |
-| `preference_affinity` | 0.8 |
-| `author_affinity` | 0.7 |
-| `citation_quality` | 0.5 |
-| `journal_affinity` | 0.5 |
-| `recency_boost` | 0.4 |
+| Signal | Raw weight | Normalized share | What it captures |
+|---|---|---|---|
+| `topic_score` | 0.20 | ~17% | Overlap with your top library topics (log-prevalence weighted). |
+| `text_similarity` | 0.20 | ~17% | Semantic SPECTER2 cosine **blended with** lexical TF-IDF + char n-grams + scholarly term overlap. The semantic / lexical sub-weights are dynamic per candidate and reported as `text_similarity_semantic_weight` + `text_similarity_lexical_weight` in the breakdown. |
+| `source_relevance` | 0.15 | ~13% | How strong the retrieval signal was that surfaced the candidate (high for related-works, lower for broad topic search). |
+| `author_affinity` | 0.15 | ~13% | Has the candidate's author appeared in your library or follow list? Log-prevalence weighted so a single dominant author can't crowd the long tail. |
+| `recency_boost` | 0.10 | ~9% | Newer papers get a bump (linear decay over `recency_window_years`, default 10). Reads `year`, falls back to `publication_date[:4]`. |
+| `feedback_adj` | 0.10 | ~9% | Liked / disliked papers and their projected graph neighbours. |
+| `preference_affinity` | 0.10 | ~9% | Distance from your `preference_profiles` centroid. |
+| `usefulness_boost` | 0.06 | ~5% | Explicit per-source bonus, partly tied to recency and citation_quality. |
+| `journal_affinity` | 0.05 | ~4% | Does the candidate's venue appear often in your library (log-prevalence). |
+| `citation_quality` | 0.05 | ~4% | `log(effective_citations + 1) / log(1000)` where `effective_citations = max(cited_by_count, 2 * influential_citation_count)`. |
 
-You can shift the balance per-lens (each lens overrides global
-weights) and see the effect after the next refresh. The
-`recommendations` table caches the last batch so you don't lose
+So a perfect SPECTER2 cosine of 1.00 contributes at most ~17% of the
+final score (≈17 points on the 0–100 scale), tied with topic_score.
+SPECTER2 dominates `text_similarity` only insofar as the dynamic
+blend favours semantic over lexical for that candidate — and even
+then it's bounded by the 17% bucket. Three knobs change this
+balance:
+
+* **Per-signal weights**: edit `weights.text_similarity` in
+  `discovery_settings` (Settings → Discovery weights). Lowering it to
+  e.g. 0.10 caps SPECTER2's contribution at ~9% of the final score.
+* **Recommendation mode**: `recommendation_mode` reads `balanced` /
+  `explore` / `exploit`. Explore multiplies `recency_boost` by 1.5×
+  and halves `author_affinity`, `journal_affinity`, `citation_quality`
+  before normalization; exploit does the opposite. The shift
+  re-normalizes against the same 1.0 budget, so all signals still
+  participate proportionally.
+* **Per-lens overrides**: each lens carries its own
+  `weights.*` overrides. They're merged on top of the global
+  defaults at refresh time.
+
+The `recommendations` table caches the last batch so you don't lose
 results when re-tuning — only the next refresh applies the new
 weights.
 
@@ -483,7 +508,7 @@ Each network bucket gets `network_slot_cap = max(2, ⌈limit/3⌉)`
 still sees external suggestions. Overlap with prior buckets
 feeds the consensus pass, not the slot cap.
 
-## Topic / venue prevalence weighting
+## Topic / venue / author prevalence weighting
 
 `_top_topics_for_library(db, limit=12)` and
 `_top_venues_for_library(db, limit=8)` return
@@ -496,6 +521,16 @@ $$
 
 so the top library topic = 1.0 and a topic with count=1 in a
 library where the max is 20 gets ≈0.23.
+
+The same `log_prevalence_weights` transform applies to
+**`author_affinity`** in `discovery/scoring.py`. Authors used to
+be linearly max-normalized on the rationale that "you wrote with
+this person or you didn't" — but on heavily skewed libraries (one
+PI on 70% of saved papers) that scheme floored every other author
+at <0.1 and let the dominant author crowd the top-K. Log-prevalence
+gives a co-author on 5 of 100 saved papers a meaningful `0.4`
+instead of an invisible `0.05`. The structural per-author cap in
+`engine.diversity_interleave` is the second guardrail.
 
 `_weighted_overlap_score(shared, weights, scale)` sums prevalence
 weights for the candidate's overlap × scale. This is what the

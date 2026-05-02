@@ -27,14 +27,39 @@ collection as the seed. You can also define lenses scoped to a
 [collection](library.md#collections), a topic keyword, or a tag (see
 [Lenses](lenses.md)).
 
-For each lens, refresh runs in three phases:
+For each lens, refresh runs in four phases:
 
 1. **Retrieval** — fan out across multiple sources to assemble a
    candidate set.
 2. **Ranking** — score each candidate via a 10-weight hybrid
    formula.
-3. **Branch grouping** — cluster results into themed sub-groups
+3. **Diversity pass** — interleave by source type, then enforce a
+   per-author cap (any first/last author is allowed at most twice in
+   the staged top-K) and a per-source-key cap (any single external
+   query supplies at most ~25% of the staged set). Excess goes to an
+   overflow tail that backfills only if the diversity pass leaves
+   slots empty. This is what prevents a single dominant author or
+   external query from monopolising the page.
+4. **Branch grouping** — cluster results into themed sub-groups
    ("Branches") for navigation.
+
+### What never re-surfaces
+
+Two filters run before staging, on top of all the diversity logic:
+
+* **Saved papers** (`status='library'`) — once you save a paper it
+  belongs to your Library and is permanently excluded from Discovery.
+* **Dismissed or disliked papers** — explicit negative actions block
+  re-surfacing.
+
+Everything else is fair game. Specifically, papers your corpus has
+already pulled in but that you haven't saved (`status='tracked'`)
+are valid candidates — they may carry an embedding, topics, and
+authorship metadata that make them genuinely useful re-suggestions
+under a different lens or after enough new feedback shifts the
+profile. Tracked papers used to be double-blocked by a permanent
+"any prior interaction" filter; that block was removed because it
+created a dead funnel as the corpus grew.
 
 ### Retrieval channels
 
@@ -43,14 +68,36 @@ For each lens, refresh runs in three phases:
 | **OpenAlex related works** | OpenAlex `/works/{id}/related-works` | Papers OpenAlex itself flags as related to your saved papers. |
 | **OpenAlex topic search** | OpenAlex `/works?filter=topics.id:…` | New papers in topics you've saved into. |
 | **Followed-author works** | OpenAlex `/works?filter=author.id:…` | Recent works from authors on your follow list. |
+| **Taste-author search** | OpenAlex / S2 keyword search | Targeted queries built from your top preferred authors — but **only authors who don't dominate your library** (cap: 40% of saved papers). Sending an explicit "Smith et al." query when 60% of your library is already Smith just amplifies him; that author still gets ranking credit through `author_affinity`, we just don't fan out external API budget at him. |
 | **Co-author network** | OpenAlex graph | Papers by frequent co-authors of your saved authors. |
 | **Citation chain** | OpenAlex / S2 | Papers that cite your highly-rated papers. |
 | **Semantic Scholar related** | S2 `/recommendations` | S2's own recommender, with optional filters. |
-| **SPECTER2 cosine** | local cache | Top-k cosine neighbours of your library centroid (if embeddings are enabled). |
+| **SPECTER2 cosine** | local cache | Top-k cosine neighbours of your library centroid (if embeddings are enabled). The lane scores **every embedded paper in the corpus** against the centroid — not a sampled subset — so the top-K is the actual best-K, not the best-K of an arbitrary first-1000 rows. |
+| **Local references (graph)** | local `publication_references` | Papers your seeds cite, ranked by how many papers across the **entire local corpus** cite each reference (with a tie-break by how many seeds cite it). The corpus-wide count cushions the recency penalty seed-only counting would create — a 2024 paper cited by one seed and four other corpus papers outranks a 2010 paper cited by one seed and nothing else. The recency_boost in the scorer takes over from there once OpenAlex enrichment supplies the publication date. |
 
 Channels can be enabled / disabled / weighted in **Settings →
 Discovery weights**. Each channel runs with a per-lane deadline so a
 single slow source can't stall the whole refresh.
+
+#### Best-of-K vs first-N
+
+Every channel that we pick from a candidate list (lexical, vector,
+graph, external) ranks before truncating to the per-lane budget:
+
+| Channel | Sort order |
+|---|---|
+| Lexical (OpenAlex search) | `relevance_score:desc` |
+| Vector (local SPECTER2) | cosine similarity to your library centroid (full corpus, not sampled) |
+| Graph: local references | `corpus_overlap DESC, seed_overlap DESC` (see above) |
+| Graph: OpenAlex related-works | OpenAlex's own relatedness algorithm |
+| Graph: citing-works | `cited_by_count:desc` |
+| Graph: referenced-works | `publication_year:desc` (recency-prioritized) |
+| Followed-author works | `publication_date:desc` (newest first) |
+| Taste-author / -topic / -keyword search | `relevance_score:desc` |
+| S2 recommendations | S2's own recommender ranking |
+
+So whatever the per-lane cap is set to, you're getting *the best* of
+that source — not whatever the source happened to surface first.
 
 ### Ranking signals
 
@@ -64,10 +111,19 @@ The hybrid scorer combines (default weights configurable):
   lexical fallback (TF-IDF + character n-grams + scholarly term
   overlap).
 * **Author affinity** — has the candidate's author appeared in your
-  Library or follow list?
+  Library or follow list? Affinity weights use **log-prevalence**
+  (`log(1 + count) / max_log`) for authors, topics, and journals
+  alike, so a single dominant author can't crowd the long tail down
+  to noise. Co-authors that appear on a handful of saved papers
+  still register as "this is someone you've worked with."
 * **Journal affinity** — does the candidate's venue appear often in
   your Library?
-* **Recency boost** — newer papers get a small boost.
+* **Recency boost** — newer papers get a small boost. The boost
+  reads `year` first, then falls back to parsing `publication_date`
+  so corpus-rehydrated papers (where `publication_date` was filled
+  but `year` may not be) still surface here. This is intentional —
+  Discovery is a place to find recent-but-not-yet-monitored work,
+  complementing what the Feed already shows.
 * **Citation quality** — log-scaled citation count.
 * **Feedback adjustment** — boosts or penalises candidates connected
   to papers you've liked, loved, disliked, dismissed, or removed. The
@@ -116,6 +172,89 @@ groupings within a lens. A branch has:
 
 The Branch Studio UI lets you pin / mute / boost a branch — those
 controls feed back into the next lens refresh's ranking.
+
+#### How branches are built
+
+`_build_seed_branches` runs at the start of every lens refresh:
+
+1. **Cluster the seeds.** When ≥ 4 of your library papers carry
+   embeddings, K-means clusters them in SPECTER2 space; otherwise a
+   lexical fallback assigns each seed to its most *distinctive*
+   token (TF-IDF against the rest of the library — not the most
+   *common* token, which would collapse every paper containing
+   "neural" into one bucket).
+2. **Right-size K.** After K-means the system checks pairwise
+   centroid similarity and merges any pair above 0.85. So a
+   coherent library that forced K=6 doesn't end up with five
+   near-duplicate clusters wasting external API budget on
+   overlapping searches; you get fewer-but-distinct branches when
+   the data supports it.
+3. **Per-cluster topics with TF-IDF.** Each branch's `core_topics`
+   are extracted with the cluster's tokens scored against *all
+   other clusters' tokens*. So a token that appears in every
+   cluster (e.g. "neural" in a neuroscience library) is suppressed,
+   leaving the discriminative term as the branch's identity. This
+   is what stops every branch label from looking like
+   "neural / cortex / model".
+4. **Explore topics.** Each branch carries `explore_topics` from a
+   neighbouring cluster — *temperature-gated*: at low temperature
+   the explore topics come from the *nearest* cluster (gradient
+   discovery, a small step away from core); at high temperature
+   they come from the *farthest* cluster (leap discovery,
+   genuinely orthogonal threads). The branch's `direction_hint`
+   surfaces this so you know why it's pointing where it is.
+5. **Branch identity.** `branch_id` is hashed from the cluster's
+   sorted seed paper IDs, scoped by lens — so labels can drift
+   without breaking the join to stored recommendations. When the
+   seed set shifts even by one paper, the id changes, but…
+
+#### Lineage: calibration + controls survive seed drift
+
+When K-means reshuffles a single seed (say, you saved 3 papers
+since the last refresh), the new cluster's `branch_id` is
+technically different from the previous one. Two mechanisms ensure
+your accumulated calibration and pin/mute/boost don't get lost:
+
+* **Calibration lineage.** `_enrich_branches_with_outcomes` checks
+  past `branch_id`s in `recommendations` for this lens and inherits
+  the outcome history of any past branch whose seed set overlaps
+  ≥ 70 % with the current cluster's seed set.
+* **Control lineage.** `_apply_branch_controls` does the same for
+  pin / mute / boost — a branch you muted three days ago stays
+  muted after K-means reshuffles, as long as the new cluster is
+  ≥ 70 % the same papers.
+
+This is what makes Branch Studio reliable for long-running users:
+acting on a branch carries forward across refreshes even as your
+library evolves.
+
+#### Auto-weighting and the budget allocator
+
+Every branch gets an **auto_weight** in `[0.5, 1.5]` derived from
+its save / dismiss history (`_compute_branch_auto_weight`):
+
+* Bayesian-smoothed positive share, prior strength 6.0, so
+  ~6 actions are needed before the weight moves meaningfully.
+* Each action is exponentially decayed with a 30-day half-life;
+  the window is 60 days. Old signal naturally fades; the branch
+  drifts back toward neutral 1.0 as fresh data dominates.
+* New branches with no history start at 1.15 (cold-start
+  visibility lift), so they actually get surface area to
+  accumulate signal in their first couple of refreshes.
+
+The auto_weight is the proportional share each active branch gets
+of the external lane's per-refresh candidate budget — strong
+branches get more API queries, weak ones get fewer. Pin and boost
+are **floors** on top: pinned branches get at least 1.65×, boosted
+at least 1.3×, regardless of auto_weight.
+
+Two safety floors prevent self-fulfilling weakness:
+
+* `branches.min_budget_per_branch` (default 8) — no active branch
+  drops below 8 candidates from the external lane regardless of
+  auto_weight. A weak branch needs enough volume to ever recover.
+* Muted branches receive zero budget but stay in the cluster set,
+  so unmuting recovers them instantly.
 
 ## Actions on a Discovery card
 

@@ -52,9 +52,21 @@ interface Chip {
 function buildChips(signals: ProvenanceSignals): Chip[] {
   const chips: Chip[] = []
 
-  // Numeric "why" chips (T4) — lead with these because they're the
-  // truthful evidence users want. Rendered only when the underlying
-  // signal cleared its threshold at scoring time.
+  // Lead with the consensus chip — multi-source agreement is the
+  // strongest "why this surfaced" signal we have. When N≥2 distinct
+  // retrieval channels independently surface the same candidate, we
+  // want the user to see that *first*, then the per-signal scores.
+  if (typeof signals.consensusCount === 'number' && signals.consensusCount >= 2) {
+    chips.push({
+      key: 'consensus',
+      label: `Found by ${signals.consensusCount} sources`,
+      tone: 'accent',
+    })
+  }
+
+  // Numeric "why" chips (T4) — truthful evidence users want.
+  // Rendered only when the underlying signal cleared its threshold at
+  // scoring time.
   if (typeof signals.specterCosine === 'number' && signals.specterCosine > 0) {
     chips.push({
       key: 'specter',
@@ -87,17 +99,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
       tone: 'warning',
     })
   }
-  // Multi-source consensus: a candidate found by N≥2 retrieval channels
-  // / source APIs gets a band-relative score bonus (see scoring docs).
-  // Surfacing the count makes the bonus legible; without it the chip
-  // would mean nothing.
-  if (typeof signals.consensusCount === 'number' && signals.consensusCount >= 2) {
-    chips.push({
-      key: 'consensus',
-      label: `Suggested by ${signals.consensusCount} sources`,
-      tone: 'positive',
-    })
-  }
+  // (Consensus chip moved to lead position above.)
   // Projected feedback: the signed pull from the user's per-paper
   // history (saves / ratings / dismisses → authors / topics / venues
   // / keywords / tags / semantic + citation neighbours). Threshold of
