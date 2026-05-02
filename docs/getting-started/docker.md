@@ -20,7 +20,10 @@ There are two install paths:
    build the image from source, manage ALMa alongside other
    compose-managed services, or directly inspect `data/` on the host.
 
-Both paths use the same image; pick by ergonomics.
+Both paths use the same image; pick by ergonomics. Three image tags
+are published — `:latest` (CPU, default), `:latest-gpu` (CUDA torch
+for NVIDIA hosts), and `:latest-lite` (no torch, for Pis). The
+README quick start has copy-paste `docker run` commands for each one.
 
 ## Path 1 — single `docker run` (suggested)
 
@@ -152,30 +155,82 @@ graceful fallback in action — env vars from the `env_file:` directive
 have already been passed into the container, so the app keeps
 working; it just can't *also* load the file from inside.
 
-## Two image variants
+## Three image flavors
 
-ALMa publishes two flavours; both run every feature in the app, only
-the bundled embedding stack differs.
+ALMa publishes three flavors; all of them run every feature in the
+app — only the bundled embedding stack differs.
 
-| | `normal` (default) | `lite` |
-|---|---|---|
-| Image tag | `:latest`, `:0.9.2` | `:latest-lite`, `:0.9.2-lite` |
-| Image size | ~1.4 GB | ~1.2 GB |
-| Peak runtime memory | ~2 GB | ~1 GB |
-| Local SPECTER2 encoder | yes (`torch` + `transformers`) | no |
-| Semantic Scholar pre-computed vectors | yes | yes |
-| OpenAI / cloud embedding provider | configurable | configurable |
-| Discovery / Insights graph / clustering | yes | yes |
-| BibTeX / Zotero import | yes | yes |
+| | `normal` CPU (default) | `normal` GPU | `lite` |
+|---|---|---|---|
+| Tag | `:latest`, `:0.13.0` | `:latest-gpu`, `:0.13.0-gpu` | `:latest-lite`, `:0.13.0-lite` |
+| Compressed image | ~1.4 GB | ~3.2 GB | ~1.2 GB |
+| Peak runtime memory | ~2 GB | ~3 GB (more on GPU init) | ~1 GB |
+| Local SPECTER2 encoder | yes (CPU) | yes (CUDA when host GPU is exposed; CPU otherwise) | no |
+| Semantic Scholar pre-computed vectors | yes | yes | yes |
+| OpenAI / cloud embedding provider | configurable | configurable | configurable |
+| Discovery / Insights graph / clustering | yes | yes | yes |
+| BibTeX / Zotero import | yes | yes | yes |
+| Architectures | amd64 + arm64 | amd64 only | amd64 + arm64 |
 
-Pick `lite` on a Raspberry Pi or a host where 1.5 GB of `torch` on
-disk is precious. Most papers with a DOI come back from Semantic
-Scholar with a pre-computed SPECTER2 vector, so embedding coverage
-stays high even without the local encoder.
+The CPU flavor is the default `:latest` so users without a GPU only
+download the small image. GPU users explicitly opt in via the `-gpu`
+suffix (or let `setup.sh` autodetect — see below). Pick `lite` on a
+Raspberry Pi or any host where 1.5 GB of `torch` on disk is precious.
 
-Both variants are published for `linux/amd64` and `linux/arm64`, so
-Apple Silicon Macs and ARM servers (Pi 4/5, Graviton, Ampere) get
-native binaries.
+### GPU acceleration (`docker run` or compose)
+
+Two pieces are required to reach a host GPU from inside the container:
+
+1. **Host-side**: an NVIDIA GPU plus the
+   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+   registered as a Docker runtime.
+2. **Image-side**: the `-gpu` tag (it ships the CUDA torch wheel; the
+   default `:latest` doesn't, so passthrough won't help even if you
+   pass `--gpus all`).
+
+`docker run`:
+
+```bash
+docker run -d --name alma --restart unless-stopped --gpus all \
+  -p 127.0.0.1:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -v alma-data:/app/data -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest-gpu
+```
+
+Compose: bring the stack up with the GPU overlay so the device
+reservation lands on the alma service.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
+Verify the container saw the GPU:
+
+```bash
+docker exec alma python -c "import torch; print(torch.cuda.is_available())"
+# Expect: True
+```
+
+If `False`, the runtime device-resolver in
+`discovery.similarity.SpecterEmbedder` silently falls back to CPU and
+the rest of the app still works — GPU passthrough is purely an
+acceleration. Common reasons for `False`: you pulled `:latest`
+instead of `:latest-gpu` (no CUDA wheel in the image), or the
+NVIDIA Container Toolkit isn't installed on the host.
+
+### Building locally with a chosen torch wheel
+
+`docker compose build` defaults to the CPU torch wheel (matching
+the published `:latest`). To build the CUDA flavor from this
+checkout:
+
+```bash
+ALMA_TORCH_VARIANT=cuda docker compose build alma
+```
+
+`TORCH_VARIANT` accepts `cpu` or `cuda` and is ignored when
+`ALMA_VARIANT=lite` (lite installs no torch at all).
 
 ## Where everything lives on disk
 

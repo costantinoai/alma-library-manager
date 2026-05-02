@@ -42,67 +42,95 @@ The app has five views:
 
 ---
 
-## Quick start (one Docker command — suggested)
+## Quick start
 
-Run this exact command, replacing only `you@example.com` with the
-email you want to identify yourself to OpenAlex (free, no signup
-required):
+Three paths, pick the one that matches your hardware. Replace
+`you@example.com` with the email you want to identify yourself to
+OpenAlex (free, no signup required).
+
+### Most laptops / desktops / servers (CPU)
 
 ```bash
 docker run -d --name alma --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
   -e OPENALEX_EMAIL=you@example.com \
-  -v alma-data:/app/data \
-  -v alma-config:/app/config \
+  -v alma-data:/app/data -v alma-config:/app/config \
   ghcr.io/costantinoai/alma-library-manager:latest
 ```
 
-Then open <http://localhost:8000>. That's the whole install.
+Open <http://localhost:8000>. That's the whole install. Local
+embedding compute (the SPECTER2 encoder) runs on CPU — fine for
+ongoing use; the only time you'll notice it is when you mass-recompute
+embeddings on a large library (thousands of papers without S2
+vectors). Most papers come with pre-computed Semantic Scholar vectors
+already, so day-to-day you rarely hit the local encoder.
 
-> **You don't pick a directory.** `alma-data` and `alma-config` are
-> *Docker volume names*, not host paths. Docker creates the volumes
-> automatically the first time you run the command and stores the
-> bytes itself (on Linux: under `/var/lib/docker/volumes/`; on Docker
-> Desktop: inside the managed VM). You don't need to `mkdir` anything
-> first. To inspect what's inside or copy a file out:
->
-> ```bash
-> docker volume ls                              # list volumes
-> docker run --rm -v alma-data:/d alpine ls /d  # peek inside
-> ```
->
-> If you'd rather have a normal host folder (e.g. `~/alma/`) so you
-> can browse the SQLite file directly, use the *Compose* path below
-> — it's the right tool for that.
+### NVIDIA GPU host (faster embedding compute)
 
-<details>
-<summary>What each line of that command does</summary>
-
-| Flag | What it does |
-|---|---|
-| `docker run -d` | Start a new container, **detached** (in the background). Without `-d`, your terminal stays attached and Ctrl-C kills the app. |
-| `--name alma` | Give the container the human-readable name `alma`, so later commands can refer to it (`docker logs alma`, `docker stop alma`). |
-| `--restart unless-stopped` | Auto-restart on crashes, on Docker daemon restarts, and on host reboots. Stays stopped if *you* explicitly `docker stop` it. |
-| `-p 127.0.0.1:8000:8000` | Map host port 8000 to the container's port 8000, listening only on `127.0.0.1` (loopback). The app is reachable at `http://localhost:8000` from your machine but **not** from your network. To expose it remotely, drop the `127.0.0.1:` prefix and put a reverse proxy + `API_KEY` in front. |
-| `-e OPENALEX_EMAIL=you@example.com` | Set an environment variable inside the container. ALMa reads `OPENALEX_EMAIL` to enroll your requests in OpenAlex's polite pool — higher rate limits in exchange for being identified. |
-| `-v alma-data:/app/data` | Mount the **named volume** `alma-data` at `/app/data` inside the container. Docker creates the volume automatically on first run. This is where `scholar.db` (your library) and the backups directory live. The volume survives `docker rm -f alma` and `docker pull` of a new image — only `docker volume rm alma-data` deletes it. |
-| `-v alma-config:/app/config` | Same idea, but for plugin configs (Slack channel mappings, etc.). |
-| `ghcr.io/costantinoai/.../:latest` | The image to run. `ghcr.io/...` is the GitHub Container Registry path; `:latest` tracks the newest release on `main`. Pin to `:0.10.3`, `:0.9`, or `:0` on shared servers. |
-
-</details>
-
-To upgrade:
+One-time host setup — install the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+so Docker can pass the GPU through. On Ubuntu / Debian:
 
 ```bash
-docker pull ghcr.io/costantinoai/alma-library-manager:latest
-docker rm -f alma
-# rerun the same `docker run` command — your data lives in the volumes
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
 ```
 
-To pin a specific version on a shared server, swap `:latest` for
-`:0.10.3`, `:0.9`, or `:0`. The lite variant (smaller image, no local
-SPECTER2 encoder; see *Two image variants* below) uses `-lite`
-suffixes: `:latest-lite`, `:0.10.3-lite`.
+On Fedora / RHEL replace `apt-get` with `dnf`. Then run the GPU image:
+
+```bash
+docker run -d --name alma --restart unless-stopped --gpus all \
+  -p 127.0.0.1:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -v alma-data:/app/data -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest-gpu
+```
+
+The `-gpu` tag ships the CUDA torch wheel (~3.2 GB image) so SPECTER2
+inference uses the GPU. Confirm with
+`docker exec alma python -c "import torch; print(torch.cuda.is_available())"`
+— it should print `True`.
+
+### Raspberry Pi or other low-resource host
+
+```bash
+docker run -d --name alma --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -v alma-data:/app/data -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest-lite
+```
+
+Drops `torch` entirely (~1.2 GB image, ~1 GB runtime memory). You
+still get full embeddings via Semantic Scholar's pre-computed
+SPECTER2 vectors, and you can configure OpenAI as the embedding
+provider from Settings if you want.
+
+### Auto-restart and updates
+
+`--restart unless-stopped` already auto-restarts the container on
+crashes, Docker daemon restarts, and host reboots — you don't have to
+do anything for that.
+
+To pull the latest image and restart:
+
+```bash
+docker pull ghcr.io/costantinoai/alma-library-manager:latest   # or :latest-gpu / :latest-lite
+docker rm -f alma
+# rerun the same `docker run` command — your data lives in the named volumes
+```
+
+To automate updates daily, drop in [Watchtower](https://containrrr.dev/watchtower/):
+
+```bash
+docker run -d --name watchtower --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  containrrr/watchtower alma --cleanup --interval 86400
+```
+
+That polls once a day, pulls a new image when `:latest` changes,
+restarts the container, and removes the old image layer.
 
 > **More to configure?** Add `-e API_KEY=your-key` to require an
 > `X-API-Key` header on every request, `-e SLACK_TOKEN=…` for Slack
@@ -113,45 +141,33 @@ suffixes: `:latest-lite`, `:0.10.3-lite`.
 
 ## Quick start (Docker Compose — for local builds or stack management)
 
-If you're building the image from source, running ALMa alongside other
-services, or you'd rather have host-side bind-mounts so you can poke
-at `data/` directly:
+For users who want to build the image from source, run ALMa alongside
+other services in a stack, or have host-side bind-mounts so they can
+poke at `data/` directly. Clone the repo, then:
 
 ```bash
-mkdir alma && cd alma
-mkdir -p data config
-touch .env settings.json
-chmod 666 .env settings.json   # so the container's appuser can read/write
+cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
+docker compose up -d             # CPU build (default)
 ```
 
-Save as `docker-compose.yml`:
-
-```yaml
-services:
-  alma:
-    image: ghcr.io/costantinoai/alma-library-manager:latest
-    # build: .   # uncomment to build locally instead of pulling
-    container_name: alma
-    restart: unless-stopped
-    ports: ["127.0.0.1:8000:8000"]
-    env_file: [.env]
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./settings.json:/app/settings.json
-      - ./.env:/app/.env
-```
-
-Edit `.env` with at least `OPENALEX_EMAIL=you@example.com`, then:
+GPU build with passthrough — needs the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+installed on the host (see the GPU box in the quick start above):
 
 ```bash
-docker compose up -d
-docker compose logs -f alma   # follow the boot, Ctrl+C to detach
+ALMA_TORCH_VARIANT=cuda \
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+Lite build:
+
+```bash
+ALMA_VARIANT=lite docker compose up -d --build
 ```
 
 Update with `docker compose pull && docker compose up -d`. Your data
-lives in the host folders next to the compose file; nothing personal
-is baked into the image.
+lives in `./data` next to the compose file; nothing personal is
+baked into the image.
 
 ---
 
@@ -184,28 +200,41 @@ better seed material from day one.
 
 ---
 
-## Two image variants
+## Three image flavors
 
-ALMa publishes two flavours of the Docker image. Both run the full
-app — Library, Discovery, Feed, Authors, Insights, the Insights graph,
-clustering, BibTeX/Zotero imports. They differ only in whether the
-local SPECTER2 encoder is bundled.
+ALMa publishes three flavors of the Docker image. All of them run the
+full app — Library, Discovery, Feed, Authors, Insights, the Insights
+graph, clustering, BibTeX/Zotero imports. They differ only in the
+bundled embedding stack and image size.
 
-**`normal`** (the default, `:0.10.3`) includes `torch` + `transformers`,
-so SPECTER2 embeddings can be computed locally on demand. Image size
-is around 1.4 GB, peak runtime memory ~2 GB. Pick this on a desktop
-or server with at least 4 GB RAM.
+**`:latest`** (the default `normal` CPU build) includes `torch` +
+`transformers` so SPECTER2 embeddings can be computed locally on
+demand. Image size ~1.4 GB, peak runtime memory ~2 GB. The default
+because it's small and works everywhere — pick this on a desktop or
+server without an NVIDIA GPU.
 
-**`lite`** (`:0.10.3-lite`) drops `torch`. Image size is around
-1.2 GB, runtime memory ~1 GB. You still get full embeddings via
-Semantic Scholar's pre-computed SPECTER2 vectors (most papers with a
-DOI have one) and you can configure OpenAI as the embedding provider
-from Settings if you want. Pick this on a Raspberry Pi or a smaller
-host where 1.5 GB of torch on disk is precious.
+**`:latest-gpu`** is the `normal` flavor built against the CUDA torch
+wheel (~3.2 GB image). Use this when the host has an NVIDIA GPU
+exposed to Docker via the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/);
+SPECTER2 inference then runs on the GPU instead of the CPU. The same
+image still works without a GPU — `torch.cuda.is_available()` simply
+returns `False` and the encoder falls back to CPU. Available for
+`linux/amd64` only.
 
-Both variants are published for `linux/amd64` and `linux/arm64`, so
-Apple Silicon Macs and ARM servers (Pi, Graviton, Ampere) get native
-images.
+**`:latest-lite`** drops `torch` entirely (~1.2 GB image, ~1 GB
+runtime). You still get full embeddings via Semantic Scholar's
+pre-computed SPECTER2 vectors (most papers with a DOI have one) and
+you can configure OpenAI as the embedding provider from Settings.
+Pick this on a Raspberry Pi or any host where 1.5 GB of torch on
+disk is precious.
+
+The CPU + lite flavors are published for `linux/amd64` and
+`linux/arm64`. The GPU flavor is `amd64`-only.
+
+Not sure which one to pick? Run `./setup.sh` from a clone of this
+repo — it autodetects the host's GPU and toolkit and pulls the right
+tag for you.
 
 ---
 
