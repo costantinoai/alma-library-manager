@@ -165,6 +165,41 @@ change. Surfaced in the breakdown as `source_calibration_multiplier`
 and `source_calibration_components`. See `docs/reference/scoring.md
 #outcome-calibration`.
 
+### Refresh size and the staged page
+
+`POST /lenses/{id}/refresh?limit=50` is the user-visible target —
+50 means "50 cards actually land on the Discovery page after every
+filter and diversity check." The backend oversamples internally
+(per-lane retrieval pulls more than 50 each, scoring runs on the
+full pool, then truncation lands 50) so 50 is reliable rather
+than aspirational. The frontend `LENS_REFRESH_LIMIT` constant
+controls this number from the UI.
+
+The Discovery page itself opens to the **first 20** of the 50 by
+default with a *Show all 50 recommendations* button below — keeps
+initial scroll economical, no second network round-trip on click
+because the full 50 are already in memory. Switch lenses → resets
+to the curated 20.
+
+### Activity transparency: per-lane subtasks
+
+Every lens refresh emits **one parent Activity row + four child
+rows**, one per retrieval lane (`lexical`, `vector`, `graph`,
+`external`). Each child carries its own status, start/finish time,
+duration, candidate count, and failure message. The parent's log
+stream carries `lane.<name>.start` and `lane.<name>.completed`
+markers linking to the child via `subtask_job_id`, so the Activity
+panel can drill from "lens refresh took 11 s" to "graph lane took
+5.8 s, vector took 78 ms" with one expand. A failed external
+query (e.g. S2 rate-limit) lights up only the offending child red;
+the rest still complete green and the parent reports a partial
+success rather than a single composite warning.
+
+Subtask IDs follow the pattern `<parent_job_id>_lane_<lane_name>`
+— e.g. `lens_refresh_88069a_lane_graph`. They go through the same
+operation-status table as any other Activity job, so existing
+queries (`/api/v1/activity?limit=...`) surface them.
+
 ### Branches
 
 Branches are themed clusters of a lens's **seed papers**. Today they

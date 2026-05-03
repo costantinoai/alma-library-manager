@@ -133,11 +133,25 @@ connected to that pattern lose rank unless other evidence outweighs it.
 
 A candidate found by more than one retrieval lane gets a small,
 diminishing-returns score bonus on top of its weighted-signal score.
-The "Why this surfaced" panel surfaces this as a **Suggested by N
-sources** chip when at least 2 lanes independently agreed. The chip
-is informational — the bonus is already in the score. It exists so
-you know *why* a card outranked another that looked similar in the
-ten signals.
+The "Why this surfaced" panel surfaces this as a **Found by N
+sources** chip (in brand-blue) when at least 2 lanes independently
+agreed — the chip is the *first* in the chip row because it's the
+strongest "why" signal we have. The chip is informational — the
+bonus is already in the score. It exists so you know *why* a card
+outranked another that looked similar in the ten signals.
+
+## Refreshing and visible cards
+
+A lens refresh stages 50 cards on the page after all filters and
+diversity caps. To keep the initial scroll focused, only the first
+20 cards render by default — click *Show all 50 recommendations*
+below the list to expand the rest. Switching lenses resets to the
+curated 20.
+
+The four retrieval lanes (lexical, vector, graph, external) each
+emit their own row in the Activity panel under the parent
+*Lens refresh* row, so you can see exactly which lane was slow or
+which one failed without digging through one combined log stream.
 
 ## Outcome calibration
 
