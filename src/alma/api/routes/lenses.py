@@ -308,7 +308,17 @@ def refresh_lens(
         runner_conn = open_db_connection()
         try:
             class _LogCtx:
-                """Minimal `ctx` shim that forwards `log_step` to operation_status."""
+                """Minimal `ctx` shim that forwards `log_step` to operation_status.
+
+                Exposes `job_id` so the application layer can spawn
+                Activity sub-jobs under this parent (e.g. per-lane
+                retrieval subtasks in `refresh_lens_recommendations`).
+                Matches the ActivityJobContext public surface in
+                ``api/helpers.py``.
+                """
+
+                def __init__(self, parent_job_id: str):
+                    self.job_id = parent_job_id
 
                 def log_step(self, step: str, message: str, **kwargs):  # noqa: ARG002
                     processed = kwargs.get("processed")
@@ -318,9 +328,9 @@ def refresh_lens(
                         fields["processed"] = int(processed)
                     if total is not None:
                         fields["total"] = int(total)
-                    set_job_status(job_id, status="running", **fields)
+                    set_job_status(self.job_id, status="running", **fields)
 
-            ctx = _LogCtx()
+            ctx = _LogCtx(job_id)
             ctx.log_step(
                 "load_lens",
                 f"Lens refresh ({lens_label}): loading lens and seed papers",
