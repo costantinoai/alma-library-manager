@@ -35,6 +35,7 @@ _NEGATIVE_ACTIONS = {
     "dismiss",
     "dismissed",
     "dislike",
+    "disliked",
     "remove",
     "removed",
     "swipe_left",

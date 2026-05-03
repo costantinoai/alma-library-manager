@@ -33,24 +33,30 @@ For each lens, refresh runs in four phases:
    candidate set.
 2. **Ranking** — score each candidate via a 10-weight hybrid
    formula.
-3. **Diversity pass** — interleave by source type, then enforce a
-   per-author cap (any first/last author is allowed at most twice in
-   the staged top-K) and a per-source-key cap (any single external
-   query supplies at most ~25% of the staged set). Excess goes to an
-   overflow tail that backfills only if the diversity pass leaves
-   slots empty. This is what prevents a single dominant author or
-   external query from monopolising the page.
-4. **Branch grouping** — cluster results into themed sub-groups
-   ("Branches") for navigation.
+3. **Diversity-aware staging and filtering** — sort by the final
+   score, then run a diversity selector that keeps score-qualified
+   candidates from collapsing onto one source, branch, author, venue, or topic.
+   The staging pool is larger than the visible limit so lifecycle
+   filters can remove saved / dismissed / duplicate papers without
+   starving the final page.
+4. **Branch planning** — cluster the lens seed papers into themed
+   branches and use those branches to plan extra external retrieval
+   lanes. Branches are visible in Branch Studio, but not every
+   persisted recommendation currently carries branch attribution.
 
 ### What never re-surfaces
 
-Two filters run before staging, on top of all the diversity logic:
+Two filters run before staging, on top of scoring:
 
 * **Saved papers** (`status='library'`) — once you save a paper it
   belongs to your Library and is permanently excluded from Discovery.
-* **Dismissed or disliked papers** — explicit negative actions block
-  re-surfacing.
+* **Dismissed papers** (`status='dismissed'`) — explicit dismissals
+  block re-surfacing.
+
+`Dislike` is intentionally softer: it hides the current
+recommendation row and writes a negative signal, but leaves the paper
+as `tracked` so it can still be found later if enough new evidence
+outweighs the penalty.
 
 Everything else is fair game. Specifically, papers your corpus has
 already pulled in but that you haven't saved (`status='tracked'`)
@@ -161,17 +167,27 @@ and `source_calibration_components`. See `docs/reference/scoring.md
 
 ### Branches
 
-Recommendations are clustered into **Branches** — small themed
-groupings within a lens. A branch has:
+Branches are themed clusters of a lens's **seed papers**. Today they
+are primarily a retrieval-planning device: Discovery builds branch
+core/explore queries and spends part of the external-source budget on
+those queries. Branch-attributed candidates that remain relevant after
+scoring can survive into the persisted recommendation set, giving the
+branch outcome data for auto-weighting. A branch has:
 
-* A label derived from the dominant topics and representative titles.
-* A score and quality state (`strong / cool / underexplored /
-  narrow / monitor`).
-* A tuning hint that explains why the branch is in that state.
-* A handful of representative papers.
+* A label derived from discriminative seed-paper topics and
+  representative titles.
+* Core and explore topics used to construct branch-specific external
+  searches.
+* Representative seed papers.
+* Manual control state (`pin`, `boost`, `mute`) plus an `auto_weight`
+  when enough branch-attributed outcomes exist.
 
-The Branch Studio UI lets you pin / mute / boost a branch — those
-controls feed back into the next lens refresh's ranking.
+The Branch Studio UI lets you pin / mute / boost a branch. Those
+controls affect branch-specific external retrieval budget on the next
+lens refresh. Current production branches are not yet the persistent
+hierarchical interest tree described in the experimental branched user
+model work; branch outcome learning still depends on enough
+recommendations being persisted with `branch_id`.
 
 #### How branches are built
 
@@ -224,19 +240,27 @@ your accumulated calibration and pin/mute/boost don't get lost:
   muted after K-means reshuffles, as long as the new cluster is
   ≥ 70 % the same papers.
 
-This is what makes Branch Studio reliable for long-running users:
-acting on a branch carries forward across refreshes even as your
-library evolves.
+This lineage is best-effort and only has useful outcome data when
+previous recommendations carried branch attribution. If a refresh
+produces branch-lane candidates but none survive into persisted
+recommendations with `branch_id`, Branch Studio can still show and
+control branches, but auto-weighting and branch diagnostics have no
+outcome stream to learn from.
+
+The refresh summary includes `diversity` and `final_mix` diagnostics:
+source-type counts, branch-attributed count, and max author / venue /
+topic concentration. Those fields are the operational check that the
+page is heterogeneous without dropping relevance too far.
 
 #### Auto-weighting and the budget allocator
 
-Every branch gets an **auto_weight** in `[0.5, 1.5]` derived from
-its save / dismiss history (`_compute_branch_auto_weight`):
+Every branch gets an **auto_weight** in `[0.3, 1.8]` derived from
+its save / negative-action history (`_compute_branch_auto_weight`):
 
 * Bayesian-smoothed positive share, prior strength 6.0, so
   ~6 actions are needed before the weight moves meaningfully.
-* Each action is exponentially decayed with a 30-day half-life;
-  the window is 60 days. Old signal naturally fades; the branch
+* Each action is exponentially decayed with a 30-day half-life.
+  The aggregation window is 60 days. Old signal naturally fades; the branch
   drifts back toward neutral 1.0 as fresh data dominates.
 * New branches with no history start at 1.15 (cold-start
   visibility lift), so they actually get surface area to
@@ -283,10 +307,11 @@ that one bad day kills a branch."
 |---|---|
 | **Save / Like / Love** | Transitions to `library` with the matching rating. |
 | **Dismiss** | Hides the card from this lens **and** writes a negative signal. The recommender will not re-suggest it. |
+| **Dislike** | Hides the current recommendation and writes a negative signal without changing the paper's lifecycle status. |
 | **Pivot** | Treats the dismissed paper as a seed for a new branch (find more like this, but I haven't saved it). |
 | **Open details** | Opens the shared Paper detail panel — abstract, topics, prior / derivative works, full provenance. |
 
-Paper feedback is graph-shaped, not just paper-shaped. A 5★ paper
+Paper feedback is graph-shaped, not just paper-shaped. A 5-star paper
 raises nearby authors, topics, venues, keywords, tags, close semantic
 neighbours, and local citation neighbours; a dismissed or disliked
 paper lowers those connected signals. Following an author adds a

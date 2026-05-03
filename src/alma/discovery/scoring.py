@@ -895,7 +895,7 @@ def _projected_feedback_adjustment(
         return 0.0
 
     adjustment = 0.0
-    paper_id = str(candidate.get("id") or "").strip().lower()
+    paper_id = str(candidate.get("paper_id") or candidate.get("id") or "").strip().lower()
     if paper_id:
         adjustment += 0.65 * float(projected.paper.get(paper_id, 0.0))
         adjustment += 0.55 * float(projected.semantic_neighbor.get(paper_id, 0.0))
