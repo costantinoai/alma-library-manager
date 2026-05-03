@@ -68,15 +68,16 @@ import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/l
 // what's new in the lens without losing the underlying scoring.
 type DiscoverySort = 'relevance' | 'recent'
 type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
-// Per-refresh staging cap. Drives both the per-channel candidate
-// budget (each retrieval lane aims for `limit` candidates, so the
-// raw pool is roughly 4 × limit before dedup + filters) and the
-// final top-K. 100 gives the diversity / author / source-key caps
-// substantial room to enforce themselves and significantly raises
-// the chance of cross-lane consensus hits — the same paper found
-// independently by lexical + vector + S2 will accumulate buckets
-// only when each lane's pool is large enough to overlap.
-const LENS_REFRESH_LIMIT = 100
+// Per-refresh target — number of recommendations actually staged on
+// the Discovery page after dedup, diversity, lifecycle filters, and
+// truncation. The backend oversamples internally so the post-filter
+// landing reliably hits this number.
+const LENS_REFRESH_LIMIT = 50
+
+// How many recs are visible by default in the Discovery card list
+// before the user clicks "Show all". Keeps the initial scroll
+// economical while letting the curious dig into the full 50.
+const DEFAULT_VISIBLE_RECS = 20
 
 export function DiscoveryPage() {
   const queryClient = useQueryClient()
@@ -105,6 +106,9 @@ export function DiscoveryPage() {
   const [sort, setSort] = useState<DiscoverySort>('relevance')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
   const [selectedRecIds, setSelectedRecIds] = useState<Set<string>>(new Set())
+  // "Show all" toggle for the rec list. False -> only the first
+  // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
+  const [showAllRecs, setShowAllRecs] = useState(false)
 
   const lensesQuery = useQuery({
     queryKey: ['lenses'],
@@ -127,9 +131,12 @@ export function DiscoveryPage() {
     }
   }, [lensesQuery.data, selectedLensId, routeLensId])
 
-  // Reset actioned IDs when lens changes
+  // Reset actioned IDs and the show-all toggle when the lens changes —
+  // a fresh lens always opens to the curated first DEFAULT_VISIBLE_RECS
+  // so users land on a focused page, not a 50-card scroll.
   useEffect(() => {
     setActionedIds(new Set())
+    setShowAllRecs(false)
   }, [selectedLensId])
 
   const lensRecommendationsQuery = useQuery({
@@ -949,7 +956,7 @@ export function DiscoveryPage() {
               }}
             />
           ) : (
-            recommendations.map((rec) => {
+            (showAllRecs ? recommendations : recommendations.slice(0, DEFAULT_VISIBLE_RECS)).map((rec) => {
               const paper = rec.paper ?? null
               const cardPaper = {
                 id: rec.paper_id,
@@ -1029,6 +1036,25 @@ export function DiscoveryPage() {
                 </PaperCard>
               )
             })
+          )}
+
+          {/* Show-all toggle. Hidden in compact mode (the table already
+              paginates differently) and only visible when the truncation
+              actually omitted recs. Click reveals the rest of the
+              already-fetched batch — no additional network request. */}
+          {viewMode !== 'compact' && recommendations.length > DEFAULT_VISIBLE_RECS && (
+            <div className="flex justify-center pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAllRecs((prev) => !prev)}
+              >
+                {showAllRecs
+                  ? `Show fewer (back to first ${DEFAULT_VISIBLE_RECS})`
+                  : `Show all ${recommendations.length} recommendations`}
+              </Button>
+            </div>
           )}
         </div>
 
