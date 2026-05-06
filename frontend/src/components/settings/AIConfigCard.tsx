@@ -5,19 +5,26 @@ import { z } from 'zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   Brain,
+  CheckCircle2,
+  ChevronDown,
   Cloud,
   Cpu,
+  Folder,
   Globe,
   Info,
   Loader2,
   Package,
   RefreshCw,
   Save,
+  Server,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react'
 
-import { api, type AIConfig, type AIStatus } from '@/api/client'
+import { api, type AIConfig, type AIDependencyEnvironment, type AIStatus } from '@/api/client'
 import {
   AsyncButton,
   KeyValueRow,
@@ -28,6 +35,12 @@ import {
   SettingsSections,
   StatTile,
 } from '@/components/settings/primitives'
+import { ConceptCallout } from '@/components/ui/concept-callout'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +69,7 @@ import {
 } from '@/components/ui/tooltip'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { cn } from '@/lib/utils'
 
 type ComputeScope = 'missing' | 'stale' | 'missing_stale' | 'all'
 
@@ -127,6 +141,190 @@ function TierHint({ items }: { items: string[] }) {
         </ul>
       </TooltipContent>
     </Tooltip>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Dependency-environment verdict
+//
+// The Dependencies section gets the same diagnostic data from /ai/status no
+// matter what state the user is in (env valid / env invalid + fallback / deps
+// missing / etc.). Without a single derived verdict the UI ends up showing
+// flat lists of contradictory chips ("Environment invalid" + "All dependency
+// checks passed"). This helper collapses the state space into ONE banner the
+// user can read at a glance, plus a tone the section header can echo even
+// while the section is collapsed.
+// ---------------------------------------------------------------------------
+
+type EnvVerdictTone = 'success' | 'warning' | 'destructive' | 'info'
+
+interface EnvVerdict {
+  tone: EnvVerdictTone
+  /** Section-trailing badge tone — echoed in the closed-section header. */
+  badgeTone: StatusBadgeTone
+  /** Short label for the section-trailing badge. */
+  badgeLabel: string
+  icon: LucideIcon
+  title: string
+  description: string
+}
+
+function computeEnvVerdict(
+  env: AIDependencyEnvironment | undefined,
+  missingCount: number,
+  totalCount: number,
+): EnvVerdict {
+  if (missingCount > 0) {
+    return {
+      tone: 'destructive',
+      badgeTone: 'negative',
+      badgeLabel: `${missingCount} missing`,
+      icon: AlertCircle,
+      title:
+        missingCount === 1
+          ? '1 package missing in the active runtime'
+          : `${missingCount} of ${totalCount} packages missing`,
+      description:
+        'AI features that need these will be disabled or fall back. Install the packages, or point at an environment that already has them.',
+    }
+  }
+
+  if (env?.using_fallback) {
+    return {
+      tone: 'warning',
+      badgeTone: 'warning',
+      badgeLabel: 'Using fallback',
+      icon: AlertTriangle,
+      title: 'AI is working — but your configured environment is unreachable',
+      description:
+        env.fallback_reason ??
+        env.message ??
+        "ALMa fell back to the backend's own Python because the configured environment couldn't be used.",
+    }
+  }
+
+  // Real env, valid, but Python version differs from the backend runtime.
+  // Only meaningful when there actually IS a selected env (selected_python_version
+  // present) — otherwise python_version_match=false is a spurious side-effect
+  // of empty values being compared in the backend.
+  if (
+    env?.valid &&
+    env.python_version_match === false &&
+    Boolean(env.selected_python_version)
+  ) {
+    return {
+      tone: 'info',
+      badgeTone: 'info',
+      badgeLabel: 'Restart needed',
+      icon: Info,
+      title: 'Configured Python differs from the backend runtime',
+      description:
+        'Packages are installed in the selected env but may not be importable until you restart the backend from that env.',
+    }
+  }
+
+  return {
+    tone: 'success',
+    badgeTone: 'positive',
+    badgeLabel: 'Ready',
+    icon: CheckCircle2,
+    title: 'AI dependencies are ready',
+    description:
+      env?.using_fallback === false && env?.valid && env.selected_python_executable
+        ? 'Running from your configured environment.'
+        : "Running from the backend's own Python environment.",
+  }
+}
+
+function EnvVerdictAlert({ verdict }: { verdict: EnvVerdict }) {
+  const Icon = verdict.icon
+  return (
+    <Alert variant={verdict.tone}>
+      <Icon className="h-4 w-4" />
+      <AlertTitle className="text-sm">{verdict.title}</AlertTitle>
+      <AlertDescription className="text-xs">{verdict.description}</AlertDescription>
+    </Alert>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ResolutionStep — one card in the "Configured → Active runtime" chain.
+//
+// The chain visualizes the lookup ALMa performed: it tried the configured
+// environment first, then (if that failed) fell back to the backend's own
+// Python. Showing both as separate cards with an arrow between them makes
+// the fallback semantics legible — instead of a flat row of contradictory
+// badges, the user sees "you configured A; ALMa is using B; here's why".
+// ---------------------------------------------------------------------------
+
+interface ResolutionStepProps {
+  eyebrow: string
+  icon: LucideIcon
+  pathLabel: string
+  /** Mono-rendered path / executable. `null` shows a quiet "—". */
+  path: string | null
+  /** Optional Python version line (e.g. "3.11.9"). */
+  version: string | null
+  status: { tone: StatusBadgeTone; label: string }
+  /** Optional one-line reason or note. */
+  note?: string | null
+  /** Subdued styling for the unused branch (e.g. configured path that errored). */
+  muted?: boolean
+}
+
+function ResolutionStep({
+  eyebrow,
+  icon: Icon,
+  pathLabel,
+  path,
+  version,
+  status,
+  note,
+  muted,
+}: ResolutionStepProps) {
+  return (
+    <div
+      className={cn(
+        'rounded-sm border p-3',
+        muted
+          ? 'border-[var(--color-border)] bg-parchment-50/60'
+          : 'border-[var(--color-border)] bg-alma-paper shadow-paper-sm',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Icon
+            className={cn(
+              'h-3.5 w-3.5 shrink-0',
+              muted ? 'text-slate-400' : 'text-slate-500',
+            )}
+          />
+          <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+            {eyebrow}
+          </span>
+        </div>
+        <StatusBadge tone={status.tone} size="sm">
+          {status.label}
+        </StatusBadge>
+      </div>
+      <div className="mt-2 space-y-1">
+        <p className="text-[10px] uppercase tracking-wide text-slate-400">{pathLabel}</p>
+        <p
+          className={cn(
+            'break-all font-mono text-[11px] leading-snug',
+            path ? 'text-slate-700' : 'italic text-slate-400',
+          )}
+        >
+          {path ?? 'not set'}
+        </p>
+        {version ? (
+          <p className="text-[11px] text-slate-500">
+            Python <span className="font-mono">{version}</span>
+          </p>
+        ) : null}
+        {note ? <p className="text-[11px] text-slate-500">{note}</p> : null}
+      </div>
+    </div>
   )
 }
 
@@ -291,8 +489,95 @@ export function AIConfigCard() {
       .map(([pkg]) => pkg)
   }, [aiStatusQuery.data])
 
+  const totalPackageCount = useMemo(
+    () => Object.keys(aiStatusQuery.data?.dependencies ?? {}).length,
+    [aiStatusQuery.data],
+  )
+  const readyPackageCount = totalPackageCount - missingDependencies.length
+
   const dependencyEnv = aiStatusQuery.data?.dependency_environment
   const savedDependencyPath = (dependencyEnv?.path ?? '').trim()
+
+  // Single derived verdict for the Dependencies section. Mirrored into the
+  // section's trailing badge so the header still tells the truth while the
+  // section is collapsed.
+  const envVerdict = useMemo(
+    () => computeEnvVerdict(dependencyEnv, missingDependencies.length, totalPackageCount),
+    [dependencyEnv, missingDependencies.length, totalPackageCount],
+  )
+
+  // Resolution chain — Configured (what the user set) → Active runtime (what
+  // ALMa actually imports from). We deliberately split these so a fallback
+  // reads as "your config didn't work; we used something else" instead of
+  // a stack of contradictory chips.
+  const configuredDisplay = useMemo(() => {
+    if (!dependencyEnv) {
+      return {
+        path: null as string | null,
+        version: null as string | null,
+        status: { tone: 'neutral' as StatusBadgeTone, label: 'Unknown' },
+        note: null as string | null,
+        muted: true,
+      }
+    }
+    const userPath = dependencyEnv.path?.trim() || null
+    if (!userPath) {
+      return {
+        path: null,
+        version: null,
+        status: { tone: 'neutral' as StatusBadgeTone, label: 'Not set' },
+        note: 'Using the backend runtime by default.',
+        muted: true,
+      }
+    }
+    if (dependencyEnv.using_fallback || !dependencyEnv.valid) {
+      return {
+        path: userPath,
+        version: null,
+        status: { tone: 'negative' as StatusBadgeTone, label: 'Unreachable' },
+        note: dependencyEnv.fallback_reason ?? dependencyEnv.message ?? null,
+        muted: true,
+      }
+    }
+    return {
+      path: dependencyEnv.selected_python_executable ?? userPath,
+      version: dependencyEnv.selected_python_version ?? null,
+      status: { tone: 'positive' as StatusBadgeTone, label: 'Validated' },
+      note: dependencyEnv.detected_type
+        ? `Detected as ${dependencyEnv.detected_type}.`
+        : null,
+      muted: false,
+    }
+  }, [dependencyEnv])
+
+  const activeDisplay = useMemo(() => {
+    if (!dependencyEnv) {
+      return {
+        path: null as string | null,
+        version: null as string | null,
+        status: { tone: 'neutral' as StatusBadgeTone, label: 'Unknown' },
+        note: null as string | null,
+      }
+    }
+    const tone: StatusBadgeTone =
+      missingDependencies.length > 0 ? 'negative' : 'positive'
+    const label = missingDependencies.length > 0 ? 'Deps missing' : 'Importing OK'
+    return {
+      path:
+        dependencyEnv.effective_python_executable ??
+        dependencyEnv.backend_python_executable ??
+        null,
+      version:
+        dependencyEnv.effective_python_version ??
+        dependencyEnv.backend_python_version ??
+        null,
+      status: { tone, label },
+      note:
+        missingDependencies.length > 0
+          ? `${missingDependencies.length} package(s) cannot be imported here.`
+          : `${readyPackageCount} of ${totalPackageCount} packages importable.`,
+    }
+  }, [dependencyEnv, missingDependencies.length, readyPackageCount, totalPackageCount])
 
   const confirmDependencyPath = useCallback(() => {
     const nextPath = (values.python_env_path ?? '').trim()
@@ -677,14 +962,88 @@ export function AIConfigCard() {
               </div>
             </SettingsSection>
 
-            {/* Dependencies — dense troubleshooting info; collapsed by default
-                so the common case (capability tiers + providers + coverage)
-                isn't buried under the site-packages diagnostics. */}
-            <SettingsSection title="Dependencies" defaultOpen={false}>
-              <div className="space-y-3">
+            {/* Dependencies & Environment — three layers, top to bottom:
+                  (1) ConceptCallout: explain the runtime-vs-configured model.
+                  (2) Single derived verdict + a "Configured → Active" chain
+                      so the fallback semantics are legible.
+                  (3) Path input, package chips, and a Diagnostics drawer for
+                      raw exec paths / version comparison.
+                The trailing slot mirrors the verdict tone so the closed
+                section header still surfaces "all good" / "fallback" / "missing
+                deps" at a glance. */}
+            <SettingsSection
+              title="Dependencies & Environment"
+              defaultOpen={false}
+              trailing={
+                <StatusBadge tone={envVerdict.badgeTone} size="sm">
+                  {envVerdict.badgeLabel}
+                </StatusBadge>
+              }
+            >
+              <div className="space-y-4">
+                <ConceptCallout
+                  eyebrow="How does this work?"
+                  summary="ALMa's AI features import Python packages at runtime — usually from the backend's own env, optionally from one you point at."
+                >
+                  <p>
+                    ALMa needs a Python environment with packages like{' '}
+                    <code className="font-mono text-[11px]">torch</code>,{' '}
+                    <code className="font-mono text-[11px]">transformers</code>, and{' '}
+                    <code className="font-mono text-[11px]">hdbscan</code> to run SPECTER2,
+                    compute embeddings, and build clusters.
+                  </p>
+                  <p>
+                    By default, it uses whichever environment the backend itself was started in.
+                    You can also point it at a different env (a local{' '}
+                    <code className="font-mono text-[11px]">.venv</code>, a conda env, or a
+                    specific Python executable) — but{' '}
+                    <strong>if that path can't be found or doesn't have the right packages</strong>
+                    , ALMa falls back to the backend's own Python so AI features still work.
+                  </p>
+                  <p>
+                    The card below separates two things: <strong>Configured</strong> (where
+                    you told ALMa to look) and <strong>Active runtime</strong> (where it's
+                    actually importing from). When those don't match, the verdict at the top
+                    explains why.
+                  </p>
+                </ConceptCallout>
+
+                <EnvVerdictAlert verdict={envVerdict} />
+
+                {dependencyEnv && (
+                  <div className="grid gap-2 md:grid-cols-[1fr_auto_1fr] md:items-stretch">
+                    <ResolutionStep
+                      eyebrow="Configured"
+                      icon={Folder}
+                      pathLabel="You set this path"
+                      path={configuredDisplay.path}
+                      version={configuredDisplay.version}
+                      status={configuredDisplay.status}
+                      note={configuredDisplay.note}
+                      muted={configuredDisplay.muted}
+                    />
+                    <div className="hidden items-center justify-center md:flex">
+                      <ArrowRight className="h-4 w-4 text-slate-300" aria-hidden />
+                    </div>
+                    <ResolutionStep
+                      eyebrow={
+                        dependencyEnv.using_fallback
+                          ? 'Active runtime (fallback)'
+                          : 'Active runtime'
+                      }
+                      icon={Server}
+                      pathLabel="ALMa is importing from"
+                      path={activeDisplay.path}
+                      version={activeDisplay.version}
+                      status={activeDisplay.status}
+                      note={activeDisplay.note}
+                    />
+                  </div>
+                )}
+
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-slate-600">
-                    Environment Folder or Python Executable
+                    Environment folder or Python executable
                   </label>
                   <div className="flex gap-2">
                     <Input
@@ -699,7 +1058,7 @@ export function AIConfigCard() {
                           confirmDependencyPath()
                         }
                       }}
-                      placeholder="Default: .venv in this repo (Docker: /opt/venv)"
+                      placeholder="Leave empty to use the backend's own Python"
                       disabled={confirmEnvPathMutation.isPending}
                     />
                     <AsyncButton
@@ -714,127 +1073,155 @@ export function AIConfigCard() {
                     </AsyncButton>
                   </div>
                   <p className="text-xs text-slate-400">
-                    Type is inferred automatically during validation. Leave empty to use the
-                    current server environment.
+                    Accepts a venv folder, a conda env folder, or a Python executable. Type is
+                    inferred during validation. Leave empty to use whatever Python the backend
+                    is running.
                   </p>
                   {confirmEnvPathMutation.isPending && (
                     <p className="flex items-center gap-1 text-xs text-slate-500">
                       <Loader2 className="h-3 w-3 animate-spin" />
-                      Validating environment and checking installed packages...
+                      Validating environment and checking installed packages…
                     </p>
                   )}
                 </div>
 
-                {dependencyEnv && (
-                  <div className="space-y-1 rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusBadge
-                        tone={dependencyEnv.valid ? 'positive' : 'negative'}
-                        size="sm"
-                      >
-                        {dependencyEnv.valid ? 'Environment valid' : 'Environment invalid'}
-                      </StatusBadge>
-                      {dependencyEnv.using_fallback && (
-                        <StatusBadge tone="warning" size="sm">
-                          Using server fallback
-                        </StatusBadge>
-                      )}
-                    </div>
-                    {dependencyEnv.message && (
-                      <p className="text-xs text-slate-600">{dependencyEnv.message}</p>
-                    )}
-                    {dependencyEnv.fallback_reason && (
-                      <p className="text-xs text-amber-700">{dependencyEnv.fallback_reason}</p>
-                    )}
-                    {dependencyEnv.selected_python_executable && (
-                      <KeyValueRow
-                        label="Selected Python"
-                        value={
-                          <span className="font-mono text-[11px]">
-                            {dependencyEnv.selected_python_executable}
-                          </span>
-                        }
-                      />
-                    )}
-                    {dependencyEnv.backend_python_executable && (
-                      <KeyValueRow
-                        label="Backend Python"
-                        value={
-                          <span className="font-mono text-[11px]">
-                            {dependencyEnv.backend_python_executable}
-                          </span>
-                        }
-                      />
-                    )}
-                    {dependencyEnv.selected_python_version && (
-                      <KeyValueRow
-                        label="Env Python version"
-                        value={dependencyEnv.selected_python_version}
-                      />
-                    )}
-                    {dependencyEnv.python_version_match === false && (
-                      <p className="text-xs text-amber-700">
-                        Selected env Python differs from the backend runtime. Packages may be
-                        installed but not importable until the backend is restarted from that env.
-                      </p>
-                    )}
-                    {(dependencyEnv.active_site_packages?.length ?? 0) > 0 && (
-                      <p className="text-xs text-slate-500">
-                        Active site-packages paths: {dependencyEnv.active_site_packages?.length}
-                      </p>
-                    )}
+                <div className="space-y-1.5">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h5 className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                      Packages in active runtime
+                    </h5>
+                    <span className="text-xs text-slate-500">
+                      {readyPackageCount}/{totalPackageCount} ready
+                    </span>
                   </div>
-                )}
-
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(status.dependencies).map(([pkg, info]) => {
-                    const selectedOk = Boolean(info.installed)
-                    const runtimeOk = info.runtime_importable !== false
-                    const ready = selectedOk && runtimeOk
-                    const tone: StatusBadgeTone = ready
-                      ? 'positive'
-                      : selectedOk
-                        ? 'warning'
-                        : 'neutral'
-                    return (
-                      <PackageChip
-                        key={pkg}
-                        tone={tone}
-                        icon={<Package className="h-3 w-3" />}
-                        label={pkg}
-                        suffix={
-                          <>
-                            {info.version ? `v${info.version}` : null}
-                            {selectedOk && !runtimeOk ? ' · runtime missing' : null}
-                          </>
-                        }
-                        title={
-                          selectedOk && !runtimeOk
-                            ? 'Installed in selected environment but not importable by backend runtime'
-                            : undefined
-                        }
-                      />
-                    )
-                  })}
-                </div>
-                <p className="text-xs text-slate-400">
-                  {missingDependencies.length === 0
-                    ? 'All dependency checks passed.'
-                    : `${missingDependencies.length} package(s) missing in the active dependency environment.`}
-                </p>
-                {status.dependency_check_warning && (
-                  <p className="text-xs text-amber-700">{status.dependency_check_warning}</p>
-                )}
-                {status.dependency_setup_suggestions &&
-                  status.dependency_setup_suggestions.length > 0 && (
-                    <ol className="list-inside list-decimal space-y-1 rounded-lg border border-alma-100 bg-alma-50 p-3 text-xs text-alma-900">
-                      {status.dependency_setup_suggestions.map((step, idx) => (
-                        <li key={`${idx}-${step}`} className="font-mono text-[11px]">
-                          {step}
-                        </li>
-                      ))}
-                    </ol>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(status.dependencies).map(([pkg, info]) => {
+                      const selectedOk = Boolean(info.installed)
+                      const runtimeOk = info.runtime_importable !== false
+                      const ready = selectedOk && runtimeOk
+                      const tone: StatusBadgeTone = ready
+                        ? 'positive'
+                        : selectedOk
+                          ? 'warning'
+                          : 'neutral'
+                      return (
+                        <PackageChip
+                          key={pkg}
+                          tone={tone}
+                          icon={<Package className="h-3 w-3" />}
+                          label={pkg}
+                          suffix={
+                            <>
+                              {info.version ? `v${info.version}` : null}
+                              {selectedOk && !runtimeOk ? ' · runtime missing' : null}
+                            </>
+                          }
+                          title={
+                            selectedOk && !runtimeOk
+                              ? 'Installed in selected environment but not importable by backend runtime'
+                              : undefined
+                          }
+                        />
+                      )
+                    })}
+                  </div>
+                  {status.dependency_check_warning && (
+                    <p className="text-xs text-amber-700">
+                      {status.dependency_check_warning}
+                    </p>
                   )}
+                  {status.dependency_setup_suggestions &&
+                    status.dependency_setup_suggestions.length > 0 && (
+                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-lg border border-alma-100 bg-alma-50 p-3 text-xs text-alma-900">
+                        {status.dependency_setup_suggestions.map((step, idx) => (
+                          <li key={`${idx}-${step}`} className="font-mono text-[11px]">
+                            {step}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                </div>
+
+                {dependencyEnv && (
+                  <Collapsible className="rounded-sm border border-[var(--color-border)] bg-parchment-50/60">
+                    <CollapsibleTrigger
+                      className={cn(
+                        'group flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left',
+                        'hover:bg-parchment-100/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500',
+                      )}
+                    >
+                      <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        <Terminal className="h-3.5 w-3.5 text-slate-500" />
+                        Show diagnostics
+                      </div>
+                      <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-data-[state=open]:rotate-180" />
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <div className="space-y-1 border-t border-parchment-300/50 px-3 py-2 text-xs">
+                        <KeyValueRow
+                          label="Configured type"
+                          value={dependencyEnv.type || 'system'}
+                        />
+                        {dependencyEnv.detected_type && (
+                          <KeyValueRow
+                            label="Detected layout"
+                            value={dependencyEnv.detected_type}
+                          />
+                        )}
+                        {dependencyEnv.resolved_path && (
+                          <KeyValueRow
+                            label="Resolved path"
+                            value={
+                              <span className="font-mono text-[11px]">
+                                {dependencyEnv.resolved_path}
+                              </span>
+                            }
+                          />
+                        )}
+                        {dependencyEnv.backend_python_executable && (
+                          <KeyValueRow
+                            label="Backend executable"
+                            value={
+                              <span className="font-mono text-[11px]">
+                                {dependencyEnv.backend_python_executable}
+                              </span>
+                            }
+                          />
+                        )}
+                        {dependencyEnv.backend_python_version && (
+                          <KeyValueRow
+                            label="Backend Python"
+                            value={dependencyEnv.backend_python_version}
+                          />
+                        )}
+                        {dependencyEnv.selected_python_executable &&
+                          !dependencyEnv.using_fallback && (
+                            <KeyValueRow
+                              label="Configured executable"
+                              value={
+                                <span className="font-mono text-[11px]">
+                                  {dependencyEnv.selected_python_executable}
+                                </span>
+                              }
+                            />
+                          )}
+                        {dependencyEnv.selected_python_version &&
+                          !dependencyEnv.using_fallback && (
+                            <KeyValueRow
+                              label="Configured Python"
+                              value={dependencyEnv.selected_python_version}
+                            />
+                          )}
+                        {(dependencyEnv.active_site_packages?.length ?? 0) > 0 && (
+                          <KeyValueRow
+                            label="Active site-packages"
+                            value={`${dependencyEnv.active_site_packages?.length} path(s)`}
+                          />
+                        )}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
               </div>
             </SettingsSection>
           </SettingsSections>

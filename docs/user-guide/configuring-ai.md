@@ -81,6 +81,34 @@ The card persists:
 
 and probes the selected environment for the packages ALMa needs.
 
+### How the card is laid out
+
+The **Dependencies & Environment** section (collapsed by default; the
+header shows a status badge — `Ready` / `Using fallback` / `Restart
+needed` / `N missing` — so the verdict is visible without expanding it)
+splits the question of "does AI work?" into two independent parts:
+
+1. **Configured** — the path you typed in. Either validates (`Validated`),
+   sits empty (`Not set`), or fails to resolve (`Unreachable`, e.g. when
+   you set a host path while running ALMa in Docker).
+2. **Active runtime** — the Python ALMa is actually importing from. When
+   the configured path is unreachable, ALMa transparently falls back to
+   the backend's own Python so AI features keep working; the runtime
+   card shows the executable being used and how many packages it could
+   import.
+
+A single derived verdict at the top names the resulting state in plain
+English (e.g. *"AI is working — but your configured environment is
+unreachable"*). Below that, the path input + **Recheck** button, the
+package chips for the active runtime, and a collapsible **Show
+diagnostics** drawer with the raw executables / versions / detected
+layout for troubleshooting.
+
+The card never reports "all dependency checks passed" *and* "environment
+invalid" at the same time — those used to be presented as parallel
+chips but they answer different questions, so a fallback (config bad,
+runtime fine) reads as one warning instead of a contradiction.
+
 ## Background actions
 
 Heavy embedding work does not run inline. It goes through Activity:
