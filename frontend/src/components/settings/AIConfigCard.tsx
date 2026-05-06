@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Save,
   Server,
+  Terminal,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
