@@ -50,6 +50,26 @@ logger = logging.getLogger(__name__)
 _MAX_DISCOVERY_SCORE = 100.0
 _CONSENSUS_BONUS_FRACTION = 0.12
 
+# Dismissal cluster penalty — paper-side mirror of the author rail's
+# `_dismissal_overlap_penalty` (see `alma.application.authors`).
+# Pulled out as a separate post-consensus pass (not folded into
+# `feedback_adj`) so direct user dismissals can hit harder than the
+# bounded ±0.6 projected adjustment allows. Magnitudes here are in
+# *score points* (0–100 band), not normalized weights.
+#
+# Per-axis ceilings reflect the same rank-of-evidence the author rail
+# uses: topic > venue > institution > author identity > keyword/tag.
+# Caller-supplied projected magnitudes are already in [-1, +1]; we
+# multiply by these per-hit ceilings and sum, then cap at 30 points
+# so a candidate can never be permanently zero'd by penalty alone —
+# the user can still dismiss them explicitly.
+_DISMISSAL_TOPIC_PENALTY_PER_HIT = 4.0
+_DISMISSAL_VENUE_PENALTY_PER_HIT = 3.0
+_DISMISSAL_AUTHOR_PENALTY_PER_HIT = 2.0
+_DISMISSAL_AUTHOR_NAME_PENALTY_PER_HIT = 1.5
+_DISMISSAL_KEYWORD_PENALTY_PER_HIT = 1.0
+_DISMISSAL_PENALTY_CAP = 30.0
+
 
 def _clamp(value: float, lo: float, hi: float) -> float:
     return _shared_clamp(value, lo, hi)
@@ -829,7 +849,20 @@ def score_candidate(
         else int(candidate.get("consensus_count") or 0)
     )
     consensus_bonus = _consensus_bonus(consensus_count)
-    final_score = min(_MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus)
+    score_pre_dismissal = min(_MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus)
+
+    # Dismissal cluster penalty — mirrors the author rail. Applied
+    # AFTER consensus so multi-source agreement can't entirely rescue
+    # a candidate that overlaps with what the user has explicitly
+    # dismissed. Cap inside `_dismissal_cluster_penalty` keeps total
+    # ≤ 30 points so a candidate is never zero'd by penalty alone.
+    dismissal_penalty, dismissal_parts = _dismissal_cluster_penalty(
+        candidate,
+        paper_topics,
+        authors_str,
+        preference_profile.get("projected_feedback"),
+    )
+    final_score = max(0.0, score_pre_dismissal - dismissal_penalty)
 
     breakdown: Dict[str, Any] = {}
     for signal in weights:
@@ -849,6 +882,9 @@ def score_candidate(
     breakdown["consensus_buckets"] = list(consensus_buckets)
     breakdown["consensus_count"] = consensus_count
     breakdown["consensus_bonus"] = round(consensus_bonus, 4)
+    breakdown["score_pre_dismissal"] = round(float(score_pre_dismissal), 4)
+    breakdown["dismissal_penalty"] = round(float(dismissal_penalty), 4)
+    breakdown["dismissal_penalty_parts"] = dismissal_parts
     breakdown["source_type"] = candidate.get("source_type", "")
     breakdown["source_key"] = candidate.get("source_key", "")
     breakdown["text_similarity_mode"] = text_similarity_mode
@@ -928,6 +964,93 @@ def _projected_feedback_adjustment(
         adjustment += 0.30 * float(projected.author_name.get(author_name.strip().lower(), 0.0))
 
     return _clamp(adjustment, -0.6, 0.6)
+
+
+def _dismissal_cluster_penalty(
+    candidate: dict,
+    paper_topics: List[dict],
+    authors_str: str,
+    projected: Any,
+) -> tuple[float, Dict[str, float]]:
+    """Penalty in *score points* from candidate's overlap with negative projected signals.
+
+    Mirror of `alma.application.authors._dismissal_overlap_penalty`.
+    The author rail applies a dedicated post-weighted-sum penalty (up
+    to 30% of band) so explicit dismissal evidence can pull harder
+    than the bounded `feedback_adj` signal alone. Same idea here.
+
+    Reads the negative side of `ProjectedPaperSignals.{topic, venue,
+    author, author_name, keyword, tag}` — these are already
+    propagated from dismiss / dislike / unsave events upstream in
+    `signal_projection`. For each candidate axis (topic of the paper,
+    journal, paper authors, …) we look up the projected magnitude;
+    only the negative-signed contribution adds to the penalty.
+
+    Returns ``(penalty_points, parts)`` where ``parts`` is a per-axis
+    breakdown (``"topic"``, ``"venue"``, ``"author"``,
+    ``"author_name"``, ``"keyword"``) for provenance.
+    """
+    parts: Dict[str, float] = {}
+    if not isinstance(projected, ProjectedPaperSignals):
+        return 0.0, parts
+
+    def _neg(value: float) -> float:
+        v = float(value or 0.0)
+        return -v if v < 0.0 else 0.0
+
+    venue_pen = 0.0
+    journal = str(candidate.get("journal") or "").strip().lower()
+    if journal:
+        venue_pen = _DISMISSAL_VENUE_PENALTY_PER_HIT * _neg(projected.venue.get(journal, 0.0))
+    if venue_pen:
+        parts["venue"] = round(venue_pen, 3)
+
+    topic_pen = 0.0
+    for topic in paper_topics or []:
+        term = str(topic.get("term") or topic.get("name") or "").strip().lower()
+        if not term:
+            continue
+        try:
+            topic_strength = float(topic.get("score") or 0.5)
+        except (TypeError, ValueError):
+            topic_strength = 0.5
+        topic_pen += (
+            _DISMISSAL_TOPIC_PENALTY_PER_HIT
+            * _clamp(topic_strength, 0.1, 1.0)
+            * _neg(projected.topic.get(term, 0.0))
+        )
+    if topic_pen:
+        parts["topic"] = round(topic_pen, 3)
+
+    keyword_pen = 0.0
+    for keyword in _candidate_keywords(candidate):
+        keyword_pen += _DISMISSAL_KEYWORD_PENALTY_PER_HIT * _neg(
+            projected.keyword.get(keyword, 0.0)
+        )
+        keyword_pen += _DISMISSAL_KEYWORD_PENALTY_PER_HIT * _neg(
+            projected.tag.get(keyword, 0.0)
+        )
+    if keyword_pen:
+        parts["keyword"] = round(keyword_pen, 3)
+
+    author_pen = 0.0
+    for author_id in _candidate_author_ids(candidate):
+        author_pen += _DISMISSAL_AUTHOR_PENALTY_PER_HIT * _neg(
+            projected.author.get(author_id, 0.0)
+        )
+    if author_pen:
+        parts["author"] = round(author_pen, 3)
+
+    author_name_pen = 0.0
+    for author_name in parse_author_names(authors_str):
+        author_name_pen += _DISMISSAL_AUTHOR_NAME_PENALTY_PER_HIT * _neg(
+            projected.author_name.get(author_name.strip().lower(), 0.0)
+        )
+    if author_name_pen:
+        parts["author_name"] = round(author_name_pen, 3)
+
+    total = topic_pen + venue_pen + author_pen + author_name_pen + keyword_pen
+    return min(_DISMISSAL_PENALTY_CAP, total), parts
 
 
 def _candidate_author_ids(candidate: dict) -> list[str]:

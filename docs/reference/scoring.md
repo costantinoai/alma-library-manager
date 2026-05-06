@@ -227,6 +227,41 @@ scored candidate confirmed by 3+ independent sources reliably climbs
 the rail. Pre-bonus value is preserved as
 `weighted_score_pre_consensus` in the breakdown for provenance.
 
+## Dismissal cluster penalty
+
+After consensus, paper Discovery applies a dedicated penalty that
+mirrors the author-suggestion rail's `_dismissal_overlap_penalty`.
+`feedback_adj` already pulls in projected dismissal evidence, but it's
+bounded to ±0.6 and weighted at 0.10 — so direct user dismissals can
+move a candidate by at most ~10 points on the 100-band score. That
+ceiling is intentionally low for *projected* feedback (one dismissed
+paper shouldn't dominate similarity); but for the *cluster* of things
+the user has dismissed, the rail wants to pull harder. The dismissal
+cluster pass is that harder pull.
+
+For each candidate the scorer reads the negative side of
+`ProjectedPaperSignals.{topic, venue, author, author_name, keyword,
+tag}` and accumulates score-point penalties:
+
+| Axis | Per-hit penalty | Rationale |
+|---|---:|---|
+| Topic | 4.0 × magnitude × topic_strength | Strongest cluster evidence |
+| Venue | 3.0 × magnitude | Next-strongest — venue matches a research community |
+| Author (OpenAlex id) | 2.0 × magnitude | Identity-level signal |
+| Author name | 1.5 × magnitude | Fallback when no id |
+| Keyword / tag | 1.0 × magnitude (each) | Noisier; lower per-hit weight |
+
+Total is capped at **30 points** so a candidate is never zeroed by
+penalty alone — the user can still dismiss them explicitly. Applied
+*after* the consensus bonus (so multi-source agreement can't fully
+rescue a candidate matching a dismissed cluster) and the result is
+clamped at 0.
+
+The breakdown carries `score_pre_dismissal`, `dismissal_penalty`, and
+`dismissal_penalty_parts` (the per-axis decomposition) for provenance.
+A clean run with no dismissal evidence returns
+`dismissal_penalty=0.0` and `dismissal_penalty_parts={}`.
+
 ## Outcome calibration
 
 After consensus, every candidate's `source_relevance` is multiplied
