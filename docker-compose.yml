@@ -108,6 +108,8 @@ services:
       - PYTHONUNBUFFERED=1
       # Optional API auth — leave empty for single-user local mode.
       - API_KEY=${API_KEY:-}
+      # Disable numba JIT cache to avoid Docker filesystem issues with UMAP
+      - NUMBA_DISABLE_JITCACHE=1
 
     # -------------------------------------------------------------------------
     # Bind mounts — host paths shown on the left, container paths on the right.
