@@ -575,6 +575,85 @@ def init_db_schema() -> None:
                 )"""
             )
 
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_enrichment_status (
+                    author_id TEXT NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
+                    source TEXT NOT NULL,
+                    purpose TEXT NOT NULL,
+                    lookup_key TEXT NOT NULL DEFAULT '',
+                    fields_key TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    fields_requested_json TEXT,
+                    fields_filled_json TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TEXT,
+                    next_retry_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (author_id, source, purpose)
+                )"""
+            )
+            _ensure_columns(
+                conn,
+                "author_enrichment_status",
+                {
+                    "lookup_key": "TEXT NOT NULL DEFAULT ''",
+                    "fields_key": "TEXT NOT NULL DEFAULT ''",
+                    "reason": "TEXT",
+                    "fields_requested_json": "TEXT",
+                    "fields_filled_json": "TEXT",
+                    "attempts": "INTEGER NOT NULL DEFAULT 0",
+                    "last_attempt_at": "TEXT",
+                    "next_retry_at": "TEXT",
+                    "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+                },
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_author_enrichment_status_lookup "
+                "ON author_enrichment_status(source, purpose, lookup_key, fields_key, status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_author_enrichment_status_retry "
+                "ON author_enrichment_status(source, purpose, status, next_retry_at)"
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_affiliation_evidence (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id TEXT NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
+                    source TEXT NOT NULL,
+                    institution_openalex_id TEXT,
+                    institution_ror TEXT,
+                    institution_name TEXT NOT NULL,
+                    role TEXT,
+                    start_date TEXT NOT NULL DEFAULT '',
+                    end_date TEXT,
+                    is_current INTEGER DEFAULT 0,
+                    evidence_url TEXT,
+                    confidence REAL,
+                    observed_at TEXT NOT NULL,
+                    UNIQUE (author_id, source, institution_name, role, start_date)
+                )"""
+            )
+            _ensure_columns(
+                conn,
+                "author_affiliation_evidence",
+                {
+                    "institution_openalex_id": "TEXT",
+                    "institution_ror": "TEXT",
+                    "role": "TEXT",
+                    "start_date": "TEXT NOT NULL DEFAULT ''",
+                    "end_date": "TEXT",
+                    "is_current": "INTEGER DEFAULT 0",
+                    "evidence_url": "TEXT",
+                    "confidence": "REAL",
+                    "observed_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
+                },
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_author_affiliation_evidence_author "
+                "ON author_affiliation_evidence(author_id, is_current DESC, observed_at DESC)"
+            )
+
             # ==============================================================
             # FEED: Author-based inbox
             # ==============================================================

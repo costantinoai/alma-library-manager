@@ -501,6 +501,17 @@ def merge_author_profiles(
         except sqlite3.OperationalError:
             # Table may not exist on older schemas — non-fatal.
             pass
+        try:
+            from alma.services.author_hydrate import enqueue_pending_author_hydration
+
+            enqueue_pending_author_hydration(
+                db,
+                primary_id,
+                priority="high",
+                reason="author_merge",
+            )
+        except Exception as exc:
+            logger.debug("author hydration enqueue skipped after merge %s: %s", primary_id, exc)
 
     db.commit()
     return summary

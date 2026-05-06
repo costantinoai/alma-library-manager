@@ -266,6 +266,17 @@ def apply_follow_state(
     # duplicate suggestion they could have been spared.
     if followed:
         _schedule_orcid_alias_recording(author_id)
+        try:
+            from alma.services.author_hydrate import enqueue_pending_author_hydration
+
+            enqueue_pending_author_hydration(
+                db,
+                author_id,
+                priority="high",
+                reason="author_follow",
+            )
+        except Exception as exc:
+            logger.debug("author hydration enqueue skipped for %s: %s", author_id, exc)
 
     # Eager GC after unfollow: the author may now be orphan (no live
     # paper attachment AND no longer followed). Audited soft-remove.

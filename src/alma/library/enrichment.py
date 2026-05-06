@@ -1011,6 +1011,17 @@ def materialize_imported_authors(conn: sqlite3.Connection) -> dict:
                 )
                 if inserted.rowcount and inserted.rowcount > 0:
                     created += 1
+                    try:
+                        from alma.services.author_hydrate import enqueue_pending_author_hydration
+
+                        enqueue_pending_author_hydration(
+                            conn,
+                            author_id,
+                            priority="low",
+                            reason="import_author_create",
+                        )
+                    except Exception:
+                        logger.debug("author hydration enqueue skipped for %s", author_id, exc_info=True)
             if author_id != "import" and not str(author_id).startswith("import_author_"):
                 preferred_tracked_id = preferred_tracked_id or author_id
             if idx == 0:

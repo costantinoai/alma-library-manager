@@ -239,7 +239,7 @@ _POLICIES: dict[str, SourcePolicy] = {
     "orcid": SourcePolicy(
         name="orcid",
         base_url="https://pub.orcid.org/v3.0",
-        min_interval_seconds=0.35,
+        min_interval_seconds=0.04,
         max_concurrency=1,
         max_retries=2,
         default_headers=(("Accept", "application/json"),),

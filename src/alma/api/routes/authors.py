@@ -2692,7 +2692,42 @@ def list_authors_needs_attention(
     # bucket "split" sits above the unresolved bucket but below true
     # errors/no_match — they are actionable but not blocking like a
     # missing identifier on a followed author).
-    out = merge_conflicts + split_profiles + out
+    from alma.application.author_affiliation import list_affiliation_conflicts
+
+    affiliation_conflicts: list[dict] = []
+    for c in list_affiliation_conflicts(db, limit=limit):
+        first = c.get("first") or {}
+        second = c.get("second") or {}
+        first_name = str(first.get("institution_name") or "")
+        second_name = str(second.get("institution_name") or "")
+        affiliation_conflicts.append(
+            {
+                "author_id": str(c.get("author_id") or ""),
+                "author_name": str(c.get("author_name") or ""),
+                "openalex_id": c.get("openalex_id"),
+                "status": "affiliation_conflict",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "affiliation_conflict",
+                "reason": "Affiliation evidence disagrees across sources",
+                "reason_detail": (
+                    f"Top evidence points to {first_name}; "
+                    f"near-tie evidence points to {second_name}."
+                ),
+                "selected_affiliation": c.get("selected_affiliation"),
+                "suggested_action": {
+                    "code": "pick_affiliation",
+                    "label": "Review affiliation",
+                    "hint": (
+                        "Open the evidence list and choose which "
+                        "institution should be displayed for this author."
+                    ),
+                },
+                "updated_at": str(first.get("observed_at") or second.get("observed_at") or "") or None,
+            }
+        )
+
+    out = merge_conflicts + affiliation_conflicts + split_profiles + out
     return {"total": len(out), "items": out}
 
 
@@ -2705,6 +2740,26 @@ class SetIdentifiersRequest(BaseModel):
     orcid: Optional[str] = Field(default=None, description="ORCID iD (with or without https prefix)")
     openalex_id: Optional[str] = Field(default=None, description="OpenAlex author ID (A1234… or full URL)")
     scholar_id: Optional[str] = Field(default=None, description="Google Scholar user id")
+
+
+@router.get(
+    "/enrichment-status",
+    summary="Author metadata hydration ledger",
+    description="Read-only summary of author profile / affiliation hydration ledger rows.",
+)
+def get_author_enrichment_status(
+    limit: int = Query(100, ge=1, le=500),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.services.author_hydrate import (
+        build_author_enrichment_status,
+        list_author_enrichment_status_items,
+    )
+
+    payload = build_author_enrichment_status(db)
+    payload["items"] = list_author_enrichment_status_items(db, limit=limit)
+    return payload
 
 
 @router.post(
@@ -4314,6 +4369,110 @@ def deep_refresh_all_authors(
         operation_key=operation_key,
         queued_message=f"Queued deep refresh for all authors (scope={scope_value})",
     )
+
+
+@router.post(
+    "/rehydrate-metadata",
+    summary="Hydrate author profile and affiliation metadata",
+    description=(
+        "Queues an Activity-backed author metadata job. The job uses a "
+        "per-author/source/purpose ledger and fills profile fields plus "
+        "structured affiliation evidence from OpenAlex, ORCID, Semantic "
+        "Scholar, and Crossref when identifiers are available."
+    ),
+)
+def rehydrate_author_metadata(
+    limit: Optional[int] = Query(
+        None,
+        ge=1,
+        le=100_000,
+        description="Maximum authors to prepare; omitted means all eligible authors",
+    ),
+    force: bool = Query(False, description="Ignore current ledger state and retry eligible authors"),
+    background: bool = Query(True, description="Run in background and track in Activity"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.services.author_hydrate import run_author_metadata_rehydration
+
+    if not background:
+        try:
+            return run_author_metadata_rehydration(limit=limit, force=force)
+        except Exception as e:
+            raise_internal("Author metadata hydration failed", e)
+
+    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+
+    operation_key = "authors.rehydrate_metadata"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="Author metadata hydration already running",
+        )
+
+    job_id = f"author_metadata_rehydrate_{uuid.uuid4().hex[:10]}"
+    total_hint = limit if limit is not None else 0
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=datetime.utcnow().isoformat(),
+        processed=0,
+        total=total_hint,
+        message=(
+            "Author metadata hydration queued"
+            if limit is not None
+            else "Author metadata hydration queued for all eligible authors"
+        ),
+    )
+    add_job_log(
+        job_id,
+        "Queued author metadata hydration",
+        step="queued",
+        data={"limit": limit, "force": force},
+    )
+
+    def _runner() -> dict:
+        from alma.api.scheduler import add_job_log as _add_log
+        from alma.api.scheduler import is_cancellation_requested, set_job_status as _set_status
+
+        return run_author_metadata_rehydration(
+            job_id,
+            limit=limit,
+            force=force,
+            set_job_status=_set_status,
+            add_job_log=_add_log,
+            is_cancellation_requested=is_cancellation_requested,
+        )
+
+    schedule_immediate(job_id, _runner)
+    return _immediate_job_response(
+        job_id,
+        operation_key=operation_key,
+        queued_message="Queued author metadata hydration",
+    )
+
+
+@router.get(
+    "/{author_id}/affiliations",
+    summary="List affiliation evidence for one author",
+    description="Read-only evidence rows used to pick an author's display affiliation.",
+)
+def get_author_affiliations(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.services.author_hydrate import list_author_affiliations
+
+    payload = list_author_affiliations(db, author_id)
+    if not payload.get("found", True):
+        raise HTTPException(status_code=404, detail="Author not found")
+    return payload
 
 
 @router.post(

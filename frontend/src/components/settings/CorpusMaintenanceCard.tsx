@@ -6,6 +6,7 @@ import {
   dedupAuthorsByOrcid,
   dedupPreprints,
   garbageCollectOrphanAuthors,
+  rehydrateAuthorMetadata,
   rehydrateCorpusMetadata,
   refreshAllAuthors,
   type CorpusScope,
@@ -49,7 +50,7 @@ export function CorpusMaintenanceCard() {
     mutationFn: async () => {
       const [papers, authors] = await Promise.all([
         rehydrateCorpusMetadata({ force: false }),
-        refreshAllAuthors({ scope: 'needs_metadata' }),
+        rehydrateAuthorMetadata({ force: false }),
       ])
       return { papers, authors }
     },
@@ -71,7 +72,7 @@ export function CorpusMaintenanceCard() {
       }
       toast({
         title: 'Rehydration queued',
-        description: 'Paper metadata and author identity/profile refresh jobs are queued in Activity.',
+        description: 'Paper metadata and author profile/affiliation hydration jobs are queued in Activity.',
       })
     },
     onError: () => errorToast('Error', 'Failed to queue corpus metadata rehydration.'),
@@ -222,7 +223,7 @@ export function CorpusMaintenanceCard() {
             Rehydrate corpus metadata
           </span>
         }
-        description="Batched repair for stored papers and authors that need metadata. Papers use OpenAlex, Semantic Scholar, and Crossref fallbacks for DOI, abstract, TLDR, URL, publication date, authorships, topics, and references. Authors use the deep refresh pipeline for missing ORCID/profile fields and identity-resolution issues."
+        description="Batched repair for stored papers and authors that need metadata. Papers use OpenAlex, Semantic Scholar, and Crossref fallbacks for DOI, abstract, TLDR, URL, publication date, authorships, topics, and references. Authors use OpenAlex, ORCID, Semantic Scholar, and Crossref to fill profile fields and affiliation evidence."
       >
         <div className="space-y-3">
           <p className="text-[11px] leading-snug text-slate-500">
