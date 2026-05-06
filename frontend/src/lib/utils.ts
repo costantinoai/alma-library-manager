@@ -72,6 +72,34 @@ export function truncate(str: string | undefined | null, maxLen: number): string
 }
 
 /**
+ * Repair LaTeX-style "dotless ı + combining diacritic" sequences and NFC-normalise.
+ *
+ * OpenAlex / Crossref / Semantic Scholar occasionally surface author names
+ * where a regular `i` followed by a combining diacritic was rendered as
+ * `\i` + accent in upstream LaTeX, then ingested as Unicode dotless-i
+ * (U+0131) followed by a combining mark (U+0300–U+036F). Examples seen in
+ * production: `Marı́a Ruz` (should be `María`), `Antoni Rodrı́guez-Fornells`,
+ * `Alain Taı̈eb`, `Sliman J. Bensmaı̈a`, `Benoı̂st Schaal`, `Giuseppe Alı̀`.
+ *
+ * The dotless-ı + combining mark sequence does not NFC-collapse into a
+ * precomposed character on its own — `ı + ◌́` is not a recognised
+ * precomposition. We substitute the dotless-ı back to a regular `i` first,
+ * then NFC collapses `i + ◌́ → í`, `i + ◌̈ → ï`, `i + ◌̂ → î`, `i + ◌̀ → ì`.
+ *
+ * We do NOT strip diacritics; we restore them to their canonical precomposed
+ * form so they render cleanly in any font with even partial Latin coverage.
+ * The Phase 2 author-hydration pipeline should apply the same repair at the
+ * write boundary (`alma/openalex/client.py`, `application/feed.py`) so this
+ * frontend pass becomes a defensive belt-and-braces step.
+ */
+const DOTLESS_I_PLUS_COMBINING = /ı([̀-ͯ])/g
+
+export function repairDisplayText(value?: string | null): string {
+  if (!value) return ''
+  return String(value).replace(DOTLESS_I_PLUS_COMBINING, 'i$1').normalize('NFC')
+}
+
+/**
  * Canonical author-name normalization. Collapses whitespace, lowercases, and
  * trims so "John  Smith", "  JOHN SMITH ", and "john smith" all become
  * "john smith". Used by PaperCard's follow-button state derivation and by

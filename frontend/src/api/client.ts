@@ -1,3 +1,5 @@
+import { repairDisplayText } from '@/lib/utils'
+
 const BASE_URL = '/api/v1'
 
 class ApiError extends Error {
@@ -8,6 +10,43 @@ class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+/**
+ * Field names whose values may carry LaTeX-leaked `dotless-ı + combining
+ * accent` sequences (see `repairDisplayText`). We normalise every match in
+ * place during JSON deserialisation so individual rendering sites can stay
+ * naïve about the upstream-data quirk.
+ *
+ * Limited to known-text fields so we never accidentally rewrite IDs, URLs,
+ * keys, or other ASCII metadata. Backend-side fix lives in Phase 2 author
+ * hydration; this is the belt that closes the visible bug today.
+ */
+const REPAIRABLE_FIELDS: ReadonlySet<string> = new Set([
+  'title',
+  'authors',
+  'display_name',
+  'name',
+  'affiliation',
+])
+
+function repairDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = repairDeep(value[i])
+    return value
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    for (const key of Object.keys(obj)) {
+      const v = obj[key]
+      if (typeof v === 'string' && REPAIRABLE_FIELDS.has(key)) {
+        obj[key] = repairDisplayText(v)
+      } else if (v && typeof v === 'object') {
+        obj[key] = repairDeep(v)
+      }
+    }
+  }
+  return value
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -38,7 +77,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   const contentType = response.headers.get('content-type') || ''
   if (contentType.includes('application/json')) {
-    return response.json()
+    const data = await response.json()
+    return repairDeep(data) as T
   }
 
   const text = await response.text()
