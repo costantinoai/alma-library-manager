@@ -478,7 +478,7 @@ def get_paper_enrichment_status(
     ),
 )
 def rehydrate_paper_metadata(
-    limit: int = Query(500, ge=1, le=100_000, description="Maximum papers to inspect in this run"),
+    limit: Optional[int] = Query(None, ge=1, le=100_000, description="Maximum papers to inspect in this run; omit to process all eligible papers"),
     force: bool = Query(False, description="Ignore terminal ledger rows and refetch matching lookup/projection pairs"),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
@@ -511,14 +511,18 @@ def rehydrate_paper_metadata(
         trigger_source="user",
         started_at=datetime.utcnow().isoformat(),
         processed=0,
-        total=limit,
-        message=f"OpenAlex metadata rehydration queued for up to {limit} paper(s)",
+        total=0,
+        message=(
+            f"OpenAlex metadata rehydration queued for up to {limit} paper(s)"
+            if limit is not None
+            else "OpenAlex metadata rehydration queued for all eligible papers"
+        ),
     )
     add_job_log(
         job_id,
         "OpenAlex metadata rehydration queued",
         step="queued",
-        data={"limit": limit, "force": force},
+        data={"limit": limit, "all_eligible": limit is None, "force": force},
     )
 
     def _runner() -> dict:
@@ -536,8 +540,12 @@ def rehydrate_paper_metadata(
         job_id,
         status="queued",
         operation_key=operation_key,
-        message="OpenAlex metadata rehydration queued",
-        total=limit,
+        message=(
+            "OpenAlex metadata rehydration queued"
+            if limit is not None
+            else "OpenAlex metadata rehydration queued for all eligible papers"
+        ),
+        total=limit or 0,
     )
 
 

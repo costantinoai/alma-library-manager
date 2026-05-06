@@ -178,20 +178,20 @@ def _build_dependency_setup_suggestions(
     elif env_type == "uv":
         suggestions.extend(
             [
-                "Create a clean env: uv venv .venv-scholarbot-ai",
-                "Activate it: source .venv-scholarbot-ai/bin/activate",
+                "Create a clean env: uv venv .venv",
+                "Activate it: source .venv/bin/activate",
                 f"Install packages: uv {provider_install_line}",
-                "Set the .venv-scholarbot-ai folder in Settings.",
+                "Set the .venv folder in Settings.",
                 "Restart backend after install so Python reloads compiled dependencies from this env.",
             ]
         )
     else:
         suggestions.extend(
             [
-                "Create a clean env: python -m venv .venv-scholarbot-ai",
-                "Activate it: source .venv-scholarbot-ai/bin/activate",
+                "Create a clean env: python -m venv .venv",
+                "Activate it: source .venv/bin/activate",
                 f"Install packages: {provider_install_line}",
-                "Set the .venv-scholarbot-ai folder in Settings.",
+                "Set the .venv folder in Settings.",
                 "Restart backend after install so Python reloads compiled dependencies from this env.",
             ]
         )
