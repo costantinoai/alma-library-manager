@@ -198,6 +198,9 @@ parameters and response shapes.
 | `POST` | `/authors/{id}/refresh-cache` | Incremental refresh |
 | `POST` | `/authors/{id}/deep-refresh` | Full re-fetch |
 | `POST` | `/authors/deep-refresh-all` | Bulk deep refresh; `scope=needs_metadata` targets identity/profile gaps for Settings maintenance |
+| `GET` | `/authors/enrichment-status` | Pure-read author hydration ledger summary (OpenAlex / ORCID / Semantic Scholar / Crossref) + per-author rows |
+| `POST` | `/authors/rehydrate-metadata` | Queue author profile/affiliation/alias hydration through the Activity envelope |
+| `GET` | `/authors/{id}/affiliations` | Read affiliation evidence and the current display-affiliation decision |
 | `POST` | `/authors/backfill-works` | Pull works + S2 vectors |
 | `POST` | `/authors/{id}/history-backfill` | Historical corpus backfill |
 | `POST` | `/authors/{id}/empty-cache` | Clear cached works |

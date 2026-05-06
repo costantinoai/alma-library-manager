@@ -74,6 +74,22 @@ Three refresh paths:
 
 All three are Activity-backed and report per-author progress.
 
+## Metadata and affiliation hydration
+
+ALMa also keeps a lighter author metadata hydration ledger for
+profile fields, aliases, and affiliation evidence. It runs when a
+new author is first seen in the corpus, when you follow someone, when
+profiles are merged, and when you use **Settings → Corpus
+maintenance → Rehydrate corpus metadata**.
+
+The hydration job reads OpenAlex, ORCID, Semantic Scholar, and
+Crossref when the needed identifiers are available. Affiliation
+evidence is stored per source and the displayed author affiliation is
+recomputed from weighted evidence, preferring current ORCID employment
+when available and using OpenAlex / Crossref as supporting evidence.
+If strong sources disagree, the Authors page can surface an
+affiliation-conflict row under **Needs attention**.
+
 ## Author suggestions
 
 Below the Followed list, the page surfaces **Author suggestions**

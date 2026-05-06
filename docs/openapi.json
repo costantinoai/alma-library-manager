@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ALMa API",
-    "description": "\n    REST API for ALMa — Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
+    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
     "contact": {
       "name": "ALMa",
       "url": "https://github.com/costantinoai/alma-library-manager"
@@ -520,7 +520,7 @@
           "authors"
         ],
         "summary": "Log a rail-originated author follow for outcome calibration",
-        "description": "Fire-and-forget call from the Suggested Authors rail after a follow succeeds, so per-bucket outcome calibration can attribute the positive event to the bucket that surfaced the author. The actual follow write goes through the existing follow / author-create routes — this is the calibration log only.",
+        "description": "Fire-and-forget call from the Suggested Authors rail after a follow succeeds, so per-bucket outcome calibration can attribute the positive event to the bucket that surfaced the author. The actual follow write goes through the existing follow / author-create routes \u2014 this is the calibration log only.",
         "operationId": "track_followed_suggestion_api_v1_authors_suggestions_track_follow_post",
         "security": [
           {
@@ -927,6 +927,91 @@
         }
       }
     },
+    "/api/v1/authors/enrichment-status": {
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Author metadata hydration ledger",
+        "description": "Read-only summary of author profile / affiliation hydration ledger rows.",
+        "operationId": "get_author_enrichment_status_api_v1_authors_enrichment_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/{author_id}/identifiers": {
       "post": {
         "tags": [
@@ -1208,7 +1293,7 @@
           "authors"
         ],
         "summary": "Discover OpenAlex split profiles via ORCID",
-        "description": "Looks up the author's ORCID on OpenAlex and queries every OpenAlex author profile sharing that ORCID. ORCID is person-level and verified, so co-occurrence is high-confidence evidence of a split profile. Returns the alias list for the user to merge via /merge-profiles. Read-only — does not modify any rows.",
+        "description": "Looks up the author's ORCID on OpenAlex and queries every OpenAlex author profile sharing that ORCID. ORCID is person-level and verified, so co-occurrence is high-confidence evidence of a split profile. Returns the alias list for the user to merge via /merge-profiles. Read-only \u2014 does not modify any rows.",
         "operationId": "discover_author_aliases_api_v1_authors__author_id__discover_aliases_post",
         "security": [
           {
@@ -2186,7 +2271,7 @@
           "authors"
         ],
         "summary": "Fetch a page of the author's full OpenAlex bibliography",
-        "description": "Lazy cursor-paginated window onto the author's complete OpenAlex works list. Does NOT touch the local DB — use /publications for the already-saved view and /library/import/search/save to pull a work into Library. Accepts either a local author UUID (resolved to its openalex_id) or a bare OpenAlex author id (A…).",
+        "description": "Lazy cursor-paginated window onto the author's complete OpenAlex works list. Does NOT touch the local DB \u2014 use /publications for the already-saved view and /library/import/search/save to pull a work into Library. Accepts either a local author UUID (resolved to its openalex_id) or a bare OpenAlex author id (A\u2026).",
         "operationId": "list_author_openalex_works_api_v1_authors__author_id__openalex_works_get",
         "security": [
           {
@@ -2730,7 +2815,7 @@
           "authors"
         ],
         "summary": "Deep refresh all refreshable authors",
-        "description": "Full refresh pipeline for every selected author: hierarchical identity resolution → OpenAlex profile update (name, affiliation, institutions, citations, h-index, works_count, topics, cited_by_year, ORCID) → works + SPECTER2 vectors backfill → SPECTER2 centroid recompute. Same code the popup 'Refresh author' button runs — just iterated over the author pool. Imported-only placeholder authors without any upstream ID are skipped automatically.",
+        "description": "Full refresh pipeline for every selected author: hierarchical identity resolution \u2192 OpenAlex profile update (name, affiliation, institutions, citations, h-index, works_count, topics, cited_by_year, ORCID) \u2192 works + SPECTER2 vectors backfill \u2192 SPECTER2 centroid recompute. Same code the popup 'Refresh author' button runs \u2014 just iterated over the author pool. Imported-only placeholder authors without any upstream ID are skipped automatically.",
         "operationId": "deep_refresh_all_authors_api_v1_authors_deep_refresh_all_post",
         "security": [
           {
@@ -2744,11 +2829,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "followed | followed_plus_library | library | corpus",
+              "description": "followed | needs_metadata | followed_plus_library | library | corpus",
               "default": "followed",
               "title": "Scope"
             },
-            "description": "followed | followed_plus_library | library | corpus"
+            "description": "followed | needs_metadata | followed_plus_library | library | corpus"
           },
           {
             "name": "background",
@@ -2821,13 +2906,212 @@
         }
       }
     },
+    "/api/v1/authors/rehydrate-metadata": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Hydrate author profile and affiliation metadata",
+        "description": "Queues an Activity-backed author metadata job. The job uses a per-author/source/purpose ledger and fills profile fields plus structured affiliation evidence from OpenAlex, ORCID, Semantic Scholar, and Crossref when identifiers are available.",
+        "operationId": "rehydrate_author_metadata_api_v1_authors_rehydrate_metadata_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100000,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum authors to prepare; omitted means all eligible authors",
+              "title": "Limit"
+            },
+            "description": "Maximum authors to prepare; omitted means all eligible authors"
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Ignore current ledger state and retry eligible authors",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Ignore current ledger state and retry eligible authors"
+          },
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Run in background and track in Activity",
+              "default": true,
+              "title": "Background"
+            },
+            "description": "Run in background and track in Activity"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/affiliations": {
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "List affiliation evidence for one author",
+        "description": "Read-only evidence rows used to pick an author's display affiliation.",
+        "operationId": "get_author_affiliations_api_v1_authors__author_id__affiliations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/dedup-by-orcid": {
       "post": {
         "tags": [
           "authors"
         ],
         "summary": "Dedup followed authors by ORCID (auto-merge + alias record)",
-        "description": "Manual sweep that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) auto-merges if another currently-followed author already holds that openalex_id (richer-profile-wins), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Activity-enveloped — runs in the background and the Activity panel shows per-author progress.",
+        "description": "Manual sweep that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) auto-merges if another currently-followed author already holds that openalex_id (richer-profile-wins), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Activity-enveloped \u2014 runs in the background and the Activity panel shows per-author progress.",
         "operationId": "dedup_authors_by_orcid_endpoint_api_v1_authors_dedup_by_orcid_post",
         "security": [
           {
@@ -4075,14 +4359,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100000,
-              "minimum": 1,
-              "description": "Maximum papers to inspect in this run",
-              "default": 500,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100000,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum papers to inspect in this run; omit to process all eligible papers",
               "title": "Limit"
             },
-            "description": "Maximum papers to inspect in this run"
+            "description": "Maximum papers to inspect in this run; omit to process all eligible papers"
           },
           {
             "name": "force",
@@ -4463,7 +4753,7 @@
           "papers"
         ],
         "summary": "Papers referenced by this paper (full OpenAlex graph)",
-        "description": "Return every paper this paper references, fetched from OpenAlex.\n\nThe OpenAlex graph is the source of truth — local\n``publication_references`` is no longer queried for this view, so\nthe user sees the full bibliography rather than a corpus-only\nsubset. Local matches are looked up in bulk and surfaced via\n``in_library=true`` plus an attached ``paper_id`` so the Pivot\nbutton still works for in-library hits.\n\nCached for 24 h in ``paper_network_cache`` so repeat opens are\ninstant; cache key is ``paper_id + 'prior'``.",
+        "description": "Return every paper this paper references, fetched from OpenAlex.\n\nThe OpenAlex graph is the source of truth \u2014 local\n``publication_references`` is no longer queried for this view, so\nthe user sees the full bibliography rather than a corpus-only\nsubset. Local matches are looked up in bulk and surfaced via\n``in_library=true`` plus an attached ``paper_id`` so the Pivot\nbutton still works for in-library hits.\n\nCached for 24 h in ``paper_network_cache`` so repeat opens are\ninstant; cache key is ``paper_id + 'prior'``.",
         "operationId": "list_prior_works_api_v1_papers__paper_id__prior_works_get",
         "security": [
           {
@@ -4723,8 +5013,8 @@
         "tags": [
           "papers"
         ],
-        "summary": "Detect + merge preprint↔journal twin papers",
-        "description": "Scans for pairs where the same work exists as both a preprint (arXiv / bioRxiv / psyRxiv / chemRxiv / OSF / MDPI) and a published journal row, collapsing each pair into the journal version. `scope=library` only collapses pairs where at least one side is a saved Library paper (fast); `scope=corpus` considers every pair (can take a while on a large corpus). FK rows migrate preprint → canonical; Library + Discovery lists filter the merged preprint out automatically.",
+        "summary": "Detect + merge preprint\u2194journal twin papers",
+        "description": "Scans for pairs where the same work exists as both a preprint (arXiv / bioRxiv / psyRxiv / chemRxiv / OSF / MDPI) and a published journal row, collapsing each pair into the journal version. `scope=library` only collapses pairs where at least one side is a saved Library paper (fast); `scope=corpus` considers every pair (can take a while on a large corpus). FK rows migrate preprint \u2192 canonical; Library + Discovery lists filter the merged preprint out automatically.",
         "operationId": "dedup_preprint_twins_api_v1_papers_dedup_preprints_post",
         "security": [
           {
@@ -8514,7 +8804,7 @@
           "library"
         ],
         "summary": "Update paper reading status",
-        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state ∈ {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` —\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
+        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
         "operationId": "update_reading_status_api_v1_library_papers__paper_id__reading_status_patch",
         "security": [
           {
@@ -8591,7 +8881,7 @@
           "library"
         ],
         "summary": "Get reading list grouped by status",
-        "description": "Return the reading list grouped by status.\n\nD2 lifecycle (post-2026-04-26): reading state ∈ {None, reading,\ndone, excluded}. The legacy `queued` bucket has been retired —\nmembership of the reading list IS `reading`. Reading state stays\nindependent from library membership: marking reading does not\nsave, saving does not mark reading.",
+        "description": "Return the reading list grouped by status.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. The legacy `queued` bucket has been retired \u2014\nmembership of the reading list IS `reading`. Reading state stays\nindependent from library membership: marking reading does not\nsave, saving does not mark reading.",
         "operationId": "get_reading_queue_api_v1_library_reading_queue_get",
         "security": [
           {
@@ -9552,7 +9842,7 @@
           "library-import"
         ],
         "summary": "Streaming variant of /import/search (NDJSON, per-source events)",
-        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons → partial results → final ranked list incrementally. Each newline-delimited JSON object carries a `type` field — `scorer_ready`, `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
+        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons \u2192 partial results \u2192 final ranked list incrementally. Each newline-delimited JSON object carries a `type` field \u2014 `scorer_ready`, `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
         "operationId": "online_source_search_stream_api_v1_library_import_search_stream_post",
         "security": [
           {
@@ -9618,7 +9908,7 @@
           "library-import"
         ],
         "summary": "Save an online search result with the add/like/love/dislike contract",
-        "description": "Resolves one OpenAlex work and applies the shared `3/4/5/1` rating contract. add/like/love land in Library with `added_from='online_search'`; dislike writes a negative feedback event and marks the paper dismissed (unless it's already in Library — then the library entry is preserved and only the signal is recorded).",
+        "description": "Resolves one OpenAlex work and applies the shared `3/4/5/1` rating contract. add/like/love land in Library with `added_from='online_search'`; dislike writes a negative feedback event and marks the paper dismissed (unless it's already in Library \u2014 then the library entry is preserved and only the signal is recorded).",
         "operationId": "online_source_search_save_api_v1_library_import_search_save_post",
         "security": [
           {
@@ -13936,7 +14226,7 @@
           "insights"
         ],
         "summary": "Get monitor and discovery diagnostics",
-        "description": "Returns product-facing diagnostics for Feed monitors, Discovery sources, and branch quality.",
+        "description": "Returns the full diagnostics payload composed from per-section materialised views. Each section is also exposed at `/insights/diagnostics/sections/{section}` so the frontend can stream cards in independently with per-card skeletons.",
         "operationId": "get_insights_diagnostics_api_v1_insights_diagnostics_get",
         "security": [
           {
@@ -14027,6 +14317,72 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/insights/diagnostics/sections/{section}": {
+      "get": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Get one diagnostics section",
+        "description": "Returns just one section of the Insights diagnostics payload. Each section is cached as a materialised view with a narrow fingerprint, so cards stream in independently and stay fresh without recomputing unrelated work.",
+        "operationId": "get_diagnostics_section_api_v1_insights_diagnostics_sections__section__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "section",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Section"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -14261,6 +14617,65 @@
               "title": "Backup Name"
             }
           },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library-mgmt/embeddings/reset": {
+      "post": {
+        "tags": [
+          "library-management"
+        ],
+        "summary": "Delete every cached embedding so they can be re-fetched",
+        "description": "Wipes `publication_embeddings`, `author_centroids`, and `publication_embedding_fetch_status` so the next AI run / S2 backfill repopulates them from scratch. Synchronous (small tables, < 1 s). Library papers, followed authors, lenses, feedback events, collections, tags, and the corpus are preserved \u2014 only the vector caches and their per-paper fetch markers are removed.",
+        "operationId": "reset_embeddings_api_v1_library_mgmt_embeddings_reset_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
           {
             "name": "x-api-key",
             "in": "header",
@@ -15420,7 +15835,7 @@
           "graphs"
         ],
         "summary": "Get Paper Map",
-        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, no topic overlay) are served via the materialised-view layer:\ncache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations bypass the cache and build inline — those are\nrare, ad-hoc views where caching every variant would be wasteful.",
+        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, no topic overlay) are served via the materialised-view layer:\ncache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations bypass the cache and build inline \u2014 those are\nrare, ad-hoc views where caching every variant would be wasteful.",
         "operationId": "get_paper_map_api_v1_graphs_paper_map_get",
         "security": [
           {
@@ -15678,7 +16093,7 @@
           "graphs"
         ],
         "summary": "Refresh Cluster Labels",
-        "description": "Regenerate representative cluster labels for one graph + scope.\n\nRuns in the Activity envelope so the UI can track per-cluster\nprogress without blocking the GET path. The GET route picks up\ncached labels from `graph_cluster_labels` on the next refresh —\nthis endpoint invalidates `graph_cache` at the end to force that\nrebuild.",
+        "description": "Regenerate representative cluster labels for one graph + scope.\n\nRuns in the Activity envelope so the UI can track per-cluster\nprogress without blocking the GET path. The GET route picks up\ncached labels from `graph_cluster_labels` on the next refresh \u2014\nthis endpoint invalidates `graph_cache` at the end to force that\nrebuild.",
         "operationId": "refresh_cluster_labels_api_v1_graphs_cluster_labels_refresh_post",
         "security": [
           {
@@ -16756,7 +17171,7 @@
           "feedback"
         ],
         "summary": "Reset learned feedback state",
-        "description": "Wipes every table that encodes user-derived feedback signal — raw feedback events, per-lens aggregates, author dismissals, author centroids, and cached author suggestion buckets — and clears `recommendations.user_action` so past actions no longer count as evidence. Saved Library papers, followed authors, lenses, and the corpus itself are preserved.",
+        "description": "Wipes every table that encodes user-derived feedback signal \u2014 raw feedback events, per-lens aggregates, author dismissals, author centroids, and cached author suggestion buckets \u2014 and clears `recommendations.user_action` so past actions no longer count as evidence. Saved Library papers, followed authors, lenses, and the corpus itself are preserved.",
         "operationId": "reset_feedback_learning_api_v1_feedback_reset_post",
         "security": [
           {
@@ -18857,7 +19272,7 @@
           "label"
         ],
         "title": "AuthorSuggestionSignal",
-        "description": "One piece of evidence backing an author suggestion.\n\nT7 (2026-04-24) — replaces the single opaque `suggestion_type`\nlabel with a priority-ordered list of concrete evidence chips.\n`label` is the user-facing string; `kind` is a stable machine\ntag for analytics / future targeting. `count` / `value` /\n`subject` are optional numeric / string facets the UI can use\nfor tooltip-rich rendering."
+        "description": "One piece of evidence backing an author suggestion.\n\nT7 (2026-04-24) \u2014 replaces the single opaque `suggestion_type`\nlabel with a priority-ordered list of concrete evidence chips.\n`label` is the user-facing string; `kind` is a stable machine\ntag for analytics / future targeting. `count` / `value` /\n`subject` are optional numeric / string facets the UI can use\nfor tooltip-rich rendering."
       },
       "AuthorTypeUpdateRequest": {
         "properties": {
@@ -18909,7 +19324,7 @@
         },
         "type": "object",
         "title": "BackfillAuthorWorksRequest",
-        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs — useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
+        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs \u2014 useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
       },
       "BibtexTextImportRequest": {
         "properties": {
@@ -21776,7 +22191,7 @@
           "score"
         ],
         "title": "RecommendationExplainResponse",
-        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope. Different ranker versions emit different signal\ntaxonomies — the legacy 10-signal layout\n(``source_relevance``, ``topic_score``, ``text_similarity``, …,\n``usefulness_boost``), the v2 retrieval-channel layout\n(``lexical``, ``vector``), and various raw-diagnostic fields — and a\nhardcoded Pydantic model silently dropped every v2 key via\n``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live\nDB. The route returns the stored breakdown exactly as scoring wrote\nit, annotated with descriptions for known signal names; the frontend\niterates keys generically and renders the ones it recognises (see\n``components/shared/PaperCard.tsx::SIGNAL_META``)."
+        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope. Different ranker versions emit different signal\ntaxonomies \u2014 the legacy 10-signal layout\n(``source_relevance``, ``topic_score``, ``text_similarity``, \u2026,\n``usefulness_boost``), the v2 retrieval-channel layout\n(``lexical``, ``vector``), and various raw-diagnostic fields \u2014 and a\nhardcoded Pydantic model silently dropped every v2 key via\n``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live\nDB. The route returns the stored breakdown exactly as scoring wrote\nit, annotated with descriptions for known signal names; the frontend\niterates keys generically and renders the ones it recognises (see\n``components/shared/PaperCard.tsx::SIGNAL_META``)."
       },
       "RecommendationLibraryActionRequest": {
         "properties": {
@@ -21981,7 +22396,7 @@
         },
         "type": "object",
         "title": "RefreshAuthorNetworkRequest",
-        "description": "Trigger the two network author-suggestion refresh runners.\n\n`force=True` re-runs both even if their caches are fresh; by\ndefault stale/missing caches are the only ones refreshed\n(fresh caches are left alone — cheap no-op)."
+        "description": "Trigger the two network author-suggestion refresh runners.\n\n`force=True` re-runs both even if their caches are fresh; by\ndefault stale/missing caches are the only ones refreshed\n(fresh caches are left alone \u2014 cheap no-op)."
       },
       "RejectSuggestionRequest": {
         "properties": {
@@ -22001,7 +22416,7 @@
               }
             ],
             "title": "Suggestion Bucket",
-            "description": "Originating rail bucket (library_core / cited_by_high_signal / adjacent / semantic_similar / openalex_related / s2_related). Optional — used by outcome calibration to reweight per-bucket scoring; NULL is fine for non-rail rejections."
+            "description": "Originating rail bucket (library_core / cited_by_high_signal / adjacent / semantic_similar / openalex_related / s2_related). Optional \u2014 used by outcome calibration to reweight per-bucket scoring; NULL is fine for non-rail rejections."
           }
         },
         "type": "object",
@@ -22023,7 +22438,7 @@
           "choice"
         ],
         "title": "ResolveConflictRequest",
-        "description": "Body for `POST /authors/conflicts/{conflict_id}/resolve`.\n`choice` = which side wins ('primary' or 'alt'). When 'alt' wins,\nthe primary author row's column gets overwritten with the alt's\nvalue before the conflict is marked resolved. `dismiss` skips\nboth — the conflict goes away without changing the row."
+        "description": "Body for `POST /authors/conflicts/{conflict_id}/resolve`.\n`choice` = which side wins ('primary' or 'alt'). When 'alt' wins,\nthe primary author row's column gets overwritten with the alt's\nvalue before the conflict is marked resolved. `dismiss` skips\nboth \u2014 the conflict goes away without changing the row."
       },
       "ResolveIdentifiersRequest": {
         "properties": {
@@ -22203,7 +22618,7 @@
               }
             ],
             "title": "Openalex Id",
-            "description": "OpenAlex author ID (A1234… or full URL)"
+            "description": "OpenAlex author ID (A1234\u2026 or full URL)"
           },
           "scholar_id": {
             "anyOf": [
@@ -22688,7 +23103,32 @@
         ],
         "title": "TopicCreateRequest"
       },
-      "TopicDomainNode": {
+      "TopicDomainNode-Input": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "paper_count": {
+            "type": "integer",
+            "title": "Paper Count"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TopicFieldNode"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "paper_count"
+        ],
+        "title": "TopicDomainNode"
+      },
+      "TopicDomainNode-Output": {
         "properties": {
           "name": {
             "type": "string",
@@ -22780,7 +23220,7 @@
         "properties": {
           "domains": {
             "items": {
-              "$ref": "#/components/schemas/TopicDomainNode"
+              "$ref": "#/components/schemas/TopicDomainNode-Output"
             },
             "type": "array",
             "title": "Domains"
@@ -22917,13 +23357,6 @@
           "type": {
             "type": "string",
             "title": "Error Type"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "ctx": {
-            "type": "object",
-            "title": "Context"
           }
         },
         "type": "object",
