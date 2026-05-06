@@ -42,7 +42,7 @@ from alma.core.resolution import (
     get_author_sample_titles,
     resolve_author_identity,
 )
-from alma.core.utils import normalize_title_key
+from alma.core.utils import normalize_orcid, normalize_title_key
 
 logger = logging.getLogger(__name__)
 
@@ -402,12 +402,28 @@ def persist_identity_result(
         updates.append("scholar_id = COALESCE(NULLIF(scholar_id, ''), ?)")
         params.append(result.scholar_id)
     if result.orcid:
-        from alma.core.utils import normalize_orcid
-
         normalized_orcid = normalize_orcid(result.orcid)
         if normalized_orcid:
-            updates.append("orcid = COALESCE(NULLIF(orcid, ''), ?)")
-            params.append(normalized_orcid)
+            owner = db.execute(
+                """
+                SELECT id
+                FROM authors
+                WHERE lower(trim(orcid)) = lower(?)
+                  AND id != ?
+                LIMIT 1
+                """,
+                (normalized_orcid, author_id),
+            ).fetchone()
+            if owner:
+                logger.warning(
+                    "Skipping ORCID %s for %s during identity persistence; already owned by %s",
+                    normalized_orcid,
+                    author_id,
+                    owner["id"] if isinstance(owner, sqlite3.Row) else owner[0],
+                )
+            else:
+                updates.append("orcid = COALESCE(NULLIF(orcid, ''), ?)")
+                params.append(normalized_orcid)
 
     updates.extend(
         [
@@ -434,7 +450,7 @@ def persist_identity_result(
         db.execute(sql, params)
         if db.in_transaction:
             db.commit()
-    except sqlite3.OperationalError as exc:
+    except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
         logger.warning("persist_identity_result failed for %s: %s", author_id, exc)
 
 

@@ -102,9 +102,27 @@ def apply_author_profile_update(
 
         normalized = normalize_orcid(orcid)
         if normalized:
-            fields.append("orcid = COALESCE(NULLIF(TRIM(orcid), ''), ?)")
-            params.append(normalized)
-            changed.append("orcid")
+            owner = db.execute(
+                """
+                SELECT id, openalex_id, name
+                FROM authors
+                WHERE lower(trim(orcid)) = lower(?)
+                  AND id != ?
+                LIMIT 1
+                """,
+                (normalized, author_key),
+            ).fetchone()
+            if owner is None:
+                fields.append("orcid = COALESCE(NULLIF(TRIM(orcid), ''), ?)")
+                params.append(normalized)
+                changed.append("orcid")
+            else:
+                logger.warning(
+                    "Skipping ORCID %s for %s; already held by author %s",
+                    normalized,
+                    author_key,
+                    owner["id"] if isinstance(owner, sqlite3.Row) else owner[0],
+                )
 
     # Monotonic counters — MAX only upgrades. A 0 from a transient OA
     # outage can't zero our h-index / citations.
@@ -170,7 +188,7 @@ def apply_author_profile_update(
         db.execute(sql, params)
         if db.in_transaction:
             db.commit()
-    except sqlite3.OperationalError as exc:
+    except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
         logger.warning("apply_author_profile_update failed for %s: %s", author_key, exc)
         return {"updated": [], "error": str(exc)}
 

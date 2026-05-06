@@ -283,8 +283,26 @@ def _apply_author_resolution_result(
     if result.orcid:
         normalized_orcid = normalize_orcid(result.orcid)
         if normalized_orcid:
-            updates.append("orcid = COALESCE(NULLIF(orcid, ''), ?)")
-            params.append(normalized_orcid)
+            owner = db.execute(
+                """
+                SELECT id
+                FROM authors
+                WHERE lower(trim(orcid)) = lower(?)
+                  AND id != ?
+                LIMIT 1
+                """,
+                (normalized_orcid, author_id),
+            ).fetchone()
+            if owner:
+                logger.warning(
+                    "Skipping ORCID %s for %s during author resolution; already owned by %s",
+                    normalized_orcid,
+                    author_id,
+                    owner["id"] if isinstance(owner, sqlite3.Row) else owner[0],
+                )
+            else:
+                updates.append("orcid = COALESCE(NULLIF(orcid, ''), ?)")
+                params.append(normalized_orcid)
 
     profile = result.openalex_profile or {}
     institution = str(profile.get("institution") or "").strip()
@@ -968,12 +986,39 @@ def _refresh_author_cache_impl(
                 )
 
     if not used_modern_backfill:
-        pubs = fetch_publications_by_id(
-            author_id,
-            output_folder=_data_dir(),
-            args=SimpleNamespace(update_cache=True, test_fetching=False),
-            from_year=from_year,
-        )
+        scholar_lookup_id = str(row["scholar_id"] or "").strip()
+        if scholar_lookup_id:
+            try:
+                pubs = fetch_publications_by_id(
+                    scholar_lookup_id,
+                    output_folder=_data_dir(),
+                    args=SimpleNamespace(update_cache=True, test_fetching=False),
+                    from_year=from_year,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Scholar fallback failed for %s (%s): %s",
+                    author_name,
+                    scholar_lookup_id,
+                    exc,
+                )
+                if job_id:
+                    add_job_log(
+                        job_id,
+                        f"Scholar fallback warning for {author_name}: {exc}",
+                        level="WARNING",
+                        step="refresh_scholar_fallback",
+                    )
+                pubs = []
+        else:
+            if job_id:
+                add_job_log(
+                    job_id,
+                    f"Skipped Scholar fallback for {author_name}: no Scholar ID on author row",
+                    level="WARNING",
+                    step="refresh_scholar_fallback",
+                )
+            pubs = []
 
     now = datetime.utcnow().isoformat()
     db.execute("UPDATE authors SET last_fetched_at = ? WHERE id = ?", (now, author_id))
@@ -1121,7 +1166,7 @@ def _deep_refresh_all_impl(
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
 
     scope = (scope or "followed").strip().lower()
-    if scope not in {"library", "followed", "followed_plus_library", "corpus"}:
+    if scope not in {"library", "followed", "needs_metadata", "followed_plus_library", "corpus"}:
         scope = "followed"
 
     scope_join_map: dict[str, str] = {
@@ -1132,6 +1177,9 @@ def _deep_refresh_all_impl(
         ),
         # Explicitly followed authors only.
         "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",
+        # Targeted metadata repair: rows where identity/profile state is
+        # incomplete or failed, without sweeping every placeholder row.
+        "needs_metadata": "",
         # Default scope used by the Settings UI: union of followed +
         # every author of every library paper. Captures the
         # "adjacent-author" signal (co-authors of papers I've kept)
@@ -1155,6 +1203,31 @@ def _deep_refresh_all_impl(
         "corpus": "",
     }
     scope_join = scope_join_map[scope]
+    needs_metadata_clause = """
+        AND (
+            COALESCE(a.id_resolution_status, '') IN ('error', 'no_match', 'needs_manual_review')
+            OR (
+                COALESCE(a.id_resolution_status, '') = 'unresolved'
+                AND EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
+            )
+            OR (
+                EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
+                AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') = ''
+            )
+            OR (
+                COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') != ''
+                AND (
+                    COALESCE(NULLIF(TRIM(a.orcid), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.affiliation), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.interests), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.institutions), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.cited_by_year), ''), '') = ''
+                    OR COALESCE(a.works_count, 0) <= 0
+                    OR COALESCE(NULLIF(TRIM(a.last_fetched_at), ''), '') = ''
+                )
+            )
+        )
+    """ if scope == "needs_metadata" else ""
     rows = db.execute(
         f"""
         SELECT DISTINCT a.id AS id, a.name AS name,
@@ -1162,6 +1235,7 @@ def _deep_refresh_all_impl(
         FROM authors a
         {scope_join}
         WHERE COALESCE(a.status, 'active') <> 'removed'
+        {needs_metadata_clause}
         ORDER BY a.name
         """
     ).fetchall()
@@ -1329,8 +1403,18 @@ def _deep_refresh_all_impl(
             for aid, an, _ in work_items
         }
         for fut in as_completed(futures):
-            status, aid, an, exc, gained = fut.result()
+            aid, an = futures[fut]
+            if fut.cancelled():
+                status, exc, gained = "cancelled", None, False
+            else:
+                status, aid, an, exc, gained = fut.result()
             with progress_lock:
+                cancel_requested = bool(job_id and is_cancellation_requested(job_id))
+                if cancel_requested:
+                    cancelled = True
+                    for pending in futures:
+                        if not pending.done():
+                            pending.cancel()
                 processed += 1
                 if status == "ok":
                     refreshed += 1
@@ -1363,7 +1447,7 @@ def _deep_refresh_all_impl(
                     # below.
                     pass
 
-                if job_id and status != "cancelled":
+                if job_id and status != "cancelled" and not cancelled:
                     set_job_status(
                         job_id,
                         status="running",
@@ -4156,7 +4240,7 @@ def refresh_author_cache(
 def deep_refresh_all_authors(
     scope: str = Query(
         "followed",
-        description="followed | followed_plus_library | library | corpus",
+        description="followed | needs_metadata | followed_plus_library | library | corpus",
     ),
     background: bool = Query(True, description="Run as background job and track in Activity"),
     db: sqlite3.Connection = Depends(get_db),
@@ -4166,6 +4250,9 @@ def deep_refresh_all_authors(
 
     Scope:
     - ``followed`` (default) — rows in ``followed_authors``.
+    - ``needs_metadata`` — active authors with identity-resolution
+      issues, followed authors missing OpenAlex, or OpenAlex-backed
+      profiles missing ORCID/profile fields.
     - ``followed_plus_library`` — followed authors PLUS every co-author
       of any paper currently in the library. Surfaces the
       adjacent-author signal Discovery uses, without sweeping the long
@@ -4178,7 +4265,7 @@ def deep_refresh_all_authors(
     from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
 
     scope_value = (scope or "followed").strip().lower()
-    if scope_value not in {"library", "followed", "followed_plus_library", "corpus"}:
+    if scope_value not in {"library", "followed", "needs_metadata", "followed_plus_library", "corpus"}:
         scope_value = "followed"
 
     if not background:
