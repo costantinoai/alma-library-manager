@@ -848,6 +848,41 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
             ).fetchall()
         except sqlite3.OperationalError:
             followed_rows = []
+
+        # Pre-compute background_publications for ALL followed authors in
+        # one grouped query. Each per-author call to
+        # ``get_followed_author_backfill_status`` would otherwise issue
+        # the same heavy 3-way JOIN (papers ⋈ publication_authors ⋈
+        # authors); with N followed authors that's an N+1 that ran the
+        # diagnostics tab into ~60 s on a 50-author corpus. Passing the
+        # count in as a kwarg lets the helper skip its own query.
+        bg_counts: dict[str, int] = {}
+        if (
+            table_exists(db, "publication_authors")
+            and table_exists(db, "authors")
+            and followed_rows
+        ):
+            try:
+                bg_rows = db.execute(
+                    """
+                    SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
+                    FROM authors a
+                    JOIN followed_authors fa ON fa.author_id = a.id
+                    JOIN publication_authors pa
+                      ON lower(a.openalex_id) = lower(pa.openalex_id)
+                     AND a.openalex_id IS NOT NULL
+                     AND TRIM(a.openalex_id) <> ''
+                    JOIN papers p ON p.id = pa.paper_id
+                    WHERE p.status <> 'library'
+                    GROUP BY a.id
+                    """
+                ).fetchall()
+                bg_counts = {
+                    str(r["author_id"]): int(r["c"] or 0) for r in bg_rows
+                }
+            except sqlite3.OperationalError:
+                bg_counts = {}
+
         for row in followed_rows:
             author_id = str(row["id"] or "").strip()
             if not author_id:
@@ -856,6 +891,7 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
                 db,
                 author_id,
                 works_count=int(row["works_count"] or 0),
+                background_publications=bg_counts.get(author_id, 0),
             )
             state = str(status.get("state") or "unknown")
             if state == "fresh":
@@ -2021,813 +2057,36 @@ mv.register(
 @router.get(
     "/diagnostics",
     summary="Get monitor and discovery diagnostics",
-    description="Returns product-facing diagnostics for Feed monitors, Discovery sources, and branch quality.",
+    description=(
+        "Returns the full diagnostics payload composed from per-section "
+        "materialised views. Each section is also exposed at "
+        "`/insights/diagnostics/sections/{section}` so the frontend can "
+        "stream cards in independently with per-card skeletons."
+    ),
 )
 def get_insights_diagnostics(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    """Composed diagnostics payload — backed by per-section MVs.
+
+    Each of the eight named sections (feed, discovery, ai, authors,
+    alerts, feedback, operational, evaluation) is registered as a
+    fingerprint-based materialised view in
+    ``alma.api.routes.insights_diagnostics``. We pull each section's
+    cached payload through ``mv.get`` and recompose them into the
+    legacy ``InsightsDiagnostics`` shape so existing consumers keep
+    working. New consumers should hit the section endpoints directly
+    for finer-grained loading + caching.
+    """
     try:
-        from alma.application import feed_monitors as monitor_app
-
-        monitors = monitor_app.list_feed_monitors(db) if table_exists(db, "feed_monitors") else []
-        total_monitors = len(monitors)
-        ready_monitors = [m for m in monitors if m.get("health") == "ready"]
-        degraded_monitors = [m for m in monitors if m.get("health") == "degraded"]
-        disabled_monitors = [m for m in monitors if m.get("health") == "disabled"]
-
-        monitor_rows: list[dict[str, Any]] = []
-        for monitor in monitors:
-            last_result = monitor.get("last_result") if isinstance(monitor.get("last_result"), dict) else {}
-            papers_found = last_result.get("papers_found") if isinstance(last_result, dict) else None
-            items_created = last_result.get("items_created") if isinstance(last_result, dict) else None
-            yield_rate = None
-            if isinstance(papers_found, (int, float)) and int(papers_found) > 0 and isinstance(items_created, (int, float)):
-                yield_rate = round(float(items_created) / float(papers_found), 3)
-            monitor_rows.append(
-                {
-                    "id": monitor.get("id"),
-                    "label": monitor.get("label"),
-                    "monitor_type": monitor.get("monitor_type"),
-                    "author_id": monitor.get("author_id"),
-                    "author_name": monitor.get("author_name"),
-                    "health": monitor.get("health"),
-                    "health_reason": monitor.get("health_reason"),
-                    "last_checked_at": monitor.get("last_checked_at"),
-                    "last_success_at": monitor.get("last_success_at"),
-                    "last_status": monitor.get("last_status"),
-                    "last_error": monitor.get("last_error"),
-                    "papers_found": int(papers_found) if isinstance(papers_found, (int, float)) else 0,
-                    "items_created": int(items_created) if isinstance(items_created, (int, float)) else 0,
-                    "yield_rate": yield_rate,
-                }
-            )
-        monitor_rows.sort(
-            key=lambda item: (
-                0 if item["health"] == "degraded" else 1 if item["health"] == "disabled" else 2,
-                -(item.get("items_created") or 0),
-                str(item.get("label") or "").lower(),
-            )
+        from alma.api.routes.insights_diagnostics import (
+            compose_legacy_diagnostics_payload,
         )
 
-        feed_refresh_ops = _load_recent_operations(db, operation_key="feed.refresh_inbox", limit=45)
-        discovery_refresh_ops = _load_recent_operations(db, operation_key="discovery.refresh_recommendations", limit=45)
-
-        recent_feed_refreshes = []
-        for op in feed_refresh_ops:
-            result = op.get("result") or {}
-            recent_feed_refreshes.append(
-                {
-                    "job_id": op["job_id"],
-                    "status": op["status"],
-                    "finished_at": op.get("finished_at") or op.get("updated_at"),
-                    "items_created": int(result.get("items_created") or 0),
-                    "papers_found": int(result.get("papers_found") or 0),
-                    "monitors_total": int(result.get("monitors_total") or 0),
-                    "monitors_degraded": int(result.get("monitors_degraded") or 0),
-                }
-            )
-
-        recent_discovery_refreshes = []
-        for op in discovery_refresh_ops:
-            result = op.get("result") or {}
-            recent_discovery_refreshes.append(
-                {
-                    "job_id": op["job_id"],
-                    "status": op["status"],
-                    "finished_at": op.get("finished_at") or op.get("updated_at"),
-                    "new_recommendations": int(result.get("new_recommendations") or 0),
-                    "total_recommendations": int(result.get("total_recommendations") or 0),
-                }
-            )
-
-        combined_results = []
-        for op in [*feed_refresh_ops, *discovery_refresh_ops]:
-            result = op.get("result") or {}
-            if isinstance(result, dict):
-                combined_results.append(result)
-
-        source_diagnostics = _aggregate_http_source_diagnostics(combined_results)
-        openalex_usage = _aggregate_openalex_usage(combined_results)
-
-        recommendation_totals = {
-            "total": 0,
-            "active_unseen": 0,
-        }
-        source_quality: list[dict[str, Any]] = []
-        branch_quality: list[dict[str, Any]] = []
-        if table_exists(db, "recommendations"):
-            recent_publication_cutoff = (datetime.utcnow() - timedelta(days=365)).date().isoformat()
-            total_row = db.execute(
-                """
-                SELECT
-                    COUNT(*) AS total,
-                    COALESCE(SUM(CASE WHEN COALESCE(user_action, '') = '' THEN 1 ELSE 0 END), 0) AS active_unseen
-                FROM recommendations
-                """
-            ).fetchone()
-            recommendation_totals = {
-                "total": int(total_row["total"] or 0),
-                "active_unseen": int(total_row["active_unseen"] or 0),
-            }
-
-            source_rows = db.execute(
-                """
-                SELECT
-                    COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type,
-                    COALESCE(NULLIF(source_api, ''), 'unknown') AS source_api,
-                    COUNT(*) AS count,
-                    ROUND(COALESCE(AVG(score), 0), 3) AS avg_score,
-                    COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                    COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed,
-                    COALESCE(SUM(CASE WHEN user_action = 'seen' THEN 1 ELSE 0 END), 0) AS seen
-                FROM recommendations
-                GROUP BY COALESCE(NULLIF(source_type, ''), 'unknown'), COALESCE(NULLIF(source_api, ''), 'unknown')
-                ORDER BY count DESC, avg_score DESC
-                """
-            ).fetchall()
-            for row in source_rows:
-                count = int(row["count"] or 0)
-                liked = int(row["liked"] or 0)
-                dismissed = int(row["dismissed"] or 0)
-                source_quality.append(
-                    {
-                        "source_type": row["source_type"],
-                        "source_api": row["source_api"],
-                        "count": count,
-                        "avg_score": float(row["avg_score"] or 0.0),
-                        "liked": liked,
-                        "dismissed": dismissed,
-                        "seen": int(row["seen"] or 0),
-                        "engagement_rate": round((liked + dismissed) / count, 3) if count else 0.0,
-                    }
-                )
-
-            branch_rows = db.execute(
-                """
-                SELECT
-                    COALESCE(NULLIF(branch_id, ''), NULL) AS branch_id,
-                    COALESCE(NULLIF(branch_label, ''), NULL) AS branch_label,
-                    COUNT(*) AS count,
-                    ROUND(COALESCE(AVG(score), 0), 3) AS avg_score,
-                    COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                    COALESCE(SUM(CASE WHEN user_action = 'save' THEN 1 ELSE 0 END), 0) AS saved,
-                    COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed,
-                    COALESCE(SUM(CASE WHEN COALESCE(user_action, '') = '' THEN 1 ELSE 0 END), 0) AS unseen,
-                    COALESCE(SUM(CASE WHEN branch_mode = 'core' THEN 1 ELSE 0 END), 0) AS core_count,
-                    COALESCE(SUM(CASE WHEN branch_mode = 'explore' THEN 1 ELSE 0 END), 0) AS explore_count,
-                    COALESCE(SUM(
-                        CASE
-                            WHEN COALESCE(substr(p.publication_date, 1, 10), '') >= ? THEN 1
-                            ELSE 0
-                        END
-                    ), 0) AS recent_count,
-                    COUNT(DISTINCT COALESCE(NULLIF(source_type, ''), 'unknown')) AS unique_sources
-                FROM recommendations r
-                LEFT JOIN papers p ON p.id = r.paper_id
-                WHERE COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> ''
-                GROUP BY COALESCE(NULLIF(branch_id, ''), NULL), COALESCE(NULLIF(branch_label, ''), NULL)
-                ORDER BY count DESC, avg_score DESC
-                """
-                ,
-                (recent_publication_cutoff,),
-            ).fetchall()
-            for row in branch_rows:
-                count = int(row["count"] or 0)
-                liked = int(row["liked"] or 0)
-                saved = int(row["saved"] or 0)
-                dismissed = int(row["dismissed"] or 0)
-                unseen = int(row["unseen"] or 0)
-                core_count = int(row["core_count"] or 0)
-                explore_count = int(row["explore_count"] or 0)
-                recent_count = int(row["recent_count"] or 0)
-                unique_sources = int(row["unique_sources"] or 0)
-                positive_rate = safe_div(liked + saved, count)
-                dismiss_rate = safe_div(dismissed, count)
-                recent_share = safe_div(recent_count, count)
-                dominant_mode = "core" if core_count >= explore_count else "explore"
-                branch_id = row["branch_id"]
-                branch_label = row["branch_label"] or row["branch_id"] or "Unnamed branch"
-                try:
-                    if branch_id:
-                        source_mix_rows = db.execute(
-                            """
-                            SELECT COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type, COUNT(*) AS count
-                            FROM recommendations
-                            WHERE branch_id = ?
-                            GROUP BY COALESCE(NULLIF(source_type, ''), 'unknown')
-                            ORDER BY count DESC, source_type ASC
-                            LIMIT 4
-                            """,
-                            (branch_id,),
-                        ).fetchall()
-                    else:
-                        source_mix_rows = db.execute(
-                            """
-                            SELECT COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type, COUNT(*) AS count
-                            FROM recommendations
-                            WHERE COALESCE(NULLIF(branch_label, ''), '') = ?
-                            GROUP BY COALESCE(NULLIF(source_type, ''), 'unknown')
-                            ORDER BY count DESC, source_type ASC
-                            LIMIT 4
-                            """,
-                            (branch_label,),
-                        ).fetchall()
-                except sqlite3.OperationalError:
-                    source_mix_rows = []
-                source_mix = [
-                    {
-                        "source_type": str(source_row["source_type"] or "unknown"),
-                        "count": int(source_row["count"] or 0),
-                    }
-                    for source_row in source_mix_rows
-                ]
-                if count >= 4 and dismiss_rate >= 0.40:
-                    tuning_hint = "Mute or cool this branch. Dismissals are too high."
-                    quality_state = "cool"
-                elif count >= 4 and positive_rate >= 0.28 and recent_share >= 0.35:
-                    tuning_hint = "Boost this branch. It is producing useful, recent recommendations."
-                    quality_state = "strong"
-                elif count <= 3 and positive_rate >= 0.34:
-                    tuning_hint = "Give this branch more budget. Early outcomes are promising but volume is thin."
-                    quality_state = "underexplored"
-                elif unique_sources <= 1 and positive_rate >= 0.20:
-                    tuning_hint = "Diversify source mix. Branch quality is decent but too concentrated."
-                    quality_state = "narrow"
-                else:
-                    tuning_hint = "Monitor this branch. It needs more volume or clearer user feedback."
-                    quality_state = "monitor"
-                branch_quality.append(
-                    {
-                        "branch_id": branch_id,
-                        "branch_label": branch_label,
-                        "count": count,
-                        "avg_score": float(row["avg_score"] or 0.0),
-                        "liked": liked,
-                        "saved": saved,
-                        "dismissed": dismissed,
-                        "unseen": unseen,
-                        "engagement_rate": round((liked + saved + dismissed) / count, 3) if count else 0.0,
-                        "positive_rate": round(positive_rate, 3),
-                        "dismiss_rate": round(dismiss_rate, 3),
-                        "recent_share": round(recent_share, 3),
-                        "dominant_mode": dominant_mode,
-                        "core_count": core_count,
-                        "explore_count": explore_count,
-                        "unique_sources": unique_sources,
-                        "source_mix": source_mix,
-                        "quality_state": quality_state,
-                        "tuning_hint": tuning_hint,
-                    }
-                )
-
-        workflow_snapshot = _library_workflow_snapshot(db)
-        from alma.application import discovery as discovery_app
-
-        discovery_settings = discovery_app.read_settings(db)
-        authors_snapshot = _build_authors_snapshot(db, monitors)
-        alerts_snapshot = _build_alert_quality_snapshot(db, days=30)
-        signal_lab_snapshot = _build_signal_lab_snapshot(db)
-        ai_snapshot = _build_ai_snapshot(db, discovery_settings=discovery_settings)
-        operational_snapshot = _build_operational_snapshot(
-            db,
-            monitors=monitors,
-            discovery_settings=discovery_settings,
-            alert_snapshot=alerts_snapshot,
-            authors_snapshot=authors_snapshot,
-            ai_snapshot=ai_snapshot,
-        )
-        ready_ratio = safe_div(len(ready_monitors), total_monitors or 1)
-        avg_monitor_yield = safe_div(
-            sum(float(item.get("yield_rate") or 0.0) for item in monitor_rows if item.get("yield_rate") is not None),
-            max(1, sum(1 for item in monitor_rows if item.get("yield_rate") is not None)),
-        )
-        feed_score = max(0, min(100, round(((ready_ratio * 0.7) + (min(avg_monitor_yield * 1.5, 1.0) * 0.3)) * 100)))
-
-        total_source_count = sum(int(item.get("count") or 0) for item in source_quality)
-        total_source_liked = sum(int(item.get("liked") or 0) for item in source_quality)
-        total_source_dismissed = sum(int(item.get("dismissed") or 0) for item in source_quality)
-        total_source_engaged = total_source_liked + total_source_dismissed
-        discovery_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        (safe_div(total_source_engaged, total_source_count or 1) * 0.45)
-                        + (safe_div(total_source_liked, total_source_engaged or 1) * 0.35)
-                        + ((1.0 - safe_div(total_source_dismissed, total_source_engaged or 1)) * 0.20)
-                    ) * 100
-                ),
-            ),
-        )
-
-        active_branch_rows = [item for item in branch_quality if int(item.get("count") or 0) > 0]
-        branch_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        (
-                            safe_div(
-                                sum(float(item.get("positive_rate") or 0.0) for item in active_branch_rows),
-                                max(1, len(active_branch_rows)),
-                            )
-                            * 0.50
-                        )
-                        + (
-                            safe_div(
-                                sum(float(item.get("recent_share") or 0.0) for item in active_branch_rows),
-                                max(1, len(active_branch_rows)),
-                            )
-                            * 0.20
-                        )
-                        + (
-                            safe_div(
-                                sum(min(int(item.get("unique_sources") or 0), 3) / 3.0 for item in active_branch_rows),
-                                max(1, len(active_branch_rows)),
-                            )
-                            * 0.10
-                        )
-                        + (
-                            safe_div(
-                                sum((1.0 - float(item.get("dismiss_rate") or 0.0)) for item in active_branch_rows),
-                                max(1, len(active_branch_rows)),
-                            )
-                            * 0.20
-                        )
-                    )
-                    * 100
-                ),
-            ),
-        )
-
-        total_library = max(1, workflow_snapshot["total_library"])
-        workflow_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        ((1.0 - safe_div(workflow_snapshot["untriaged_count"], total_library)) * 0.7)
-                        + (safe_div(workflow_snapshot["done_count"] + workflow_snapshot["reading_count"], total_library) * 0.3)
-                    ) * 100
-                ),
-            ),
-        )
-
-        scorecards = [
-            {
-                "id": "feed_monitor_health",
-                "label": "Feed Monitor Health",
-                "score": feed_score,
-                "status": "good" if feed_score >= 75 else "attention" if feed_score >= 50 else "critical",
-                "summary": f"{len(ready_monitors)} of {total_monitors} monitors are ready.",
-                "detail": f"Average recent yield is {avg_monitor_yield:.2f} and {len(degraded_monitors)} monitors are degraded.",
-            },
-            {
-                "id": "discovery_quality",
-                "label": "Discovery Quality",
-                "score": discovery_score,
-                "status": "good" if discovery_score >= 75 else "attention" if discovery_score >= 50 else "critical",
-                "summary": f"{total_source_liked} likes and {total_source_dismissed} dismisses across {total_source_count} recommendations.",
-                "detail": f"Engagement is {safe_div(total_source_engaged, total_source_count or 1) * 100:.0f}% across tracked source groups.",
-            },
-            {
-                "id": "branch_signal_quality",
-                "label": "Branch Signal Quality",
-                "score": branch_score,
-                "status": "good" if branch_score >= 75 else "attention" if branch_score >= 50 else "critical",
-                "summary": f"{len(active_branch_rows)} branches have tracked recommendation outcomes.",
-                "detail": "Branch score reflects positive outcomes, recency share, source diversity, and dismiss pressure.",
-            },
-            {
-                "id": "library_workflow",
-                "label": "Library Workflow",
-                "score": workflow_score,
-                "status": "good" if workflow_score >= 75 else "attention" if workflow_score >= 50 else "critical",
-                "summary": f"{workflow_snapshot['untriaged_count']} untriaged and {workflow_snapshot['queued_count']} queued papers.",
-                "detail": "Workflow score rewards triaged acquisitions and progress through the reading queue.",
-            },
-        ]
-
-        recommended_actions: list[dict[str, Any]] = []
-        if degraded_monitors:
-            recommended_actions.append(
-                {
-                    "id": "repair_degraded_monitors",
-                    "title": "Repair degraded monitors",
-                    "detail": f"{len(degraded_monitors)} Feed monitors are degraded and reducing intake coverage.",
-                    "page": "authors",
-                    "params": {"filter": "", "followed": "true"},
-                    "priority": "high",
-                }
-            )
-        noisy_source = next(
-            (
-                item for item in sorted(
-                    source_quality,
-                    key=lambda row: (safe_div(float(row.get("dismissed") or 0.0), max(1.0, float(row.get("count") or 0.0))), -float(row.get("count") or 0.0)),
-                    reverse=True,
-                )
-                if int(item.get("count") or 0) >= 4 and safe_div(float(item.get("dismissed") or 0.0), max(1.0, float(item.get("count") or 0.0))) >= 0.35
-            ),
-            None,
-        )
-        if noisy_source:
-            recommended_actions.append(
-                {
-                    "id": "tune_noisy_sources",
-                    "title": "Tune noisy discovery sources",
-                    "detail": f"{noisy_source['source_type']} via {noisy_source['source_api']} is over-producing dismissals.",
-                    "page": "settings",
-                    "params": {"section": "discovery"},
-                    "priority": "medium",
-                }
-            )
-        best_branch = next(
-            (
-                item for item in sorted(
-                    branch_quality,
-                    key=lambda row: (float(row.get("engagement_rate") or 0.0), float(row.get("count") or 0.0)),
-                    reverse=True,
-                )
-                if int(item.get("count") or 0) >= 3 and float(item.get("engagement_rate") or 0.0) >= 0.25
-            ),
-            None,
-        )
-        if best_branch:
-            recommended_actions.append(
-                {
-                    "id": "operationalize_branch",
-                    "title": "Operationalize a strong branch",
-                    "detail": f"{best_branch['branch_label']} is already engaging well enough to turn into an alert or branch watch.",
-                    "page": "alerts",
-                    "params": {"section": "rules"},
-                    "priority": "medium",
-                }
-            )
-        weak_branch = next(
-            (
-                item
-                for item in sorted(
-                    branch_quality,
-                    key=lambda row: (float(row.get("dismiss_rate") or 0.0), -float(row.get("count") or 0.0)),
-                    reverse=True,
-                )
-                if int(item.get("count") or 0) >= 4 and float(item.get("dismiss_rate") or 0.0) >= 0.35
-            ),
-            None,
-        )
-        if weak_branch:
-            recommended_actions.append(
-                {
-                    "id": "cool_weak_branch",
-                    "title": "Cool a weak branch",
-                    "detail": f"{weak_branch['branch_label']} is producing too many dismissals and should be muted, cooled, or rebalanced.",
-                    "page": "discovery",
-                    "params": {},
-                    "priority": "medium",
-                }
-            )
-        underexplored_branch = next(
-            (
-                item
-                for item in sorted(
-                    branch_quality,
-                    key=lambda row: (float(row.get("positive_rate") or 0.0), -float(row.get("count") or 0.0)),
-                    reverse=True,
-                )
-                if int(item.get("count") or 0) <= 3 and float(item.get("positive_rate") or 0.0) >= 0.34
-            ),
-            None,
-        )
-        if underexplored_branch:
-            recommended_actions.append(
-                {
-                    "id": "expand_underexplored_branch",
-                    "title": "Expand an underexplored branch",
-                    "detail": f"{underexplored_branch['branch_label']} is promising but underfed. Give it more branch budget or exploratory temperature.",
-                    "page": "discovery",
-                    "params": {},
-                    "priority": "low",
-                }
-            )
-        if workflow_snapshot["untriaged_count"] >= 5:
-            recommended_actions.append(
-                {
-                    "id": "triage_library_backlog",
-                    "title": "Triage the library backlog",
-                    "detail": f"{workflow_snapshot['untriaged_count']} library papers still have no reading status.",
-                    "page": "library",
-                    "params": {"tab": "all"},
-                    "priority": "high",
-                }
-            )
-        if int((authors_snapshot.get("summary") or {}).get("background_corpus_papers") or 0) <= max(3, int((authors_snapshot.get("summary") or {}).get("tracked_authors") or 0)):
-            recommended_actions.append(
-                {
-                    "id": "grow_followed_author_corpus",
-                    "title": "Grow followed-author background corpus",
-                    "detail": "Tracked authors still have a thin non-library historical corpus. Run more author backfills and review dossier coverage.",
-                    "page": "authors",
-                    "params": {"followed": "true"},
-                    "priority": "high",
-                }
-            )
-        for item in (ai_snapshot.get("recommendations") or [])[:3]:
-            recommended_actions.append(
-                {
-                    "id": str(item.get("id") or "ai_recommendation"),
-                    "title": str(item.get("label") or "Tune AI layer"),
-                    "detail": str(item.get("detail") or "").strip() or "AI health needs review.",
-                    "page": "settings",
-                    "params": {"section": "ai"},
-                    "priority": "high" if str(item.get("severity") or "") == "critical" else "medium",
-                }
-            )
-        if workflow_snapshot["uncollected_count"] >= 5:
-            recommended_actions.append(
-                {
-                    "id": "organize_library_structure",
-                    "title": "Organize uncategorized library papers",
-                    "detail": f"{workflow_snapshot['uncollected_count']} library papers are not yet assigned to any collection.",
-                    "page": "library",
-                    "params": {"tab": "collections"},
-                    "priority": "medium",
-                }
-            )
-
-        try:
-            from alma.application import alerts as alerts_app
-
-            automation_opportunities = alerts_app.list_alert_templates(db)[:4]
-        except Exception:
-            automation_opportunities = []
-
-        feed_refresh_trend = _build_refresh_trend(
-            feed_refresh_ops,
-            primary_key="items_created",
-            secondary_key="papers_found",
-        )
-        discovery_refresh_trend = _build_refresh_trend(
-            discovery_refresh_ops,
-            primary_key="new_recommendations",
-            secondary_key="total_recommendations",
-        )
-        recommendation_action_trend = _build_recommendation_action_trend(db, days=30)
-        alert_history_trend = _build_alert_history_trend(db, days=30)
-        branch_trends = _build_branch_trends(db, days=30)
-        author_follow_trend = _build_author_follow_trend(db, days=30)
-        signal_lab_trend = _build_signal_lab_trend(db, days=30)
-        cold_start_topic_validation = _build_cold_start_topic_validation(db)
-
-        tracked_authors = max(1, int((authors_snapshot.get("summary") or {}).get("tracked_authors") or 0))
-        ready_tracked = int((authors_snapshot.get("summary") or {}).get("ready_tracked") or 0)
-        bridge_gap_count = int((authors_snapshot.get("summary") or {}).get("bridge_gap_count") or 0)
-        stale_backfills = int((authors_snapshot.get("summary") or {}).get("stale_backfills") or 0)
-        thin_backfills = int((authors_snapshot.get("summary") or {}).get("thin_backfills") or 0)
-        pending_backfills = int((authors_snapshot.get("summary") or {}).get("pending_backfills") or 0)
-        authors_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        (safe_div(ready_tracked, tracked_authors) * 0.55)
-                        + ((1.0 - safe_div(bridge_gap_count, tracked_authors)) * 0.20)
-                        + ((1.0 - safe_div(stale_backfills + thin_backfills + pending_backfills, tracked_authors)) * 0.25)
-                    ) * 100
-                ),
-            ),
-        )
-        alert_summary = alerts_snapshot.get("summary") or {}
-        sent_runs_30d = int(alert_summary.get("sent_runs_30d") or 0)
-        failed_runs_30d = int(alert_summary.get("failed_runs_30d") or 0)
-        empty_runs_30d = int(alert_summary.get("empty_runs_30d") or 0)
-        alerts_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        ((1.0 - safe_div(failed_runs_30d, max(1, sent_runs_30d + failed_runs_30d))) * 0.45)
-                        + ((1.0 - safe_div(empty_runs_30d, max(1, sent_runs_30d + empty_runs_30d))) * 0.30)
-                        + (min(float(alert_summary.get("avg_papers_per_sent") or 0.0) / 4.0, 1.0) * 0.25)
-                    ) * 100
-                ),
-            ),
-        )
-        low_usefulness_alert = next(
-            (
-                item
-                for item in (alerts_snapshot.get("top_alerts") or [])
-                if int(item.get("total_runs") or 0) >= 3 and int(item.get("usefulness_score") or 0) <= 55
-            ),
-            None,
-        )
-        signal_summary = signal_lab_snapshot.get("summary") or {}
-        signal_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        (min(int(signal_summary.get("week_interactions") or 0) / 10.0, 1.0) * 0.40)
-                        + (min(int(signal_summary.get("source_diversity_7d") or 0) / 4.0, 1.0) * 0.15)
-                        + (min(int(signal_summary.get("topic_coverage") or 0) / 8.0, 1.0) * 0.15)
-                        + (min(float(signal_summary.get("recommendation_engagement_rate") or 0.0) / 0.45, 1.0) * 0.30)
-                    ) * 100
-                ),
-            ),
-        )
-        ai_summary = ai_snapshot.get("summary") or {}
-        ai_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        (min(float(ai_summary.get("embedding_coverage_pct") or 0.0) / 100.0, 1.0) * 0.45)
-                        + ((1.0 - min(int(ai_summary.get("stale_embeddings") or 0) / max(1, int(ai_summary.get("stale_embeddings") or 0) + int(ai_summary.get("up_to_date_embeddings") or 0)), 1.0)) * 0.15)
-                        + (min(float(ai_summary.get("hybrid_text_rate") or 0.0) / 0.6, 1.0) * 0.10)
-                        + (min(float(ai_summary.get("avg_text_similarity") or 0.0) / 0.35, 1.0) * 0.10)
-                        + ((1.0 - min(float(ai_summary.get("compressed_similarity_rate") or 0.0) / 0.6, 1.0)) * 0.07)
-                    ) * 100
-                ),
-            ),
-        )
-        operational_summary = operational_snapshot.get("summary") or {}
-        operational_score = max(
-            0,
-            min(
-                100,
-                round(
-                    (
-                        ((1.0 - safe_div(int(operational_summary.get("critical_count") or 0), 3)) * 0.45)
-                        + ((1.0 - safe_div(int(operational_summary.get("warning_count") or 0), 6)) * 0.30)
-                        + (safe_div(int(operational_summary.get("healthy_checks") or 0), 7) * 0.25)
-                    ) * 100
-                ),
-            ),
-        )
-
-        return {
-            "generated_at": datetime.utcnow().isoformat(),
-            "feed": {
-                "summary": {
-                    "total_monitors": total_monitors,
-                    "ready_monitors": len(ready_monitors),
-                    "degraded_monitors": len(degraded_monitors),
-                    "disabled_monitors": len(disabled_monitors),
-                    "author_monitors": sum(1 for m in monitors if m.get("monitor_type") == "author"),
-                    "topic_monitors": sum(1 for m in monitors if m.get("monitor_type") == "topic"),
-                    "query_monitors": sum(1 for m in monitors if m.get("monitor_type") == "query"),
-                },
-                "monitors": monitor_rows[:20],
-                "recent_refreshes": recent_feed_refreshes,
-                "scorecards": [card for card in scorecards if card["id"] == "feed_monitor_health"],
-            },
-            "discovery": {
-                "summary": recommendation_totals,
-                "source_quality": source_quality,
-                "branch_quality": branch_quality,
-                "branch_trends": branch_trends,
-                "cold_start_topic_validation": cold_start_topic_validation,
-                "source_diagnostics": source_diagnostics,
-                "openalex_usage": openalex_usage,
-                "recent_refreshes": recent_discovery_refreshes,
-                "scorecards": [card for card in scorecards if card["id"] in {"discovery_quality", "branch_signal_quality"}],
-            },
-            "library": {
-                "workflow": workflow_snapshot,
-                "scorecards": [card for card in scorecards if card["id"] == "library_workflow"],
-            },
-            "authors": authors_snapshot,
-            "alerts": alerts_snapshot,
-            "feedback_learning": signal_lab_snapshot,
-            "ai": ai_snapshot,
-            "operational": operational_snapshot,
-            "trends": {
-                "window_days": 30,
-                "feed_refresh_daily": feed_refresh_trend,
-                "discovery_refresh_daily": discovery_refresh_trend,
-                "recommendation_actions_daily": recommendation_action_trend,
-                "alert_history_daily": alert_history_trend,
-                "alert_history_weekly_90d": ((alerts_snapshot.get("long_horizon") or {}).get("weekly_trend") or []),
-                "author_follows_daily": author_follow_trend,
-                "feedback_learning_daily": signal_lab_trend,
-            },
-            "evaluation": {
-                "scorecards": scorecards
-                + [
-                    {
-                        "id": "ai_quality",
-                        "label": "AI Retrieval Quality",
-                        "score": ai_score,
-                        "status": "good" if ai_score >= 75 else "attention" if ai_score >= 50 else "critical",
-                        "summary": f"{ai_summary.get('embedding_coverage_pct', 0)}% embedding coverage and {int(ai_summary.get('recent_recommendations_analyzed') or 0)} recent recommendations analyzed.",
-                        "detail": "AI score reflects embedding coverage, embedding freshness, hybrid-text usage, and similarity quality.",
-                    },
-                    {
-                        "id": "authors_monitoring",
-                        "label": "Authors Monitoring",
-                        "score": authors_score,
-                        "status": "good" if authors_score >= 75 else "attention" if authors_score >= 50 else "critical",
-                        "summary": f"{ready_tracked} of {int((authors_snapshot.get('summary') or {}).get('tracked_authors') or 0)} tracked authors are refresh-ready.",
-                        "detail": f"{bridge_gap_count} tracked authors still need a stronger identity bridge.",
-                    },
-                    {
-                        "id": "alert_automation_quality",
-                        "label": "Alert Automation Quality",
-                        "score": alerts_score,
-                        "status": "good" if alerts_score >= 75 else "attention" if alerts_score >= 50 else "critical",
-                        "summary": f"{sent_runs_30d} sent runs, {failed_runs_30d} failed, {empty_runs_30d} empty in the last 30 days.",
-                        "detail": "Alert score balances delivery reliability, non-empty output, and papers delivered per successful run.",
-                    },
-                    {
-                        "id": "feedback_learning",
-                        "label": "Feedback Learning",
-                        "score": signal_score,
-                        "status": "good" if signal_score >= 75 else "attention" if signal_score >= 50 else "critical",
-                        "summary": f"{int(signal_summary.get('week_interactions') or 0)} interactions this week with {int(signal_summary.get('source_diversity_7d') or 0)} source groups touched.",
-                        "detail": "Learning health reflects recent interaction depth, source diversity, topic coverage, and recommendation engagement.",
-                    },
-                    {
-                        "id": "operational_health",
-                        "label": "Operational Health",
-                        "score": operational_score,
-                        "status": "good" if operational_score >= 75 else "attention" if operational_score >= 50 else "critical",
-                        "summary": f"{int(operational_summary.get('issues_total') or 0)} active issues across embeddings, monitors, sources, alerts, and plugins.",
-                        "detail": "Operational health focuses on degraded capabilities that directly affect retrieval quality, delivery, and observability.",
-                    },
-                ],
-                "recommended_actions": (
-                    recommended_actions
-                    + (
-                        [
-                            {
-                                "id": "repair_author_bridges",
-                                "title": "Repair author identity bridges",
-                                "detail": f"{bridge_gap_count} tracked authors are still missing a clean OpenAlex bridge for reliable refresh.",
-                                "page": "authors",
-                                "params": {"followed": "true"},
-                                "priority": "high",
-                            }
-                        ]
-                        if bridge_gap_count > 0
-                        else []
-                    )
-                    + (
-                        [
-                            {
-                                "id": "tune_low_usefulness_alerts",
-                                "title": "Tune low-usefulness alerts",
-                                "detail": f"{low_usefulness_alert.get('alert_name', 'This alert')} is generating too many empty or low-yield runs.",
-                                "page": "alerts",
-                                "params": {"section": "history"},
-                                "priority": "medium",
-                            }
-                        ]
-                        if low_usefulness_alert is not None
-                        else []
-                    )
-                    + (
-                        [
-                            {
-                                "id": "grow_feedback_learning_coverage",
-                                "title": "Grow feedback-learning coverage",
-                                "detail": "Recent interactions are still too shallow for a strong learning loop. Use Discovery, Feed, and Library actions more deliberately.",
-                                "page": "discovery",
-                                "params": {},
-                                "priority": "medium",
-                            }
-                        ]
-                        if int(signal_summary.get("week_interactions") or 0) < 8
-                        else []
-                    )
-                    + (
-                        [
-                            {
-                                "id": "resolve_operational_issues",
-                                "title": "Resolve degraded operational states",
-                                "detail": f"{int(operational_summary.get('issues_total') or 0)} active issues are reducing product quality or delivery reliability.",
-                                "page": "settings",
-                                "params": {"section": "operations"},
-                                "priority": "high" if int(operational_summary.get("critical_count") or 0) > 0 else "medium",
-                            }
-                        ]
-                        if int(operational_summary.get("issues_total") or 0) > 0
-                        else []
-                    )
-                )[:8],
-                "automation_opportunities": automation_opportunities,
-            },
-        }
-
-    except Exception as e:
-        raise_internal("Failed to compute insights diagnostics", e)
+        return compose_legacy_diagnostics_payload(db)
+    except Exception as exc:  # noqa: BLE001 — surface a 5xx with context
+        raise_internal("Failed to compute insights diagnostics", exc)
 
 
 @router.post(
@@ -2853,4 +2112,12 @@ def apply_branch_action(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise_internal("Failed to apply branch action", e)
+
+
+# Side-effect import: registers the per-section diagnostics
+# materialised views and wires the `/diagnostics/sections/{section}`
+# endpoints onto our `router`. Keep this at the *bottom* of the
+# module — the imported file pulls helpers from here, so it must run
+# after they are defined.
+from alma.api.routes import insights_diagnostics  # noqa: E402,F401
 

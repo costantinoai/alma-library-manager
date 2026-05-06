@@ -726,6 +726,15 @@ def init_db_schema() -> None:
                     conn.execute(ddl)
                 except Exception:
                     pass
+            for idx_sql in [
+                # Diagnostics aggregations: branch_quality groups by
+                # (branch_id, source_type) to compute the source_mix in a
+                # single query instead of N+1 per-branch sub-selects, and
+                # source_quality groups by (source_type, source_api).
+                "CREATE INDEX IF NOT EXISTS idx_recs_branch_source ON recommendations(branch_id, source_type)",
+                "CREATE INDEX IF NOT EXISTS idx_recs_source_api ON recommendations(source_type, source_api)",
+            ]:
+                conn.execute(idx_sql)
 
             # Migration: drop the legacy `query_plan_used_ai` column from
             # `recommendations`. The LLM-backed branch query planner was
