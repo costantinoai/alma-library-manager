@@ -1924,6 +1924,116 @@ export function getInsightsDiagnostics(): Promise<InsightsDiagnostics> {
   return api.get<InsightsDiagnostics>('/insights/diagnostics')
 }
 
+// ── Per-section diagnostics endpoints ────────────────────────────────────
+//
+// The Diagnostics tab is split into eight cached sections on the
+// backend (see `alma.api.routes.insights_diagnostics`). Each section
+// is a fingerprint-based materialised view: a cache hit returns in
+// ~1 ms, and the SWR envelope adds `stale` / `rebuilding` /
+// `computed_at` so the UI can show a "Refreshing…" indicator while a
+// background rebuild completes.
+//
+// The legacy `getInsightsDiagnostics()` is kept for callers that still
+// want the full payload at once (Settings → Operational status,
+// Alerts → automation chips). The Diagnostics tab itself uses these
+// section fetchers so each card streams in independently with its
+// own skeleton.
+
+export const DIAGNOSTICS_SECTION_KEYS = [
+  'feed',
+  'discovery',
+  'ai',
+  'authors',
+  'alerts',
+  'feedback',
+  'operational',
+  'evaluation',
+] as const
+
+export type DiagnosticsSectionKey = (typeof DIAGNOSTICS_SECTION_KEYS)[number]
+
+/** SWR metadata appended to every section payload by the MV layer. */
+export type DiagnosticsSectionMeta = {
+  stale?: boolean
+  rebuilding?: boolean
+  computed_at?: string | null
+}
+
+export type DiagnosticsFeedSection = DiagnosticsSectionMeta & {
+  summary: InsightsDiagnostics['feed']['summary']
+  monitors: InsightsDiagnostics['feed']['monitors']
+  recent_refreshes: InsightsDiagnostics['feed']['recent_refreshes']
+  feed_refresh_trend: InsightsDiagnostics['trends']['feed_refresh_daily']
+}
+
+export type DiagnosticsDiscoverySection = DiagnosticsSectionMeta & {
+  summary: InsightsDiagnostics['discovery']['summary']
+  source_quality: InsightsDiagnostics['discovery']['source_quality']
+  branch_quality: InsightsDiagnostics['discovery']['branch_quality']
+  branch_trends: InsightsDiagnostics['discovery']['branch_trends']
+  cold_start_topic_validation?: InsightsDiagnostics['discovery']['cold_start_topic_validation']
+  source_diagnostics: InsightsDiagnostics['discovery']['source_diagnostics']
+  openalex_usage: InsightsDiagnostics['discovery']['openalex_usage']
+  recent_refreshes: InsightsDiagnostics['discovery']['recent_refreshes']
+  discovery_refresh_trend: InsightsDiagnostics['trends']['discovery_refresh_daily']
+  recommendation_action_trend: InsightsDiagnostics['trends']['recommendation_actions_daily']
+}
+
+export type DiagnosticsAiSection = DiagnosticsSectionMeta & InsightsDiagnostics['ai']
+
+export type DiagnosticsAuthorsSection = DiagnosticsSectionMeta & {
+  summary: InsightsDiagnostics['authors']['summary']
+  degraded: InsightsDiagnostics['authors']['degraded']
+  suggestions: InsightsDiagnostics['authors']['suggestions']
+  corpus_health?: InsightsDiagnostics['authors']['corpus_health']
+  author_follow_trend: NonNullable<InsightsDiagnostics['trends']['author_follows_daily']>
+}
+
+export type DiagnosticsAlertsSection = DiagnosticsSectionMeta & {
+  summary: InsightsDiagnostics['alerts']['summary']
+  top_alerts: InsightsDiagnostics['alerts']['top_alerts']
+  long_horizon?: InsightsDiagnostics['alerts']['long_horizon']
+  alert_history_trend: InsightsDiagnostics['trends']['alert_history_daily']
+  alert_history_weekly_90d?: InsightsDiagnostics['trends']['alert_history_weekly_90d']
+}
+
+export type DiagnosticsFeedbackSection = DiagnosticsSectionMeta & {
+  summary: InsightsDiagnostics['feedback_learning']['summary']
+  top_topics: InsightsDiagnostics['feedback_learning']['top_topics']
+  top_authors: InsightsDiagnostics['feedback_learning']['top_authors']
+  next_actions: InsightsDiagnostics['feedback_learning']['next_actions']
+  feedback_learning_trend: NonNullable<InsightsDiagnostics['trends']['feedback_learning_daily']>
+}
+
+export type DiagnosticsOperationalSection =
+  DiagnosticsSectionMeta & InsightsDiagnostics['operational']
+
+export type DiagnosticsEvaluationSection = DiagnosticsSectionMeta & {
+  scorecards: InsightsDiagnostics['evaluation']['scorecards']
+  recommended_actions: InsightsDiagnostics['evaluation']['recommended_actions']
+  automation_opportunities: InsightsDiagnostics['evaluation']['automation_opportunities']
+  library_workflow: InsightsDiagnostics['library']['workflow']
+}
+
+export type DiagnosticsSectionPayload = {
+  feed: DiagnosticsFeedSection
+  discovery: DiagnosticsDiscoverySection
+  ai: DiagnosticsAiSection
+  authors: DiagnosticsAuthorsSection
+  alerts: DiagnosticsAlertsSection
+  feedback: DiagnosticsFeedbackSection
+  operational: DiagnosticsOperationalSection
+  evaluation: DiagnosticsEvaluationSection
+}
+
+export function getDiagnosticsSection<K extends DiagnosticsSectionKey>(
+  section: K,
+): Promise<DiagnosticsSectionPayload[K]> {
+  return api.get<DiagnosticsSectionPayload[K]>(
+    `/insights/diagnostics/sections/${section}`,
+  )
+}
+
 /**
  * Evaluate (and send) an alert digest. Returns the AlertEvaluationResult
  * after polling the Activity envelope to completion.
@@ -2050,6 +2160,18 @@ export function rehydrateCorpusMetadata(body?: {
   const qs = new URLSearchParams({ force: String(Boolean(body?.force)) })
   if (body?.limit !== undefined) qs.set('limit', String(body.limit))
   return api.post(`/papers/rehydrate-metadata?${qs.toString()}`)
+}
+
+export function rehydrateAuthorMetadata(body?: {
+  limit?: number
+  force?: boolean
+}): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
+  const qs = new URLSearchParams({
+    background: 'true',
+    force: String(Boolean(body?.force)),
+  })
+  if (body?.limit !== undefined) qs.set('limit', String(body.limit))
+  return api.post(`/authors/rehydrate-metadata?${qs.toString()}`)
 }
 
 export interface AuthorAlternateProfile {

@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { InsightsDiagnosticsTab } from '@/components/insights/InsightsDiagnosticsTab'
+import {
+  InsightsDiagnosticsTab,
+  type InsightsDiagnosticsSections,
+  type SectionState,
+} from '@/components/insights/InsightsDiagnosticsTab'
 import { InsightsGraphTab } from '@/components/insights/InsightsGraphTab'
 import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
 import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
@@ -12,7 +16,15 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import {
   api, type InsightsData, type AIStatus,
   getWeeklyBrief, getCollectionIntelligence, getTopicDrift, getSignalImpact,
-  applyInsightsBranchAction, getInsightsDiagnostics, type InsightsDiagnostics,
+  applyInsightsBranchAction, getDiagnosticsSection,
+  type DiagnosticsAiSection,
+  type DiagnosticsAlertsSection,
+  type DiagnosticsAuthorsSection,
+  type DiagnosticsDiscoverySection,
+  type DiagnosticsEvaluationSection,
+  type DiagnosticsFeedSection,
+  type DiagnosticsFeedbackSection,
+  type DiagnosticsOperationalSection,
 } from '@/api/client'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
@@ -108,19 +120,116 @@ export function InsightsPage() {
     }
   }, [savedDrilldowns])
 
-  const { data: diagnostics, isLoading: diagnosticsLoading, isError: diagnosticsError } = useQuery({
-    queryKey: ['insights-diagnostics'],
-    queryFn: getInsightsDiagnostics,
+  // ── Diagnostics: per-section queries ────────────────────────────
+  //
+  // Each card on the Diagnostics tab is fed by exactly one
+  // materialised view on the backend. We dispatch eight independent
+  // useQueries so cards stream in as their section's MV resolves.
+  // Fast sections (ai, alerts, feedback) typically come back in <50
+  // ms even on the first cold visit; slow sections (authors, with
+  // its citation-neighbour projection) keep their card in skeleton
+  // until ready. After the first build every cache-hit section
+  // returns ~1 ms.
+  const diagFeedQuery = useQuery({
+    queryKey: ['insights-diag', 'feed'],
+    queryFn: () => getDiagnosticsSection('feed'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagDiscoveryQuery = useQuery({
+    queryKey: ['insights-diag', 'discovery'],
+    queryFn: () => getDiagnosticsSection('discovery'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagAiQuery = useQuery({
+    queryKey: ['insights-diag', 'ai'],
+    queryFn: () => getDiagnosticsSection('ai'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagAuthorsQuery = useQuery({
+    queryKey: ['insights-diag', 'authors'],
+    queryFn: () => getDiagnosticsSection('authors'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagAlertsQuery = useQuery({
+    queryKey: ['insights-diag', 'alerts'],
+    queryFn: () => getDiagnosticsSection('alerts'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagFeedbackQuery = useQuery({
+    queryKey: ['insights-diag', 'feedback'],
+    queryFn: () => getDiagnosticsSection('feedback'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagOperationalQuery = useQuery({
+    queryKey: ['insights-diag', 'operational'],
+    queryFn: () => getDiagnosticsSection('operational'),
+    staleTime: 60_000,
+    retry: 1,
+    enabled: activeTab === 'diagnostics',
+  })
+  const diagEvaluationQuery = useQuery({
+    queryKey: ['insights-diag', 'evaluation'],
+    queryFn: () => getDiagnosticsSection('evaluation'),
     staleTime: 60_000,
     retry: 1,
     enabled: activeTab === 'diagnostics',
   })
 
+  function toSectionState<T extends { stale?: boolean }>(query: {
+    data?: T
+    isLoading: boolean
+    isError: boolean
+  }): SectionState<T> {
+    return {
+      data: query.data,
+      loading: query.isLoading,
+      error: query.isError,
+      stale: query.data?.stale ?? false,
+    }
+  }
+
+  const diagnosticsSections: InsightsDiagnosticsSections = {
+    feed: toSectionState<DiagnosticsFeedSection>(diagFeedQuery),
+    discovery: toSectionState<DiagnosticsDiscoverySection>(diagDiscoveryQuery),
+    ai: toSectionState<DiagnosticsAiSection>(diagAiQuery),
+    authors: toSectionState<DiagnosticsAuthorsSection>(diagAuthorsQuery),
+    alerts: toSectionState<DiagnosticsAlertsSection>(diagAlertsQuery),
+    feedback: toSectionState<DiagnosticsFeedbackSection>(diagFeedbackQuery),
+    operational: toSectionState<DiagnosticsOperationalSection>(diagOperationalQuery),
+    evaluation: toSectionState<DiagnosticsEvaluationSection>(diagEvaluationQuery),
+  }
+  const diagnosticsRefreshing = Object.values(diagnosticsSections).some(
+    (section) => section.stale === true,
+  )
+
   const branchActionMutation = useMutation({
     mutationFn: ({ branchId, action }: { branchId: string; action: 'pin' | 'boost' | 'mute' | 'reset' | 'cool' }) =>
       applyInsightsBranchAction({ branch_id: branchId, action }),
     onSuccess: async (_result, variables) => {
-      await invalidateQueries(queryClient, ['insights-diagnostics'], ['lenses'], ['lens-branches'])
+      // Branch controls touch discovery + evaluation (scorecards).
+      // Invalidate the section queries so their next render pulls the
+      // updated MV; the legacy `insights-diagnostics` key is left in
+      // for any consumer still using the full payload.
+      await invalidateQueries(
+        queryClient,
+        ['insights-diag', 'discovery'],
+        ['insights-diag', 'evaluation'],
+        ['insights-diagnostics'],
+        ['lenses'],
+        ['lens-branches'],
+      )
       toast({
         title: 'Branch controls updated',
         description: `Applied '${variables.action}' to the branch across matching lenses.`,
@@ -168,35 +277,9 @@ export function InsightsPage() {
   // small "Refreshing…" pill rather than as a full-page block.
   const showStatsSkeleton = isLoading && !data
   const showStatsError = isError && !data
-  const isRefreshing = Boolean(data?.stale || data?.rebuilding)
-
-  const diagnosticsData: InsightsDiagnostics | null = diagnostics ?? null
-  const diagnosticsFeedSummary = diagnosticsData?.feed.summary
-  const diagnosticsDiscoverySummary = diagnosticsData?.discovery.summary
-  const diagnosticsSourceRequests = (diagnosticsData?.discovery.source_diagnostics ?? []).reduce(
-    (sum, source) => sum + (source.requests ?? 0),
-    0,
-  )
-  const diagnosticsBranchTrends = diagnosticsData?.discovery.branch_trends ?? []
-  const latestFeedRefresh = diagnosticsData?.feed.recent_refreshes?.[0]
-  const latestDiscoveryRefresh = diagnosticsData?.discovery.recent_refreshes?.[0]
-  const diagnosticsScorecards = diagnosticsData?.evaluation.scorecards ?? []
-  const diagnosticsActions = diagnosticsData?.evaluation.recommended_actions ?? []
-  const automationOpportunities = diagnosticsData?.evaluation.automation_opportunities ?? []
-  const diagnosticsTrends = diagnosticsData?.trends
-  const feedRefreshTrend = diagnosticsTrends?.feed_refresh_daily ?? []
-  const discoveryRefreshTrend = diagnosticsTrends?.discovery_refresh_daily ?? []
-  const recommendationActionTrend = diagnosticsTrends?.recommendation_actions_daily ?? []
-  const alertHistoryTrend = diagnosticsTrends?.alert_history_daily ?? []
-  const alertHistoryWeeklyTrend = diagnosticsTrends?.alert_history_weekly_90d ?? []
-  const diagnosticsAuthors = diagnosticsData?.authors
-  const diagnosticsAlerts = diagnosticsData?.alerts
-  const diagnosticsFeedbackLearning = diagnosticsData?.feedback_learning
-  const diagnosticsAI = diagnosticsData?.ai
-  const diagnosticsOperational = diagnosticsData?.operational
-  const coldStartValidation = diagnosticsData?.discovery.cold_start_topic_validation
-  const authorFollowTrend = diagnosticsTrends?.author_follows_daily ?? []
-  const feedbackLearningTrend = diagnosticsTrends?.feedback_learning_daily ?? []
+  const isRefreshing =
+    Boolean(data?.stale || data?.rebuilding) ||
+    (activeTab === 'diagnostics' && diagnosticsRefreshing)
 
   const saveDrilldown = (item: SavedDrilldown) => {
     setSavedDrilldowns((prev) => {
@@ -254,32 +337,7 @@ export function InsightsPage() {
         </TabsContent>
         <TabsContent value="diagnostics" className="mt-4 space-y-6">
           <InsightsDiagnosticsTab
-            loading={diagnosticsLoading}
-            error={diagnosticsError}
-            diagnostics={diagnosticsData}
-            feedSummary={diagnosticsFeedSummary}
-            discoverySummary={diagnosticsDiscoverySummary}
-            latestFeedRefresh={latestFeedRefresh}
-            latestDiscoveryRefresh={latestDiscoveryRefresh}
-            sourceRequestsTotal={diagnosticsSourceRequests}
-            scorecards={diagnosticsScorecards}
-            recommendedActions={diagnosticsActions}
-            automationOpportunities={automationOpportunities}
-            ai={diagnosticsAI}
-            authors={diagnosticsAuthors}
-            alerts={diagnosticsAlerts}
-            feedbackLearning={diagnosticsFeedbackLearning}
-            operational={diagnosticsOperational}
-            coldStartValidation={coldStartValidation}
-            branchTrends={diagnosticsBranchTrends}
-            trendWindowDays={diagnosticsTrends?.window_days}
-            feedRefreshTrend={feedRefreshTrend}
-            discoveryRefreshTrend={discoveryRefreshTrend}
-            recommendationActionTrend={recommendationActionTrend}
-            alertHistoryTrend={alertHistoryTrend}
-            alertHistoryWeeklyTrend={alertHistoryWeeklyTrend}
-            authorFollowTrend={authorFollowTrend}
-            feedbackLearningTrend={feedbackLearningTrend}
+            sections={diagnosticsSections}
             savedDrilldowns={savedDrilldowns}
             onSaveDrilldown={saveDrilldown}
             onRemoveSavedDrilldown={removeSavedDrilldown}
