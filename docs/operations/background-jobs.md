@@ -75,6 +75,16 @@ middle of an HTTP call to an external API, it'll finish that call
 before checking the flag. Expect a few seconds of latency on
 cancel.
 
+The scheduler enforces cancellation centrally: once
+`cancel_requested=true` is recorded for a job, later progress updates
+cannot move it back to `running`, and a job that returns after a
+cancel request is finalized as `cancelled` instead of `completed`.
+Activity status/log checkpoints also raise a scheduler cancellation
+exception, so runners that report progress stop at the next checkpoint.
+Individual runners should still check `is_cancellation_requested()`
+inside long inner loops and before expensive external calls so they
+stop before the next Activity write when possible.
+
 ## Concurrency rules
 
 * **Same job, only one instance.** Author refresh, feed refresh,
@@ -104,7 +114,8 @@ cancel.
 | OpenAlex resolve | Library → Imports → Resolve. |
 | Enrich imports | Library → Imports → Enrich. |
 | Preprint dedup | Settings → Data & system. |
-| Corpus metadata rehydration | Settings → Corpus maintenance, **and auto-triggered after every paper insert** (Library save, Feed candidate, Discovery rec — `enqueue_pending_hydration` schedules an idempotent background sweep through the same Activity envelope, `trigger_source="auto:paper_insert"`). Three phases per run: **(1) OpenAlex batched** (50 work IDs per call) repairs DOI / abstract / URL / publication date / authorships / topics / references via `merge_openalex_work_metadata`. **(1.5) Semantic Scholar batched** (100 lookup IDs per call) fills `tldr` and `influential_citation_count` (both surfaced downstream — PaperCard renders TLDR, Discovery's `citation_quality` ranker reads influential count) plus abstract fallback. **(2) Crossref per-paper** by DOI is the last-resort abstract fill for OpenAlex+S2 misses. Per-source ledger (`paper_enrichment_status` keyed `(paper_id, source, purpose)`) — `unchanged` rows get a 30-day TTL so OpenAlex's late abstract backfills are picked up without manual intervention. Per-call cap: **100,000 papers** (was 5,000) so a single click drains the full backlog of a personal-library-sized corpus in ~25 min. |
+| Corpus metadata rehydration | Settings → Corpus maintenance, **and auto-triggered after every paper insert** (Library save, Feed candidate, Discovery rec — `enqueue_pending_hydration` schedules an idempotent background sweep through the same Activity envelope, `trigger_source="auto:paper_insert"`). Three phases per run: **(1) OpenAlex batched** (50 work IDs per call) repairs DOI / abstract / URL / publication date / authorships / topics / references via `merge_openalex_work_metadata`. **(1.5) Semantic Scholar batched** (100 lookup IDs per call) fills `tldr` and `influential_citation_count` (both surfaced downstream — PaperCard renders TLDR, Discovery's `citation_quality` ranker reads influential count) plus abstract fallback. **(2) Crossref per-paper** by DOI is the last-resort abstract fill for OpenAlex+S2 misses. Per-source ledger (`paper_enrichment_status` keyed `(paper_id, source, purpose)`) — `unchanged` rows get a 30-day TTL so OpenAlex's late abstract backfills are picked up without manual intervention. Manual Settings runs omit `limit` by default and drain every eligible paper; API callers can still pass `limit` for bounded maintenance probes. |
+| Author metadata deep refresh | Settings → Corpus maintenance queues `POST /authors/deep-refresh-all?scope=needs_metadata&background=true`, which targets active authors with identity-resolution failures, followed authors missing OpenAlex IDs, and OpenAlex-backed profiles missing ORCID/profile fields. Full followed/library/corpus sweeps remain available through explicit API scopes. |
 | Alert evaluate-and-send | Per-alert manual + scheduler. |
 
 ## What "failed" means

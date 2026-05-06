@@ -92,12 +92,15 @@ def _detect_default_python_env() -> tuple[str, str]:
     The Docker images bundle a fully-populated venv at ``/opt/venv``;
     when that's present, point the AI dependency resolver at it so the
     UI shows a green-light environment out of the box. Bare-metal
-    installs fall back to whatever Python is invoking us.
+    source installs default to the repo-local ``.venv`` documented in
+    the install guide, so Settings points at the same environment users
+    create for torch / transformers / adapters.
     """
     docker_venv = "/opt/venv"
     if os.path.isfile(os.path.join(docker_venv, "bin", "python")):
         return ("venv", docker_venv)
-    return ("system", "")
+    repo_root = Path(__file__).resolve().parents[3]
+    return ("venv", str(repo_root / ".venv"))
 
 
 _default_env_type, _default_env_path = _detect_default_python_env()
@@ -1192,6 +1195,37 @@ def init_db_schema() -> None:
                 conn.execute(
                     "INSERT OR IGNORE INTO discovery_settings (key, value) VALUES (?, ?)",
                     (k, v),
+                )
+            # Source installs used to inherit Docker's `/opt/venv`
+            # default when settings were created in a container, then
+            # later run from the clone. If `/opt/venv` is not present,
+            # repoint that stale default to the source-install default
+            # (`<repo>/.venv`) without disturbing explicit user choices.
+            if (
+                _default_env_path != "/opt/venv"
+                and not os.path.isfile("/opt/venv/bin/python")
+            ):
+                conn.execute(
+                    """
+                    UPDATE discovery_settings
+                    SET value = ?
+                    WHERE key = 'ai.python_env_path'
+                      AND value = '/opt/venv'
+                    """,
+                    (_default_env_path,),
+                )
+                conn.execute(
+                    """
+                    UPDATE discovery_settings
+                    SET value = ?
+                    WHERE key = 'ai.python_env_type'
+                      AND EXISTS (
+                          SELECT 1 FROM discovery_settings p
+                          WHERE p.key = 'ai.python_env_path'
+                            AND p.value = ?
+                      )
+                    """,
+                    (_default_env_type, _default_env_path),
                 )
             # One-way cleanup of removed local embedding options. Runtime code
             # only knows the canonical `local`/SPECTER2 provider.

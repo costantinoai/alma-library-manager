@@ -52,6 +52,11 @@ _job_logs: dict[str, collections.deque[dict]] = {}
 _job_lock = threading.RLock()
 _ACTIVITY_STATUS_LIMIT = 2000
 _ACTIVE_STATUSES = {"queued", "scheduled", "running", "cancelling"}
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+class JobCancelled(Exception):
+    """Raised at a cooperative Activity checkpoint after user cancellation."""
 
 
 def _activity_conn() -> sqlite3.Connection:
@@ -1323,6 +1328,18 @@ def is_cancellation_requested(job_id: str) -> bool:
     return bool(st.get("cancel_requested"))
 
 
+def _raise_if_cancel_checkpoint(job_id: str, *, step: Optional[str] = None) -> None:
+    """Stop cooperative runners at the next Activity checkpoint."""
+    if not job_id:
+        return
+    allowed_steps = {"status", "cancel_requested", "cancelled"}
+    if step in allowed_steps:
+        return
+    st = get_job_status(job_id) or {}
+    if st.get("cancel_requested") and str(st.get("status") or "").lower() not in _TERMINAL_STATUSES:
+        raise JobCancelled(str(st.get("message") or "Operation cancelled"))
+
+
 def add_job_log(
     job_id: str,
     message: str,
@@ -1332,6 +1349,7 @@ def add_job_log(
     data: Optional[dict] = None,
 ) -> None:
     """Append a structured log entry for a job."""
+    _raise_if_cancel_checkpoint(job_id, step=step)
     safe_message = redact_sensitive_text(message or "")
     safe_data = redact_sensitive_data(data or {})
     entry = {
@@ -1405,6 +1423,37 @@ def set_job_status(job_id: str, **kwargs) -> None:
     prev_message = None
     with _job_lock:
         status = _job_status.get(job_id, {})
+        if not status:
+            db_status = _load_job_status_from_db(job_id)
+            if db_status:
+                status = dict(db_status)
+        existing_status = str(status.get("status") or "").lower()
+        incoming_status = str(kwargs.get("status") or "").lower() if "status" in kwargs else ""
+        if existing_status in _TERMINAL_STATUSES and incoming_status in _ACTIVE_STATUSES:
+            logger.debug(
+                "Ignoring active-status regression for terminal job %s (%s -> %s)",
+                job_id,
+                existing_status,
+                incoming_status,
+            )
+            return
+        incoming_cancel_request = bool(kwargs.get("cancel_requested"))
+        cancellation_requested = bool(status.get("cancel_requested") or incoming_cancel_request)
+        if cancellation_requested and existing_status not in _TERMINAL_STATUSES:
+            if (
+                status.get("cancel_requested")
+                and not incoming_cancel_request
+                and incoming_status in {"queued", "scheduled", "running"}
+            ):
+                raise JobCancelled(str(status.get("message") or "Operation cancelled"))
+            kwargs["cancel_requested"] = True
+            if incoming_status in {"queued", "scheduled", "running"}:
+                kwargs["status"] = "cancelling"
+                kwargs.setdefault("message", "Cancellation requested; stopping at next checkpoint")
+            elif incoming_status == "completed":
+                kwargs["status"] = "cancelled"
+                kwargs.setdefault("finished_at", datetime.utcnow().isoformat())
+                kwargs.setdefault("message", "Operation cancelled")
         prev_status = status.get("status")
         prev_message = status.get("message")
         status.update(kwargs)
@@ -1576,7 +1625,25 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
         try:
             result = func(*args, **kwargs)
             st_after = get_job_status(job_id) or {}
-            if st_after.get("status") not in ("completed", "failed"):
+            if st_after.get("cancel_requested") or st_after.get("status") in ("cancelling", "cancelled"):
+                cancel_result = {
+                    "success": False,
+                    "cancelled": True,
+                    "message": "Operation cancelled",
+                }
+                if isinstance(result, dict):
+                    cancel_result.update(result)
+                    cancel_result["cancelled"] = True
+                    cancel_result["success"] = False
+                set_job_status(
+                    job_id,
+                    status="cancelled",
+                    cancel_requested=True,
+                    finished_at=datetime.utcnow().isoformat(),
+                    message="Operation cancelled",
+                    result=cancel_result,
+                )
+            elif st_after.get("status") not in ("completed", "failed"):
                 # Terminal-message contract: prefer a runner-provided
                 # `message` in the return dict; otherwise fall back to a
                 # bland default.  Pre-2026-04-25 we read whatever
@@ -1602,6 +1669,15 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 if isinstance(result, dict):
                     payload["result"] = result
                 set_job_status(job_id, **payload)
+        except JobCancelled:
+            set_job_status(
+                job_id,
+                status="cancelled",
+                cancel_requested=True,
+                finished_at=datetime.utcnow().isoformat(),
+                message="Operation cancelled",
+                result={"success": False, "cancelled": True},
+            )
         except Exception as exc:
             logger.exception("Immediate job %s failed: %s", job_id, exc)
             set_job_status(
