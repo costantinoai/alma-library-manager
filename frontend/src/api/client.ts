@@ -1395,6 +1395,14 @@ export interface InsightsData {
     total_collections: number
     total_followed_authors: number
   }
+  // Stale-while-revalidate envelope flags. Backed by the materialised-view
+  // layer (alma.application.materialized_views): when the underlying data
+  // changes, the next GET enqueues a background rebuild and returns the
+  // prior payload with `stale: true`. The page can show a "Refreshing…"
+  // hint without blocking on recomputation.
+  stale?: boolean
+  rebuilding?: boolean
+  computed_at?: string | null
 }
 
 export interface InsightsDiagnostics {

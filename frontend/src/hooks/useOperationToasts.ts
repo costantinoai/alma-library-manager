@@ -120,6 +120,18 @@ function rootsForOperation(operationKey?: string): string[] {
     ]
   }
 
+  // Materialised views (alma.application.materialized_views): when a
+  // background rebuild completes, the matching React Query root must
+  // refetch so the page swaps the stale payload for the new one. Keys
+  // mirror the view_key suffix (`materialize.insights.overview` →
+  // `['insights']`).
+  if (key.startsWith('materialize.insights.')) {
+    return ['insights']
+  }
+  if (key.startsWith('materialize.graph.')) {
+    return ['graph', 'paper-map', 'author-network', 'topic-map']
+  }
+
   return []
 }
 

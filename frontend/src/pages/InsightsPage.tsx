@@ -159,13 +159,16 @@ export function InsightsPage() {
     enabled: activeReport === 'impact',
   })
 
-  if (isLoading) {
-    return <LoadingState message="Loading insights..." />
-  }
-
-  if (isError || !data) {
-    return <ErrorState message="Failed to load insights data." />
-  }
+  // The page shell (tabs, diagnostics, graph, reports) renders without
+  // waiting for `/insights`. Only the Stats tab depends on `data`, and
+  // it shows its own skeleton during the very first load. After the
+  // first build the materialised-view cache returns instantly on every
+  // subsequent visit; on subsequent data changes the response carries
+  // `stale=true` while a background rebuild runs, which we surface as a
+  // small "Refreshing…" pill rather than as a full-page block.
+  const showStatsSkeleton = isLoading && !data
+  const showStatsError = isError && !data
+  const isRefreshing = Boolean(data?.stale || data?.rebuilding)
 
   const diagnosticsData: InsightsDiagnostics | null = diagnostics ?? null
   const diagnosticsFeedSummary = diagnosticsData?.feed.summary
@@ -217,20 +220,37 @@ export function InsightsPage() {
         }}
         className="w-full"
       >
-        <TabsList>
-          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
-          <TabsTrigger value="stats">Stats</TabsTrigger>
-          <TabsTrigger value="graph">Graph</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
-        </TabsList>
+        <div className="flex items-center justify-between gap-4">
+          <TabsList>
+            <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+            <TabsTrigger value="stats">Stats</TabsTrigger>
+            <TabsTrigger value="graph">Graph</TabsTrigger>
+            <TabsTrigger value="reports">Reports</TabsTrigger>
+          </TabsList>
+          {isRefreshing ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-alma-200 bg-alma-50 px-2.5 py-1 text-xs text-alma-700"
+              title="Insights are being recomputed in the background. The current view is from the previous snapshot."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-alma-folio animate-pulse" aria-hidden />
+              Refreshing…
+            </span>
+          ) : null}
+        </div>
         <TabsContent value="stats" className="space-y-6 mt-4">
-          <InsightsOverviewTab
-            data={data}
-            aiStatus={aiStatus}
-            colors={COLORS}
-            pieColors={PIE_COLORS}
-            tooltipStyle={TOOLTIP_STYLE}
-          />
+          {showStatsSkeleton ? (
+            <LoadingState message="Loading insights..." />
+          ) : showStatsError ? (
+            <ErrorState message="Failed to load insights data." />
+          ) : data ? (
+            <InsightsOverviewTab
+              data={data}
+              aiStatus={aiStatus}
+              colors={COLORS}
+              pieColors={PIE_COLORS}
+              tooltipStyle={TOOLTIP_STYLE}
+            />
+          ) : null}
         </TabsContent>
         <TabsContent value="diagnostics" className="mt-4 space-y-6">
           <InsightsDiagnosticsTab
