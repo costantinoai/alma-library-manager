@@ -113,3 +113,4 @@ scripts/
 docker-compose.override.yml
 data/.volume-settings.json
 /data/.hf-cache
+/tools
