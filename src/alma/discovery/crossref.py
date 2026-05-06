@@ -124,6 +124,46 @@ def _crossref_to_candidate(item: dict, score: float) -> Optional[dict]:
     }
 
 
+def fetch_work_by_doi(doi: str) -> Optional[dict]:
+    """Fetch a single Crossref work by DOI.
+
+    Returns a normalized candidate dict (same shape as `_crossref_to_candidate`)
+    or `None` on miss / network error / non-200. Crossref's
+    `/works/{doi}` endpoint is the authoritative source for abstracts on
+    DOI-bearing works that OpenAlex hasn't indexed an
+    `abstract_inverted_index` for — typically ARVO / Journal of Vision
+    proceedings and other late-binding venues. A bare-bones single-DOI
+    fetcher because the existing `search_works` is a free-text search,
+    not an identifier lookup.
+    """
+    normalized = normalize_doi(doi or "")
+    if not normalized:
+        return None
+    try:
+        resp = get_source_http_client("crossref").get(
+            f"/works/{normalized}", timeout=20
+        )
+    except Exception as exc:
+        logger.warning("Crossref by-DOI fetch failed for %s: %s", normalized, exc)
+        return None
+    if resp.status_code != 200:
+        if resp.status_code != 404:
+            logger.debug(
+                "Crossref by-DOI returned HTTP %d for %s",
+                resp.status_code,
+                normalized,
+            )
+        return None
+    try:
+        message = ((resp.json() or {}).get("message")) or {}
+    except Exception as exc:
+        logger.warning("Crossref by-DOI JSON decode failed for %s: %s", normalized, exc)
+        return None
+    if not isinstance(message, dict) or not message:
+        return None
+    return _crossref_to_candidate(message, score=1.0)
+
+
 def search_works(
     query: str,
     *,

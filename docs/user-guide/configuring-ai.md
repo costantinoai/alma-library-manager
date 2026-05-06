@@ -97,11 +97,25 @@ Heavy embedding work does not run inline. It goes through Activity:
 * **Rebuild graph projections**
 
 If the blocked count is large, run **Settings → Corpus maintenance
-→ Rehydrate metadata** first. That job batches OpenAlex by work ID
-to fill missing DOI / abstract / URL / publication date /
-authorships / topics / references on already-stored papers, with
-per-paper bookkeeping in `paper_enrichment_status` so reruns are
-cheap.
+→ Rehydrate metadata** first. The job runs in three phases and is
+**Activity-enveloped** (visible in the Activity panel with
+queued → running → completed status):
+
+1. **OpenAlex batched** (50 work IDs per call) fills DOI / abstract
+   / URL / publication date / authorships / topics / references /
+   biblio / OA flags / FWCI / keywords on already-stored papers.
+2. **Semantic Scholar batched** (100 lookup IDs per call) adds
+   `tldr` (rendered on every paper card) and
+   `influential_citation_count` (drives Discovery's
+   `citation_quality` ranker) plus an abstract fallback.
+3. **Crossref per-paper** is a last-resort abstract fill for the
+   residual papers OpenAlex and S2 both left blank.
+
+Per-paper bookkeeping in `paper_enrichment_status` (one row per
+source) makes reruns cheap; the job picks up automatically every
+time a new paper is added (Library save / Feed candidate / Discovery
+rec) so the corpus stays hydrated without recurring manual sweeps.
+A single click handles up to 100,000 papers per run.
 
 You can keep using the app while those jobs run.
 

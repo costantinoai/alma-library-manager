@@ -579,6 +579,16 @@ def _upsert_candidate_paper(db: sqlite3.Connection, candidate: dict, *, now: str
         )
     except Exception as exc:
         logger.debug("Feed candidate sidecar upsert failed for %s: %s", paper_id, exc)
+    # Enqueue for cross-source metadata hydration so a Feed-discovered
+    # paper missing an abstract enters the rehydration runner's
+    # candidate pool on the next sweep instead of waiting for a manual
+    # corpus-maintenance click.
+    try:
+        from alma.services.corpus_rehydrate import enqueue_pending_hydration
+
+        enqueue_pending_hydration(db, paper_id)
+    except Exception as exc:
+        logger.debug("Feed candidate hydration enqueue skipped for %s: %s", paper_id, exc)
     return paper_id
 
 

@@ -478,7 +478,7 @@ def get_paper_enrichment_status(
     ),
 )
 def rehydrate_paper_metadata(
-    limit: int = Query(500, ge=1, le=5000, description="Maximum papers to inspect in this run"),
+    limit: int = Query(500, ge=1, le=100_000, description="Maximum papers to inspect in this run"),
     force: bool = Query(False, description="Ignore terminal ledger rows and refetch matching lookup/projection pairs"),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),

@@ -317,58 +317,137 @@ def publication_text(pub: dict) -> str:
 
 
 def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
-    """Insert recommendation dicts into the database."""
+    """Insert recommendation dicts into the database.
+
+    Persists every field the source candidate carries (abstract, journal,
+    publication_date, openalex_id, S2 ids, tldr) using fill-only
+    semantics on conflict so a less-complete source can never overwrite
+    populated columns. Without these columns in the INSERT/UPDATE,
+    abstracts surfaced by S2/biorxiv/arXiv/Crossref were silently
+    discarded — which starved local SPECTER2 of input text and forced
+    the corpus-rehydration job to re-fetch what we already had in hand.
+    """
     count = 0
     for rec in recs:
         try:
             paper_id = uuid.uuid4().hex
+            doi_raw = (rec.get("doi") or "").strip()
+            # `INSERT OR IGNORE`, not `ON CONFLICT(doi)`: `papers.doi` has no
+            # UNIQUE constraint on this schema (only an idx; partial UNIQUE
+            # is on `openalex_id`), so an explicit `ON CONFLICT(doi)` raises
+            # OperationalError. The legacy implementation here did exactly
+            # that and was silently bombing every call since the v0.9.1
+            # schema swap — the `except Exception: logger.debug(...)` below
+            # swallowed the error and the function returned 0 every time.
+            # Dedup now flows through the SELECT-by-DOI-or-(title,authors)
+            # lookup + the fill-only secondary UPDATE further down, which is
+            # the same approach `_upsert_candidate_paper` and the lens
+            # refresh's `library_app.upsert_paper` already use.
+            #
+            # `openalex_id` and S2 ids are also omitted from the INSERT
+            # (partial UNIQUE on `openalex_id` in `api/deps.py:469`); they
+            # are filled by the IntegrityError-guarded UPDATE below, after
+            # we've resolved the canonical paper row.
             conn.execute(
-                """INSERT INTO papers (id, title, authors, url, doi, year, cited_by_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(doi) DO UPDATE SET
-                       title = excluded.title,
-                       authors = excluded.authors,
-                       url = excluded.url,
-                       year = excluded.year,
-                       cited_by_count = excluded.cited_by_count""",
+                """INSERT OR IGNORE INTO papers
+                       (id, title, authors, abstract, url, doi,
+                        journal, publication_date, year, cited_by_count,
+                        tldr, influential_citation_count)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     paper_id,
-                    rec.get("title", ""),
-                    rec.get("authors", ""),
-                    rec.get("url", ""),
-                    rec.get("doi", ""),
+                    rec.get("title", "") or "",
+                    rec.get("authors", "") or "",
+                    rec.get("abstract", "") or "",
+                    rec.get("url", "") or "",
+                    doi_raw,
+                    rec.get("journal", "") or "",
+                    rec.get("publication_date", "") or "",
                     rec.get("year"),
-                    rec.get("cited_by_count", 0),
+                    rec.get("cited_by_count", 0) or 0,
+                    rec.get("tldr", "") or "",
+                    rec.get("influential_citation_count"),
                 ),
             )
             row = conn.execute(
                 "SELECT id FROM papers WHERE doi = ? OR (title = ? AND authors = ?)",
                 (
-                    rec.get("doi", ""),
+                    doi_raw,
                     rec.get("title", ""),
                     rec.get("authors", ""),
                 ),
             ).fetchone()
             if row:
                 paper_id = row["id"]
+            # Fill-only secondary UPDATE: covers both the
+            # already-existed-and-INSERT-was-ignored case AND the brand-new
+            # row case (no-op when fields already match).
             try:
-                if rec.get("semantic_scholar_id") or rec.get("semantic_scholar_corpus_id"):
-                    conn.execute(
-                        """
-                        UPDATE papers
-                        SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
-                            semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), ?)
-                        WHERE id = ?
-                        """,
-                        (
-                            rec.get("semantic_scholar_id") or None,
-                            rec.get("semantic_scholar_corpus_id") or None,
-                            paper_id,
-                        ),
-                    )
+                conn.execute(
+                    """
+                    UPDATE papers SET
+                        abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? != '' THEN ? ELSE abstract END,
+                        journal = CASE WHEN COALESCE(journal, '') = '' AND ? != '' THEN ? ELSE journal END,
+                        publication_date = CASE
+                            WHEN COALESCE(publication_date, '') = '' AND ? != '' THEN ?
+                            ELSE publication_date
+                        END,
+                        semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), NULLIF(?, '')),
+                        semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), NULLIF(?, '')),
+                        tldr = COALESCE(NULLIF(tldr, ''), NULLIF(?, ''))
+                    WHERE id = ?
+                    """,
+                    (
+                        rec.get("abstract", "") or "",
+                        rec.get("abstract", "") or "",
+                        rec.get("journal", "") or "",
+                        rec.get("journal", "") or "",
+                        rec.get("publication_date", "") or "",
+                        rec.get("publication_date", "") or "",
+                        rec.get("semantic_scholar_id", "") or "",
+                        rec.get("semantic_scholar_corpus_id", "") or "",
+                        rec.get("tldr", "") or "",
+                        paper_id,
+                    ),
+                )
                 upsert_specter2_embedding(conn, paper_id, rec)
             except sqlite3.OperationalError:
                 pass
+            # `openalex_id` upsert is split out and IntegrityError-guarded
+            # because the partial UNIQUE on `openalex_id` (api/deps.py:469)
+            # can fire when a preprint/journal twin already owns the
+            # value. Skipping the identifier fill on a twin keeps the rec
+            # — and its just-filled abstract — alive; the twin is
+            # collapsed later by the corpus-hygiene preprint dedup pass.
+            openalex_id_raw = (rec.get("openalex_id") or "").strip()
+            if openalex_id_raw:
+                try:
+                    conn.execute(
+                        """
+                        UPDATE papers
+                        SET openalex_id = ?
+                        WHERE id = ?
+                          AND COALESCE(openalex_id, '') = ''
+                          AND NOT EXISTS (
+                              SELECT 1 FROM papers p2
+                              WHERE p2.openalex_id = ? AND p2.id != papers.id
+                          )
+                        """,
+                        (openalex_id_raw, paper_id, openalex_id_raw),
+                    )
+                except sqlite3.IntegrityError:
+                    pass
+
+            # Enqueue cross-source metadata hydration for the paper so
+            # that any abstract / journal / publication_date the
+            # discovery candidate didn't carry gets backfilled on the
+            # next rehydration sweep.
+            try:
+                from alma.services.corpus_rehydrate import enqueue_pending_hydration
+
+                enqueue_pending_hydration(conn, paper_id)
+            except Exception as exc:
+                logger.debug("Recommendation hydration enqueue skipped for %s: %s", paper_id, exc)
 
             rec_id = uuid.uuid4().hex
             conn.execute(
@@ -449,6 +528,9 @@ def merge_candidate(
             "url": (candidate.get("url") or "").strip(),
             "doi": (candidate.get("doi") or "").strip(),
             "abstract": (candidate.get("abstract") or "").strip(),
+            "journal": (candidate.get("journal") or "").strip(),
+            "publication_date": (candidate.get("publication_date") or "").strip(),
+            "openalex_id": (candidate.get("openalex_id") or "").strip(),
             "semantic_scholar_id": (candidate.get("semantic_scholar_id") or "").strip(),
             "semantic_scholar_corpus_id": str(candidate.get("semantic_scholar_corpus_id") or "").strip(),
             "specter2_embedding": candidate.get("specter2_embedding"),
@@ -456,6 +538,8 @@ def merge_candidate(
             "score": round(score, 4),
             "year": candidate.get("year"),
             "cited_by_count": candidate.get("cited_by_count", 0),
+            "tldr": (candidate.get("tldr") or "").strip(),
+            "influential_citation_count": candidate.get("influential_citation_count"),
             "topics": candidate.get("topics", []),
             "created_at": now,
         }

@@ -253,6 +253,22 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
     return paper_id
 
 
+def _schedule_pending_hydration(db: sqlite3.Connection, paper_id: str) -> None:
+    """Enqueue a paper for cross-source metadata hydration.
+
+    Cheap, no HTTP — writes a `pending` ledger row that the rehydration
+    runner picks up on its next sweep. Wired into every canonical paper
+    insert/upsert so the rehydration job never goes "stale": an added
+    paper missing an abstract enters the candidate pool immediately.
+    """
+    try:
+        from alma.services.corpus_rehydrate import enqueue_pending_hydration
+
+        enqueue_pending_hydration(db, paper_id)
+    except Exception as exc:
+        logger.debug("enqueue_pending_hydration skipped for %s: %s", paper_id, exc)
+
+
 def upsert_paper(db: sqlite3.Connection, **kwargs) -> str:
     """Insert or update a paper. Deduplicates via the canonical triple
     (openalex_id → doi → year+normalized_title) plus a semantic_scholar_id
@@ -312,9 +328,12 @@ def upsert_paper(db: sqlite3.Connection, **kwargs) -> str:
                 f"UPDATE papers SET {set_clause} WHERE id = ?",
                 list(updates.values()) + [paper_id],
             )
+        _schedule_pending_hydration(db, paper_id)
         return paper_id
     else:
-        return create_paper(db, **kwargs)
+        new_id = create_paper(db, **kwargs)
+        _schedule_pending_hydration(db, new_id)
+        return new_id
 
 
 def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:

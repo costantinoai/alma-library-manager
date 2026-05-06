@@ -104,7 +104,7 @@ cancel.
 | OpenAlex resolve | Library → Imports → Resolve. |
 | Enrich imports | Library → Imports → Enrich. |
 | Preprint dedup | Settings → Data & system. |
-| Corpus metadata rehydration | Settings → Corpus maintenance. Batched OpenAlex repair for stored papers missing DOI / abstract / URL / publication date / authorships / topics / references. Per-paper ledger (`paper_enrichment_status`) so reruns skip already-enriched rows. |
+| Corpus metadata rehydration | Settings → Corpus maintenance, **and auto-triggered after every paper insert** (Library save, Feed candidate, Discovery rec — `enqueue_pending_hydration` schedules an idempotent background sweep through the same Activity envelope, `trigger_source="auto:paper_insert"`). Three phases per run: **(1) OpenAlex batched** (50 work IDs per call) repairs DOI / abstract / URL / publication date / authorships / topics / references via `merge_openalex_work_metadata`. **(1.5) Semantic Scholar batched** (100 lookup IDs per call) fills `tldr` and `influential_citation_count` (both surfaced downstream — PaperCard renders TLDR, Discovery's `citation_quality` ranker reads influential count) plus abstract fallback. **(2) Crossref per-paper** by DOI is the last-resort abstract fill for OpenAlex+S2 misses. Per-source ledger (`paper_enrichment_status` keyed `(paper_id, source, purpose)`) — `unchanged` rows get a 30-day TTL so OpenAlex's late abstract backfills are picked up without manual intervention. Per-call cap: **100,000 papers** (was 5,000) so a single click drains the full backlog of a personal-library-sized corpus in ~25 min. |
 | Alert evaluate-and-send | Per-alert manual + scheduler. |
 
 ## What "failed" means
