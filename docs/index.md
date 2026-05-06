@@ -86,19 +86,6 @@ fall-back.
 
 ## How the parts fit together
 
-```mermaid
-flowchart LR
-    M[Monitors<br/>authors · topics · queries] --> F[Feed]
-    F -->|save| L[Library]
-    L --> D[Discovery]
-    D -->|save| L
-    L --> I[Insights]
-    L --> A[Alerts]
-    L -.feedback.-> D
-    F -.feedback.-> D
-    D -.feedback.-> D
-```
-
 Monitors generate the **Feed** (chronological, deterministic). Saving
 from the Feed grows the **Library** (curated, organised). Discovery
 recommends papers adjacent to the Library (probabilistic, ranked).
