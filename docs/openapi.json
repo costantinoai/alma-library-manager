@@ -514,6 +514,84 @@
         }
       }
     },
+    "/api/v1/authors/suggestions/track-follow": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Log a rail-originated author follow for outcome calibration",
+        "description": "Fire-and-forget call from the Suggested Authors rail after a follow succeeds, so per-bucket outcome calibration can attribute the positive event to the bucket that surfaced the author. The actual follow write goes through the existing follow / author-create routes — this is the calibration log only.",
+        "operationId": "track_followed_suggestion_api_v1_authors_suggestions_track_follow_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackFollowSuggestionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/suggestions/refresh-network": {
       "post": {
         "tags": [
@@ -3814,6 +3892,273 @@
         }
       }
     },
+    "/api/v1/papers/enrichment-status": {
+      "get": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Get paper metadata enrichment bookkeeping",
+        "description": "Pure-read status for corpus metadata rehydration. Reports per-paper ledger counts and current OpenAlex metadata repair eligibility without performing any external API calls or writes.",
+        "operationId": "get_paper_enrichment_status_api_v1_papers_enrichment_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Enrichment source; currently only openalex",
+              "default": "openalex",
+              "title": "Source"
+            },
+            "description": "Enrichment source; currently only openalex"
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Enrichment purpose; currently only metadata",
+              "default": "metadata",
+              "title": "Purpose"
+            },
+            "description": "Enrichment purpose; currently only metadata"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional ledger status filter",
+              "title": "Status"
+            },
+            "description": "Optional ledger status filter"
+          },
+          {
+            "name": "paper_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional paper id to inspect",
+              "title": "Paper Id"
+            },
+            "description": "Optional paper id to inspect"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 0,
+              "description": "Number of per-paper ledger rows to include",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "Number of per-paper ledger rows to include"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Per-paper ledger row offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Per-paper ledger row offset"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Paper Enrichment Status Api V1 Papers Enrichment Status Get"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/papers/rehydrate-metadata": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Rehydrate missing paper metadata from OpenAlex",
+        "description": "Queues an Activity-backed corpus repair job. The job batches OpenAlex work IDs, records one ledger row per paper/source/purpose, skips already-covered lookup/projection pairs, and writes only improving paper metadata.",
+        "operationId": "rehydrate_paper_metadata_api_v1_papers_rehydrate_metadata_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 1,
+              "description": "Maximum papers to inspect in this run",
+              "default": 500,
+              "title": "Limit"
+            },
+            "description": "Maximum papers to inspect in this run"
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Ignore terminal ledger rows and refetch matching lookup/projection pairs",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Ignore terminal ledger rows and refetch matching lookup/projection pairs"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Rehydrate Paper Metadata Api V1 Papers Rehydrate Metadata Post"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/papers/stats": {
       "get": {
         "tags": [
@@ -4117,8 +4462,8 @@
         "tags": [
           "papers"
         ],
-        "summary": "Papers referenced by this paper (corpus + S2 fallback)",
-        "description": "Return papers this paper references (outgoing graph edges).\n\nLocal-first SQL over `publication_references`; falls back to S2\n`/paper/{id}/references` when the local count is thin (and\n`include_remote` is set; default true). S2 results are merged,\ndeduped against local by DOI / S2 id, and cached for 24 h in\n`paper_network_cache` so repeat dialog opens are instant.",
+        "summary": "Papers referenced by this paper (full OpenAlex graph)",
+        "description": "Return every paper this paper references, fetched from OpenAlex.\n\nThe OpenAlex graph is the source of truth — local\n``publication_references`` is no longer queried for this view, so\nthe user sees the full bibliography rather than a corpus-only\nsubset. Local matches are looked up in bulk and surfaced via\n``in_library=true`` plus an attached ``paper_id`` so the Pivot\nbutton still works for in-library hits.\n\nCached for 24 h in ``paper_network_cache`` so repeat opens are\ninstant; cache key is ``paper_id + 'prior'``.",
         "operationId": "list_prior_works_api_v1_papers__paper_id__prior_works_get",
         "security": [
           {
@@ -4143,16 +4488,6 @@
               "type": "integer",
               "default": 30,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "include_remote",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Include Remote"
             }
           },
           {
@@ -4219,8 +4554,8 @@
         "tags": [
           "papers"
         ],
-        "summary": "Papers that cite this paper (corpus + S2 fallback)",
-        "description": "Return papers that cite this paper (incoming graph edges).\n\nLocal-first SQL over `publication_references`, ordered by\ninfluential-citation count. Falls back to S2\n`/paper/{id}/citations` when the local count is thin (and\n`include_remote` is set). S2 per-edge `isInfluential` lights up\nthe amber ★ chip on the frontend row.",
+        "summary": "Papers that cite this paper (full OpenAlex graph)",
+        "description": "Return every paper that cites this paper, fetched from OpenAlex.\n\nUses OpenAlex's ``filter=cites:Wxxx`` query, sorted by\n``cited_by_count desc`` so high-impact citing papers surface\nfirst. Local-corpus matches are flagged via ``in_library=true``;\nthe user sees the full forward-citation graph rather than only\nlocally-known citers.\n\nCached for 24 h in ``paper_network_cache``.",
         "operationId": "list_derivative_works_api_v1_papers__paper_id__derivative_works_get",
         "security": [
           {
@@ -4245,16 +4580,6 @@
               "type": "integer",
               "default": 30,
               "title": "Limit"
-            }
-          },
-          {
-            "name": "include_remote",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Include Remote"
             }
           },
           {
@@ -4769,7 +5094,7 @@
           "plugins"
         ],
         "summary": "Test plugin connection",
-        "description": "Test if the plugin can connect to its service.",
+        "description": "Test if the plugin can connect to its service. For Slack, this runs the test asynchronously through the Activity envelope so the exact code path that delivers real alerts is what gets exercised.",
         "operationId": "test_plugin_connection_api_v1_plugins__plugin_name__test_post",
         "security": [
           {
@@ -4808,9 +5133,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PluginTestResult"
-                }
+                "schema": {}
               }
             }
           },
@@ -10410,8 +10733,8 @@
         "tags": [
           "alerts"
         ],
-        "summary": "Evaluate and send alert",
-        "description": "Run all assigned rules, merge papers, filter already-alerted, send via channels.\n\nStays ``async def`` because ``alerts_app.evaluate_digest`` is a coroutine\n(it awaits the Slack / channel delivery HTTP round-trips). The sync\n``runner.run`` call afterwards persists operation lifecycle to SQLite and\nis dispatched through ``asyncio.to_thread`` so the commit does not block\nthe event loop while another request is mid-flight.",
+        "summary": "Evaluate and send alert (async-enveloped)",
+        "description": "Queue a digest evaluation and return the canonical activity envelope.\n\nThe actual rule matching, deduplication, and Slack delivery run on the\nscheduler thread pool so the request thread is released in ~100 ms.\nProgress flows into ``operation_status``; the frontend polls\n``GET /activity/{job_id}`` and reads ``result`` once the job completes.\n\nConforms to the activity-envelope pattern (`lessons.md:1027`):\n1. Validate input synchronously -> fast 4xx for missing alert.\n2. Dedupe with ``find_active_job`` so concurrent clicks don't double-send.\n3. ``_runner`` opens its own connection (per `lessons.md:1042`).\n4. Returns the envelope; result lands in ``operation_status.result``.",
         "operationId": "evaluate_alert_api_v1_alerts__alert_id__evaluate_post",
         "security": [
           {
@@ -10450,9 +10773,7 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlertEvaluationResult"
-                }
+                "schema": {}
               }
             }
           },
@@ -11270,7 +11591,7 @@
           "discovery"
         ],
         "summary": "Save a recommendation to library",
-        "description": "Save a recommendation to the library without forcing a rating.",
+        "description": "Save a recommendation to Library and remove it from Discovery.",
         "operationId": "save_recommendation_api_v1_discovery_recommendations__rec_id__save_post",
         "security": [
           {
@@ -11352,7 +11673,7 @@
           "discovery"
         ],
         "summary": "Like a recommendation",
-        "description": "Mark a recommendation as liked.",
+        "description": "Rate a recommendation positively without hiding it.",
         "operationId": "like_recommendation_api_v1_discovery_recommendations__rec_id__like_post",
         "security": [
           {
@@ -11428,13 +11749,78 @@
         }
       }
     },
+    "/api/v1/discovery/recommendations/{rec_id}/read": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Add a recommendation to the reading list",
+        "description": "Move a recommendation to Reading list without saving to Library.",
+        "operationId": "read_recommendation_api_v1_discovery_recommendations__rec_id__read_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "rec_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rec Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/discovery/recommendations/{rec_id}/dismiss": {
       "post": {
         "tags": [
           "discovery"
         ],
         "summary": "Dismiss a recommendation",
-        "description": "Mark a recommendation as dismissed.",
+        "description": "Hide a recommendation and record a long-cooldown negative signal.",
         "operationId": "dismiss_recommendation_api_v1_discovery_recommendations__rec_id__dismiss_post",
         "security": [
           {
@@ -11498,8 +11884,8 @@
         "tags": [
           "discovery"
         ],
-        "summary": "Dislike a recommendation (negative signal, no system-wide hide)",
-        "description": "Record a negative signal on a recommendation without hiding the\npaper system-wide.\n\nDistinct from `dismiss`: `dismiss` flips `papers.status` to\n`dismissed` so the paper disappears from every surface; `dislike`\nonly updates the recommendation's `user_action` + writes a\nfeedback event + adjusts lens signals. The underlying `papers`\nrow stays untouched, so the user can still find the paper via\nFind & add or future recommendations — just with less lift.",
+        "summary": "Rate a recommendation negatively without hiding it",
+        "description": "Record a 1-star negative signal without hiding the suggestion.",
         "operationId": "dislike_recommendation_api_v1_discovery_recommendations__rec_id__dislike_post",
         "security": [
           {
@@ -11875,7 +12261,7 @@
           "feed"
         ],
         "summary": "Feed refresh status",
-        "description": "Return lightweight feed status, including the last successful refresh.\n\n``last_refresh_at`` is the latest ``finished_at`` across completed\n``feed.refresh_inbox`` operations in ``operation_status``. It is ``None``\nwhen the inbox has never been refreshed successfully.",
+        "description": "Return lightweight feed status, including the last successful refresh.\n\n``last_refresh_at`` is the latest ``finished_at`` across completed full\ninbox or per-monitor feed refreshes in ``operation_status``. ``new_count``\ncounts only still-new papers fetched during that latest window.",
         "operationId": "get_feed_status_api_v1_feed_status_get",
         "security": [
           {
@@ -14586,7 +14972,7 @@
           "ai"
         ],
         "summary": "Ai Status",
-        "description": "Return the current AI/ML system status.\n\nIncludes embedding provider info, embedding coverage statistics, and\ndependency availability. LLM provider configuration was removed in\n2026-04 (see tasks/01_LLM_PRODUCTION_EXIT.md).",
+        "description": "Return the current AI/ML system status.\n\nIncludes embedding provider info, embedding coverage statistics, and\ndependency availability.",
         "operationId": "ai_status_api_v1_ai_status_get",
         "security": [
           {
@@ -15034,7 +15420,7 @@
           "graphs"
         ],
         "summary": "Get Paper Map",
-        "description": "Get paper map visualization data.\n\nUses embeddings + clustering if available, falls back to a textual\nmulti-signal paper representation (topics + keywords + metadata).\nReturns publication nodes (with x,y positions, cluster_id, color) and edges.",
+        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, no topic overlay) are served via the materialised-view layer:\ncache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations bypass the cache and build inline — those are\nrare, ad-hoc views where caching every variant would be wasteful.",
         "operationId": "get_paper_map_api_v1_graphs_paper_map_get",
         "security": [
           {
@@ -15164,7 +15550,7 @@
           "graphs"
         ],
         "summary": "Get Author Network",
-        "description": "Get author network visualization data.",
+        "description": "Get author network visualization data, served via materialised view.",
         "operationId": "get_author_network_api_v1_graphs_author_network_get",
         "security": [
           {
@@ -15234,7 +15620,7 @@
           "graphs"
         ],
         "summary": "Get Topic Map",
-        "description": "Get topic co-occurrence map visualization data.",
+        "description": "Get topic co-occurrence map visualization data, served via materialised view.",
         "operationId": "get_topic_map_api_v1_graphs_topic_map_get",
         "security": [
           {
@@ -16946,7 +17332,7 @@
     "/{full_path}": {
       "get": {
         "summary": "Serve Frontend",
-        "description": "Serve the React SPA for any path not matched by API/web routes.",
+        "description": "Serve a real dist file if it exists, else the SPA index.",
         "operationId": "serve_frontend__full_path__get",
         "parameters": [
           {
@@ -18388,6 +18774,28 @@
               }
             ],
             "title": "Last Removed At"
+          },
+          "consensus_count": {
+            "type": "integer",
+            "title": "Consensus Count",
+            "default": 1
+          },
+          "consensus_buckets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Consensus Buckets"
+          },
+          "paper_signal_adjustment": {
+            "type": "number",
+            "title": "Paper Signal Adjustment",
+            "default": 0.0
+          },
+          "bucket_calibration_multiplier": {
+            "type": "number",
+            "title": "Bucket Calibration Multiplier",
+            "default": 1.0
           }
         },
         "type": "object",
@@ -21145,30 +21553,6 @@
         "title": "PluginInfo",
         "description": "Response model for plugin information."
       },
-      "PluginTestResult": {
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "title": "Success"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          },
-          "timestamp": {
-            "type": "string",
-            "title": "Timestamp"
-          }
-        },
-        "type": "object",
-        "required": [
-          "success",
-          "message",
-          "timestamp"
-        ],
-        "title": "PluginTestResult",
-        "description": "Response model for plugin connection test."
-      },
       "PublicationRef": {
         "properties": {
           "paper_id": {
@@ -21606,6 +21990,18 @@
             "minLength": 1,
             "title": "Openalex Id",
             "description": "OpenAlex author ID of the suggestion to reject"
+          },
+          "suggestion_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Bucket",
+            "description": "Originating rail bucket (library_core / cited_by_high_signal / adjacent / semantic_similar / openalex_related / s2_related). Optional — used by outcome calibration to reweight per-bucket scoring; NULL is fine for non-rail rejections."
           }
         },
         "type": "object",
@@ -21833,7 +22229,7 @@
             "pattern": "^(scholar|openalex)$",
             "title": "Backend",
             "description": "Publication backend",
-            "default": "scholar"
+            "default": "openalex"
           },
           "openalex_email": {
             "anyOf": [
@@ -22292,32 +22688,7 @@
         ],
         "title": "TopicCreateRequest"
       },
-      "TopicDomainNode-Input": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "paper_count": {
-            "type": "integer",
-            "title": "Paper Count"
-          },
-          "fields": {
-            "items": {
-              "$ref": "#/components/schemas/TopicFieldNode"
-            },
-            "type": "array",
-            "title": "Fields"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "paper_count"
-        ],
-        "title": "TopicDomainNode"
-      },
-      "TopicDomainNode-Output": {
+      "TopicDomainNode": {
         "properties": {
           "name": {
             "type": "string",
@@ -22409,7 +22780,7 @@
         "properties": {
           "domains": {
             "items": {
-              "$ref": "#/components/schemas/TopicDomainNode-Output"
+              "$ref": "#/components/schemas/TopicDomainNode"
             },
             "type": "array",
             "title": "Domains"
@@ -22456,6 +22827,33 @@
           "canonical"
         ],
         "title": "TopicSummary"
+      },
+      "TrackFollowSuggestionRequest": {
+        "properties": {
+          "openalex_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Openalex Id",
+            "description": "OpenAlex author ID of the followed suggestion"
+          },
+          "suggestion_bucket": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion Bucket",
+            "description": "Originating rail bucket label (see RejectSuggestionRequest)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "openalex_id"
+        ],
+        "title": "TrackFollowSuggestionRequest"
       },
       "TrackRequest": {
         "properties": {
@@ -22519,6 +22917,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

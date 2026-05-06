@@ -1287,6 +1287,27 @@ def init_db_schema() -> None:
                 )"""
             )
 
+            # Generalised cache for any expensive read view (Insights,
+            # graphs, …). Lookup is keyed by the view name; the
+            # `fingerprint` is a hash of the view's input state at the
+            # time `payload` was computed. A GET serves `payload`
+            # immediately; if the current fingerprint differs, the
+            # route enqueues a background rebuild and returns the stale
+            # payload so the user never blocks on recomputation. See
+            # `alma.application.materialized_views` for the registry.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS materialized_views (
+                    view_key       TEXT PRIMARY KEY,
+                    fingerprint    TEXT NOT NULL,
+                    payload        TEXT NOT NULL,
+                    computed_at    TEXT NOT NULL,
+                    compute_ms     INTEGER,
+                    build_status   TEXT NOT NULL DEFAULT 'ok',
+                    build_error    TEXT,
+                    rebuild_job_id TEXT
+                )"""
+            )
+
             # LLM-generated cluster labels, cached per cluster signature.
             # Signature = hash of sorted member IDs, so a relabel triggers
             # only when the cluster composition actually changes.

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
+from alma.application import materialized_views as mv
 from alma.config import get_db_path
 
 logger = logging.getLogger(__name__)
@@ -73,19 +74,28 @@ def get_paper_map(
 ):
     """Get paper map visualization data.
 
-    Uses embeddings + clustering if available, falls back to a textual
-    multi-signal paper representation (topics + keywords + metadata).
-    Returns publication nodes (with x,y positions, cluster_id, color) and edges.
+    Default options (cluster labels, cluster colour, citation size, edges
+    on, no topic overlay) are served via the materialised-view layer:
+    cache hit returns instantly, fingerprint mismatch enqueues a
+    background rebuild and serves the prior payload meanwhile. Custom
+    option combinations bypass the cache and build inline — those are
+    rare, ad-hoc views where caching every variant would be wasteful.
     """
     scope = scope if scope in {"library", "corpus"} else "library"
-    cache_key = "paper_map" if scope == "library" else "paper_map_corpus"
-    # Only use cache for default settings (and no topic overlay)
-    if (label_mode == "cluster" and color_by == "cluster" and size_by == "citations"
-        and show_edges and not show_topics):
-        cached = _get_cached_graph(conn, cache_key)
-        if cached:
-            return cached
+    is_default_options = (
+        label_mode == "cluster"
+        and color_by == "cluster"
+        and size_by == "citations"
+        and show_edges
+        and not show_topics
+    )
 
+    if is_default_options:
+        view_key = f"graph:paper_map:{scope}"
+        envelope = mv.get(conn, view_key)
+        return _graph_data_from_envelope(envelope)
+
+    # Custom-options path: live build, no caching.
     ai_state = _get_graph_ai_state(conn)
     graph_options = {
         "label_mode": label_mode,
@@ -94,20 +104,13 @@ def get_paper_map(
         "show_edges": show_edges,
         "scope": scope,
     }
-
-    # Try embedding-based map first
     embeddings = _load_embeddings(conn, scope=scope)
-
     if embeddings and len(embeddings) >= 5:
         result = _build_embedding_paper_map(conn, embeddings, ai_state=ai_state, graph_options=graph_options)
     else:
-        # Fallback: papers mapped by topic+keyword signals
         result = _build_topic_paper_map(conn, ai_state=ai_state, graph_options=graph_options)
-
-    # Add topic overlay if requested
     if show_topics:
         result = _add_topic_overlay(conn, result)
-
     return result
 
 
@@ -116,13 +119,19 @@ def get_author_network(
     scope: str = Query("library", description="library (default) or corpus"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """Get author network visualization data."""
+    """Get author network visualization data, served via materialised view."""
     scope = scope if scope in {"library", "corpus"} else "library"
-    cache_key = "author_network" if scope == "library" else "author_network_corpus"
-    cached = _get_cached_graph(conn, cache_key)
-    if cached:
-        return cached
+    view_key = f"graph:author_network:{scope}"
+    envelope = mv.get(conn, view_key)
+    return _graph_data_from_envelope(envelope)
 
+
+def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
+    """Compute the author-network GraphData (as a dict) for the given scope.
+
+    This is the original `get_author_network` body, lifted out so the
+    materialised-view layer can call it on cache miss / rebuild.
+    """
     from alma.ai.cluster_labels import compute_cluster_signature, fetch_cached_labels
     from alma.ai.projections import build_coauthor_network
 
@@ -211,17 +220,22 @@ def get_author_network(
             "clusters": enriched_clusters,
         },
     )
-    _cache_graph(conn, cache_key, result)
-    return result
+    return result.model_dump()
 
 
 @router.get("/topic-map", response_model=GraphData)
 def get_topic_map(conn: sqlite3.Connection = Depends(get_db)):
-    """Get topic co-occurrence map visualization data."""
-    cached = _get_cached_graph(conn, "topic_map")
-    if cached:
-        return cached
+    """Get topic co-occurrence map visualization data, served via materialised view."""
+    envelope = mv.get(conn, "graph:topic_map")
+    return _graph_data_from_envelope(envelope)
 
+
+def _build_topic_map_payload(conn: sqlite3.Connection) -> dict:
+    """Compute the topic-cooccurrence GraphData (as a dict).
+
+    Lifted out of `get_topic_map` so the materialised-view layer can
+    invoke it on cache miss / rebuild.
+    """
     from alma.ai.projections import build_topic_cooccurrence
 
     raw = build_topic_cooccurrence(conn)
@@ -248,11 +262,9 @@ def get_topic_map(conn: sqlite3.Connection = Depends(get_db)):
         for e in raw["edges"]
     ]
 
-    result = GraphData(
+    return GraphData(
         nodes=nodes, edges=edges, metadata={"type": "topic_map"}
-    )
-    _cache_graph(conn, "topic_map", result)
-    return result
+    ).model_dump()
 
 
 def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None) -> dict:
@@ -331,13 +343,16 @@ def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None)
         return {"rebuilt": rebuilt, "count": 0, "cancelled": True, "reference_backfill": graph_backfill}
 
     # Phase 3: paper_map — reads embeddings, runs clustering/projection,
-    # writes publication_clusters + graph_cache. Flush when done so the
-    # next phase starts with no pending writer lock.
+    # writes publication_clusters and the materialised-view payload.
+    # Flush when done so the next phase starts with no pending writer
+    # lock. Forced through `mv.rebuild` (not the GET-side `mv.get`) so
+    # the rebuild fires unconditionally even if the fingerprint happens
+    # to match the cached row.
     _mark_progress(2, "paper_map")
     try:
         if job_id:
             add_job_log(job_id, "Rebuilding paper map", step="paper_map")
-        get_paper_map(conn=conn)
+        mv.rebuild(conn, "graph:paper_map:library")
         _flush()
         rebuilt.append("paper_map")
     except Exception as e:
@@ -356,7 +371,7 @@ def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None)
     try:
         if job_id:
             add_job_log(job_id, "Rebuilding author network", step="author_network")
-        get_author_network(conn=conn)
+        mv.rebuild(conn, "graph:author_network:library")
         _flush()
         rebuilt.append("author_network")
     except Exception as e:
@@ -375,7 +390,7 @@ def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None)
     try:
         if job_id:
             add_job_log(job_id, "Rebuilding topic map", step="topic_map")
-        get_topic_map(conn=conn)
+        mv.rebuild(conn, "graph:topic_map")
         _flush()
         rebuilt.append("topic_map")
     except Exception as e:
@@ -430,10 +445,10 @@ def _cluster_label_refresh_impl(
 
     if graph_type == "paper_map":
         graph = get_paper_map(conn=conn, scope=scope)
-        cache_key = "paper_map" if scope != "corpus" else "paper_map_corpus"
+        view_key = f"graph:paper_map:{scope if scope == 'corpus' else 'library'}"
     elif graph_type == "author_network":
         graph = get_author_network(conn=conn, scope=scope)
-        cache_key = "author_network" if scope != "corpus" else "author_network_corpus"
+        view_key = f"graph:author_network:{scope if scope == 'corpus' else 'library'}"
     else:
         raise ValueError(f"Unsupported graph_type: {graph_type}")
 
@@ -546,13 +561,15 @@ def _cluster_label_refresh_impl(
                 message=f"Labelling clusters ({processed}/{total_clusters})",
             )
 
-    # Invalidate matching graph_cache so the next GET renders with fresh labels.
+    # Force a rebuild of the matching materialised view so the next GET
+    # renders with the new labels. We rebuild eagerly (rather than just
+    # invalidating) because the label-refresh job already runs in the
+    # background and the user expects the new labels to be live the next
+    # time they look at the graph.
     try:
-        conn.execute("DELETE FROM graph_cache WHERE graph_type = ?", (cache_key,))
-        if conn.in_transaction:
-            conn.commit()
-    except sqlite3.OperationalError:
-        pass
+        mv.rebuild(conn, view_key)
+    except Exception:
+        logger.exception("cluster-label refresh: failed to rebuild %s", view_key)
 
     summary = {
         "graph_type": graph_type,
@@ -1611,8 +1628,6 @@ def _build_embedding_paper_map(
             **(ai_state or {}),
         },
     )
-    cache_key = "paper_map" if (graph_options or {}).get("scope") != "corpus" else "paper_map_corpus"
-    _cache_graph(conn, cache_key, result)
     return result
 
 
@@ -1874,8 +1889,6 @@ def _build_topic_paper_map(
             **(ai_state or {}),
         },
     )
-    cache_key = "paper_map" if (graph_options or {}).get("scope") != "corpus" else "paper_map_corpus"
-    _cache_graph(conn, cache_key, result)
     return result
 
 
@@ -2100,3 +2113,150 @@ def _add_topic_overlay(
             "topics_shown": True,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Materialised-view registrations
+# ---------------------------------------------------------------------------
+#
+# Each public graph endpoint registers a view here so a cache hit returns
+# in <10 ms on the GET path. The fingerprint captures every input that
+# should change the rendered graph: corpus / library paper count, last
+# Library mutation, embedding count + active model (paper_map),
+# followed-author count + last follow time (author_network), and topic
+# coverage (topic_map). On fingerprint mismatch the prior payload is
+# served immediately and a background rebuild job runs under
+# `materialize.graph.<view>` — `useOperationToasts` invalidates the
+# matching React Query roots when it completes.
+
+
+def _graph_data_from_envelope(envelope: dict) -> GraphData:
+    """Reconstruct a GraphData from a materialised-view envelope.
+
+    The cached payload is a JSON-decoded dict with `nodes`, `edges`,
+    `metadata`. We re-validate it through Pydantic so the response stays
+    typed (the route still declares ``response_model=GraphData``), and
+    the SWR flags ride along inside ``metadata`` so existing frontend
+    code that only reads ``nodes`` / ``edges`` keeps working.
+    """
+    payload = envelope.get("payload") or {}
+    metadata = dict(payload.get("metadata") or {})
+    metadata["stale"] = bool(envelope.get("stale", False))
+    metadata["rebuilding"] = bool(envelope.get("rebuilding", False))
+    if envelope.get("computed_at"):
+        metadata["computed_at"] = envelope["computed_at"]
+    return GraphData(
+        nodes=payload.get("nodes") or [],
+        edges=payload.get("edges") or [],
+        metadata=metadata,
+    )
+
+
+def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
+    """Build the default-options paper-map payload (as a dict).
+
+    Mirrors the path inside `get_paper_map` for default options:
+    embedding-based map when ≥5 vectors are available, falling back to
+    the topic-signal map otherwise. Topic overlay is intentionally
+    excluded — it's a non-default option and is rendered live, not
+    cached.
+    """
+    ai_state = _get_graph_ai_state(conn)
+    graph_options = {
+        "label_mode": "cluster",
+        "color_by": "cluster",
+        "size_by": "citations",
+        "show_edges": True,
+        "scope": scope,
+    }
+    embeddings = _load_embeddings(conn, scope=scope)
+    if embeddings and len(embeddings) >= 5:
+        result = _build_embedding_paper_map(
+            conn, embeddings, ai_state=ai_state, graph_options=graph_options
+        )
+    else:
+        result = _build_topic_paper_map(
+            conn, ai_state=ai_state, graph_options=graph_options
+        )
+    return result.model_dump()
+
+
+# Paper map (per scope). Fingerprint covers Library/corpus paper count
+# and last update, embedding count for the active model, and the active
+# model itself — any of these change → cached layout is stale.
+_PAPER_MAP_LIBRARY_FP_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM papers WHERE status = 'library'),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
+      (SELECT COUNT(*) FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id
+         WHERE p.status = 'library'),
+      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
+"""
+
+_PAPER_MAP_CORPUS_FP_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM papers),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers),
+      (SELECT COUNT(*) FROM publication_embeddings),
+      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
+"""
+
+# Author network. Fingerprint covers paper edges (which authors
+# co-author together is derived from the publication graph) and follow
+# state (followed authors get a different visual treatment).
+_AUTHOR_NETWORK_LIBRARY_FP_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM papers WHERE status = 'library'),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
+      (SELECT COUNT(*) FROM followed_authors),
+      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors)
+"""
+
+_AUTHOR_NETWORK_CORPUS_FP_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM papers),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers),
+      (SELECT COUNT(*) FROM followed_authors),
+      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors)
+"""
+
+# Topic map. Fingerprint covers paper count + last update; topic
+# extraction is derived from paper records.
+_TOPIC_MAP_FP_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM papers),
+      (SELECT COALESCE(MAX(updated_at), '') FROM papers)
+"""
+
+
+mv.register(mv.View(
+    key="graph:paper_map:library",
+    fingerprint_sql=_PAPER_MAP_LIBRARY_FP_SQL,
+    build_fn=lambda conn: _build_paper_map_payload(conn, scope="library"),
+    operation_key="materialize.graph.paper_map.library",
+))
+mv.register(mv.View(
+    key="graph:paper_map:corpus",
+    fingerprint_sql=_PAPER_MAP_CORPUS_FP_SQL,
+    build_fn=lambda conn: _build_paper_map_payload(conn, scope="corpus"),
+    operation_key="materialize.graph.paper_map.corpus",
+))
+mv.register(mv.View(
+    key="graph:author_network:library",
+    fingerprint_sql=_AUTHOR_NETWORK_LIBRARY_FP_SQL,
+    build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
+    operation_key="materialize.graph.author_network.library",
+))
+mv.register(mv.View(
+    key="graph:author_network:corpus",
+    fingerprint_sql=_AUTHOR_NETWORK_CORPUS_FP_SQL,
+    build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
+    operation_key="materialize.graph.author_network.corpus",
+))
+mv.register(mv.View(
+    key="graph:topic_map",
+    fingerprint_sql=_TOPIC_MAP_FP_SQL,
+    build_fn=_build_topic_map_payload,
+    operation_key="materialize.graph.topic_map",
+))

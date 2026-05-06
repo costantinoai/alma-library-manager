@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import json_loads, raise_internal, safe_div, table_exists
+from alma.application import materialized_views as mv
 from alma.application.followed_authors import get_followed_author_backfill_status
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
@@ -1544,6 +1545,30 @@ def get_insights(
 ):
     """Library-scoped analytics for the Insights page.
 
+    Served via the materialised-view layer (`alma.application.materialized_views`):
+    a cache hit returns in <10 ms; on a content-fingerprint mismatch the
+    stale payload is returned immediately and a background rebuild is
+    enqueued, so the page never blocks on recomputation. The response
+    shape stays backwards-compatible — callers see the original payload
+    fields at the top level — and three SWR flags are added alongside:
+    `stale`, `rebuilding`, `computed_at`.
+    """
+    try:
+        envelope = mv.get(db, "insights:overview")
+    except Exception as exc:
+        raise_internal("Failed to compute insights", exc)
+    payload = envelope.get("payload") or {}
+    return {
+        **payload,
+        "stale": envelope.get("stale", False),
+        "rebuilding": envelope.get("rebuilding", False),
+        "computed_at": envelope.get("computed_at"),
+    }
+
+
+def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
+    """Library-scoped analytics payload — the original `/insights` body.
+
     Intent: Insights answers "what does my curated Library look like?"
     Every paper-derived aggregate filters `papers.status = 'library'` so
     tracked / removed / dismissed corpus rows the user never saved can't
@@ -1966,6 +1991,31 @@ def get_insights(
 
     except Exception as e:
         raise_internal("Failed to compute insights", e)
+
+
+# Register the Insights overview as a materialised view. The fingerprint
+# captures every input that should change the rendered numbers: any
+# Library paper edit (status / metadata / rating), any new recommendation
+# row, any follow / unfollow, plus the active embedding model. When any
+# of these change the next GET enqueues a background rebuild and serves
+# the prior payload meanwhile (stale-while-revalidate).
+mv.register(
+    mv.View(
+        key="insights:overview",
+        fingerprint_sql="""
+            SELECT
+              (SELECT COUNT(*) FROM papers WHERE status = 'library'),
+              (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
+              (SELECT COUNT(*) FROM recommendations),
+              (SELECT COALESCE(MAX(created_at), '') FROM recommendations),
+              (SELECT COUNT(*) FROM followed_authors),
+              (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
+              (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
+        """,
+        build_fn=_build_insights_payload,
+        operation_key="materialize.insights.overview",
+    )
+)
 
 
 @router.get(
