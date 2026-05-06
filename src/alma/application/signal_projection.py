@@ -485,7 +485,26 @@ def _project_citation_neighbors(
     paper_strength: dict[str, float],
     out: ProjectedPaperSignals,
 ) -> None:
-    """Project paper feedback through local outgoing and incoming citations."""
+    """Project paper feedback through local outgoing and incoming citations.
+
+    Both joins MUST be index-friendly. The earlier shape used
+    ``ON lower(trim(rp.openalex_id)) = lower('W' || ...) OR ...``
+    which produced ``SCAN papers`` (full 5k-row scan per pr row, ~55s
+    on the lens-refresh hot path). Two invariants make the simpler form
+    correct on this DB:
+
+    - Every ``papers.openalex_id`` is uppercase ``W``-prefixed (verified
+      against live data: 5511/5511 rows GLOB ``W*``, 0 lower / 0
+      unprefixed). The defensive ``lower(trim(...))`` was wasted work
+      that defeated ``idx_papers_openalex_id``.
+    - Every ``publication_references.referenced_work_id`` is the
+      unprefixed numeric id (verified: 0/212526 W-prefixed). The
+      ``OR`` branch matching the unprefixed form was dead code.
+
+    With those folded in, both joins go from SCAN → SEARCH USING INDEX
+    (``idx_papers_openalex_id`` for outgoing, ``idx_publication_
+    references_ref`` for incoming).
+    """
 
     try:
         for chunk in _chunks(paper_ids, 500):
@@ -494,9 +513,7 @@ def _project_citation_neighbors(
                 f"""
                 SELECT pr.paper_id AS seed_id, rp.id AS neighbour_id
                 FROM publication_references pr
-                JOIN papers rp
-                  ON lower(trim(rp.openalex_id)) = lower('W' || pr.referenced_work_id)
-                  OR lower(trim(rp.openalex_id)) = lower(CAST(pr.referenced_work_id AS TEXT))
+                JOIN papers rp ON rp.openalex_id = 'W' || pr.referenced_work_id
                 WHERE pr.paper_id IN ({placeholders})
                   AND rp.id <> pr.paper_id
                 """,
@@ -514,11 +531,12 @@ def _project_citation_neighbors(
                 SELECT fp.id AS seed_id, cp.id AS neighbour_id
                 FROM papers fp
                 JOIN publication_references pr
-                  ON lower('W' || pr.referenced_work_id) = lower(trim(fp.openalex_id))
-                  OR lower(CAST(pr.referenced_work_id AS TEXT)) = lower(trim(fp.openalex_id))
+                  ON pr.referenced_work_id = CAST(SUBSTR(fp.openalex_id, 2) AS INTEGER)
                 JOIN papers cp ON cp.id = pr.paper_id
                 WHERE fp.id IN ({placeholders})
                   AND cp.id <> fp.id
+                  AND fp.openalex_id IS NOT NULL
+                  AND fp.openalex_id LIKE 'W%'
                 """,
                 chunk,
             ).fetchall()
