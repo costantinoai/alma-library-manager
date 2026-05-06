@@ -162,7 +162,7 @@ app — only the bundled embedding stack differs.
 
 | | `normal` CPU (default) | `normal` GPU | `lite` |
 |---|---|---|---|
-| Tag | `:latest`, `:0.13.0` | `:latest-gpu`, `:0.13.0-gpu` | `:latest-lite`, `:0.13.0-lite` |
+| Tag | `:latest`, `:0.14.0` | `:latest-gpu`, `:0.14.0-gpu` | `:latest-lite`, `:0.14.0-lite` |
 | Compressed image | ~1.4 GB | ~3.2 GB | ~1.2 GB |
 | Peak runtime memory | ~2 GB | ~3 GB (more on GPU init) | ~1 GB |
 | Local SPECTER2 encoder | yes (CPU) | yes (CUDA when host GPU is exposed; CPU otherwise) | no |
