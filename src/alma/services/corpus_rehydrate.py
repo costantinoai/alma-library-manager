@@ -148,7 +148,7 @@ def _eligible_status_clause(force: bool) -> str:
 def _select_openalex_candidates(
     conn: sqlite3.Connection,
     *,
-    limit: int,
+    limit: int | None,
     force: bool = False,
 ) -> list[sqlite3.Row]:
     _ensure_enrichment_status_table(conn)
@@ -157,7 +157,10 @@ def _select_openalex_candidates(
     status_clause = _eligible_status_clause(force)
     if not force:
         params.extend([OPENALEX_WORKS_FIELDS_KEY, _utcnow_iso()])
-    params.append(max(1, int(limit or 1)))
+    limit_clause = ""
+    if limit is not None:
+        params.append(max(1, int(limit)))
+        limit_clause = "LIMIT ?"
     return conn.execute(
         f"""
         SELECT
@@ -182,7 +185,7 @@ def _select_openalex_candidates(
             CASE WHEN es.status = '{RETRYABLE_STATUS}' THEN 0 ELSE 1 END,
             COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC,
             p.id ASC
-        LIMIT ?
+        {limit_clause}
         """,
         params,
     ).fetchall()
@@ -191,7 +194,7 @@ def _select_openalex_candidates(
 def _select_s2_candidates(
     conn: sqlite3.Connection,
     *,
-    limit: int,
+    limit: int | None,
 ) -> list[sqlite3.Row]:
     """Pick papers eligible for the batched Semantic Scholar phase.
 
@@ -202,8 +205,13 @@ def _select_s2_candidates(
     Discovery ranker and PaperCard surfaces actively consume.
     """
     _ensure_enrichment_status_table(conn)
+    params: list[Any] = [S2_SOURCE, METADATA_PURPOSE]
+    limit_clause = ""
+    if limit is not None:
+        params.append(max(1, int(limit)))
+        limit_clause = "LIMIT ?"
     return conn.execute(
-        """
+        f"""
         SELECT
             p.id,
             p.title,
@@ -230,9 +238,9 @@ def _select_s2_candidates(
             CASE WHEN COALESCE(NULLIF(TRIM(p.abstract), ''), '') = '' THEN 0 ELSE 1 END,
             COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC,
             p.id ASC
-        LIMIT ?
+        {limit_clause}
         """,
-        (S2_SOURCE, METADATA_PURPOSE, max(1, int(limit or 1))),
+        params,
     ).fetchall()
 
 
@@ -381,7 +389,7 @@ def _fetch_openalex_chunk(chunk_ids: list[str]) -> tuple[dict[str, dict], dict[s
 def _run_s2_batched_phase(
     conn: sqlite3.Connection,
     *,
-    limit: int,
+    limit: int | None,
     job_id: str,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
@@ -703,7 +711,7 @@ def list_enrichment_status_items(
 def run_corpus_metadata_rehydration(
     job_id: str,
     *,
-    limit: int = 500,
+    limit: int | None = None,
     force: bool = False,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
@@ -713,13 +721,8 @@ def run_corpus_metadata_rehydration(
     from alma.api.deps import open_db_connection
 
     conn = open_db_connection()
-    # Cap raised from 5_000 to 100_000 (2026-05-06): with abstract-fill
-    # being the user's explicit blocker for local SPECTER2, a single
-    # operator click should be able to drain the whole backlog. At
-    # batch_size=50 + ~5 OpenAlex calls/sec this is still bounded
-    # (≤ ~7 minutes wall time for a 100k-paper corpus, far above any
-    # realistic personal library).
-    limit = max(1, min(int(limit or 500), 100_000))
+    if limit is not None:
+        limit = max(1, min(int(limit), 100_000))
     batch_size = 50
     retry_after = timedelta(hours=6)
     summary: Counter[str] = Counter()
