@@ -12,10 +12,9 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PaperCard, type PaperCardPaper } from '@/components/shared'
+import { MetricTile, PaperCard, type PaperCardPaper } from '@/components/shared'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -134,16 +133,32 @@ export function ReadingListTab() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-3">
-        {sections.map((section) => (
-          <Card key={section.key}>
-            <CardContent className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{section.title}</p>
-              <p className="mt-2 text-2xl font-semibold text-alma-800">{section.total}</p>
-              <p className="text-xs text-slate-500">{section.description}</p>
-            </CardContent>
-          </Card>
-        ))}
+      {/* Bucket scoreboard — three MetricTile align="center" tiles for
+          parity with the Library landing's metadata strip. Reading uses
+          the Folio-blue accent when > 0 so the active workload reads as
+          the eye-catch of this tab; Done is success-emerald (a small,
+          satisfying green); Excluded stays neutral. */}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {sections.map((section) => {
+          const tone =
+            section.key === 'reading'
+              ? section.total > 0
+                ? 'accent'
+                : 'neutral'
+              : section.key === 'done'
+                ? 'success'
+                : 'neutral'
+          return (
+            <MetricTile
+              key={section.key}
+              align="center"
+              tone={tone}
+              label={section.title}
+              value={section.total}
+              hint={section.description}
+            />
+          )
+        })}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

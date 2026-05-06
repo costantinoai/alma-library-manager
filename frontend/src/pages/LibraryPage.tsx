@@ -20,12 +20,11 @@ import { TopicsTab } from '@/components/library/TopicsTab'
 import { ImportsTab } from '@/components/library/ImportsTab'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { type TabId, type TabDefinition } from '@/components/library/types'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { cn } from '@/lib/utils'
 
 const TABS: TabDefinition[] = [
   { id: 'saved', label: 'Saved', icon: Heart },
@@ -42,11 +41,6 @@ const READING_ACTIONS: Array<{ value: 'reading' | 'done'; label: string }> = [
   { value: 'reading', label: 'Reading' },
   { value: 'done', label: 'Done' },
 ]
-
-function workflowTone(value: number, warning = false): string {
-  if (warning) return value > 0 ? 'text-amber-700' : 'text-alma-800'
-  return value > 0 ? 'text-alma-700' : 'text-alma-800'
-}
 
 /**
  * Library landing uses the shared PaperCard (compact mode) so the "Reading
@@ -140,100 +134,58 @@ export function LibraryPage() {
   const workflow = workflowQuery.data
 
   const needsAttentionCount = workflow?.needs_attention_count ?? 0
+  const totalLibrary = workflow?.summary.total_library
+  const readingCount = workflow?.summary.reading_count
+  const collectionsTotal = workflow?.summary.collections_total
+  const uncollected = workflow?.summary.uncollected_count ?? 0
 
   return (
     <div className="space-y-6">
-      {/* Landing tiles (D2 v3, post-2026-04-26): just three — total
-          library, currently reading, collections. No "Queued" tile
-          (queued was retired with D2 v3 — reading-list membership IS
-          the reading state) and no "Untriaged" tile (the concept was
-          retired entirely; metadata gaps live in Needs Attention). */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Library Papers</p>
-            <p className="mt-2 font-brand text-2xl font-semibold text-alma-800 tabular-nums">{workflow?.summary.total_library ?? '—'}</p>
-            <p className="text-xs text-slate-500">Saved memory core across Feed, Discovery, and imports.</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Currently Reading</p>
-            <p className={`mt-2 font-brand text-2xl font-semibold tabular-nums ${workflowTone(workflow?.summary.reading_count ?? 0)}`}>
-              {workflow?.summary.reading_count ?? '—'}
-            </p>
-            <p className="text-xs text-slate-500">Active reading workload — papers on the reading list.</p>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="mt-2 h-auto px-0 text-xs text-alma-700 hover:text-alma-800"
-              onClick={() => {
-                setActiveTab('reading')
-                window.location.hash = buildHashRoute('library', { tab: 'reading' })
-              }}
-            >
-              Open reading list
-            </Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Collections</p>
-            <p className="mt-2 font-brand text-2xl font-semibold text-alma-800 tabular-nums">{workflow?.summary.collections_total ?? '—'}</p>
-            <p className="text-xs text-slate-500">{workflow?.summary.uncollected_count ?? 0} papers still uncategorized.</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Curation workflow — Reading Workflow (Next Up) full-width.
-          Needs Attention is a collapsible disclosure below the
-          workflow card; collapsed by default so it doesn't compete
-          with the active reading list. Analytics (Acquisition
-          Handoff, Library Health, Structure Highlights) live on
-          Insights — see PRODUCT_DECISIONS.md D7. */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Reading Workflow</CardTitle>
-          <p className="text-sm text-slate-500">
-            Mark papers as reading, done, or excluded. Reading state is
-            independent from library membership — saving doesn't auto-mark,
-            marking doesn't auto-save.
+      {/* Page header — inline metadata line carries the three landing
+          numbers (papers · reading · collections) so they cost zero
+          extra rows. Folio-blue accent on Currently Reading > 0 marks
+          the only number that's actionable; everything else stays
+          alma-800. The reading workflow lives entirely on the Reading
+          List tab now (per beta feedback 2026-05-06 — see
+          tasks/01_BETA_FEEDBACK.md Workstream B). */}
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="font-brand text-2xl font-semibold text-alma-800">Library</h1>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-slate-500">
+            <span>
+              <strong className="font-medium text-alma-800 tabular-nums">
+                {totalLibrary ?? '—'}
+              </strong>{' '}
+              papers
+            </span>
+            <span aria-hidden className="text-slate-300">·</span>
+            <span>
+              <strong
+                className={cn(
+                  'font-medium tabular-nums',
+                  (readingCount ?? 0) > 0 ? 'text-alma-folio' : 'text-alma-800',
+                )}
+              >
+                {readingCount ?? '—'}
+              </strong>{' '}
+              reading
+            </span>
+            <span aria-hidden className="text-slate-300">·</span>
+            <span>
+              <strong className="font-medium text-alma-800 tabular-nums">
+                {collectionsTotal ?? '—'}
+              </strong>{' '}
+              collections
+              {uncollected > 0 && (
+                <span className="text-slate-400">
+                  {' '}· {uncollected} uncategorised
+                </span>
+              )}
+            </span>
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {(workflow?.reading_mix ?? []).map((bucket) => (
-              <Badge key={bucket.status} variant="outline">
-                {bucket.status}: {bucket.count}
-              </Badge>
-            ))}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setActiveTab('reading')
-                window.location.hash = buildHashRoute('library', { tab: 'reading' })
-              }}
-            >
-              Open Reading List
-            </Button>
-          </div>
-          {(workflow?.next_up ?? []).length === 0 ? (
-            <p className="text-sm text-slate-400">No reading-list papers yet — mark a saved paper as Reading from the Saved tab below.</p>
-          ) : (
-            <div className="space-y-3">
-              {workflow?.next_up.map((paper) => (
-                <LandingPaperRow
-                  key={paper.id}
-                  paper={paper}
-                  onSetReadingStatus={(paperId, readingStatus) => readingStatusMutation.mutate({ paperId, readingStatus })}
-                  onOpenDetails={(p) => { setSelectedPaper(p); setDetailOpen(true) }}
-                />
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        </div>
+        {/* Right-side header slot reserved for future Library-wide actions. */}
+      </header>
 
       {/* Needs Attention — collapsed by default. Each row carries an
           inline reasons strip explaining WHY the paper is flagged + a
