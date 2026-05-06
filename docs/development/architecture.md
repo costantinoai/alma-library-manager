@@ -243,6 +243,48 @@ See [Background jobs](../operations/background-jobs.md).
   `alma/api/deps.py`. Keeps the schema explicit and queries
   inspectable.
 
+## Materialised views (cached read aggregates)
+
+Endpoints that produce expensive payloads — `/insights` and the
+three graph endpoints — are served via a fingerprint-keyed cache in
+`alma.application.materialized_views`, backed by the
+`materialized_views` table (`view_key PK, fingerprint, payload,
+computed_at, …`).
+
+The contract is **pull-based stale-while-revalidate**:
+
+1. Each registered view declares a `fingerprint_sql` — a single
+   SELECT returning a tuple of values that change iff the rendered
+   payload should change (typically a handful of `MAX(updated_at)`
+   / `COUNT(*)` selects across the tables the build reads).
+2. On GET, the layer computes the current fingerprint (~5 ms) and
+   compares it to the cached row's fingerprint.
+3. **Match** → return the cached payload.
+4. **Mismatch** → return the cached payload with `stale: true,
+   rebuilding: true`, enqueue a background rebuild via APScheduler
+   under the view's `operation_key` (e.g.
+   `materialize.graph.paper_map.library`; deduped, so concurrent
+   GETs collapse to one running job).
+5. **No row yet** → build synchronously this once.
+6. **Build failure with a stale row available** → serve the stale
+   row and log; never 5xx.
+
+Writers don't know views exist. The fingerprint check on every GET
+catches every mutation (imports, lens refreshes, follow changes,
+paper edits) without coupling writers to views. If profiling ever
+shows the 5 ms cost matters for a hot endpoint, add an explicit
+`mv.invalidate(view_key)` helper and call it from the write path;
+the helper isn't implemented today because we haven't needed it.
+
+Six views registered today: `insights:overview`,
+`graph:paper_map:{library,corpus}`,
+`graph:author_network:{library,corpus}`, `graph:topic_map`. To add
+a new one, call `mv.register(View(...))` at module load and add a
+branch to `frontend/src/hooks/useOperationToasts.ts`'s
+`rootsForOperation` so the matching React Query roots refetch when
+the rebuild completes. See `tasks/lessons.md` ("Materialised-view
+caching: fingerprint, not TTL") for the design rationale.
+
 ## Frontend ↔ backend boundary
 
 * The frontend sees one API surface: `frontend/src/api/client.ts`

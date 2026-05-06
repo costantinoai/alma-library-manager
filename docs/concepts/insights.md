@@ -75,6 +75,25 @@ The honest underbelly:
 * **Resolution status** — how many imports / authors are still
   unresolved.
 
+## How fresh is what I'm seeing?
+
+The Insights page and the three graphs (Paper Map, Author Network,
+Topic Map) are served from a fingerprint-keyed cache: each GET
+returns the previously-computed payload in <10 ms as long as nothing
+the view depends on has changed. When you save / edit / unfollow /
+import, the next page load detects the change automatically — the
+displayed values are the *previous* snapshot for a few seconds while
+the cache rebuilds in the background, then the page silently swaps
+to the fresh values when the background job completes. On the
+**Stats** tab a small **Refreshing…** pill appears in the header
+while the rebuild runs; the graph tabs don't show the pill today
+but follow the same swap-on-completion behaviour.
+
+You don't usually need to do anything. If you want to force a fresh
+graph layout (full re-clustering and re-projection — the layout may
+shift), the **Rebuild graphs** button under Settings → Operational
+status triggers it explicitly.
+
 ## Activity panel
 
 Not strictly part of Insights, but always docked at the bottom of

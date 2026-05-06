@@ -230,10 +230,13 @@ parameters and response shapes.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/insights` | Overview (charts + summary) |
+| `GET` | `/insights` | Overview (charts + summary). Served from a fingerprint-keyed cache; response carries `stale` / `rebuilding` / `computed_at` flags. |
 | `GET` | `/insights/diagnostics` | Honest underbelly (monitor health, branch quality, embedding coverage) |
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
-| `GET` | `/graphs/library` | 2D SPECTER2 projection + clusters |
+| `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options served from cache; custom options bypass cache. SWR flags ride inside `metadata`. |
+| `GET` | `/graphs/author-network` | Co-authorship clusters. Cached. |
+| `GET` | `/graphs/topic-map` | Topic co-occurrence graph. Cached. |
+| `POST` | `/graphs/rebuild` | Force a full rebuild of all graph caches (re-cluster + re-project). |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
 | `GET` | `/reports/topic-drift` | Topic drift report |
@@ -297,8 +300,8 @@ parameters and response shapes.
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
-| `GET` | `/papers/enrichment-status` | Pure-read corpus metadata rehydration ledger summary + per-paper rows |
-| `POST` | `/papers/rehydrate-metadata` | Queue an OpenAlex metadata repair job (Activity envelope) |
+| `GET` | `/papers/enrichment-status` | Pure-read corpus metadata rehydration ledger summary (per-source counts: OpenAlex / Semantic Scholar / Crossref) + per-paper rows |
+| `POST` | `/papers/rehydrate-metadata` | Queue a 3-phase metadata repair job (Activity envelope): Phase 1 OpenAlex batched, Phase 1.5 Semantic Scholar batched (fills `tldr` + `influential_citation_count` + abstract fallback), Phase 2 Crossref per-paper for residual abstract misses. `limit` accepts up to 100,000 papers per call. |
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |

@@ -67,6 +67,36 @@ Common patterns:
 | Feed refresh > 10 minutes | A single monitor is pulling thousands of works | Tighten the monitor's filters or cap `feed.monitor_defaults.daily_max`. |
 | Page mount reads slow | Embedding fetch running synchronously | Move it to AI compute background job (the default). |
 | Backfill S2 vectors crawling | Public S2 rate limits | Set `SEMANTIC_SCHOLAR_API_KEY` for higher quotas. |
+| Insights / graph page first load slow after a big import | Materialised view rebuilding | Wait — subsequent loads hit the cache. The page shows a "Refreshing…" pill while the rebuild runs. |
+
+## Cached read aggregates (materialised views)
+
+Insights and the three graph endpoints are served from a fingerprint-
+keyed cache (`materialized_views` table; see
+`src/alma/application/materialized_views.py`). On every GET, a tiny
+SQL query computes a content fingerprint of the view's inputs (paper
+counts, last-update timestamps, embedding count, active model). If
+the fingerprint matches the cached row, the GET returns in <10 ms.
+If it doesn't match, the cached payload is returned immediately with
+`stale: true, rebuilding: true`, and a background rebuild is enqueued
+under the view's `operation_key` (e.g.
+`materialize.graph.paper_map.library`, deduped via the scheduler). The
+frontend shows a "Refreshing…" pill and auto-refetches when the
+rebuild completes (`useOperationToasts` invalidates the matching
+React Query roots).
+
+| View | Build cost (cold) | Triggers a rebuild |
+|---|---|---|
+| `insights:overview` | ~30 ms | Library paper add/edit, recommendations churn, follow change, embedding-model change |
+| `graph:paper_map:library` | seconds-to-minutes | Library paper add/edit, embedding count change, embedding-model change |
+| `graph:paper_map:corpus` | tens of seconds | Same, corpus-wide |
+| `graph:author_network:library` | seconds | Library paper add/edit, follow change |
+| `graph:author_network:corpus` | tens of seconds | Same, corpus-wide |
+| `graph:topic_map` | ~hundreds of ms | Any paper change |
+
+Explicit "Rebuild graphs" (`POST /graphs/rebuild`) and the cluster-
+label refresh job bypass the fingerprint check and force a fresh
+build.
 
 ## Database size
 

@@ -34,7 +34,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `publication_topics` | Many-to-many between papers and topics, with score. |
 | `publication_institutions` | Author-institution links per paper. |
 | `publication_references` | Citation graph: who cites whom. PK is `(paper_id, referenced_work_id)` for paper-side lookups; `idx_publication_references_ref` on `referenced_work_id` accelerates the graph lane's corpus-overlap query (which would otherwise be O(N²) on dense reference graphs). |
-| `paper_enrichment_status` | Per-paper, per-source, per-purpose ledger for the corpus metadata rehydration job. Records `status` (`enriched` / `unchanged` / `terminal_no_match` / `retryable_error`), `lookup_key`, `fields_key`, `attempts`, and `next_retry_at` so reruns skip what's already covered. |
+| `paper_enrichment_status` | Per-paper, per-source, per-purpose ledger for the corpus metadata rehydration job. One row per `(paper_id, source, purpose)` with `source ∈ {openalex, semantic_scholar, crossref}` and `purpose='metadata'`. Records `status` (`pending` / `enriched` / `unchanged` / `terminal_no_match` / `retryable_error`), `lookup_key`, `fields_key`, `attempts`, and `next_retry_at` so reruns skip what's already covered. `unchanged` rows carry a 30-day TTL — OpenAlex backfills abstracts late (e.g. ARVO / Journal of Vision proceedings), so a no-op outcome must expire instead of becoming a permanent dead end. New paper inserts (Library save / Feed candidate / Discovery rec) write `pending` rows here via `enqueue_pending_hydration` and auto-schedule an Activity-enveloped rehydration sweep. |
 
 ### Curation
 
@@ -87,9 +87,10 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `publication_embeddings` | SPECTER2 vectors per paper. `source` ∈ `{'s2', 'local'}` for provenance. |
 | `publication_embedding_fetch_status` | Per-paper S2 fetch state (`unmatched`, `missing_vector`, `lookup_error`, etc.). |
 | `publication_clusters` | HDBSCAN cluster assignment per paper. |
-| `graph_cache` | 2D projection cache for the Insights graph. |
+| `graph_cache` | Legacy 1-hour TTL graph cache. **Superseded by `materialized_views`** (2026-05-06) — kept for one release as a fallback, no longer read or written. |
 | `graph_cluster_labels` | LLM-generated cluster labels. |
 | `paper_network_cache` | Cached citation / co-author graphs per paper. |
+| `materialized_views` | Fingerprint-keyed cache for expensive read aggregates: `insights:overview`, `graph:paper_map:{library,corpus}`, `graph:author_network:{library,corpus}`, `graph:topic_map`. Each row stores the JSON payload, the input fingerprint at compute time, and the in-flight rebuild job id. Stale-while-revalidate: a fingerprint mismatch on GET enqueues a background rebuild and serves the prior payload. See `src/alma/application/materialized_views.py`. |
 
 ### Alerts
 
