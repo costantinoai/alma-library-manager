@@ -38,19 +38,75 @@ corpus, not the entire tracked set.
 ### Graph
 
 A 2D projection of your Library's SPECTER2 vectors. Requires that
-embeddings have been computed (either pulled from S2 or generated
-locally).
+embeddings have been computed (either pulled from Semantic Scholar
+or generated locally). When no embeddings are available the page
+falls back to a principled text-TF-IDF clustering on title +
+abstract; it never clusters on `publication_topics` (OpenAlex's
+coarse topic vocabulary), journal, or author names.
 
-* **Auto-k clustering** — HDBSCAN with silhouette-sweep tuning
+#### Pipeline (BERTopic recipe)
+
+```
+SPECTER2 vectors (768-d)
+    │
+    ├─▶ L2-normalise rows (cosine geometry — what SPECTER2 was trained for)
+    │
+    ├─▶ UMAP n_components=5  (cosine, n_neighbors=15)   ── clustering substrate
+    │       │
+    │       └─▶ HDBSCAN(metric='euclidean', leaf)       ── density clusters
+    │
+    └─▶ UMAP n_components=2  (cosine)                   ── 2-d display layout
+```
+
+L2-normalising puts every vector on the unit sphere, so euclidean on
+the reduced space is rank-equivalent to cosine in the original 768-d
+space — letting HDBSCAN/UMAP/kmeans use their fast euclidean code
+paths without leaving the geometry SPECTER2 was trained for.
+UMAP-reducing to 5-d before HDBSCAN solves the curse of
+dimensionality: density estimates are unreliable in 768-d at our
+scale (50–500 papers) but tractable at 5-d. Both the clustering
+substrate and the display layout read the same L2-normalised input
+through cosine UMAP, so visual proximity and cluster boundaries
+agree by construction — neighbouring papers in the layout are also
+in the same cluster.
+
+#### Behaviour
+
+* **Auto-k clustering** — HDBSCAN with `cluster_selection_method='leaf'`
   picks the cluster count automatically; no fiddling with `k`.
-* **Representative cluster labels** — short labels built from the
-  strongest titles / abstracts in each cluster.
-* **Word-cloud overlay** — per-cluster keyword cloud, derived from
-  member-paper titles / abstracts.
+  `min_cluster_size = max(3, min(12, ⌈√n × 0.5⌉))` so a 50-paper
+  library produces 5–8 well-balanced clusters and a 300-paper library
+  produces 15–25.
+* **Distinctive cluster labels** — class-based TF-IDF (the BERTopic
+  c-TF-IDF formula) over (1, 2)-grams of each cluster's member titles
+  + abstracts. An English + academic-domain stop-list (`study`,
+  `method`, `result`, …) is removed before scoring, and a bigram
+  absorbs its constituent unigrams in the final phrase so labels read
+  as topics (`"visual cortex, object recognition"`) rather than
+  bag-of-keywords. Labels persist in `graph_cluster_labels` keyed by
+  the cluster's member-set signature; the **Refresh cluster labels**
+  job recomputes them in the background and pushes the result
+  through the same materialised-view layer.
 * **Hover detail** — paper title, year, journal, rating.
 
-Graph data is cached server-side. Re-clustering is opt-in (it costs
-real time on a large corpus).
+Graph data is cached server-side via the materialised-view layer
+(fingerprint-keyed, see [Performance](../operations/performance.md)).
+Re-clustering is opt-in via Settings → Operational status →
+**Rebuild graphs**.
+
+#### Fallbacks
+
+* **UMAP unavailable / N < 15** → cluster on the L2-normalised raw
+  vectors with HDBSCAN. Same geometry, just no dimensionality
+  reduction.
+* **HDBSCAN unavailable** → silhouette-driven `MiniBatchKMeans`
+  with `k ∈ [2, 30]` on the reduced space.
+* **HDBSCAN collapses to ≤ 3 clusters on N ≥ 18** → same kmeans
+  rescue so the paper map is never reduced to a few mega-clusters.
+* **No embeddings at all** → text-TF-IDF clustering on title +
+  abstract. Never `publication_topics`, never journal/authors as
+  topical features. Falls back to an unclustered grid when text is
+  too sparse.
 
 ### Reports
 

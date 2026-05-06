@@ -2,7 +2,7 @@
 
 import json
 import logging
-import re
+import math
 import sqlite3
 import uuid
 import hashlib
@@ -107,7 +107,7 @@ def get_paper_map(
     if embeddings and len(embeddings) >= 5:
         result = _build_embedding_paper_map(conn, embeddings, ai_state=ai_state, graph_options=graph_options)
     else:
-        result = _build_topic_paper_map(conn, ai_state=ai_state, graph_options=graph_options)
+        result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
     if show_topics:
         result = _add_topic_overlay(conn, result)
     return result
@@ -620,22 +620,46 @@ def _collect_author_cluster_context(
     limit: int = 6,
     scope: str = "library",
 ) -> tuple[list[str], list[str]]:
-    """Fetch top papers across the cluster's member authors for label prompting."""
+    """Fetch top papers across the cluster's member authors for labelling.
+
+    The cluster's ``member_ids`` are local ``authors.id`` UUIDs.
+    Authorship lives in ``publication_authors`` keyed by
+    ``openalex_id`` (the table has no ``author_id`` column). We bridge
+    via ``authors.openalex_id`` and dedupe ``papers.id`` so a multi-
+    author paper is counted once even when several of its authors
+    belong to the same cluster. The ``lower(...)`` join uses
+    ``ux_authors_openalex_norm`` and a matching index on
+    ``publication_authors.openalex_id``; do NOT add ``trim()`` — see
+    the 2026-04-26 lesson on expression-index defeats.
+    """
     if not author_ids:
         return [], []
     placeholders = ",".join("?" * len(author_ids))
-    scope_filter = " AND p.status = 'library'" if scope == "library" else ""
-    rows = conn.execute(
-        f"""
-        SELECT p.title, p.abstract
-        FROM papers p
-        WHERE p.author_id IN ({placeholders}){scope_filter}
-        ORDER BY COALESCE(p.cited_by_count, 0) DESC,
-                 COALESCE(p.publication_date, '') DESC
-        LIMIT ?
-        """,
-        [*author_ids, limit],
-    ).fetchall()
+
+    def _fetch(scope_filter: str) -> list:
+        return conn.execute(
+            f"""
+            SELECT p.title, p.abstract,
+                   MAX(COALESCE(p.cited_by_count, 0)) AS cby,
+                   MAX(COALESCE(p.publication_date, '')) AS pdate
+            FROM papers p
+            JOIN publication_authors pa ON pa.paper_id = p.id
+            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
+            WHERE a.id IN ({placeholders}){scope_filter}
+            GROUP BY p.id
+            ORDER BY cby DESC, pdate DESC
+            LIMIT ?
+            """,
+            [*author_ids, limit],
+        ).fetchall()
+
+    rows = _fetch(" AND p.status = 'library'") if scope == "library" else _fetch("")
+    # Fallback: if a cluster's authors have no library-scope papers
+    # (e.g. they're background co-authors only), draw from the wider
+    # corpus rather than emitting a placeholder label. The labels are
+    # advisory chrome, not curation, so widening here is harmless.
+    if not rows and scope == "library":
+        rows = _fetch("")
     titles: list[str] = []
     abstracts: list[str] = []
     for row in rows:
@@ -837,18 +861,6 @@ CLUSTER_COLORS = [
 ]
 
 
-_KEYWORD_STOPWORDS = {
-    "the", "and", "for", "with", "that", "this", "from", "into", "over",
-    "under", "between", "within", "without", "using", "use", "used", "based",
-    "via", "of", "in", "on", "to", "by", "as", "a", "an", "is", "are", "be",
-    "we", "it", "our", "their", "its", "at", "or", "not", "no", "yes", "more",
-    "less", "new", "novel", "study", "paper", "method", "methods", "results",
-    "analysis", "approach", "effect", "effects", "case", "data", "model",
-    "models", "evidence", "insight", "insights", "evaluation", "towards",
-    "about", "across", "can", "may", "might", "will", "would", "should",
-}
-
-
 def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     provider = "none"
     try:
@@ -892,15 +904,287 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     }
 
 
-def _extract_keywords(text: str, max_keywords: int = 8) -> list[str]:
-    if not text:
-        return []
-    tokens = re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", text.lower())
-    tokens = [t for t in tokens if t not in _KEYWORD_STOPWORDS and not t.isdigit()]
-    if not tokens:
-        return []
-    freqs = Counter(tokens)
-    return [tok for tok, _ in freqs.most_common(max_keywords)]
+def _build_text_paper_map(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    ai_state: Optional[dict] = None,
+) -> GraphData:
+    """Paper-map response when SPECTER2 embeddings are unavailable.
+
+    Principled text-only fallback per the locked product rule
+    (2026-05-07): when no embeddings exist, cluster on the *paper's
+    own text* (title + abstract) via TF-IDF — never on
+    ``publication_topics`` (OpenAlex's coarse topic vocabulary), the
+    venue, or author names. Uses the same silhouette-driven k sweep
+    and the same c-TF-IDF labeller as the embedding path so the
+    fallback feels continuous with the embedded experience.
+
+    When fewer than 5 papers carry meaningful text, degrade to an
+    unclustered grid layout — no fake clusters.
+
+    Args:
+        scope: ``"library"`` (default) or ``"corpus"``.
+        ai_state: optional payload of AI-state metadata to merge into
+            the graph's ``metadata`` block (provider, embedding count,
+            coverage pct) so the frontend can show the right empty-
+            state CTA.
+    """
+    from alma.ai.clustering import _silhouette_optimal_k, label_clusters_tfidf, Cluster
+    from alma.ai.projections import project_embeddings as _project_embeddings
+    from sklearn.cluster import MiniBatchKMeans
+    if scope == "library":
+        rows = conn.execute(
+            """
+            SELECT id, title, abstract, year, journal, cited_by_count, rating,
+                   publication_date, authors
+            FROM papers
+            WHERE status = 'library'
+            ORDER BY COALESCE(cited_by_count, 0) DESC,
+                     COALESCE(publication_date, '') DESC
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, title, abstract, year, journal, cited_by_count, rating,
+                   publication_date, authors
+            FROM papers
+            ORDER BY COALESCE(cited_by_count, 0) DESC,
+                     COALESCE(publication_date, '') DESC
+            """
+        ).fetchall()
+
+    paper_ids: list[str] = []
+    docs: list[str] = []
+    paper_meta: dict[str, dict] = {}
+    for row in rows:
+        paper_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+        title = (row["title"] if isinstance(row, sqlite3.Row) else row[1]) or ""
+        abstract = (row["abstract"] if isinstance(row, sqlite3.Row) else row[2]) or ""
+        year = row["year"] if isinstance(row, sqlite3.Row) else row[3]
+        journal = (row["journal"] if isinstance(row, sqlite3.Row) else row[4]) or ""
+        cited_by = (row["cited_by_count"] if isinstance(row, sqlite3.Row) else row[5]) or 0
+        rating = (row["rating"] if isinstance(row, sqlite3.Row) else row[6]) or 0
+        publication_date = (row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]) or None
+        authors = (row["authors"] if isinstance(row, sqlite3.Row) else row[8]) or ""
+
+        paper_ids.append(paper_id)
+        # Title + abstract only. Journal and authors are NOT topical
+        # signal — including them gives clusters dominated by venue or
+        # author cliques. publication_topics is not consulted here per
+        # the locked product rule.
+        docs.append(f"{title}. {abstract}".strip())
+        paper_meta[paper_id] = {
+            "title": title,
+            "year": year,
+            "publication_date": publication_date,
+            "journal": journal,
+            "authors": authors,
+            "cited_by_count": int(cited_by or 0),
+            "rating": int(rating or 0),
+        }
+
+    n_papers = len(paper_ids)
+    method_tag = "text_tfidf"
+    cluster_assignments: dict[str, int] = {}
+    coords: dict[str, tuple[float, float]] = {}
+    similarity_matrix: Optional[np.ndarray] = None
+    cluster_labels_by_cid: dict[int, str] = {}
+    cluster_sizes: dict[int, int] = {}
+
+    has_text = any(doc.strip() for doc in docs)
+
+    if n_papers >= 5 and has_text:
+        try:
+            vectorizer = TfidfVectorizer(
+                max_features=4000,
+                stop_words="english",
+                ngram_range=(1, 2),
+                min_df=2 if n_papers >= 10 else 1,
+                max_df=0.9,
+                token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
+                lowercase=True,
+            )
+            tfidf = vectorizer.fit_transform(docs)
+            matrix = tfidf.toarray().astype(np.float32)
+            if matrix.shape[1] == 0:
+                raise ValueError("TF-IDF vocabulary is empty after stop-word filtering")
+
+            n_clusters = _silhouette_optimal_k(matrix, min_k=2, max_k=30)
+            n_clusters = min(n_clusters, max(2, n_papers - 1))
+            km = MiniBatchKMeans(
+                n_clusters=n_clusters,
+                random_state=42,
+                n_init=5,
+                batch_size=min(256, max(32, n_papers * 2)),
+            )
+            km_labels = km.fit_predict(matrix)
+
+            members_by_cid: dict[int, list[str]] = defaultdict(list)
+            for idx, cid in enumerate(km_labels):
+                members_by_cid[int(cid)].append(paper_ids[idx])
+
+            # Renumber dense + size-descending so cluster 0 is the largest.
+            sorted_old_cids = sorted(
+                members_by_cid.keys(),
+                key=lambda c: len(members_by_cid[c]),
+                reverse=True,
+            )
+            cid_map = {old: new for new, old in enumerate(sorted_old_cids)}
+            cluster_assignments = {
+                pid: cid_map[int(km_labels[idx])]
+                for idx, pid in enumerate(paper_ids)
+            }
+            cluster_sizes = {
+                cid_map[old]: len(members_by_cid[old]) for old in sorted_old_cids
+            }
+
+            synthetic_clusters = [
+                Cluster(
+                    cluster_id=cid_map[old],
+                    member_keys=members_by_cid[old],
+                )
+                for old in sorted_old_cids
+            ]
+            label_strings = label_clusters_tfidf(
+                synthetic_clusters,
+                {pid: docs[i] for i, pid in enumerate(paper_ids)},
+            )
+            for c, lbl in zip(synthetic_clusters, label_strings):
+                cluster_labels_by_cid[int(c.cluster_id)] = lbl
+
+            # 2D layout: pretend each TF-IDF row is an embedding for projection.
+            # ``project_embeddings`` falls back gracefully when UMAP isn't
+            # installed (TSNE) or when n is very small (centred at origin).
+            try:
+                tfidf_embeddings = {
+                    paper_ids[i]: matrix[i].tolist() for i in range(n_papers)
+                }
+                coords = _project_embeddings(tfidf_embeddings, method="auto")
+            except Exception:
+                coords = {}
+
+            # Cosine similarity for kNN edges; reuse for the edge step below.
+            norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            normed = matrix / norms
+            similarity_matrix = np.clip(normed @ normed.T, 0.0, 1.0)
+        except Exception as exc:
+            logger.warning(
+                "Text TF-IDF clustering failed; falling back to unclustered grid: %s",
+                exc,
+            )
+            cluster_assignments = {}
+            coords = {}
+            similarity_matrix = None
+            method_tag = "no_clustering"
+
+    if not cluster_assignments:
+        method_tag = "no_clustering"
+        cluster_labels_by_cid = {}
+        cluster_sizes = {}
+        # Deterministic grid layout when we can't cluster.
+        side = max(1, int(math.ceil(math.sqrt(max(1, n_papers)))))
+        for idx, pid in enumerate(paper_ids):
+            gx = (idx % side) / max(1, side - 1) if side > 1 else 0.5
+            gy = (idx // side) / max(1, side - 1) if side > 1 else 0.5
+            coords[pid] = (
+                float(0.05 + 0.9 * gx),
+                float(0.05 + 0.9 * gy),
+            )
+
+    nodes: list[GraphNode] = []
+    for pid in paper_ids:
+        meta = paper_meta[pid]
+        x, y = coords.get(pid, (0.5, 0.5))
+        x = float(min(0.98, max(0.02, x)))
+        y = float(min(0.98, max(0.02, y)))
+        cid = cluster_assignments.get(pid)
+        nodes.append(
+            GraphNode(
+                id=pid,
+                name=str(meta["title"] or "(untitled)"),
+                x=x,
+                y=y,
+                cluster_id=cid,
+                color=(
+                    CLUSTER_COLORS[cid % len(CLUSTER_COLORS)]
+                    if cid is not None
+                    else None
+                ),
+                size=max(1.0, math.log1p(meta["cited_by_count"])),
+                metadata={
+                    "title": meta["title"],
+                    "year": meta["year"],
+                    "publication_date": meta["publication_date"],
+                    "journal": meta["journal"],
+                    "authors": meta["authors"],
+                    "cited_by_count": meta["cited_by_count"],
+                    "rating": meta["rating"],
+                    "paper_id": pid,
+                    "cluster_label": cluster_labels_by_cid.get(cid)
+                    if cid is not None
+                    else None,
+                },
+            )
+        )
+
+    edges: list[GraphEdge] = []
+    if similarity_matrix is not None and n_papers >= 2:
+        # Top-k nearest neighbour graph by cosine similarity. k scales
+        # with corpus size so a small library doesn't get an opaque hairball.
+        top_k = 4 if n_papers >= 25 else 3
+        seen: set[tuple[int, int]] = set()
+        for i in range(n_papers):
+            row = similarity_matrix[i].copy()
+            row[i] = 0.0
+            top_idx = np.argpartition(-row, min(top_k, n_papers - 1))[:top_k]
+            for j in top_idx:
+                if j == i:
+                    continue
+                a, b = (int(i), int(j)) if i < j else (int(j), int(i))
+                if (a, b) in seen:
+                    continue
+                seen.add((a, b))
+                weight = float(row[j])
+                if weight <= 0.05:
+                    continue
+                edges.append(
+                    GraphEdge(
+                        source=paper_ids[a],
+                        target=paper_ids[b],
+                        weight=round(weight, 3),
+                    )
+                )
+
+    clusters_payload = [
+        {
+            "id": cid,
+            "label": cluster_labels_by_cid.get(cid, f"Cluster {cid + 1}"),
+            "size": size,
+        }
+        for cid, size in sorted(cluster_sizes.items())
+    ]
+
+    metadata = {
+        "type": "paper_map",
+        "method": method_tag,
+        "clusters": clusters_payload,
+        "scope": scope,
+        **(ai_state or {}),
+    }
+    if method_tag == "no_clustering":
+        metadata["message"] = (
+            "Not enough text to cluster. Save more papers or compute "
+            "SPECTER2 embeddings in Settings → AI."
+        )
+    elif method_tag == "text_tfidf":
+        metadata["note"] = (
+            "Clustered on title + abstract (TF-IDF). Compute SPECTER2 "
+            "embeddings in Settings → AI for sharper semantic clusters."
+        )
+    return GraphData(nodes=nodes, edges=edges, metadata=metadata)
 
 
 def _load_publication_topic_signals(
@@ -1642,266 +1926,6 @@ def _build_embedding_paper_map(
     return result
 
 
-def _build_topic_paper_map(
-    conn: sqlite3.Connection,
-    *,
-    ai_state: Optional[dict] = None,
-    graph_options: Optional[dict] = None,
-) -> GraphData:
-    """Fallback paper map that still renders paper nodes.
-
-    Uses a multi-signal textual representation:
-    - OpenAlex/canonical topic terms (if available)
-    - extracted keywords from title+abstract
-    - metadata signal (journal + authors)
-    """
-    from sklearn.cluster import MiniBatchKMeans
-    from sklearn.feature_extraction.text import TfidfVectorizer
-
-    from alma.ai.clustering import Cluster, label_clusters_tfidf
-    from alma.ai.projections import project_embeddings
-
-    scope = (graph_options or {}).get("scope", "library")
-    if scope == "library":
-        rows = conn.execute(
-            """
-            SELECT id, title, abstract, cited_by_count, year, journal, authors, publication_date, rating
-            FROM papers
-            WHERE status = 'library'
-            """
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT id, title, abstract, cited_by_count, year, journal, authors, publication_date, rating
-            FROM papers
-            """
-        ).fetchall()
-    if not rows:
-        return GraphData(nodes=[], edges=[], metadata={"type": "paper_map", "method": "topics+keywords"})
-
-    topic_signals = _load_publication_topic_signals(conn)
-
-    keys: list[str] = []
-    docs: list[str] = []
-    texts: dict[str, str] = {}
-    node_payload: dict[str, dict] = {}
-    merged_topics_by_key: dict[str, list[str]] = {}
-
-    for row in rows:
-        paper_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
-        title = (row["title"] if isinstance(row, sqlite3.Row) else row[1]) or ""
-        abstract = (row["abstract"] if isinstance(row, sqlite3.Row) else row[2]) or ""
-        cited_by_count = (row["cited_by_count"] if isinstance(row, sqlite3.Row) else row[3]) or 0
-        year = row["year"] if isinstance(row, sqlite3.Row) else row[4]
-        journal = (row["journal"] if isinstance(row, sqlite3.Row) else row[5]) or ""
-        authors = (row["authors"] if isinstance(row, sqlite3.Row) else row[6]) or ""
-        publication_date = (row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]) or None
-        rating = (row["rating"] if isinstance(row, sqlite3.Row) else row[8]) or 0
-
-        keys.append(paper_id)
-        texts[paper_id] = f"{title}. {abstract}".strip()
-
-        openalex_topics = [term for term, _ in topic_signals.get(paper_id, [])[:8]]
-        weighted_topics: list[str] = []
-        for term, score in topic_signals.get(paper_id, [])[:8]:
-            repeat = 1 + min(2, int(round(max(0.0, score) * 2)))
-            weighted_topics.extend([term] * repeat)
-
-        keyword_terms = _extract_keywords(f"{title} {abstract}", max_keywords=8)
-        merged_topics = []
-        seen = set()
-        for term in openalex_topics + keyword_terms:
-            normalized = term.strip()
-            if normalized and normalized.lower() not in seen:
-                seen.add(normalized.lower())
-                merged_topics.append(normalized)
-        merged_topics_by_key[paper_id] = merged_topics[:10]
-
-        doc_parts = [
-            title,
-            abstract,
-            journal,
-            authors,
-            " ".join(weighted_topics),
-            " ".join(keyword_terms),
-        ]
-        docs.append(" ".join(p for p in doc_parts if p))
-        node_payload[paper_id] = {
-            "title": title,
-            "cited_by_count": int(cited_by_count or 0),
-            "year": year,
-            "publication_date": publication_date,
-            "rating": int(rating or 0),
-            "journal": journal,
-            "authors": authors,
-            "paper_id": paper_id,
-            "topics": merged_topics[:10],
-            "openalex_topics": openalex_topics,
-            "keywords": keyword_terms,
-        }
-
-    # Textual feature space across papers.
-    vectorizer = TfidfVectorizer(
-        max_features=2000,
-        stop_words="english",
-        ngram_range=(1, 2),
-        min_df=1,
-        max_df=0.95,
-    )
-    tfidf = vectorizer.fit_transform(docs)
-    matrix = tfidf.toarray().astype(np.float32)
-    if matrix.shape[1] == 0:
-        matrix = np.ones((len(keys), 1), dtype=np.float32)
-
-    # Cluster papers from the textual vectors. Silhouette-driven k
-    # (see `alma.ai.clustering._silhouette_optimal_k`) so the fallback
-    # layout picks its own granularity from the data instead of the
-    # old hand-tuned `max(3, min(18, √n))`.
-    n_papers = len(keys)
-    if n_papers >= 3:
-        from alma.ai.clustering import _silhouette_optimal_k
-
-        n_clusters = _silhouette_optimal_k(matrix, min_k=2, max_k=18)
-        if n_clusters >= n_papers:
-            n_clusters = max(2, n_papers - 1)
-        km = MiniBatchKMeans(
-            n_clusters=n_clusters,
-            random_state=42,
-            n_init=5,
-            batch_size=min(256, max(32, n_papers * 2)),
-        )
-        labels = km.fit_predict(matrix)
-    else:
-        labels = np.zeros(n_papers, dtype=np.int32)
-
-    cluster_members: dict[int, list[str]] = defaultdict(list)
-    for idx, lbl in enumerate(labels):
-        cluster_members[int(lbl)].append(keys[idx])
-
-    clusters: list[Cluster] = []
-    for new_cid, (_, members) in enumerate(
-        sorted(cluster_members.items(), key=lambda kv: len(kv[1]), reverse=True)
-    ):
-        clusters.append(Cluster(cluster_id=new_cid, member_keys=members))
-
-    labels_by_key: dict[str, int] = {}
-    for cluster in clusters:
-        for paper_id in cluster.member_keys:
-            labels_by_key[paper_id] = cluster.cluster_id
-
-    # Cluster labels from paper text and topics.
-    enriched_texts = {
-        paper_id: (
-            f"{texts.get(paper_id, '')}. Topics: {', '.join(merged_topics_by_key.get(paper_id, []))}."
-        )
-        for paper_id in keys
-    }
-    cluster_labels = label_clusters_tfidf(clusters, enriched_texts)
-    for c, lbl in zip(clusters, cluster_labels):
-        c.label = lbl
-
-    embeddings = {keys[i]: matrix[i].tolist() for i in range(len(keys))}
-    coords = project_embeddings(embeddings, method="auto")
-
-    # kNN edges by cosine similarity
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    normed = matrix / norms
-    similarity = np.clip(normed @ normed.T, 0.0, 1.0)
-
-    edge_set: set[tuple[int, int]] = set()
-    top_k = 4 if n_papers >= 25 else 3
-    min_sim = 0.10
-    for i in range(n_papers):
-        sims = [(j, float(similarity[i, j])) for j in range(n_papers) if j != i]
-        sims = [pair for pair in sims if pair[1] >= min_sim]
-        sims.sort(key=lambda x: x[1], reverse=True)
-        for j, _ in sims[:top_k]:
-            edge_set.add((min(i, j), max(i, j)))
-
-    nodes: list[GraphNode] = []
-    for paper_id in keys:
-        payload = node_payload[paper_id]
-        cid = labels_by_key.get(paper_id)
-        x, y = coords.get(paper_id, (0.5, 0.5))
-        cluster_label = next((c.label for c in clusters if c.cluster_id == cid), None)
-        nodes.append(
-            GraphNode(
-                id=paper_id,
-                name=payload["title"] or paper_id,
-                x=x,
-                y=y,
-                cluster_id=cid,
-                color=CLUSTER_COLORS[cid % len(CLUSTER_COLORS)] if cid is not None else "#64748B",
-                size=max(0.5, min(3.0, payload["cited_by_count"] / 50 + 0.5)),
-                metadata={
-                    "paper_id": payload["paper_id"],
-                    "cited_by_count": payload["cited_by_count"],
-                    "year": payload["year"],
-                    "publication_date": payload["publication_date"],
-                    "rating": payload["rating"],
-                    "journal": payload["journal"],
-                    "authors": payload["authors"],
-                    "cluster_label": cluster_label,
-                    "topics": payload["topics"],
-                    "openalex_topics": payload["openalex_topics"],
-                    "keywords": payload["keywords"],
-                },
-            )
-        )
-
-    edges: list[GraphEdge] = []
-    for i, j in sorted(edge_set):
-        w = float(similarity[i, j])
-        if w <= 0:
-            continue
-        edges.append(
-            GraphEdge(
-                source=keys[i],
-                target=keys[j],
-                weight=round(w, 3),
-            )
-        )
-
-    note = None
-    if ai_state:
-        if ai_state.get("ai_active") and int(ai_state.get("embeddings_count", 0)) < 5:
-            note = "AI is active, but embeddings are not available yet. Compute embeddings in Settings > AI."
-        elif not ai_state.get("ai_active"):
-            note = "Enable AI embeddings for richer semantic layout."
-
-    topic_fallback_members = {
-        int(c.cluster_id): list(c.member_keys) for c in clusters
-    }
-    topic_fallback_cached_labels = _load_paper_map_cached_labels(
-        conn,
-        topic_fallback_members,
-        scope=scope,
-    )
-    cluster_info = _build_cluster_info(
-        topic_fallback_members,
-        paper_meta=node_payload,
-        coords=coords,
-        labels_by_cluster={int(c.cluster_id): c.label or f"Cluster {c.cluster_id + 1}" for c in clusters},
-        cached_labels=topic_fallback_cached_labels,
-        cluster_texts=enriched_texts,
-    )
-
-    result = GraphData(
-        nodes=nodes,
-        edges=edges,
-        metadata={
-            "type": "paper_map",
-            "method": "topics+keywords+metadata",
-            "clusters": cluster_info,
-            "note": note,
-            "data_signals": ["openalex_topics", "keywords", "journal", "authors", "title_abstract"],
-            **(ai_state or {}),
-        },
-    )
-    return result
-
 
 def _get_cached_graph(
     conn: sqlite3.Connection, graph_type: str
@@ -2166,11 +2190,13 @@ def _graph_data_from_envelope(envelope: dict) -> GraphData:
 def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
     """Build the default-options paper-map payload (as a dict).
 
-    Mirrors the path inside `get_paper_map` for default options:
-    embedding-based map when ≥5 vectors are available, falling back to
-    the topic-signal map otherwise. Topic overlay is intentionally
-    excluded — it's a non-default option and is rendered live, not
-    cached.
+    Mirrors the path inside ``get_paper_map`` for default options:
+    SPECTER2-embedding-based clustering when ≥ 5 vectors are
+    available; otherwise the principled text-TF-IDF fallback in
+    ``_build_text_paper_map`` (clusters on title + abstract only —
+    never on ``publication_topics``, journal, or author names).
+    Topic overlay is intentionally excluded — it's a non-default
+    option and is rendered live, not cached.
     """
     ai_state = _get_graph_ai_state(conn)
     graph_options = {
@@ -2186,8 +2212,8 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
             conn, embeddings, ai_state=ai_state, graph_options=graph_options
         )
     else:
-        result = _build_topic_paper_map(
-            conn, ai_state=ai_state, graph_options=graph_options
+        result = _build_text_paper_map(
+            conn, scope=scope, ai_state=ai_state
         )
     return result.model_dump()
 

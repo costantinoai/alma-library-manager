@@ -578,23 +578,38 @@ def build_coauthor_network(
     author_embeddings = _author_mean_embeddings(conn, author_ids)
     embedded_ids = [aid for aid in author_ids if aid in author_embeddings]
 
-    cluster_ids = np.zeros(n_authors, dtype=np.int32)
+    # Per the locked product rule (2026-05-07): clustering is
+    # SPECTER2-mean only. With < 3 embedded authors we do NOT cluster
+    # — we surface every author as an unclustered node and let the
+    # frontend show the "compute embeddings" empty state. ``-1``
+    # is the in-array sentinel; nodes get ``cluster_id=None`` at
+    # serialisation time below.
+    cluster_ids = np.full(n_authors, -1, dtype=np.int32)
     coords_by_author: dict[str, tuple[float, float]] = {}
     clustering_method = "author_embedding_mean"
 
     if len(embedded_ids) >= 3:
         matrix = np.stack([author_embeddings[aid] for aid in embedded_ids]).astype(np.float32)
-        normalized = _safe_norm_rows(matrix)
         try:
             from sklearn.cluster import MiniBatchKMeans
 
-            from alma.ai.clustering import _silhouette_optimal_k
+            from alma.ai.clustering import _silhouette_optimal_k, reduce_for_clustering
 
-            # Silhouette-driven k. Ceiling scales with author count so a
-            # large corpus isn't forced into eight buckets, but the UI stays
-            # legible; floor stays at 2 so tiny corpora still cluster.
-            upper = max(3, min(12, int(round(math.sqrt(len(embedded_ids)) * 1.5))))
-            n_clusters = _silhouette_optimal_k(normalized, min_k=2, max_k=upper)
+            # BERTopic recipe: L2-normalise (cosine geometry — what
+            # SPECTER2 was trained for) → UMAP-5d (curse-of-dim fix) →
+            # cluster on the reduced space. ``reduce_for_clustering``
+            # falls back to normalised raw vectors when UMAP isn't
+            # available or N is below the UMAP threshold.
+            cluster_substrate = reduce_for_clustering(matrix)
+
+            # Silhouette-driven k. Ceiling widened to ⌈√n × 2⌉ capped
+            # at 25 (was ⌈√n × 1.5⌉ capped at 12) so the silhouette
+            # sweep can split a research corpus into the topical
+            # neighbourhoods the user actually has, not collapse them
+            # into eight legibility buckets. Floor stays at 2 so tiny
+            # corpora still cluster.
+            upper = max(3, min(25, int(round(math.sqrt(len(embedded_ids)) * 2.0))))
+            n_clusters = _silhouette_optimal_k(cluster_substrate, min_k=2, max_k=upper)
             n_clusters = min(n_clusters, max(2, len(embedded_ids) - 1))
             model = MiniBatchKMeans(
                 n_clusters=n_clusters,
@@ -602,7 +617,7 @@ def build_coauthor_network(
                 n_init=5,
                 batch_size=min(64, len(embedded_ids)),
             )
-            embedded_cluster_ids = model.fit_predict(normalized)
+            embedded_cluster_ids = model.fit_predict(cluster_substrate)
         except Exception as exc:
             logger.warning("Author embedding clustering failed; assigning a single cluster: %s", exc)
             embedded_cluster_ids = np.zeros(len(embedded_ids), dtype=np.int32)
@@ -611,6 +626,10 @@ def build_coauthor_network(
             cluster_ids[author_index[aid]] = int(cid)
 
         try:
+            # 2-d display layout reads the same SPECTER2 input through
+            # the cosine UMAP path (``project_embeddings``), so visual
+            # neighbourhood and cluster membership are produced from
+            # the same geometry — they agree by construction.
             projected = project_embeddings(
                 {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
             )
@@ -618,38 +637,87 @@ def build_coauthor_network(
         except Exception as exc:
             logger.warning("Author embedding projection failed; using fallback layout: %s", exc)
     else:
-        clustering_method = "topic_similarity_fallback"
+        clustering_method = "no_embeddings"
 
-    # Authors without embeddings end up in their own "Unplaced" cluster so
-    # the consumer can still render them without polluting the semantic
-    # clusters that came from real embedding geometry.
-    unplaced_indices = [i for i, aid in enumerate(author_ids) if aid not in author_embeddings]
-    if unplaced_indices:
-        max_cluster = int(cluster_ids.max()) if len(embedded_ids) > 0 else -1
-        unplaced_cid = max_cluster + 1
-        for idx in unplaced_indices:
-            cluster_ids[idx] = unplaced_cid
-
-    unique_clusters = sorted(int(x) for x in np.unique(cluster_ids))
-    cluster_map = {old: new for new, old in enumerate(unique_clusters)}
-    cluster_ids = np.array([cluster_map[int(cid)] for cid in cluster_ids], dtype=np.int32)
+    # Normalise the clustered author cluster_ids to a dense 0..N-1 range,
+    # leaving the ``-1`` sentinel intact for unclustered authors. Authors
+    # without an embedding stay at -1 — they are surfaced as nodes but
+    # don't get a synthetic "Unplaced" cluster (would have been a fake
+    # cluster, which the no-fallback rule rejects).
+    embedded_cluster_id_set = sorted(
+        int(cid) for cid in np.unique(cluster_ids) if int(cid) >= 0
+    )
+    cluster_remap = {old: new for new, old in enumerate(embedded_cluster_id_set)}
+    cluster_ids = np.array(
+        [cluster_remap.get(int(cid), -1) for cid in cluster_ids],
+        dtype=np.int32,
+    )
 
     cluster_members: dict[int, list[int]] = defaultdict(list)
     for idx, cid in enumerate(cluster_ids):
+        if int(cid) < 0:
+            continue
         cluster_members[int(cid)].append(idx)
 
-    cluster_topic_labels: dict[int, str] = {}
-    for cid, members in cluster_members.items():
+    unplaced_indices = [
+        i for i, aid in enumerate(author_ids) if aid not in author_embeddings
+    ]
+
+    # Class-based TF-IDF over per-cluster topic-term aggregates. The
+    # earlier "top-2 terms by sum" path picked terms that were *common*
+    # in the cluster, which on a research corpus means every cluster's
+    # label was something like "neuroscience, machine learning"
+    # because every cluster shares those high-frequency parents.
+    # Weighting per-cluster TF by inverse class frequency promotes the
+    # term that actually distinguishes a cluster from its siblings.
+    per_cluster_terms: list[dict[str, float]] = []
+    sorted_cluster_ids = sorted(cluster_members.keys())
+    for cid in sorted_cluster_ids:
         term_scores: dict[str, float] = defaultdict(float)
-        for idx in members:
+        for idx in cluster_members[cid]:
             aid = author_ids[idx]
             for term, score in topic_weights_by_author.get(aid, {}).items():
-                term_scores[term] += score
-        top_terms = sorted(term_scores.items(), key=lambda kv: kv[1], reverse=True)[:2]
-        if top_terms:
-            cluster_topic_labels[cid] = ", ".join(t for t, _ in top_terms)
-        else:
-            cluster_topic_labels[cid] = f"Cluster {cid + 1}"
+                if not term:
+                    continue
+                term_scores[term] += float(score or 0.0)
+        per_cluster_terms.append(dict(term_scores))
+
+    vocabulary = sorted({term for bag in per_cluster_terms for term in bag})
+    cluster_topic_labels: dict[int, str] = {}
+
+    if vocabulary and per_cluster_terms:
+        n_classes = len(per_cluster_terms)
+        term_index = {term: idx for idx, term in enumerate(vocabulary)}
+        weights = np.zeros((n_classes, len(vocabulary)), dtype=np.float64)
+        for class_idx, bag in enumerate(per_cluster_terms):
+            for term, score in bag.items():
+                weights[class_idx, term_index[term]] = score
+
+        class_sums = weights.sum(axis=1)
+        class_sums_safe = np.maximum(class_sums, 1e-9)
+        tf = weights / class_sums_safe[:, None]
+        avg_size = float(class_sums.mean()) if class_sums.sum() > 0 else 1.0
+        f_x = weights.sum(axis=0)
+        f_x_safe = np.maximum(f_x, 1e-9)
+        idf = np.log1p(avg_size / f_x_safe)
+        cf_idf = tf * idf[None, :]
+
+        for class_idx, cid in enumerate(sorted_cluster_ids):
+            row = cf_idf[class_idx]
+            order = np.argsort(-row, kind="stable")
+            top_terms = []
+            for ti in order[:6]:
+                if row[ti] <= 0:
+                    break
+                top_terms.append(str(vocabulary[ti]))
+                if len(top_terms) == 2:
+                    break
+            cluster_topic_labels[cid] = (
+                ", ".join(top_terms) if top_terms else f"Cluster {cid + 1}"
+            )
+
+    for cid in cluster_members.keys():
+        cluster_topic_labels.setdefault(cid, f"Cluster {cid + 1}")
 
     # Ensure coords exist for every author. Authors without embeddings are
     # scattered around the edge so they don't pile on top of each other.
@@ -668,7 +736,8 @@ def build_coauthor_network(
         x_raw, y_raw = coords_by_author[aid]
         x = float(min(0.98, max(0.02, x_raw)))
         y = float(min(0.98, max(0.02, y_raw)))
-        cid = int(cluster_ids[idx])
+        raw_cid = int(cluster_ids[idx])
+        cid = raw_cid if raw_cid >= 0 else None
         nodes.append(
             {
                 "id": aid,
@@ -684,7 +753,9 @@ def build_coauthor_network(
                 "top_topic": top_topic_by_author.get(aid),
                 "interests": author_interests.get(aid, []),
                 "cluster_id": cid,
-                "cluster_label": cluster_topic_labels.get(cid, f"Cluster {cid + 1}"),
+                "cluster_label": (
+                    cluster_topic_labels.get(cid) if cid is not None else None
+                ),
                 "x": x,
                 "y": y,
             }
