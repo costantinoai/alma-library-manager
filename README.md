@@ -168,6 +168,17 @@ Optional: if you have a BibTeX file or a Zotero library, import it
 from **Library → Imports**. Existing references give Discovery much
 better seed material from day one.
 
+## Backups
+
+ALMa's source of truth is the local SQLite database, so keep backups
+boring and regular. Use **Settings → Data & system → Library
+management → Create backup** before risky maintenance, and schedule a
+weekly online backup with `POST /api/v1/library-mgmt/backup` for
+always-on installs. For off-machine safety, copy the full `data/`
+directory, `settings.json`, and `.env` monthly. See
+[docs/operations/backups.md](docs/operations/backups.md) for restore
+steps and the verification checklist.
+
 ---
 
 ## Three image flavors

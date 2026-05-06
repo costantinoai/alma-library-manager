@@ -135,6 +135,7 @@ parameters and response shapes.
 | `GET` `POST` `DELETE` | `/library-mgmt/backup[/…]` | Backups |
 | `POST` | `/library-mgmt/restore/{name}` | Restore from a backup |
 | `POST` | `/library-mgmt/deduplicate` | Run preprint↔journal dedup |
+| `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
 | `POST` | `/library-mgmt/reset` | Wipe DB (dangerous; confirms) |
 
 ### Feed
@@ -196,7 +197,7 @@ parameters and response shapes.
 | `GET` | `/authors/{id}/openalex-works` | Page through OpenAlex bibliography |
 | `POST` | `/authors/{id}/refresh-cache` | Incremental refresh |
 | `POST` | `/authors/{id}/deep-refresh` | Full re-fetch |
-| `POST` | `/authors/deep-refresh-all` | Bulk deep refresh |
+| `POST` | `/authors/deep-refresh-all` | Bulk deep refresh; `scope=needs_metadata` targets identity/profile gaps for Settings maintenance |
 | `POST` | `/authors/backfill-works` | Pull works + S2 vectors |
 | `POST` | `/authors/{id}/history-backfill` | Historical corpus backfill |
 | `POST` | `/authors/{id}/empty-cache` | Clear cached works |

@@ -62,6 +62,10 @@ Scholar doesn't have a vector for.
 You can install AI extras later — ALMa will detect them and light up
 the matching settings.
 
+For source installs, Settings → AI & embeddings defaults the selected
+Python environment to this repo-local `.venv`. Docker builds use the
+container-internal `/opt/venv` instead.
+
 ## 3. Frontend build
 
 The React SPA is committed as source; it has to be built once before
