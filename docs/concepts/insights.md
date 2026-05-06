@@ -84,10 +84,21 @@ the view depends on has changed. When you save / edit / unfollow /
 import, the next page load detects the change automatically — the
 displayed values are the *previous* snapshot for a few seconds while
 the cache rebuilds in the background, then the page silently swaps
-to the fresh values when the background job completes. On the
-**Stats** tab a small **Refreshing…** pill appears in the header
-while the rebuild runs; the graph tabs don't show the pill today
-but follow the same swap-on-completion behaviour.
+to the fresh values when the background job completes. The
+**Refreshing…** pill in the header lights up whenever any tab is in
+that swap window.
+
+The **Diagnostics** tab is split into eight separately-cached
+sections: `feed`, `discovery`, `ai`, `authors`, `alerts`,
+`feedback`, `operational`, `evaluation`. Each card is fed by exactly
+one section and renders as soon as that section's response lands —
+fast sections (`ai`, `alerts`, `feedback`) typically come back in a
+few hundred milliseconds even on a cold first visit, slower sections
+(`authors`, with its citation-neighbour suggestion projection) keep
+their card in skeleton until ready. After the first build every
+cache-hit section returns ~1 ms, and individual sections only
+rebuild when their own inputs change — saving a paper invalidates
+authors + evaluation, not feed or discovery.
 
 You don't usually need to do anything. If you want to force a fresh
 graph layout (full re-clustering and re-projection — the layout may
@@ -112,8 +123,12 @@ envelope here; if it doesn't, that's a bug.
 ## API
 
 ```
-GET /api/v1/insights              # full overview
-GET /api/v1/insights/diagnostics
+GET /api/v1/insights                                      # full overview
+GET /api/v1/insights/diagnostics                          # composed payload (8 sections)
+GET /api/v1/insights/diagnostics/sections/{section}       # one section, cached independently
+                                                          # section ∈ {feed, discovery, ai,
+                                                          #   authors, alerts, feedback,
+                                                          #   operational, evaluation}
 GET /api/v1/insights/discovery/branch-action
 GET /api/v1/graphs/library
 GET /api/v1/reports/weekly-brief

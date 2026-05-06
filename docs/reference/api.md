@@ -232,7 +232,8 @@ parameters and response shapes.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/insights` | Overview (charts + summary). Served from a fingerprint-keyed cache; response carries `stale` / `rebuilding` / `computed_at` flags. |
-| `GET` | `/insights/diagnostics` | Honest underbelly (monitor health, branch quality, embedding coverage) |
+| `GET` | `/insights/diagnostics` | Composed payload — assembles all eight diagnostic sections from cache. Backwards-compatible with pre-split clients. |
+| `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
 | `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options served from cache; custom options bypass cache. SWR flags ride inside `metadata`. |
 | `GET` | `/graphs/author-network` | Co-authorship clusters. Cached. |
