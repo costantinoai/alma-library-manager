@@ -3370,7 +3370,22 @@ def _retrieve_lexical_channel(
     topics = _extract_keywords(seeds, explicit=explicit_topics, max_keywords=10)
     if not topics:
         return []
-    return openalex_related.search_works_by_topics(topics, limit=limit, from_year=datetime.utcnow().year - 3)
+    results = openalex_related.search_works_by_topics(
+        topics, limit=limit, from_year=datetime.utcnow().year - 3
+    )
+    # Stamp provenance so downstream `_derive_recommendation_provenance`
+    # routes these to the `lexical` bucket instead of the un-tagged
+    # `lens_retrieval` catch-all. `source_key` carries the actual query
+    # so the per-source-key diversity cap can group same-query results.
+    source_key = " OR ".join(topics[:10])
+    for item in results:
+        if not str(item.get("source_type") or "").strip():
+            item["source_type"] = "lexical"
+        if not str(item.get("source_api") or "").strip():
+            item["source_api"] = "openalex"
+        if not str(item.get("source_key") or "").strip():
+            item["source_key"] = source_key
+    return results
 
 
 def _retrieve_vector_channel(

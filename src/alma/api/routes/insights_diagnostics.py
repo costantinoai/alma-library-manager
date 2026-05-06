@@ -1005,6 +1005,11 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 "priority": "high",
             }
         )
+    # Skip the `lens_retrieval / unknown` catch-all: that bucket holds
+    # candidates whose producer didn't stamp `source_type`/`source_api`,
+    # so it's a tagging gap rather than a tunable source. Surfacing it
+    # here pointed users at Settings → Discovery, which has no knob for
+    # it. If a producer leaks into this bucket, fix the producer.
     noisy_source = next(
         (
             item
@@ -1019,6 +1024,10 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
             if _safe_int(item.get("count")) >= 4
             and safe_div(_safe_float(item.get("dismissed")), max(1.0, _safe_float(item.get("count"))))
             >= 0.35
+            and not (
+                str(item.get("source_type") or "") == "lens_retrieval"
+                and str(item.get("source_api") or "") == "unknown"
+            )
         ),
         None,
     )
