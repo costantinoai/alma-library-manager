@@ -5,8 +5,10 @@ import { Plus, Users } from 'lucide-react'
 
 import {
   api,
+  listAuthorsNeedsAttention,
   listFollowedAuthors,
   type Author,
+  type AuthorNeedsAttentionRow,
   type AuthorSuggestion,
 } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -18,7 +20,10 @@ import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/Add
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
-import { AuthorsNeedsAttentionSection } from '@/components/authors/AuthorsNeedsAttentionSection'
+import {
+  AuthorsNeedsAttentionSection,
+  useAuthorAttentionRouter,
+} from '@/components/authors/AuthorsNeedsAttentionSection'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
 
@@ -59,6 +64,16 @@ export function AuthorsPage() {
     retry: 1,
   })
 
+  // Hoisted from AuthorsNeedsAttentionSection so the followed-author
+  // grid can mark cards whose authors are in the needs-attention list.
+  // React Query dedups the cache key, so the section stays in sync
+  // with no second network request.
+  const needsAttentionQuery = useQuery({
+    queryKey: ['authors-needs-attention'],
+    queryFn: () => listAuthorsNeedsAttention(50),
+    staleTime: 60_000,
+  })
+
   const addAuthorMutation = useMutation({
     mutationFn: (payload: AddAuthorPayload) => api.post<Author>('/authors', payload),
     onSuccess: () => {
@@ -88,12 +103,38 @@ export function AuthorsPage() {
         .sort((a, b) => a.name.localeCompare(b.name)),
     [authors, followedIds],
   )
+  const authorsById = useMemo(() => {
+    const map = new Map<string, Author>()
+    for (const a of authors) map.set(a.id, a)
+    return map
+  }, [authors])
+
+  const attentionRows = needsAttentionQuery.data?.items ?? []
+  // Map keyed by `authors.id` so each followed-author card can render
+  // its own warning triangle in O(1). Background-author rows from the
+  // needs-attention list still appear in the dedicated section below
+  // — they just don't have a card to decorate.
+  const attentionByAuthor = useMemo(() => {
+    const map = new Map<string, AuthorNeedsAttentionRow>()
+    for (const row of attentionRows) map.set(row.author_id, row)
+    return map
+  }, [attentionRows])
 
   const openDetail = (author: Author) => {
     setSelectedSuggestion(null)
     setSelectedAuthor(author)
     setDetailOpen(true)
   }
+
+  // Single shared router for the needs-attention sub-dialogs. The
+  // section's row buttons AND each followed-author card's warning
+  // triangle dispatch through `router.openForRow`, so dialog state
+  // never duplicates and `review_candidates` / `manual_search` action
+  // codes route into this page's `openDetail`.
+  const attentionRouter = useAuthorAttentionRouter({
+    authorsById,
+    onOpenDetail: openDetail,
+  })
 
   const openSuggestionDetail = (s: AuthorSuggestion) => {
     // If the suggestion is already backed by a local author row, open that
@@ -186,6 +227,11 @@ export function AuthorsPage() {
                     author={author}
                     signal={null}
                     onClick={() => openDetail(author)}
+                    attentionRow={attentionByAuthor.get(author.id) ?? null}
+                    onAttentionClick={() => {
+                      const row = attentionByAuthor.get(author.id)
+                      if (row) attentionRouter.openForRow(row)
+                    }}
                   />
                 </motion.div>
               ))}
@@ -196,7 +242,14 @@ export function AuthorsPage() {
 
       <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />
 
-      <AuthorsNeedsAttentionSection authors={authors} onOpenDetail={openDetail} />
+      <AuthorsNeedsAttentionSection
+        rows={attentionRows}
+        isLoading={needsAttentionQuery.isLoading}
+        isError={needsAttentionQuery.isError}
+        router={attentionRouter}
+      />
+
+      {attentionRouter.dialogs}
 
       <AuthorDetailPanel
         author={selectedAuthor}

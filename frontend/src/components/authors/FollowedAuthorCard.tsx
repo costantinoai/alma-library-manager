@@ -1,6 +1,6 @@
-import { ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronRight } from 'lucide-react'
 
-import type { Author, AuthorSignal } from '@/api/client'
+import type { Author, AuthorNeedsAttentionRow, AuthorSignal } from '@/api/client'
 import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorResolvedBadge } from '@/components/authors/AuthorResolvedBadge'
@@ -10,6 +10,15 @@ interface FollowedAuthorCardProps {
   author: Author
   signal?: AuthorSignal | null
   onClick: () => void
+  /** Set when the author currently appears in the
+   *  `/authors/needs-attention` list. Drives the orange-reddish
+   *  warning triangle in the header. */
+  attentionRow?: AuthorNeedsAttentionRow | null
+  /** Click handler for the warning triangle. Bypasses the card's
+   *  detail dialog and routes directly to the matching
+   *  needs-attention sub-dialog (review / resolve-conflict /
+   *  add-identifier / refresh) via the shared router. */
+  onAttentionClick?: () => void
 }
 
 function monitorLabel(health?: string | null): string {
@@ -19,7 +28,13 @@ function monitorLabel(health?: string | null): string {
   return 'Monitor attention'
 }
 
-export function FollowedAuthorCard({ author, signal, onClick }: FollowedAuthorCardProps) {
+export function FollowedAuthorCard({
+  author,
+  signal,
+  onClick,
+  attentionRow,
+  onAttentionClick,
+}: FollowedAuthorCardProps) {
   const lastCheck = author.monitor_last_success_at ?? author.monitor_last_checked_at
   const lastYieldParts = [
     author.monitor_papers_found != null ? `${author.monitor_papers_found} found` : null,
@@ -41,9 +56,38 @@ export function FollowedAuthorCard({ author, signal, onClick }: FollowedAuthorCa
             <p className="mt-0.5 truncate text-[11px] text-slate-500">{author.affiliation}</p>
           ) : null}
         </div>
-        <StatusBadge tone={monitorHealthTone(author.monitor_health)} size="sm">
-          {monitorLabel(author.monitor_health)}
-        </StatusBadge>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {/* Warning triangle — surfaces any /authors/needs-attention
+              row (split_profiles, merge_conflict, affiliation_conflict,
+              retry_refresh, ...) directly on the card so the user
+              doesn't have to scroll to the section to act. Click
+              short-circuits the card's detail dialog and routes to
+              the matching sub-dialog via the shared attention router.
+              Orange-reddish (rose) per user direction — louder than
+              the section's amber `tone="warning"` chip because here
+              it's the only attention signal on the card. */}
+          {attentionRow && onAttentionClick ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onAttentionClick()
+              }}
+              title={
+                [attentionRow.reason, attentionRow.reason_detail]
+                  .filter(Boolean)
+                  .join(' — ') || attentionRow.suggested_action.hint
+              }
+              aria-label={`Resolve ${attentionRow.reason} for ${author.name}`}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 hover:text-rose-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+            >
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          ) : null}
+          <StatusBadge tone={monitorHealthTone(author.monitor_health)} size="sm">
+            {monitorLabel(author.monitor_health)}
+          </StatusBadge>
+        </div>
       </header>
 
       <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">

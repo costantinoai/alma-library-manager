@@ -1,11 +1,10 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState, type ReactNode } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, ExternalLink, GitMerge, Loader2, RefreshCw } from 'lucide-react'
 
 import {
   api,
   discoverAuthorAliases,
-  listAuthorsNeedsAttention,
   mergeAuthorProfiles,
   resolveMergeConflict,
   setAuthorIdentifiers,
@@ -33,9 +32,111 @@ import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
 
+/**
+ * Router returned by `useAuthorAttentionRouter`. One instance per
+ * surface owns all three dialogs + the refresh mutation. Both the
+ * needs-attention section and the followed-author warning triangle
+ * funnel through `openForRow` so dialog state never duplicates.
+ */
+export interface AuthorAttentionRouter {
+  /** Dispatch by `row.suggested_action.code`: opens the matching
+   *  dialog, defers to `onOpenDetail` for review/manual_search, or
+   *  fires the deep-refresh mutation as the default. */
+  openForRow: (row: AuthorNeedsAttentionRow) => void
+  /** True while the deep-refresh mutation is in flight for `authorId`. */
+  isRefreshingFor: (authorId: string) => boolean
+  /** Render once near the top of the consuming page so the dialogs
+   *  can mount alongside other modals. */
+  dialogs: ReactNode
+}
+
+interface UseAuthorAttentionRouterOpts {
+  /** Map of `authors.id` → `Author` so `review_candidates` /
+   *  `manual_search` can hand off to `AuthorDetailPanel`. */
+  authorsById?: Map<string, Author>
+  onOpenDetail?: (author: Author) => void
+}
+
+/**
+ * Centralised router for needs-attention actions. Owns the three
+ * sub-dialog states (`reviewRow`, `identifierRow`, `conflictRow`) and
+ * the deep-refresh mutation so multiple entry points (the
+ * needs-attention section AND the per-card warning triangle on
+ * `FollowedAuthorCard`) dispatch through one source of truth — no
+ * duplicated dialog state, no double mutation queues.
+ */
+export function useAuthorAttentionRouter(
+  opts: UseAuthorAttentionRouterOpts = {},
+): AuthorAttentionRouter {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [reviewRow, setReviewRow] = useState<AuthorNeedsAttentionRow | null>(null)
+  const [identifierRow, setIdentifierRow] = useState<AuthorNeedsAttentionRow | null>(null)
+  const [conflictRow, setConflictRow] = useState<AuthorNeedsAttentionRow | null>(null)
+
+  const refreshMutation = useMutation({
+    mutationFn: (authorId: string) =>
+      api.post<{ status?: string; job_id?: string }>(
+        `/authors/${encodeURIComponent(authorId)}/deep-refresh`,
+      ),
+    onSuccess: (data, authorId) => {
+      void invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['authors-needs-attention'],
+        ['activity-operations'],
+        ['author-detail', authorId],
+      )
+      toast({
+        title:
+          data?.status === 'already_running' ? 'Refresh already running' : 'Refresh queued',
+        description: data?.job_id ? `Job ${data.job_id} will update this author.` : undefined,
+      })
+    },
+    onError: () => errorToast('Error', 'Could not queue refresh.'),
+  })
+
+  const openForRow = (row: AuthorNeedsAttentionRow) => {
+    const code = row.suggested_action.code
+    if (code === 'review_profiles') {
+      setReviewRow(row)
+      return
+    }
+    if (code === 'resolve_conflict') {
+      setConflictRow(row)
+      return
+    }
+    if (code === 'review_candidates' || code === 'manual_search') {
+      const author = opts.authorsById?.get(row.author_id)
+      if (author && opts.onOpenDetail) opts.onOpenDetail(author)
+      return
+    }
+    if (code === 'resolve_now') {
+      setIdentifierRow(row)
+      return
+    }
+    refreshMutation.mutate(row.author_id)
+  }
+
+  const isRefreshingFor = (authorId: string) =>
+    refreshMutation.isPending && refreshMutation.variables === authorId
+
+  const dialogs = (
+    <>
+      <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
+      <AddIdentifierDialog row={identifierRow} onClose={() => setIdentifierRow(null)} />
+      <ResolveConflictDialog row={conflictRow} onClose={() => setConflictRow(null)} />
+    </>
+  )
+
+  return { openForRow, isRefreshingFor, dialogs }
+}
+
 interface AuthorsNeedsAttentionSectionProps {
-  authors: Author[]
-  onOpenDetail: (author: Author) => void
+  rows: AuthorNeedsAttentionRow[]
+  isLoading: boolean
+  isError: boolean
+  router: AuthorAttentionRouter
 }
 
 /**
@@ -52,53 +153,12 @@ interface AuthorsNeedsAttentionSectionProps {
  * endpoint for retries.
  */
 export function AuthorsNeedsAttentionSection({
-  authors,
-  onOpenDetail,
+  rows,
+  isLoading,
+  isError,
+  router,
 }: AuthorsNeedsAttentionSectionProps) {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  // Sub-dialog state — `null` = closed, otherwise the row whose
-  // action triggered it. Holding the full row (not just the id)
-  // lets the dialog render without a parent map lookup.
-  const [reviewRow, setReviewRow] = useState<AuthorNeedsAttentionRow | null>(null)
-  const [identifierRow, setIdentifierRow] = useState<AuthorNeedsAttentionRow | null>(null)
-  const [conflictRow, setConflictRow] = useState<AuthorNeedsAttentionRow | null>(null)
-
-  const query = useQuery({
-    queryKey: ['authors-needs-attention'],
-    queryFn: () => listAuthorsNeedsAttention(50),
-    staleTime: 60_000,
-  })
-
-  const authorsById = useMemo(() => {
-    const map = new Map<string, Author>()
-    for (const a of authors) map.set(a.id, a)
-    return map
-  }, [authors])
-
-  const refreshMutation = useMutation({
-    mutationFn: (authorId: string) =>
-      api.post<{ status?: string; job_id?: string }>(
-        `/authors/${encodeURIComponent(authorId)}/deep-refresh`,
-      ),
-    onSuccess: (data, authorId) => {
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['activity-operations'],
-        ['author-detail', authorId],
-      )
-      toast({
-        title: data?.status === 'already_running' ? 'Refresh already running' : 'Refresh queued',
-        description: data?.job_id ? `Job ${data.job_id} will update this author.` : undefined,
-      })
-    },
-    onError: () => errorToast('Error', 'Could not queue refresh.'),
-  })
-
-  const rows = query.data?.items ?? []
-  if (query.isLoading) {
+  if (isLoading) {
     return (
       <section className="space-y-2">
         <SectionHeader total={null} />
@@ -106,7 +166,7 @@ export function AuthorsNeedsAttentionSection({
       </section>
     )
   }
-  if (query.isError) {
+  if (isError) {
     return (
       <section className="space-y-2">
         <SectionHeader total={null} />
@@ -133,20 +193,11 @@ export function AuthorsNeedsAttentionSection({
           <NeedsAttentionRow
             key={row.author_id}
             row={row}
-            author={authorsById.get(row.author_id)}
-            onOpenDetail={onOpenDetail}
-            onRefresh={() => refreshMutation.mutate(row.author_id)}
-            onReviewProfiles={() => setReviewRow(row)}
-            onAddIdentifier={() => setIdentifierRow(row)}
-            onResolveConflict={() => setConflictRow(row)}
-            isRefreshing={refreshMutation.isPending && refreshMutation.variables === row.author_id}
+            onAction={() => router.openForRow(row)}
+            isRefreshing={router.isRefreshingFor(row.author_id)}
           />
         ))}
       </ul>
-
-      <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
-      <AddIdentifierDialog row={identifierRow} onClose={() => setIdentifierRow(null)} />
-      <ResolveConflictDialog row={conflictRow} onClose={() => setConflictRow(null)} />
     </section>
   )
 }
@@ -165,40 +216,15 @@ function SectionHeader({ total }: { total: number | null }) {
 
 function NeedsAttentionRow({
   row,
-  author,
-  onOpenDetail,
-  onRefresh,
-  onReviewProfiles,
-  onAddIdentifier,
-  onResolveConflict,
+  onAction,
   isRefreshing,
 }: {
   row: AuthorNeedsAttentionRow
-  author?: Author
-  onOpenDetail: (author: Author) => void
-  onRefresh: () => void
-  onReviewProfiles: () => void
-  onAddIdentifier: () => void
-  onResolveConflict: () => void
+  onAction: () => void
   isRefreshing: boolean
 }) {
   const spec = resolvedBadgeSpec(row)
   const actionCode = row.suggested_action.code
-
-  // Action dispatch table — keep all routing in one place. Each
-  // action_code maps to exactly one click handler, so the row body
-  // stays a thin shell.
-  const handleAction = () => {
-    if (actionCode === 'review_profiles') return onReviewProfiles()
-    if (actionCode === 'resolve_conflict') return onResolveConflict()
-    if (actionCode === 'review_candidates' || actionCode === 'manual_search') {
-      if (author) onOpenDetail(author)
-      return
-    }
-    if (actionCode === 'resolve_now') return onAddIdentifier()
-    // Default: refresh / retry funnels to the deep-refresh endpoint.
-    onRefresh()
-  }
 
   // Icon picker for the action button — telegraph what kind of
   // dialog will open before the user clicks.
@@ -227,10 +253,8 @@ function NeedsAttentionRow({
             <button
               type="button"
               className="truncate text-sm font-semibold text-alma-800 hover:text-alma-700"
-              onClick={() => {
-                if (author) onOpenDetail(author)
-              }}
-              disabled={!author}
+              onClick={onAction}
+              disabled={isRefreshing}
             >
               {row.author_name}
             </button>
@@ -243,7 +267,7 @@ function NeedsAttentionRow({
           <Button
             size="sm"
             variant="outline"
-            onClick={handleAction}
+            onClick={onAction}
             disabled={isRefreshing}
             title={row.suggested_action.hint}
           >
