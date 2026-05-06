@@ -88,7 +88,7 @@ def refresh_author_centroid(
             FROM publication_authors pa
             JOIN publication_embeddings pe
               ON pe.paper_id = pa.paper_id AND pe.model = ?
-            WHERE lower(trim(pa.openalex_id)) = ?
+            WHERE lower(pa.openalex_id) = ?
             """,
             (model, oid),
         ).fetchall()
@@ -247,7 +247,7 @@ def refresh_author_works_and_vectors(
             """
             SELECT COUNT(DISTINCT paper_id) AS n
             FROM publication_authors
-            WHERE lower(trim(openalex_id)) = ?
+            WHERE lower(openalex_id) = ?
             """,
             (oid_norm.lower(),),
         ).fetchone()
@@ -336,7 +336,7 @@ def refresh_author_works_and_vectors(
             JOIN papers p ON p.id = pa.paper_id
             LEFT JOIN publication_embeddings pe
               ON pe.paper_id = p.id AND pe.model = ?
-            WHERE lower(trim(pa.openalex_id)) = ?
+            WHERE lower(pa.openalex_id) = ?
               AND pe.paper_id IS NULL
               AND (
                    COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
@@ -440,10 +440,10 @@ def backfill_all_resolved_authors(
         ).isoformat()
         rows = conn.execute(
             """
-            SELECT DISTINCT lower(trim(a.openalex_id)) AS oid
+            SELECT DISTINCT lower(a.openalex_id) AS oid
             FROM authors a
             LEFT JOIN author_centroids ac
-              ON ac.author_openalex_id = lower(trim(a.openalex_id))
+              ON ac.author_openalex_id = lower(a.openalex_id)
              AND ac.model = ?
             WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
               AND (ac.author_openalex_id IS NULL OR ac.updated_at < ?)

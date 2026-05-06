@@ -785,7 +785,7 @@ def get_author_dossier(db: sqlite3.Connection, author_id: str) -> Optional[dict]
                     COUNT(DISTINCT pa.paper_id) AS shared_papers
                 FROM publication_authors pa
                 JOIN publication_authors pa2 ON pa2.paper_id = pa.paper_id
-                WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+                WHERE lower(pa.openalex_id) = lower(trim(?))
                   AND lower(trim(COALESCE(pa2.openalex_id, ''))) <> lower(trim(?))
                   AND COALESCE(TRIM(COALESCE(pa2.display_name, pa2.openalex_id, '')), '') <> ''
                 GROUP BY COALESCE(pa2.display_name, pa2.openalex_id, ''), pa2.openalex_id
@@ -984,7 +984,7 @@ def _sample_titles_for_openalex_author(
         SELECT DISTINCT p.id, p.title, COALESCE(p.cited_by_count, 0) AS cited_by_count, COALESCE(p.year, 0) AS year
         FROM publication_authors pa
         JOIN papers p ON p.id = pa.paper_id
-        WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+        WHERE lower(pa.openalex_id) = lower(trim(?))
           AND COALESCE(trim(p.title), '') <> ''
         ORDER BY COALESCE(p.cited_by_count, 0) DESC, COALESCE(p.year, 0) DESC
         LIMIT ?
@@ -1001,7 +1001,7 @@ def _sample_titles_for_openalex_author(
             SELECT DISTINCT pt.paper_id
             FROM publication_topics pt
             JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND pt.term IS NOT NULL
             """,
             (normalized,),
@@ -1016,7 +1016,7 @@ def _sample_titles_for_openalex_author(
                 SELECT pt.paper_id, pt.term
                 FROM publication_topics pt
                 JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-                WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+                WHERE lower(pa.openalex_id) = lower(trim(?))
                   AND pt.term IS NOT NULL
                 """,
                 (normalized,),
@@ -1038,7 +1038,7 @@ def _sample_titles_for_openalex_author(
             SELECT DISTINCT p.id
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND lower(trim(COALESCE(p.journal, ''))) IN ({placeholders})
             """.format(placeholders=", ".join("?" for _ in venue_whitelist)),
             [normalized, *sorted(venue_whitelist)],
@@ -1076,7 +1076,7 @@ def _top_topics_for_followed_authors(db: sqlite3.Connection, *, limit: int = 12)
             SELECT pt.term, COUNT(DISTINCT pt.paper_id) AS paper_count
             FROM publication_topics pt
             JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-            JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
             JOIN followed_authors fa ON fa.author_id = a.id
             WHERE pt.term IS NOT NULL AND TRIM(pt.term) <> ''
             GROUP BY pt.term
@@ -1105,7 +1105,7 @@ def _top_venues_for_followed_authors(db: sqlite3.Connection, *, limit: int = 8) 
             SELECT p.journal, COUNT(DISTINCT p.id) AS paper_count
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
-            JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
             JOIN followed_authors fa ON fa.author_id = a.id
             WHERE COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal)), p.journal
@@ -1138,7 +1138,7 @@ def _shared_followed_authors_for_candidate(
         SELECT a.name, COUNT(DISTINCT pa.paper_id) AS shared_papers
         FROM publication_authors pa
         JOIN publication_authors candidate_pa ON candidate_pa.paper_id = pa.paper_id
-        JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+        JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
         JOIN followed_authors fa ON fa.author_id = a.id
         WHERE lower(trim(candidate_pa.openalex_id)) = lower(trim(?))
           AND lower(trim(pa.openalex_id)) <> lower(trim(candidate_pa.openalex_id))
@@ -1169,7 +1169,7 @@ def _shared_topics_for_candidate(
         SELECT pt.term, COUNT(DISTINCT pt.paper_id) AS paper_count
         FROM publication_topics pt
         JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-        WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+        WHERE lower(pa.openalex_id) = lower(trim(?))
           AND pt.term IS NOT NULL
         GROUP BY pt.term
         ORDER BY paper_count DESC, pt.term ASC
@@ -1200,7 +1200,7 @@ def _shared_venues_for_candidate(
         SELECT p.journal, COUNT(DISTINCT p.id) AS paper_count
         FROM papers p
         JOIN publication_authors pa ON pa.paper_id = p.id
-        WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+        WHERE lower(pa.openalex_id) = lower(trim(?))
           AND COALESCE(TRIM(p.journal), '') <> ''
         GROUP BY lower(trim(p.journal)), p.journal
         ORDER BY paper_count DESC, p.journal ASC
@@ -1324,7 +1324,7 @@ def _load_dismissal_signature(
         rows = db.execute(
             """
             WITH dismissed AS (
-                SELECT DISTINCT lower(trim(openalex_id)) AS oid
+                SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
                 WHERE signal_value < 0
                   AND created_at >= ?
@@ -1333,7 +1333,7 @@ def _load_dismissal_signature(
             SELECT lower(trim(pt.term)) AS term,
                    COUNT(DISTINCT d.oid) AS dismissed_author_count
             FROM dismissed d
-            JOIN publication_authors pa ON lower(trim(pa.openalex_id)) = d.oid
+            JOIN publication_authors pa ON lower(pa.openalex_id) = d.oid
             JOIN publication_topics pt ON pt.paper_id = pa.paper_id
             WHERE pt.term IS NOT NULL AND TRIM(pt.term) <> ''
             GROUP BY lower(trim(pt.term))
@@ -1355,7 +1355,7 @@ def _load_dismissal_signature(
         rows = db.execute(
             """
             WITH dismissed AS (
-                SELECT DISTINCT lower(trim(openalex_id)) AS oid
+                SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
                 WHERE signal_value < 0
                   AND created_at >= ?
@@ -1364,7 +1364,7 @@ def _load_dismissal_signature(
             SELECT lower(trim(p.journal)) AS venue_key,
                    COUNT(DISTINCT d.oid) AS dismissed_author_count
             FROM dismissed d
-            JOIN publication_authors pa ON lower(trim(pa.openalex_id)) = d.oid
+            JOIN publication_authors pa ON lower(pa.openalex_id) = d.oid
             JOIN papers p ON p.id = pa.paper_id
             WHERE COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal))
@@ -1392,7 +1392,7 @@ def _load_dismissal_signature(
         rows = db.execute(
             """
             WITH dismissed AS (
-                SELECT DISTINCT lower(trim(openalex_id)) AS oid
+                SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
                 WHERE signal_value < 0
                   AND created_at >= ?
@@ -1401,7 +1401,7 @@ def _load_dismissal_signature(
             SELECT lower(trim(pa2.openalex_id)) AS coauthor_oid,
                    COUNT(DISTINCT pa.paper_id) AS shared_paper_count
             FROM dismissed d
-            JOIN publication_authors pa  ON lower(trim(pa.openalex_id))  = d.oid
+            JOIN publication_authors pa  ON lower(pa.openalex_id)  = d.oid
             JOIN publication_authors pa2 ON pa2.paper_id = pa.paper_id
             WHERE COALESCE(TRIM(pa2.openalex_id), '') <> ''
               AND lower(trim(pa2.openalex_id)) <> d.oid
@@ -1429,7 +1429,7 @@ def _load_dismissal_signature(
         rows = db.execute(
             """
             WITH dismissed AS (
-                SELECT DISTINCT lower(trim(openalex_id)) AS oid
+                SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
                 WHERE signal_value < 0
                   AND created_at >= ?
@@ -1438,7 +1438,7 @@ def _load_dismissal_signature(
             SELECT lower(trim(pa.institution)) AS institution_key,
                    COUNT(DISTINCT d.oid) AS dismissed_author_count
             FROM dismissed d
-            JOIN publication_authors pa ON lower(trim(pa.openalex_id)) = d.oid
+            JOIN publication_authors pa ON lower(pa.openalex_id) = d.oid
             WHERE COALESCE(TRIM(pa.institution), '') <> ''
             GROUP BY lower(trim(pa.institution))
             HAVING dismissed_author_count >= 1
@@ -1472,7 +1472,7 @@ def _candidate_top_institutions(
             SELECT lower(trim(pa.institution)) AS institution_key,
                    COUNT(DISTINCT pa.paper_id) AS paper_count
             FROM publication_authors pa
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND COALESCE(TRIM(pa.institution), '') <> ''
             GROUP BY lower(trim(pa.institution))
             ORDER BY paper_count DESC
@@ -1642,7 +1642,7 @@ def _candidate_projection_topics(db: sqlite3.Connection, openalex_id: str, *, li
             SELECT lower(trim(pt.term)) AS term, COUNT(DISTINCT pt.paper_id) AS papers
             FROM publication_topics pt
             JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND COALESCE(TRIM(pt.term), '') <> ''
             GROUP BY lower(trim(pt.term))
             ORDER BY papers DESC, term ASC
@@ -1664,7 +1664,7 @@ def _candidate_projection_venues(db: sqlite3.Connection, openalex_id: str, *, li
             SELECT lower(trim(p.journal)) AS venue, COUNT(DISTINCT p.id) AS papers
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal))
             ORDER BY papers DESC, venue ASC
@@ -1686,7 +1686,7 @@ def _candidate_projection_keywords(db: sqlite3.Connection, openalex_id: str, *, 
             SELECT p.keywords
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND COALESCE(TRIM(p.keywords), '') <> ''
             LIMIT 50
             """,
@@ -1729,7 +1729,7 @@ def _candidate_projection_tags(db: sqlite3.Connection, openalex_id: str, *, limi
             FROM publication_tags pt
             JOIN tags t ON t.id = pt.tag_id
             JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-            WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+            WHERE lower(pa.openalex_id) = lower(trim(?))
               AND COALESCE(TRIM(t.name), '') <> ''
             GROUP BY lower(trim(t.name))
             ORDER BY papers DESC, tag_name ASC
@@ -1945,11 +1945,11 @@ def _semantic_similar_candidates(
     try:
         vec_rows = db.execute(
             f"""
-            SELECT lower(trim(pa.openalex_id)) AS oid, pe.embedding AS embedding
+            SELECT lower(pa.openalex_id) AS oid, pe.embedding AS embedding
             FROM publication_authors pa
             JOIN publication_embeddings pe
               ON pe.paper_id = pa.paper_id AND pe.model = ?
-            WHERE lower(trim(pa.openalex_id)) IN ({placeholders})
+            WHERE lower(pa.openalex_id) IN ({placeholders})
             """,
             (model, *openalex_ids),
         ).fetchall()

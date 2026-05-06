@@ -615,17 +615,22 @@ def _project_author_profiles(
     if not author_ids:
         return
 
+    # Drop redundant `trim()` from `lower(trim(pa.openalex_id))`: the
+    # index `idx_publication_authors_openalex_norm` is on
+    # `lower(openalex_id)` only, so the trim defeated the lookup
+    # (see lessons.md "Mirror expression indexes" + "OR in a JOIN").
+    # Live data verified clean (0 whitespace in openalex_id columns).
     try:
         for chunk in _chunks(author_ids, 300):
             placeholders = ",".join("?" for _ in chunk)
             topic_rows = db.execute(
                 f"""
-                SELECT lower(trim(pa.openalex_id)) AS openalex_id,
+                SELECT lower(pa.openalex_id) AS openalex_id,
                        lower(trim(pt.term)) AS term,
                        COALESCE(pt.score, 0.5) AS score
                 FROM publication_authors pa
                 JOIN publication_topics pt ON pt.paper_id = pa.paper_id
-                WHERE lower(trim(pa.openalex_id)) IN ({placeholders})
+                WHERE lower(pa.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(pt.term), '') <> ''
                 """,
                 chunk,
@@ -638,12 +643,12 @@ def _project_author_profiles(
 
             venue_rows = db.execute(
                 f"""
-                SELECT lower(trim(pa.openalex_id)) AS openalex_id,
+                SELECT lower(pa.openalex_id) AS openalex_id,
                        lower(trim(p.journal)) AS venue,
                        p.keywords AS keywords
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
-                WHERE lower(trim(pa.openalex_id)) IN ({placeholders})
+                WHERE lower(pa.openalex_id) IN ({placeholders})
                 """,
                 chunk,
             ).fetchall()
@@ -657,12 +662,12 @@ def _project_author_profiles(
 
             tag_rows = db.execute(
                 f"""
-                SELECT lower(trim(pa.openalex_id)) AS openalex_id,
+                SELECT lower(pa.openalex_id) AS openalex_id,
                        lower(trim(t.name)) AS tag_name
                 FROM publication_authors pa
                 JOIN publication_tags pt ON pt.paper_id = pa.paper_id
                 JOIN tags t ON t.id = pt.tag_id
-                WHERE lower(trim(pa.openalex_id)) IN ({placeholders})
+                WHERE lower(pa.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(t.name), '') <> ''
                 """,
                 chunk,
@@ -698,15 +703,15 @@ def _project_author_coauthors(
             rows = db.execute(
                 f"""
                 SELECT
-                    lower(trim(seed.openalex_id)) AS seed_id,
-                    lower(trim(other.openalex_id)) AS coauthor_id,
+                    lower(seed.openalex_id) AS seed_id,
+                    lower(other.openalex_id) AS coauthor_id,
                     lower(trim(other.display_name)) AS coauthor_name,
                     COUNT(*) OVER (PARTITION BY seed.paper_id) AS author_count
                 FROM publication_authors seed
                 JOIN publication_authors other
                   ON other.paper_id = seed.paper_id
-                 AND lower(trim(other.openalex_id)) <> lower(trim(seed.openalex_id))
-                WHERE lower(trim(seed.openalex_id)) IN ({placeholders})
+                 AND lower(other.openalex_id) <> lower(seed.openalex_id)
+                WHERE lower(seed.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(other.openalex_id), '') <> ''
                 """,
                 chunk,
@@ -752,10 +757,10 @@ def _project_author_institutions(
             seed_rows = db.execute(
                 f"""
                 SELECT
-                    lower(trim(openalex_id)) AS seed_id,
+                    lower(openalex_id) AS seed_id,
                     lower(trim(institution)) AS institution
                 FROM publication_authors
-                WHERE lower(trim(openalex_id)) IN ({placeholders})
+                WHERE lower(openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(institution), '') <> ''
                 """,
                 chunk,

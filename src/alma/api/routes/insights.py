@@ -798,7 +798,7 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
                 SELECT COUNT(DISTINCT p.id) AS c
                 FROM papers p
                 JOIN publication_authors pa ON pa.paper_id = p.id
-                JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+                JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
                 JOIN followed_authors fa ON fa.author_id = a.id
                 WHERE p.status <> 'library'
                 """

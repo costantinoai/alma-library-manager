@@ -487,7 +487,7 @@ def get_followed_author_backfill_status(
                 SELECT COUNT(DISTINCT p.id) AS c
                 FROM papers p
                 JOIN publication_authors pa ON pa.paper_id = p.id
-                JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+                JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
                 WHERE a.id = ?
                   AND p.status <> 'library'
                 """,

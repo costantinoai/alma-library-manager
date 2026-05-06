@@ -117,7 +117,7 @@ def query_publications(
                 AND EXISTS (
                     SELECT 1
                     FROM publication_authors pa
-                    JOIN authors a ON lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id))
+                    JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
                     JOIN followed_authors fa ON fa.author_id = a.id
                     WHERE pa.paper_id = p.id
                 )

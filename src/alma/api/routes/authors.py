@@ -1172,7 +1172,7 @@ def _deep_refresh_all_impl(
     scope_join_map: dict[str, str] = {
         # All authors of any paper currently in the user's library.
         "library": (
-            "INNER JOIN publication_authors pa ON lower(trim(pa.openalex_id)) = lower(trim(a.openalex_id)) "
+            "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
             "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
         ),
         # Explicitly followed authors only.
@@ -1891,7 +1891,7 @@ def backfill_author_works(
     if target:
         # Single-author validation: author must exist in our corpus.
         row = db.execute(
-            "SELECT 1 FROM authors WHERE lower(trim(openalex_id)) = ? LIMIT 1",
+            "SELECT 1 FROM authors WHERE lower(openalex_id) = ? LIMIT 1",
             (target.lower(),),
         ).fetchone()
         if not row:
@@ -3599,7 +3599,7 @@ def resolve_identifiers_bulk(
 
     scope_join_clauses: dict[str, str] = {
         "library": (
-            "INNER JOIN publication_authors pa ON lower(trim(pa.openalex_id)) = lower(trim(a.openalex_id)) "
+            "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
             "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
         ),
         "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",

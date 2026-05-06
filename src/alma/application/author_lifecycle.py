@@ -91,7 +91,7 @@ def is_orphan_author(db: sqlite3.Connection, author_id: str) -> bool:
         FROM publication_authors pa
         JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
         WHERE (
-              (? <> '' AND lower(trim(pa.openalex_id))   = ?)
+              (? <> '' AND lower(pa.openalex_id)   = ?)
            OR (? <> '' AND lower(trim(pa.display_name))  = ?)
         )
         LIMIT 1
@@ -214,7 +214,7 @@ def find_authors_for_paper(db: sqlite3.Connection, paper_id: str) -> list[str]:
         FROM publication_authors pa
         JOIN authors a ON (
                  (COALESCE(NULLIF(TRIM(pa.openalex_id), ''), '') <> ''
-                  AND lower(trim(a.openalex_id)) = lower(trim(pa.openalex_id)))
+                  AND lower(a.openalex_id) = lower(pa.openalex_id))
               OR (COALESCE(NULLIF(TRIM(pa.display_name), ''), '') <> ''
                   AND lower(trim(a.name)) = lower(trim(pa.display_name)))
         )

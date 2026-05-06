@@ -134,7 +134,7 @@ def get_author_sample_titles(
                 SELECT p.title
                 FROM papers p
                 JOIN publication_authors pa ON p.id = pa.paper_id
-                WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+                WHERE lower(pa.openalex_id) = lower(trim(?))
                   AND COALESCE(trim(p.title), '') <> ''
                 ORDER BY COALESCE(p.cited_by_count, 0) DESC,
                          COALESCE(p.publication_date, '') DESC,
@@ -337,7 +337,7 @@ def _local_authorship_candidates(
                 """
                 SELECT pa.openalex_id, pa.display_name, pa.orcid, pa.institution, COUNT(*) AS pub_count
                 FROM publication_authors pa
-                WHERE lower(trim(pa.openalex_id)) = lower(trim(?))
+                WHERE lower(pa.openalex_id) = lower(trim(?))
                   AND COALESCE(TRIM(pa.openalex_id), '') <> ''
                 GROUP BY pa.openalex_id, pa.display_name, pa.orcid, pa.institution
                 ORDER BY pub_count DESC
