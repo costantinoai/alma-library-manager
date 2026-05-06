@@ -44,19 +44,29 @@ For each lens, refresh runs in four phases:
    lanes. Branches are visible in Branch Studio, but not every
    persisted recommendation currently carries branch attribution.
 
-### What never re-surfaces
+### What leaves Discovery
 
-Two filters run before staging, on top of scoring:
+Several lifecycle filters run before staging, on top of scoring:
 
 * **Saved papers** (`status='library'`) — once you save a paper it
-  belongs to your Library and is permanently excluded from Discovery.
-* **Dismissed papers** (`status='dismissed'`) — explicit dismissals
-  block re-surfacing.
+  belongs to your Library and is excluded from Discovery.
+* **Reading-list papers** (`reading_status='reading'`) — adding a
+  recommendation to the Reading list keeps membership orthogonal, but
+  still removes the paper from Discovery because you have acted on it.
+* **Dismissed suggestions** (`recommendations.user_action='dismiss'`,
+  plus legacy `status='dismissed'`) — explicit dismissals hide the
+  suggestion and write a stronger negative signal.
 
-`Dislike` is intentionally softer: it hides the current
-recommendation row and writes a negative signal, but leaves the paper
-as `tracked` so it can still be found later if enough new evidence
-outweighs the penalty.
+Dismissal is no longer a forever block for newly generated candidate
+sets. It uses a slow cooldown: each dismiss contributes a negative
+paper signal with a long half-life, and repeat dismissals stack a
+stronger penalty. The card remains hidden while that decayed score is
+below the suppression threshold; much later, enough new evidence can
+earn another try.
+
+`Like`, `Love`, and `Dislike` are intentionally softer: they rate the
+paper and write feedback signals, but they do **not** hide the
+recommendation or change Library / Reading membership.
 
 Everything else is fair game. Specifically, papers your corpus has
 already pulled in but that you haven't saved (`status='tracked'`)
@@ -340,10 +350,12 @@ that one bad day kills a branch."
 
 | Action | What it does |
 |---|---|
-| **Save / Like / Love** | Transitions to `library` with the matching rating. |
-| **Dismiss** | Hides the card from this lens **and** writes a negative signal. The recommender will not re-suggest it. |
-| **Dislike** | Hides the current recommendation and writes a negative signal without changing the paper's lifecycle status. |
-| **Pivot** | Treats the dismissed paper as a seed for a new branch (find more like this, but I haven't saved it). |
+| **Save** | Transitions to `library` with the default rating and removes the paper from Discovery. |
+| **Reading list** | Sets `reading_status='reading'` and removes the paper from Discovery without saving it to Library. |
+| **Like / Love** | Sets rating 4 / 5 and writes a positive feedback signal. The recommendation stays visible. |
+| **Dislike** | Sets rating 1 and writes a negative feedback signal. The recommendation stays visible. |
+| **Dismiss** | Hides the suggestion and writes a stronger negative signal with slow cooldown and repeat-dismiss stacking. |
+| **Pivot** | Treats the paper as a seed for a new branch (find more like this, but I haven't saved it). |
 | **Open details** | Opens the shared Paper detail panel — abstract, topics, prior / derivative works, full provenance. |
 
 Paper feedback is graph-shaped, not just paper-shaped. A 5-star paper
@@ -351,9 +363,10 @@ raises nearby authors, topics, venues, keywords, tags, close semantic
 neighbours, and local citation neighbours; a dismissed or disliked
 paper lowers those connected signals. Following an author adds a
 positive author signal to Discovery, and rejecting an author adds a
-negative ranking signal through that author's profile. This changes
-ranking only. It does not delete papers, unfollow authors, or mutate
-paper lifecycle state.
+negative ranking signal through that author's profile. Except for
+explicit Save / Reading-list actions, this changes ranking only. It
+does not delete papers, unfollow authors, or mutate paper lifecycle
+state.
 
 The Paper detail panel shows **Prior works** (papers this one cites)
 and **Derivative works** (papers that cite this one). For papers

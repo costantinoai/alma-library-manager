@@ -1017,7 +1017,7 @@ def save_recommendation(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Save a recommendation to the library without forcing a rating."""
+    """Save a recommendation to Library and remove it from Discovery."""
     runner = OperationRunner(db)
 
     def _handler(_ctx):
@@ -1052,7 +1052,7 @@ def like_recommendation(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Mark a recommendation as liked."""
+    """Rate a recommendation positively without hiding it."""
     runner = OperationRunner(db)
 
     def _handler(_ctx):
@@ -1078,6 +1078,35 @@ def like_recommendation(
 
 
 @router.post(
+    "/recommendations/{rec_id}/read",
+    summary="Add a recommendation to the reading list",
+)
+def read_recommendation(
+    rec_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Move a recommendation to Reading list without saving to Library."""
+    runner = OperationRunner(db)
+
+    def _handler(_ctx):
+        out = discovery_app.mark_recommendation_action(db, rec_id, "read")
+        if out is None:
+            return OperationOutcome(status="noop", message="Recommendation not found", result={"id": rec_id})
+        return OperationOutcome(status="completed", message="Recommendation added to reading list", result=out)
+
+    op = runner.run(
+        operation_key=f"discovery.recommendation.read:{rec_id}",
+        handler=_handler,
+        trigger_source="user",
+        actor=str(user.get("username") or "api_user"),
+    )
+    if op["status"] == "noop":
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    return op.get("result") or {"id": rec_id, "read": True}
+
+
+@router.post(
     "/recommendations/{rec_id}/dismiss",
     summary="Dismiss a recommendation",
 )
@@ -1086,7 +1115,7 @@ def dismiss_recommendation(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Mark a recommendation as dismissed."""
+    """Hide a recommendation and record a long-cooldown negative signal."""
     runner = OperationRunner(db)
 
     def _handler(_ctx):
@@ -1108,23 +1137,14 @@ def dismiss_recommendation(
 
 @router.post(
     "/recommendations/{rec_id}/dislike",
-    summary="Dislike a recommendation (negative signal, no system-wide hide)",
+    summary="Rate a recommendation negatively without hiding it",
 )
 def dislike_recommendation(
     rec_id: str,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Record a negative signal on a recommendation without hiding the
-    paper system-wide.
-
-    Distinct from `dismiss`: `dismiss` flips `papers.status` to
-    `dismissed` so the paper disappears from every surface; `dislike`
-    only updates the recommendation's `user_action` + writes a
-    feedback event + adjusts lens signals. The underlying `papers`
-    row stays untouched, so the user can still find the paper via
-    Find & add or future recommendations — just with less lift.
-    """
+    """Record a 1-star negative signal without hiding the suggestion."""
     runner = OperationRunner(db)
 
     def _handler(_ctx):
@@ -1259,4 +1279,3 @@ def discovery_stats(
         return discovery_app.recommendation_stats(db)
     except Exception as e:
         raise_internal("Failed to load discovery stats", e)
-

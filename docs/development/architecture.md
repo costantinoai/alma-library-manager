@@ -114,9 +114,12 @@ keywords, and tags — plus the followed/rejected author's direct
 coauthors and same-institution colleagues (the latter capped to
 ≤400-author institutions). It also folds `papers.rating` (Library
 star ratings, no time decay) and `recommendations.user_action`
-(legacy per-rec history, age-decayed) into `paper_events` before
-projection runs, so every per-paper preference statement reaches the
-same downstream graph.
+(suggestion-resolution history plus legacy per-rec feedback,
+age-decayed) into `paper_events` before projection runs, so every
+per-paper preference statement reaches the same downstream graph.
+Current Discovery like / love / dislike actions write ratings and
+feedback events but do not resolve the recommendation row; save,
+read, and dismiss do.
 
 ### Shared scoring primitives
 
@@ -185,6 +188,7 @@ Every user action maps to exactly one canonical use-case. Examples:
 | User action | Canonical helper |
 |---|---|
 | Save a paper from any surface | `alma.application.library.add_to_library` |
+| Add a Discovery recommendation to Reading list | `alma.application.discovery.mark_recommendation_action(..., "read")` |
 | Follow / unfollow an author | `alma.application.authors.apply_follow_state` |
 | Save an online search result | `alma.application.openalex_manual.save_online_search_result` |
 | Write a feedback event | `alma.services.signal_lab.record_feedback` |

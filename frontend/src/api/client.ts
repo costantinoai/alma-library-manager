@@ -2906,6 +2906,10 @@ export function likeRecommendation(
   })
 }
 
+export function readRecommendation(recId: string): Promise<{ id: string; read: boolean }> {
+  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/read`)
+}
+
 export function dismissRecommendation(recId: string): Promise<{ id: string; dismiss: boolean }> {
   return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/dismiss`)
 }
@@ -2914,12 +2918,10 @@ export function dismissRecommendation(recId: string): Promise<{ id: string; dism
  * Record a negative signal on a Discovery recommendation without
  * hiding the paper system-wide. Distinct from `dismissRecommendation`:
  *
- * - `dismiss` flips `papers.status` to `dismissed` so the paper
- *   disappears from every surface.
- * - `dislike` only writes the feedback event + marks the rec as
- *   actioned. The `papers` row stays untouched, so the user can still
- *   find the paper via Find & add or future recommendations (with
- *   less lift, thanks to the negative signal).
+ * - `dismiss` hides the Discovery suggestion and writes a stronger
+ *   negative signal with long cooldown.
+ * - `dislike` only writes the feedback event + 1-star rating. The
+ *   recommendation stays visible; use Dismiss to hide it.
  */
 export function dislikeRecommendation(recId: string): Promise<{ id: string; dislike: boolean }> {
   return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/dislike`)
@@ -2949,6 +2951,7 @@ export function refreshFeedInbox(): Promise<ActivityOperationResponse> {
 
 export interface FeedStatusResponse {
   last_refresh_at: string | null
+  new_count?: number
 }
 
 export function getFeedStatus(): Promise<FeedStatusResponse> {

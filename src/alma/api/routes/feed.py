@@ -15,7 +15,7 @@ from alma.api.helpers import ActivityJobContext, background_mode_requested, rais
 from alma.api.models import FeedItemResponse, FeedMonitorCreateRequest, FeedMonitorResponse, FeedMonitorUpdateRequest
 from alma.application import feed as feed_app
 from alma.application import feed_monitors as monitor_app
-from alma.core.operations import OperationOutcome, OperationRunner, last_completed_finished_at
+from alma.core.operations import OperationOutcome, OperationRunner
 
 logger = logging.getLogger(__name__)
 
@@ -140,13 +140,16 @@ def get_feed_status(
 ):
     """Return lightweight feed status, including the last successful refresh.
 
-    ``last_refresh_at`` is the latest ``finished_at`` across completed
-    ``feed.refresh_inbox`` operations in ``operation_status``. It is ``None``
-    when the inbox has never been refreshed successfully.
+    ``last_refresh_at`` is the latest ``finished_at`` across completed full
+    inbox or per-monitor feed refreshes in ``operation_status``. ``new_count``
+    counts only still-new papers fetched during that latest window.
     """
     try:
-        last = last_completed_finished_at(db, "feed.refresh_inbox")
-        return {"last_refresh_at": last}
+        _, last = feed_app.latest_feed_fetch_window(db)
+        return {
+            "last_refresh_at": last,
+            "new_count": feed_app.count_new_feed_items_since_latest_fetch(db),
+        }
     except Exception as exc:
         raise_internal("Failed to read feed status", exc)
 

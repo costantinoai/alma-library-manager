@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownWideNarrow,
@@ -68,31 +68,6 @@ function deriveFeedReaction(status?: string | null): PaperReaction {
 function deriveFeedIsSaved(itemStatus?: string | null, paperStatus?: string | null): boolean {
   if (itemStatus === 'add' || itemStatus === 'like' || itemStatus === 'love') return true
   return paperStatus === 'library'
-}
-
-const SEEN_FEED_IDS_KEY = 'alma.feed.seenItemIds'
-const SEEN_FEED_IDS_CAP = 500
-
-function loadSeenFeedIds(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
-  try {
-    const raw = window.localStorage.getItem(SEEN_FEED_IDS_KEY)
-    if (!raw) return new Set()
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set()
-  } catch {
-    return new Set()
-  }
-}
-
-function saveSeenFeedIds(ids: Set<string>): void {
-  if (typeof window === 'undefined') return
-  try {
-    const trimmed = Array.from(ids).slice(-SEEN_FEED_IDS_CAP)
-    window.localStorage.setItem(SEEN_FEED_IDS_KEY, JSON.stringify(trimmed))
-  } catch {
-    // Ignore storage failures (quota, private mode, etc).
-  }
 }
 
 const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
@@ -236,6 +211,8 @@ export function FeedPage() {
   const invalidateFeedAction = async () => {
     await invalidateQueries(queryClient,
       ['feed-inbox'],
+      ['feed-status'],
+      ['bootstrap'],
       ['feed-monitors'],
       ['papers'],
       ['library-saved'],
@@ -329,28 +306,6 @@ export function FeedPage() {
     })
   }, [authorFilter, feedQuery.data])
 
-  // Track which feed items this user has already seen so we can flag freshly
-  // arrived papers with a "New" badge on subsequent visits. Pure client-side —
-  // the server's `is_new` flag is a different signal (recency-since-fetch).
-  const seenIdsRef = useRef<Set<string>>(loadSeenFeedIds())
-  const newItemIds = useMemo(() => {
-    const fresh = new Set<string>()
-    for (const item of items) {
-      if (!seenIdsRef.current.has(item.id)) fresh.add(item.id)
-    }
-    return fresh
-  }, [items])
-  useEffect(() => {
-    if (items.length === 0) return
-    let mutated = false
-    for (const item of items) {
-      if (!seenIdsRef.current.has(item.id)) {
-        seenIdsRef.current.add(item.id)
-        mutated = true
-      }
-    }
-    if (mutated) saveSeenFeedIds(seenIdsRef.current)
-  }, [items])
   const total = authorFilter ? items.length : (feedQuery.data?.total ?? 0)
   const filteredAuthorLabel = items[0]?.author_name || authorFilter
   const monitors = monitorQueryState.data ?? []
@@ -624,7 +579,6 @@ export function FeedPage() {
           items={items}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
-          newItemIds={newItemIds}
           onOpenDetails={(p) => {
             setSelectedPaper(p)
             setDetailOpen(true)
@@ -662,23 +616,12 @@ export function FeedPage() {
             const reaction = deriveFeedReaction(item.status)
             const isSaved = deriveFeedIsSaved(item.status, paper?.status)
             const isQueued = paper?.reading_status === 'reading'
-            const isNew = newItemIds.has(item.id)
+            const isNew = Boolean(item.is_new)
             return (
               <div
                 key={item.id}
                 className="relative rounded-sm"
               >
-                {/* "New" pulse floats at top-right of the card so it never
-                    competes with the header selection checkbox on the left. */}
-                {isNew && (
-                  <span className="pointer-events-none absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-alma-chrome/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 shadow-sm backdrop-blur-sm">
-                    <span className="relative flex h-1.5 w-1.5" aria-hidden>
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70" />
-                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    </span>
-                    New
-                  </span>
-                )}
                 <PaperCard
                   selection={{
                     checked: isSelected,
@@ -708,6 +651,7 @@ export function FeedPage() {
                   reaction={reaction}
                   isSaved={isSaved}
                   isQueued={isQueued}
+                  trailingHeader={isNew ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
                   forceShowAbstract={viewMode === 'extended'}
                   showActionLabels={viewMode === 'extended'}
                   // Discover-similar pivot — sends the user to Discovery
@@ -805,7 +749,6 @@ interface FeedCompactTableProps {
   items: FeedInboxItem[]
   selectedIds: Set<string>
   onSelectionChange: (next: Set<string>) => void
-  newItemIds: Set<string>
   onOpenDetails: (paper: Publication | null) => void
 }
 
@@ -832,7 +775,6 @@ function FeedCompactTable({
   items,
   selectedIds,
   onSelectionChange,
-  newItemIds,
   onOpenDetails,
 }: FeedCompactTableProps) {
   const rows: FeedCompactRow[] = useMemo(
@@ -857,10 +799,10 @@ function FeedCompactTable({
           publishedLabel: formatPublicationDate(paper),
           journal: paper?.journal ?? '',
           source,
-          isNew: newItemIds.has(item.id),
+          isNew: Boolean(item.is_new),
         }
       }),
-    [items, newItemIds],
+    [items],
   )
 
   const columns: ColumnDef<FeedCompactRow>[] = useMemo(

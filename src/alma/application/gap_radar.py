@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 _REMOVE_SIGNAL_SOFT = -0.38
 _REMOVE_SIGNAL_HARD = -0.82
-_REMOVE_DECAY_HALF_LIFE_DAYS = 45.0
-_HARD_REMOVE_HALF_LIFE_DAYS = 120.0
+_REMOVE_DECAY_HALF_LIFE_DAYS = 180.0
+_HARD_REMOVE_HALF_LIFE_DAYS = 365.0
 _HARD_REMOVE_THRESHOLD = 3
 _SUPPRESSION_THRESHOLD = -0.18
 
@@ -175,9 +175,9 @@ def record_missing_author_remove(
 ) -> dict[str, Any]:
     """Record a remove signal against an OpenAlex author.
 
-    `hard=True` writes the strong signal (-0.82, ~120-day half-life)
+    `hard=True` writes the strong signal (-0.82, ~365-day half-life)
     used by the definitive "go away" actions (unfollow, hard-delete).
-    Default soft signal (-0.38, ~45-day half-life) is for one-off
+    Default soft signal (-0.38, ~180-day half-life) is for one-off
     suggestion rejections — a single click is enough to suppress for a
     cycle but the author can come back if they show up again later
     with new evidence.
@@ -248,5 +248,4 @@ def clear_missing_author_feedback(
     if not normalized:
         return
     conn.execute("DELETE FROM missing_author_feedback WHERE openalex_id = ?", (normalized,))
-
 

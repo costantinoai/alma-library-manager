@@ -26,10 +26,10 @@ import {
   likeRecommendation,
   listLensRecommendations,
   listLenses,
+  readRecommendation,
   saveRecommendation,
   refreshLens,
   updateLens,
-  updateReadingStatus,
   type Lens,
   type LensRecommendation,
   type Publication,
@@ -46,6 +46,7 @@ import {
 } from '@/components/discovery'
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
+import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { PaperCard, SkeletonList } from '@/components/shared'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -73,6 +74,17 @@ type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
 // truncation. The backend oversamples internally so the post-filter
 // landing reliably hits this number.
 const LENS_REFRESH_LIMIT = 50
+
+function deriveDiscoveryReaction(rec: LensRecommendation): PaperReaction {
+  if (rec.user_action === 'like' || rec.user_action === 'love' || rec.user_action === 'dislike') {
+    return rec.user_action
+  }
+  const rating = Number(rec.paper?.rating ?? 0)
+  if (rating >= 5) return 'love'
+  if (rating >= 4) return 'like'
+  if (rating > 0 && rating <= 2) return 'dislike'
+  return null
+}
 
 // How many recs are visible by default in the Discovery card list
 // before the user clicks "Show all". Keeps the initial scroll
@@ -231,19 +243,20 @@ export function DiscoveryPage() {
     mutationFn: dismissRecommendation,
     onSuccess: async (_data, recId) => {
       markActioned(recId)
-      toast({ title: 'Dismissed', description: 'Paper hidden from discovery.' })
+      toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
       await invalidateQueries(queryClient,
-        ['feed-inbox'], ['library-workflow-summary'], ['lens-signals', selectedLensId],
+        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId],
       )
     },
   })
 
   const likeMutation = useMutation({
     mutationFn: (recId: string) => likeRecommendation(recId, 4),
-    onSuccess: async (_data, recId) => {
-      markActioned(recId)
-      toast({ title: 'Liked', description: 'Paper added to library with a 4-star rating.' })
-      await invalidateAfterPaperMutation(queryClient, selectedLensId)
+    onSuccess: async () => {
+      toast({ title: 'Rated', description: 'Paper rated 4 stars.' })
+      await invalidateQueries(queryClient,
+        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
+      )
     },
   })
 
@@ -253,29 +266,28 @@ export function DiscoveryPage() {
       markActioned(recId)
       toast({ title: 'Added', description: 'Paper saved to library.' })
       await invalidateAfterPaperMutation(queryClient, selectedLensId)
+      await invalidateQueries(queryClient, ['lens-recommendations', selectedLensId])
     },
   })
 
   const loveMutation = useMutation({
     mutationFn: (recId: string) => likeRecommendation(recId, 5),
-    onSuccess: async (_data, recId) => {
-      markActioned(recId)
-      toast({ title: 'Loved', description: 'Paper added to library with 5-star rating.' })
-      await invalidateAfterPaperMutation(queryClient, selectedLensId)
+    onSuccess: async () => {
+      toast({ title: 'Rated', description: 'Paper rated 5 stars.' })
+      await invalidateQueries(queryClient,
+        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
+      )
     },
   })
 
-  // Dislike — negative signal, paper stays findable system-wide (per D6).
-  // Card disappears from the active list locally via `markActioned`; the
-  // backend still marks `user_action='dislike'` so polling won't re-surface
-  // it either.
+  // Dislike is a rating/signal only. It does not hide the card; Dismiss is
+  // the explicit "hide this suggestion" action.
   const dislikeMutation = useMutation({
     mutationFn: dislikeRecommendation,
-    onSuccess: async (_data, recId) => {
-      markActioned(recId)
-      toast({ title: 'Disliked', description: 'Negative signal recorded. Paper is not hidden.' })
+    onSuccess: async () => {
+      toast({ title: 'Rated', description: 'Paper rated 1 star.' })
       await invalidateQueries(queryClient,
-        ['library-workflow-summary'], ['lens-signals', selectedLensId],
+        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
       )
     },
   })
@@ -286,13 +298,12 @@ export function DiscoveryPage() {
   // from the active Discovery list after adding so the user sees the
   // progress.
   const queueMutation = useMutation({
-    mutationFn: (args: { recId: string; paperId: string }) =>
-      updateReadingStatus(args.paperId, 'reading'),
+    mutationFn: (recId: string) => readRecommendation(recId),
     onSuccess: async (_data, args) => {
-      markActioned(args.recId)
+      markActioned(args)
       toast({ title: 'Added to reading list', description: 'Marked as Reading.' })
       await invalidateQueries(queryClient,
-        ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
+        ['lens-recommendations', selectedLensId], ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
       )
     },
     onError: () => errorToast('Queue failed', 'Could not add to reading list.'),
@@ -1013,18 +1024,14 @@ export function DiscoveryPage() {
                   onLike={() => likeMutation.mutate(rec.id)}
                   onLove={() => loveMutation.mutate(rec.id)}
                   onDislike={() => dislikeMutation.mutate(rec.id)}
-                  onQueue={() => queueMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onQueue={() => queueMutation.mutate(rec.id)}
                   onPivot={() => navigateTo('discovery', {
                     seed: cardPaper.id,
                     seedTitle: cardPaper.title,
                   })}
                   actionDisabled={anyActionPending}
-                  reaction={
-                    rec.user_action === 'like' || rec.user_action === 'love' || rec.user_action === 'dislike'
-                      ? rec.user_action
-                      : null
-                  }
-                  isSaved={paper?.status === 'library' || rec.user_action === 'add' || rec.user_action === 'like' || rec.user_action === 'love'}
+                  reaction={deriveDiscoveryReaction(rec)}
+                  isSaved={paper?.status === 'library' || rec.user_action === 'save'}
                 >
                   {/* Normal view: provenance is folded into the card body
                       as a single chip row (no standalone "Why this surfaced"

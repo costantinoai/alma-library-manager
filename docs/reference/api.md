@@ -142,7 +142,7 @@ parameters and response shapes.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/feed` | Inbox items |
-| `GET` | `/feed/status` | Refresh status |
+| `GET` | `/feed/status` | Refresh status plus latest-fetch `new_count` |
 | `POST` | `/feed/refresh` | Trigger a refresh (Activity) |
 | `POST` | `/feed/bulk-action` | Bulk save / dislike |
 | `POST` | `/feed/{id}/add` | Save a Feed paper |
@@ -163,9 +163,10 @@ parameters and response shapes.
 | `GET` | `/discovery/stats` | Engagement counters |
 | `GET` `PUT` `POST` | `/discovery/settings[/…]` | Weight + behaviour config |
 | `POST` | `/discovery/recommendations/{id}/save` | Save → Library |
-| `POST` | `/discovery/recommendations/{id}/like` | Like (rating 4 + save) |
-| `POST` | `/discovery/recommendations/{id}/dislike` | Dislike (signal only) |
-| `POST` | `/discovery/recommendations/{id}/dismiss` | Hide + signal |
+| `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
+| `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |
+| `POST` | `/discovery/recommendations/{id}/dislike` | Rate 1 + negative signal; stays visible |
+| `POST` | `/discovery/recommendations/{id}/dismiss` | Hide suggestion + long-cooldown negative signal |
 | `POST` | `/discovery/recommendations/{id}/seen` | Mark seen |
 | `GET` | `/discovery/recommendations/{id}/explain` | Score breakdown |
 | `POST` | `/discovery/similar` | "Find papers like these" |

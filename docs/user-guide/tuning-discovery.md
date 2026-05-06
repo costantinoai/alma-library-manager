@@ -201,19 +201,21 @@ These controls feed into the next refresh of that lens.
 
 | Action | Effect |
 |---|---|
-| **Dismiss** | Hides the recommendation from that lens and records a negative signal. |
-| **Dislike** | Records a negative signal without using the same hide semantics. |
+| **Dismiss** | Hides the recommendation and records a stronger negative signal with slow cooldown. Repeat dismissals increase the penalty. |
+| **Dislike** | Sets a 1-star rating and records a negative signal. The recommendation stays visible. |
 
 Use **Dismiss** when the paper is wrong for the lens. Use **Dislike**
 when you want to teach the ranker without making as strong a visibility
-decision.
+decision. Like and Love follow the same rule on the positive side:
+they rate the paper but do not save or hide it.
 
 ## The tuning loop on `main`
 
 There is no separate training page in the current public build. The
 learning loop comes from the normal product surfaces:
 
-* Save / Like / Love from Feed or Discovery
+* Save / Like / Love from Feed
+* Save / Reading list / Like / Love from Discovery
 * Dismiss / Dislike in Discovery
 * Reading history
 * Passive interaction signals such as abstract views and outbound clicks

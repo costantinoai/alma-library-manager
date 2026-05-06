@@ -30,7 +30,7 @@ from alma.openalex.client import (
     batch_fetch_referenced_works_for_openalex_ids,
     batch_fetch_works_by_openalex_ids,
 )
-from alma.core.scoring_math import clamp
+from alma.core.scoring_math import age_decay, clamp
 
 
 def _jsonable_numeric(value: Any) -> Any:
@@ -229,7 +229,13 @@ DEFAULT_CHANNEL_WEIGHTS: dict[str, dict[str, float]] = {
     "tag": {"lexical": 0.35, "vector": 0.30, "graph": 0.15, "external": 0.20},
 }
 
-VALID_RECOMMENDATION_ACTIONS = {"save", "like", "dismiss", "dislike", "seen"}
+VALID_RECOMMENDATION_ACTIONS = {"save", "read", "like", "love", "dismiss", "dislike", "seen"}
+_PAPER_DISMISS_SIGNAL_SOFT = -0.38
+_PAPER_DISMISS_SIGNAL_HARD = -0.82
+_PAPER_DISMISS_DECAY_HALF_LIFE_DAYS = 180.0
+_PAPER_DISMISS_HARD_HALF_LIFE_DAYS = 365.0
+_PAPER_DISMISS_HARD_THRESHOLD = 3
+_PAPER_DISMISS_SUPPRESSION_THRESHOLD = -0.18
 RECOMMENDATION_PROVENANCE_COLUMNS: dict[str, str] = {
     "source_type": "TEXT",
     "source_api": "TEXT",
@@ -375,6 +381,7 @@ def list_recommendations(
     # version will have its own rec row if the lens retrieval touched it.
     query.append(
         "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
+        "AND COALESCE(TRIM(p.reading_status), '') = '' "
         "AND COALESCE(p.canonical_paper_id, '') = '' "
         "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
     )
@@ -406,62 +413,86 @@ def mark_recommendation_action(
     current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
 
     effective_rating = current_rating
-    added_from = None
+    feedback_action: str | None = None
+    stamp_recommendation = action in {"save", "read", "dismiss", "seen"}
+    now = datetime.utcnow().isoformat()
+
     if action == "save":
         effective_rating = max(current_rating, int(rating or 3), 3)
-        added_from = "discovery_save"
         if paper_id:
             library_app.add_to_library(
                 db,
                 paper_id,
                 rating=effective_rating,
-                added_from=added_from,
+                added_from="discovery_save",
             )
-    elif action == "like":
-        effective_rating = max(current_rating, int(rating or 4), 4)
-        added_from = "discovery_like"
+        feedback_action = "save"
+    elif action == "read":
         if paper_id:
-            library_app.add_to_library(
-                db,
-                paper_id,
-                rating=effective_rating,
-                added_from=added_from,
+            db.execute(
+                """
+                UPDATE papers
+                SET reading_status = 'reading',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now, paper_id),
             )
+    elif action in {"like", "love"}:
+        effective_rating = int(rating or (5 if action == "love" else 4))
+        effective_rating = max(1, min(5, effective_rating))
+        if paper_id:
+            db.execute(
+                "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
+                (effective_rating, now, paper_id),
+            )
+        feedback_action = "love" if effective_rating >= 5 else "like"
     elif action == "dismiss":
         effective_rating = 1
-        if paper_id:
-            library_app.dismiss_paper(db, paper_id)
+        feedback_action = "dismiss"
     elif action == "dislike":
-        # D6: dislike on Discovery writes a negative signal but does
-        # NOT hide the paper system-wide (`dismiss_paper` flips
-        # `papers.status`; `dislike` deliberately leaves it alone).
-        # The recommendation row is still stamped `user_action='dislike'`
-        # so the active Discovery list drops it on the next poll —
-        # soft-negative at the card level, signal-only at the paper
-        # level.
-        effective_rating = 2
+        effective_rating = 1
+        if paper_id:
+            db.execute(
+                "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
+                (effective_rating, now, paper_id),
+            )
+        feedback_action = "dislike"
 
-    now = datetime.utcnow().isoformat()
-    db.execute(
-        "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
-        (action, now, rec_id),
-    )
-    if paper_id and action in {"save", "like", "dismiss", "dislike"}:
+    if stamp_recommendation:
+        if paper_id and action in {"read", "dismiss"}:
+            db.execute(
+                """
+                UPDATE recommendations
+                SET user_action = ?, action_at = ?
+                WHERE paper_id = ?
+                  AND (user_action IS NULL OR TRIM(user_action) = '')
+                """,
+                (action, now, paper_id),
+            )
+        else:
+            db.execute(
+                "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
+                (action, now, rec_id),
+            )
+
+    if paper_id and action == "save":
         library_app.sync_surface_resolution(
             db,
             paper_id,
-            action=action,
+            action="save",
             source_surface="discovery",
         )
+    if paper_id and feedback_action:
         library_app.record_paper_feedback(
             db,
             paper_id,
-            action=action,
+            action=feedback_action,
             rating=effective_rating,
             source_surface="discovery",
         )
     lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
-    if lens_id and paper_id:
+    if lens_id and paper_id and feedback_action:
         signal_value = library_app.rating_signal_value(effective_rating)
         record_lens_signal(
             db,
@@ -474,10 +505,64 @@ def mark_recommendation_action(
         "id": rec_id,
         action: True,
         "paper_id": paper_id,
-        "user_action": action,
-        "action_at": now,
+        "user_action": action if stamp_recommendation else None,
+        "action_at": now if stamp_recommendation else None,
         "rating": effective_rating,
     }
+
+
+def _parse_action_datetime(raw: object) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+
+def _paper_dismissal_scores(rows: list[sqlite3.Row]) -> dict[str, float]:
+    """Return decayed suppression scores for dismissed Discovery papers.
+
+    Mirrors the author-rail dismissal model: one dismissal is a temporary
+    negative signal, repeated dismissals stack, and three recent dismissals add
+    a stronger long half-life penalty. The score is used only to decide whether
+    a paper is still cooling down before being eligible for fresh Discovery
+    recommendations.
+    """
+    now = datetime.utcnow()
+    grouped: dict[str, list[datetime | None]] = defaultdict(list)
+    for row in rows:
+        paper_id = str(row["paper_id"] or "").strip()
+        if not paper_id:
+            continue
+        acted_at = _parse_action_datetime(row["action_at"]) or _parse_action_datetime(row["created_at"])
+        grouped[paper_id].append(acted_at)
+
+    scores: dict[str, float] = {}
+    for paper_id, timestamps in grouped.items():
+        score = 0.0
+        valid_timestamps: list[datetime] = []
+        for acted_at in timestamps:
+            age_days = max(0.0, (now - acted_at).total_seconds() / 86400.0) if acted_at else 0.0
+            score += _PAPER_DISMISS_SIGNAL_SOFT * age_decay(
+                age_days,
+                half_life_days=_PAPER_DISMISS_DECAY_HALF_LIFE_DAYS,
+            )
+            if acted_at:
+                valid_timestamps.append(acted_at)
+        if len(timestamps) >= _PAPER_DISMISS_HARD_THRESHOLD:
+            latest = max(valid_timestamps) if valid_timestamps else now
+            age_days = max(0.0, (now - latest).total_seconds() / 86400.0)
+            score += _PAPER_DISMISS_SIGNAL_HARD * age_decay(
+                age_days,
+                half_life_days=_PAPER_DISMISS_HARD_HALF_LIFE_DAYS,
+            )
+        scores[paper_id] = score
+    return scores
 
 
 def clear_recommendations(db: sqlite3.Connection) -> int:
@@ -1068,6 +1153,7 @@ def list_lens_recommendations(
         WHERE r.lens_id = ?
           AND r.user_action IS NULL
           AND p.status NOT IN ('library', 'dismissed', 'removed')
+          AND COALESCE(TRIM(p.reading_status), '') = ''
         ORDER BY COALESCE(r.rank, 999999) ASC, r.score DESC, r.created_at DESC
         LIMIT ? OFFSET ?
         """,
@@ -2068,34 +2154,34 @@ def refresh_lens_recommendations(
 
     phase_started = perf_counter()
     status_by_paper: dict[str, str] = {}
+    reading_status_by_paper: dict[str, str] = {}
     actioned_paper_ids: set[str] = set()
     unique_paper_ids = [paper_id for paper_id in dict.fromkeys(staged_paper_ids) if str(paper_id).strip()]
     for chunk in _chunked(unique_paper_ids, 200):
         placeholders = ", ".join("?" for _ in chunk)
         status_rows = db.execute(
-            f"SELECT id, status FROM papers WHERE id IN ({placeholders})",
+            f"SELECT id, status, reading_status FROM papers WHERE id IN ({placeholders})",
             chunk,
         ).fetchall()
         for row in status_rows:
             status_by_paper[str(row["id"])] = str(row["status"] or "tracked")
-        # Only block re-surfacing on *negative* prior actions. Saves and
-        # likes already drive the paper to status='library' which is
-        # caught by the status filter above; double-blocking them here
-        # was creating the "0 staged" cliff because every healthy
-        # candidate the user ever interacted with was permanently
-        # excluded — including tracked corpus papers that never made it
-        # to Library. Tracked papers (corpus, status='tracked') are
-        # legitimate re-surfacing candidates per user direction.
+            reading_status_by_paper[str(row["id"])] = str(row["reading_status"] or "").strip()
+        # Only block re-surfacing while paper dismissals are still in their
+        # cooldown window. Saves drive status='library'; reading-list handoffs
+        # are caught by the reading-status filter; like/love/dislike are
+        # rating signals and should not hide the paper.
         action_rows = db.execute(
             f"""
-            SELECT DISTINCT paper_id
+            SELECT paper_id, user_action, action_at, created_at
             FROM recommendations
             WHERE paper_id IN ({placeholders})
-              AND user_action IN ('dismiss', 'dismissed', 'dislike', 'disliked', 'remove', 'removed')
+              AND user_action IN ('dismiss', 'dismissed', 'remove', 'removed')
             """,
             chunk,
         ).fetchall()
-        actioned_paper_ids.update(str(row["paper_id"]) for row in action_rows if str(row["paper_id"] or "").strip())
+        for paper_id, score in _paper_dismissal_scores(action_rows).items():
+            if score <= _PAPER_DISMISS_SUPPRESSION_THRESHOLD:
+                actioned_paper_ids.add(paper_id)
 
     rec_rows: list[tuple] = []
     inserted_paper_ids: list[str] = []
@@ -2105,7 +2191,7 @@ def refresh_lens_recommendations(
     skipped_duplicate_paper = 0
     for idx, candidate, paper_id in staged_candidates:
         paper_status = status_by_paper.get(paper_id, "tracked")
-        if paper_status in ("library", "dismissed", "removed"):
+        if paper_status in ("library", "dismissed", "removed") or reading_status_by_paper.get(paper_id):
             skipped_library += 1
             continue
         if paper_id in actioned_paper_ids:

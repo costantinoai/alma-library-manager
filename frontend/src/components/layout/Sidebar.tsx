@@ -241,7 +241,7 @@ export function Sidebar({
                         // the icon so the count cue isn't lost.
                         <span
                           className="absolute right-1.5 top-1.5 hidden h-1.5 w-1.5 rounded-full bg-alma-folio lg:block"
-                          aria-label={`${badge} unread`}
+                          aria-label={`${badge} new papers`}
                         />
                       )}
                     </button>

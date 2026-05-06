@@ -66,7 +66,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `discovery_settings` | Mirror of the Discovery section of `settings.json` (used by some hot paths). |
 | `discovery_lenses` | Saved lens definitions. |
 | `lens_signals` | Per-lens positive / negative feedback counters. |
-| `recommendations` | Materialised recommendations from the last lens refresh. |
+| `recommendations` | Materialised recommendations from the last lens refresh. `user_action` is used for suggestion-resolution actions such as `save`, `read`, and `dismiss`; Discovery like / love / dislike are rating signals and do not resolve the row. |
 | `suggestion_sets` | Each refresh produces a suggestion set; rows track which set produced which recommendation. |
 | `feedback_events` | The append-only signal store. Every Save / Like / Dismiss / Signal-Lab event lands here with `context_json` (lens id, source bucket, surface, etc.). Paper actions are commonly stored as `event_type='paper_action'`, `entity_type='publication'`, `entity_id=<paper_id>`, with JSON `value` containing `action`, `rating`, and `signal_value`. Ranking code also tolerates older `entity_type='paper'` rows and direct event names like `like` / `dismiss`. |
 | `preference_profiles` | Materialised preference centroids derived from `feedback_events`. |
@@ -77,7 +77,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 
 | Table | Purpose |
 |---|---|
-| `feed_items` | One row per (monitor, paper) pair the monitor surfaced. |
+| `feed_items` | One row per (monitor, paper) pair the monitor surfaced. `status='new'` means untriaged; the UI's New marker is narrower and is derived from `status='new'` plus `fetched_at` inside the latest completed Feed refresh window. |
 | `feed_monitors` | Active author / topic / query monitors. |
 
 ### Embeddings
@@ -116,7 +116,14 @@ These are pinned by code:
   upstream sources. Stable across upserts.
 * **`papers.status`** is one of `tracked`, `library`, `dismissed`,
   `removed`. Library reads filter `status='library'`. Discovery
-  reads filter `status='tracked' AND status NOT IN ('dismissed', 'removed')`.
+  reads exclude `library`, `dismissed`, and `removed` membership, and
+  also exclude rows with a non-empty `reading_status`.
+* **Discovery ratings and resolution are separate**. Save promotes the
+  paper to Library, Reading-list sets `papers.reading_status='reading'`,
+  and Dismiss resolves the recommendation row with a long-cooldown
+  negative signal. Like / Love / Dislike only update rating and feedback
+  signal; they do not set `recommendations.user_action` and do not hide
+  the current suggestion.
 * **`papers.canonical_paper_id`** is non-null on preprint rows that
   collapsed into a journal twin. Library / Discovery reads filter
   `canonical_paper_id IS NULL` to show one card per work.

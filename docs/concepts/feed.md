@@ -41,6 +41,21 @@ When `publication_date` is missing, ALMa falls back to
 order correctly. There is no `YYYY-01-01` fabrication for missing
 dates.
 
+## New markers
+
+The **New** marker is tied to the latest completed Feed refresh, not
+to whether this browser session has rendered a row. A Feed item is
+marked new only when:
+
+* `feed_items.status = 'new'`
+* `feed_items.fetched_at` falls inside the latest completed full-inbox
+  or per-monitor refresh window
+
+Older untriaged rows can remain visible in the Feed, but they are not
+badged as new. The sidebar bubble uses the same backend count, so it
+signals only papers added by the latest fetch and clears as those rows
+are actioned.
+
 ## Actions on a Feed item
 
 Each card carries the standard rating vocabulary:

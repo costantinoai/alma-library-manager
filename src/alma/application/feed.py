@@ -602,6 +602,70 @@ def _insert_feed_item(
     return db.execute("SELECT changes()").fetchone()[0] > 0
 
 
+def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | None]:
+    """Return the started/finished window for the latest completed Feed fetch."""
+    try:
+        row = db.execute(
+            """
+            SELECT started_at, finished_at
+            FROM operation_status
+            WHERE status = 'completed'
+              AND (
+                operation_key = 'feed.refresh_inbox'
+                OR operation_key LIKE 'feed.monitor.refresh:%'
+              )
+              AND COALESCE(started_at, '') <> ''
+              AND COALESCE(finished_at, '') <> ''
+            ORDER BY finished_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None, None
+    if not row:
+        return None, None
+    return str(row["started_at"] or "").strip() or None, str(row["finished_at"] or "").strip() or None
+
+
+def _is_new_since_latest_fetch(
+    *,
+    status: object,
+    fetched_at: object,
+    latest_fetch_window: tuple[str | None, str | None],
+) -> bool:
+    if str(status or "new").strip().lower() != "new":
+        return False
+    start, finish = latest_fetch_window
+    if not start or not finish:
+        return False
+    fetched = str(fetched_at or "").strip()
+    return bool(fetched and start <= fetched <= finish)
+
+
+def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_days: int = 60) -> int:
+    """Count untriaged feed papers created by the latest completed fetch."""
+    start, finish = latest_feed_fetch_window(db)
+    if not start or not finish:
+        return 0
+    cutoff = (datetime.utcnow() - timedelta(days=int(since_days))).isoformat()
+    try:
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM feed_items fi
+            LEFT JOIN papers p ON p.id = fi.paper_id
+            WHERE fi.status = 'new'
+              AND fi.fetched_at >= ?
+              AND fi.fetched_at <= ?
+              AND COALESCE(NULLIF(p.publication_date, ''), fi.fetched_at) >= ?
+            """,
+            (start, finish, cutoff),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int((row["c"] if row else 0) or 0)
+
+
 def list_feed_items(
     db: sqlite3.Connection,
     *,
@@ -626,11 +690,18 @@ def list_feed_items(
     where = ["1=1"]
     params: list[object] = []
     requested_status = str(status or "").strip().lower()
+    latest_fetch_window = latest_feed_fetch_window(db)
     if requested_status and requested_status != "all":
         if requested_status not in VALID_FEED_STATUSES:
             raise ValueError(f"Invalid feed status: {requested_status}")
         where.append("fi.status = ?")
         params.append(requested_status)
+        if requested_status == "new":
+            if latest_fetch_window[0] and latest_fetch_window[1]:
+                where.append("fi.fetched_at >= ? AND fi.fetched_at <= ?")
+                params.extend([latest_fetch_window[0], latest_fetch_window[1]])
+            else:
+                where.append("1=0")
 
     if since_days is not None and since_days > 0:
         # Filter by paper publication date when known, else by the timestamp at
@@ -692,7 +763,7 @@ def list_feed_items(
         ORDER BY {order}
     """
     rows = db.execute(query, params).fetchall()
-    aggregated = _aggregate_feed_rows(rows)
+    aggregated = _aggregate_feed_rows(rows, latest_fetch_window=latest_fetch_window)
     total = len(aggregated)
     return aggregated[offset:offset + limit], total
 
@@ -748,7 +819,8 @@ def list_feed_items_for_ids(db: sqlite3.Connection, feed_item_ids: list[str]) ->
         """,
         feed_item_ids,
     ).fetchall()
-    mapped = [_map_feed_row(r) for r in rows]
+    latest_fetch_window = latest_feed_fetch_window(db)
+    mapped = [_map_feed_row(r, latest_fetch_window=latest_fetch_window) for r in rows]
     return mapped, len(mapped)
 
 
@@ -1797,7 +1869,11 @@ def refresh_feed_monitor(
     return diag
 
 
-def _map_feed_row(row: sqlite3.Row) -> dict:
+def _map_feed_row(
+    row: sqlite3.Row,
+    *,
+    latest_fetch_window: tuple[str | None, str | None],
+) -> dict:
     monitor_type = str(row["monitor_type"] or "").strip().lower() or None
     author_id = str(row["author_id"] or "").strip()
     author_name = str(row["author_name"] or "").strip() or None
@@ -1831,7 +1907,11 @@ def _map_feed_row(row: sqlite3.Row) -> dict:
         "fetched_at": row["fetched_at"],
         "status": row["status"],
         "signal_value": int(row["signal_value"] or 0),
-        "is_new": str(row["status"] or "new") == "new",
+        "is_new": _is_new_since_latest_fetch(
+            status=row["status"],
+            fetched_at=row["fetched_at"],
+            latest_fetch_window=latest_fetch_window,
+        ),
         "score_breakdown": _parse_json_dict(row["score_breakdown"]),
         "paper": {
             "id": row["p_id"],
@@ -1857,13 +1937,17 @@ def _map_feed_row(row: sqlite3.Row) -> dict:
     }
 
 
-def _aggregate_feed_rows(rows: list[sqlite3.Row]) -> list[dict]:
+def _aggregate_feed_rows(
+    rows: list[sqlite3.Row],
+    *,
+    latest_fetch_window: tuple[str | None, str | None],
+) -> list[dict]:
     """Collapse duplicate papers into one inbox card while preserving author provenance."""
     aggregated: dict[str, dict] = {}
     ordered_ids: list[str] = []
 
     for row in rows:
-        mapped = _map_feed_row(row)
+        mapped = _map_feed_row(row, latest_fetch_window=latest_fetch_window)
         group_key = str(mapped.get("paper_id") or mapped.get("id") or "").strip()
         if not group_key:
             continue

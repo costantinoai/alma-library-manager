@@ -80,7 +80,8 @@ export function invalidateAfterPaperMutation(
 
 /**
  * After the Feed inbox has been (successfully) refreshed. Invalidates the
- * inbox list, the monitor list, and the last-refresh status.
+ * inbox list, the monitor list, the last-refresh status, and the sidebar
+ * bootstrap badge.
  */
 export function invalidateAfterFeedRefresh(qc: QueryClient): Promise<void[]> {
   return invalidateQueries(
@@ -88,6 +89,6 @@ export function invalidateAfterFeedRefresh(qc: QueryClient): Promise<void[]> {
     ['feed-inbox'],
     ['feed-monitors'],
     ['feed-status'],
+    ['bootstrap'],
   )
 }
-

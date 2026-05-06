@@ -2,11 +2,11 @@
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends
 
 from alma.api.deps import get_db, get_current_user
+from alma.application import feed as feed_app
 
 logger = logging.getLogger(__name__)
 
@@ -63,23 +63,12 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Feed unread count — mirror the Feed page's visible window (status='new'
-    # AND either publication_date OR fetch date within the last 60 days) so
-    # the sidebar badge matches what the user sees when they click into Feed.
-    # Must stay in sync with `application/feed.py::list_feed_items`.
+    # Feed badge count — only papers created by the latest completed fetch.
+    # "New" is not "untriaged forever"; older untriaged papers remain visible
+    # in Feed but stop lighting up the nav after a newer fetch.
     feed_unread = 0
     try:
-        feed_cutoff = (datetime.utcnow() - timedelta(days=60)).isoformat()
-        feed_unread = db.execute(
-            """
-            SELECT COUNT(*) AS c
-            FROM feed_items fi
-            LEFT JOIN papers p ON p.id = fi.paper_id
-            WHERE fi.status = 'new'
-              AND COALESCE(NULLIF(p.publication_date, ''), fi.fetched_at) >= ?
-            """,
-            (feed_cutoff,),
-        ).fetchone()["c"]
+        feed_unread = feed_app.count_new_feed_items_since_latest_fetch(db)
     except Exception:
         pass
 
