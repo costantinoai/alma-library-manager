@@ -94,20 +94,19 @@ def refresh_author_centroid(
         ).fetchall()
     except sqlite3.OperationalError:
         return False
-    from alma.core.vector_blob import decode_vector, encode_vector
+    from alma.core.vector_blob import decode_vectors_uniform, encode_vector
 
-    vectors = [
-        decode_vector(row["embedding"])
-        for row in rows
-        if row["embedding"]
-    ]
-    if not vectors:
+    # Uniform decoder so a single rogue legacy-fp32 paper row can't
+    # blow up the centroid build with "all input arrays must have the
+    # same shape" — see lessons.md "Vector blob storage dtype".
+    matrix, _ = decode_vectors_uniform(row["embedding"] for row in rows)
+    if matrix.size == 0:
         conn.execute(
             "DELETE FROM author_centroids WHERE author_openalex_id = ? AND model = ?",
             (oid, model),
         )
         return False
-    centroid = np.mean(np.stack(vectors), axis=0)
+    centroid = np.mean(matrix, axis=0)
     conn.execute(
         """
         INSERT INTO author_centroids
@@ -122,7 +121,7 @@ def refresh_author_centroid(
             oid,
             model,
             encode_vector(centroid),
-            len(vectors),
+            int(matrix.shape[0]),
             datetime.now(timezone.utc).isoformat(),
         ),
     )

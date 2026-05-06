@@ -144,9 +144,11 @@ def compute_centroid_from_ids(
     ).fetchall()
     if not rows:
         return None
-    from alma.core.vector_blob import decode_vector
-    embeddings = [decode_vector(r["embedding"]) for r in rows]
-    return np.mean(np.stack(embeddings), axis=0)
+    from alma.core.vector_blob import decode_vectors_uniform
+    matrix, _ = decode_vectors_uniform(r["embedding"] for r in rows)
+    if matrix.size == 0:
+        return None
+    return np.mean(matrix, axis=0)
 
 
 # ---------------------------------------------------------------------------

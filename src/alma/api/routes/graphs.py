@@ -4,7 +4,6 @@ import json
 import logging
 import re
 import sqlite3
-import struct
 import uuid
 import hashlib
 from collections import Counter, defaultdict
@@ -1212,6 +1211,13 @@ def _load_embeddings(
     except sqlite3.OperationalError:
         return {}
 
+    # Always decode through the canonical helper — `publication_embeddings`
+    # stores float16 since commit 918e5fc, so the old struct-unpack path
+    # interpreted bytes as float32 and returned half-dim garbage vectors.
+    # `decode_vector` upcasts to runtime float32 and (when given an
+    # `expected_dim`) auto-rescues legacy float32 rows by byte length.
+    from alma.core.vector_blob import decode_vector
+
     embeddings: dict[str, list[float]] = {}
     for row in rows:
         if isinstance(row, sqlite3.Row):
@@ -1220,8 +1226,13 @@ def _load_embeddings(
         else:
             paper_id = row[0]
             blob = row[1]
-        n_floats = len(blob) // 4
-        embeddings[paper_id] = list(struct.unpack(f"{n_floats}f", blob))
+        if not blob:
+            continue
+        try:
+            vec = decode_vector(blob)
+        except Exception:
+            continue
+        embeddings[paper_id] = vec.tolist()
     return embeddings
 
 

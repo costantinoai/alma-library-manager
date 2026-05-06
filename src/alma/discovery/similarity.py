@@ -963,7 +963,16 @@ def compute_embedding_centroid(
     if not embeddings:
         return None
 
-    return np.mean(np.stack(embeddings), axis=0)
+    # Filter to the modal dim so a single legacy-fp32 row (decoded
+    # by `get_cached_embedding` to twice the canonical dim) doesn't
+    # crash the np.stack with a shape mismatch.
+    from collections import Counter
+    dims = Counter(int(v.shape[0]) for v in embeddings)
+    target_dim = dims.most_common(1)[0][0]
+    aligned = [v for v in embeddings if int(v.shape[0]) == target_dim]
+    if not aligned:
+        return None
+    return np.mean(np.stack(aligned), axis=0)
 
 
 def load_publication_example_embeddings(

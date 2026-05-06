@@ -1893,19 +1893,22 @@ def _semantic_similar_candidates(
         return []
     if not lib_rows:
         return []
-    from alma.core.vector_blob import decode_vector
-    lib_vecs = [
-        decode_vector(row["embedding"])
-        for row in lib_rows
-        if row["embedding"]
-    ]
-    if not lib_vecs:
+    from alma.core.vector_blob import decode_vector, decode_vectors_uniform
+
+    # Uniform decoder rescues legacy fp32 rows by byte length and
+    # filters out anything still wrong-shape; everything that survives
+    # shares the same dim so np.stack / np.mean don't crash.
+    lib_matrix, _ = decode_vectors_uniform(
+        row["embedding"] for row in lib_rows
+    )
+    if lib_matrix.size == 0:
         return []
-    lib_centroid = np.mean(np.stack(lib_vecs), axis=0)
+    lib_centroid = np.mean(lib_matrix, axis=0)
     lib_norm = float(np.linalg.norm(lib_centroid))
     if lib_norm <= 0.0:
         return []
     lib_centroid = lib_centroid / lib_norm
+    expected_dim = int(lib_centroid.shape[0])
 
     # Candidate authors — openalex_ids with ≥2 embedded papers (any
     # status) and at least some corpus mass so we can form a meaningful
@@ -1958,7 +1961,16 @@ def _semantic_similar_candidates(
         blob = row["embedding"]
         if not oid or not blob:
             continue
-        per_author_vecs.setdefault(oid, []).append(decode_vector(blob))
+        # Pin to the library dim so legacy-fp32 rows decode correctly
+        # and any genuine mismatch is silently skipped here rather
+        # than blowing up the np.stack below.
+        try:
+            vec = decode_vector(blob, expected_dim=expected_dim)
+        except Exception:
+            continue
+        if vec.shape[0] != expected_dim:
+            continue
+        per_author_vecs.setdefault(oid, []).append(vec)
 
     ranked: list[tuple[float, str, str, int]] = []
     for row in author_rows:

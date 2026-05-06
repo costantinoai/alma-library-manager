@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import sqlite3
-import struct
 
 import numpy as np
 
@@ -802,8 +801,17 @@ def _author_mean_embeddings(
     except sqlite3.OperationalError:
         return {}
 
-    sums: dict[str, np.ndarray] = {}
-    counts: dict[str, int] = {}
+    # Decode through the canonical helper — vectors are stored as
+    # float16 since commit 918e5fc, so the old struct-unpack-as-float32
+    # path produced half-dim garbage. We pass through every blob once
+    # to find the modal byte length, derive the canonical dim from it
+    # (assuming float16 storage — same target_dim works for legacy
+    # float32 rows because byte length is exactly 2× there), then
+    # decode each blob with `expected_dim` so legacy rows auto-rescue.
+    from collections import Counter
+    from alma.core.vector_blob import decode_vector
+
+    pairs: list[tuple[str, bytes]] = []
     for row in rows:
         if isinstance(row, sqlite3.Row):
             aid = row["author_id"]
@@ -813,8 +821,24 @@ def _author_mean_embeddings(
             blob = row[1]
         if not blob:
             continue
-        n_floats = len(blob) // 4
-        vec = np.asarray(struct.unpack(f"{n_floats}f", blob), dtype=np.float32)
+        pairs.append((aid, blob))
+
+    if not pairs:
+        return {}
+    modal_len = Counter(len(b) for _, b in pairs).most_common(1)[0][0]
+    if modal_len % 2 != 0:
+        return {}
+    target_dim = modal_len // 2  # canonical float16 width
+
+    sums: dict[str, np.ndarray] = {}
+    counts: dict[str, int] = {}
+    for aid, blob in pairs:
+        try:
+            vec = decode_vector(blob, expected_dim=target_dim)
+        except Exception:
+            continue
+        if vec.shape[0] != target_dim:
+            continue
         if aid in sums:
             sums[aid] += vec
             counts[aid] += 1

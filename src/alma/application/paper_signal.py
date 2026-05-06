@@ -135,16 +135,15 @@ def _load_library_centroid(db: sqlite3.Connection, model: str):
         ).fetchall()
     except sqlite3.OperationalError:
         return None
-    from alma.core.vector_blob import decode_vector
+    from alma.core.vector_blob import decode_vectors_uniform
 
-    vectors = [
-        decode_vector(row["embedding"])
-        for row in rows
-        if row["embedding"]
-    ]
-    if not vectors:
+    # Use the uniform-dim decoder so any legacy float32 row gets
+    # auto-rescued at the byte-length boundary and any genuinely
+    # mismatched row is dropped instead of crashing the np.stack.
+    matrix, _ = decode_vectors_uniform(row["embedding"] for row in rows)
+    if matrix.size == 0:
         return None
-    centroid = np.mean(np.stack(vectors), axis=0)
+    centroid = np.mean(matrix, axis=0)
     norm = float(np.linalg.norm(centroid))
     if norm <= 0.0:
         return None
@@ -209,13 +208,29 @@ def _load_author_centroid_similarities(
         return {}
     from alma.core.vector_blob import decode_vector
 
+    # We know the canonical dim — it's whatever the library centroid
+    # came back at. Pass it through so legacy float32 author-centroid
+    # blobs (written before commit 918e5fc) decode correctly at the
+    # byte-length boundary instead of crashing np.dot with a phantom
+    # 2× dimension. Anything still wrong-shape is skipped with a
+    # debug log.
+    expected_dim = int(lib_centroid.shape[0])
     out: dict[str, float] = {}
     for row in rows:
         oid = str(row["oid"] or "").strip().lower()
         blob = row["blob"]
         if not oid or not blob:
             continue
-        vec = decode_vector(blob)
+        try:
+            vec = decode_vector(blob, expected_dim=expected_dim)
+        except Exception:
+            continue
+        if vec.shape[0] != expected_dim:
+            logger.debug(
+                "skipping author centroid for %s: dim %d != lib dim %d",
+                oid, vec.shape[0], expected_dim,
+            )
+            continue
         norm = float(np.linalg.norm(vec))
         if norm <= 0.0:
             continue
