@@ -13,7 +13,7 @@ range that doesn't make the UI feel sluggish.
 
 | Operation | Budget | Notes |
 |---|---|---|
-| **Discovery lens refresh** (canonical lens, ~330 saved papers) | ~76 s end-to-end | Multi-source retrieval, ranking, branch clustering. |
+| **Discovery lens refresh** (canonical lens, ~330 saved papers) | ~60 s end-to-end | Multi-source retrieval, ranking, branch clustering. The bulk of remaining time is the external retrieval lane (network-bound). |
 | **Page-mount reads** (`/library/saved`, `/feed`, `/authors`) | < 1 s P95 | Stays responsive even during a concurrent refresh. |
 | **Detail-panel reads** (`/papers/{id}`, prior / derivative works) | < 500 ms P95 | Mostly cached. |
 | **Activity poll** (`/api/v1/activity`) | < 200 ms | Used for the live status of background jobs. |
@@ -26,14 +26,14 @@ larger / smaller corpora.
 
 ## Where time goes in a lens refresh
 
-A typical 76-second lens refresh breaks down roughly as:
+A typical ~60-second cold lens refresh breaks down roughly as:
 
 | Phase | Time | What's happening |
 |---|---|---|
-| Setup + read seeds | 2–5 s | Read your Library, build the seed set. |
-| External retrieval (OpenAlex + S2) | 30–45 s | Per-lane parallel fan-out, per-lane deadlines. |
+| Setup + seed projection (citation/topic/author neighbours) | < 1 s | Reads your Library and prepares projected signals. Cold cost was ~58 s pre-2026-05-06; expression-index fixes brought it to sub-second. |
+| External retrieval (OpenAlex + S2 + Crossref) | 30–48 s | Per-lane parallel fan-out, per-lane deadlines. Network-bound. |
 | SPECTER2 cosine over candidates | 5–10 s | Vector-cache hits where possible. |
-| Scoring | 5–10 s | Per-candidate signal computation. |
+| Scoring | 1–3 s | Per-candidate signal computation. |
 | Branch clustering + representative labels | 5–15 s | Label extraction and projection add the upper end. |
 | Writes (recommendations + suggestion_set) | 1–3 s | Single transaction. |
 

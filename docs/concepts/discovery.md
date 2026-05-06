@@ -376,7 +376,7 @@ haven't imported, they show a stub with citation intent metadata.
 ## Performance
 
 A canonical lens refresh against ~330 saved papers completes in
-about **76 seconds** end-to-end. Subsequent refreshes against the
+about **60 seconds** end-to-end. Subsequent refreshes against the
 same lens use cached candidates and are dramatically faster. See
 [Performance](../operations/performance.md) for the full budget
 table and how to profile your own refresh.
