@@ -499,6 +499,59 @@ def _run_reset(job_id: str) -> dict:
     }
 
 
+_EMBEDDINGS_RESET_TABLES = (
+    "publication_embeddings",
+    "author_centroids",
+    "publication_embedding_fetch_status",
+)
+
+
+@router.post(
+    "/embeddings/reset",
+    summary="Delete every cached embedding so they can be re-fetched",
+    description=(
+        "Wipes `publication_embeddings`, `author_centroids`, and "
+        "`publication_embedding_fetch_status` so the next AI run / S2 "
+        "backfill repopulates them from scratch. Synchronous (small "
+        "tables, < 1 s). Library papers, followed authors, lenses, "
+        "feedback events, collections, tags, and the corpus are "
+        "preserved — only the vector caches and their per-paper "
+        "fetch markers are removed."
+    ),
+)
+def reset_embeddings(
+    conn: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    """Clear every embedding-storing table; counts what was removed."""
+    cleared: dict[str, int] = {}
+    existing = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+    for table in _EMBEDDINGS_RESET_TABLES:
+        if table not in existing:
+            continue
+        try:
+            count_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            count = int(count_row[0] if count_row else 0)
+            conn.execute(f"DELETE FROM {table}")  # noqa: S608 — hardcoded allowlist
+            cleared[table] = count
+        except sqlite3.OperationalError as exc:
+            logger.warning("Could not clear embedding table %s: %s", table, exc)
+
+    conn.commit()
+
+    return {
+        "success": True,
+        "cleared": cleared,
+        "total_rows_cleared": sum(cleared.values()),
+    }
+
+
 @router.delete(
     "/reset",
     summary="Reset library data",

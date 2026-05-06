@@ -11,7 +11,13 @@ import {
   UploadCloud,
 } from 'lucide-react'
 
-import { api, resetFeedbackLearning, type BackupInfo, type LibraryInfo } from '@/api/client'
+import {
+  api,
+  resetEmbeddings,
+  resetFeedbackLearning,
+  type BackupInfo,
+  type LibraryInfo,
+} from '@/api/client'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
 import { ImportDialog } from '@/components/ImportDialog'
@@ -134,6 +140,31 @@ export function LibraryManagementCard() {
       )
     },
     onError: () => errorToast('Error', 'Failed to reset learned feedback.'),
+  })
+
+  const resetEmbeddingsMutation = useMutation({
+    mutationFn: () => resetEmbeddings(),
+    onSuccess: (data) => {
+      toast({
+        title: 'Embeddings deleted',
+        description:
+          data.total_rows_cleared === 0
+            ? 'No saved embeddings were present.'
+            : `Deleted ${data.total_rows_cleared.toLocaleString()} rows across ${
+                Object.keys(data.cleared).length
+              } embedding tables.`,
+      })
+      void invalidateQueries(
+        queryClient,
+        ['ai-status'],
+        ['insights'],
+        ['insights-diagnostics'],
+        ['graph-paper-map'],
+        ['graph-author-network'],
+        ['activity-operations'],
+      )
+    },
+    onError: () => errorToast('Error', 'Failed to delete saved embeddings.'),
   })
 
   const deduplicateMutation = useMutation({
@@ -336,6 +367,30 @@ export function LibraryManagementCard() {
                     confirmLabel="Reset feedback"
                     destructive
                     onConfirm={() => resetFeedbackLearningMutation.mutate()}
+                  />
+                </div>
+                <div className="flex items-start justify-between gap-3 border-t border-red-200 pt-3">
+                  <p className="flex-1 text-xs text-red-700">
+                    <span className="font-medium">Delete saved embeddings.</span> Wipes cached
+                    paper vectors, author centroids, and per-paper vector fetch markers only.
+                    Papers, Library state, feedback, tags, collections, monitors, and sources stay.
+                  </p>
+                  <ConfirmAction
+                    trigger={
+                      <Button variant="destructive" disabled={resetEmbeddingsMutation.isPending}>
+                        {resetEmbeddingsMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                        Delete embeddings
+                      </Button>
+                    }
+                    title="Delete every saved embedding?"
+                    description="Wipes cached paper vectors, author centroids, and per-paper vector fetch markers only. Papers, Library state, feedback, tags, collections, monitors, and sources are preserved. Re-run S2 vector fetch or AI compute to repopulate them."
+                    confirmLabel="Delete embeddings"
+                    destructive
+                    onConfirm={() => resetEmbeddingsMutation.mutate()}
                   />
                 </div>
                 <div className="flex items-start justify-between gap-3 border-t border-red-200 pt-3">
