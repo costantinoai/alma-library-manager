@@ -481,12 +481,12 @@ export function PaperCard({
     >
       {/* "Saved to library" gold corner ribbon — a small rotated gold
           square half-clipped by the Card's overflow:hidden, leaving a
-          gold triangle in the top-right corner. At-a-glance indicator
+          gold triangle in the top-left corner. At-a-glance indicator
           that this paper is in the user's Library, beyond the action-
           bar pill. Echoes the bookmark/spine motif from the brand mark. */}
       {isSaved && (
         <div
-          className="pointer-events-none absolute -right-3 -top-3 z-10 h-6 w-6 rotate-45 bg-gold-400"
+          className="pointer-events-none absolute -left-3 -top-3 z-10 h-6 w-6 rotate-45 bg-gold-400"
           aria-hidden
         />
       )}

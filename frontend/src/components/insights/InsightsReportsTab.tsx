@@ -75,6 +75,7 @@ export function InsightsReportsTab({
   const collectionColumns = useMemo<ColumnDef<CollectionRow>[]>(() => [
     {
       id: 'name',
+      accessorKey: 'name',
       header: 'Collection',
       size: 220,
       // Flex row with colour dot + name — handle truncation via `min-w-0`
@@ -94,6 +95,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'paper_count',
+      accessorKey: 'paper_count',
       header: 'Papers',
       size: 90,
       meta: { cellOverflow: 'none' },
@@ -101,6 +103,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'avg_citations',
+      accessorKey: 'avg_citations',
       header: 'Avg Cit.',
       size: 100,
       meta: { cellOverflow: 'none' },
@@ -108,6 +111,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'avg_rating',
+      accessorKey: 'avg_rating',
       header: 'Avg Rating',
       size: 110,
       meta: { cellOverflow: 'none' },
@@ -152,12 +156,14 @@ export function InsightsReportsTab({
   const signalColumns = useMemo<ColumnDef<SignalRow>[]>(() => [
     {
       id: 'signal',
+      accessorKey: 'signal',
       header: 'Signal',
       size: 180,
       cell: ({ row }) => <span className="font-medium text-alma-800" title={row.original.signal}>{row.original.signal}</span>,
     },
     {
       id: 'liked_avg',
+      accessorKey: 'liked_avg',
       header: 'Liked Avg',
       size: 110,
       meta: { cellOverflow: 'none' },
@@ -165,6 +171,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'dismissed_avg',
+      accessorKey: 'dismissed_avg',
       header: 'Dismissed Avg',
       size: 130,
       meta: { cellOverflow: 'none' },
@@ -172,6 +179,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'delta',
+      accessorKey: 'delta',
       header: 'Delta',
       size: 100,
       meta: { cellOverflow: 'none' },
@@ -194,6 +202,7 @@ export function InsightsReportsTab({
     },
     {
       id: 'impact',
+      accessorKey: 'impact',
       header: 'Impact',
       size: 130,
       meta: { cellOverflow: 'none' },

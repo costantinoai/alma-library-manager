@@ -2006,6 +2006,7 @@ export function refreshClusterLabels(body: {
 // signal reads, so a literal "every row" sweep is misleading).
 export type CorpusScope =
   | 'followed'
+  | 'needs_metadata'
   | 'followed_plus_library'
   | 'library'
   | 'corpus'
@@ -2046,10 +2047,8 @@ export function rehydrateCorpusMetadata(body?: {
   limit?: number
   force?: boolean
 }): Promise<{ status?: string; job_id?: string; operation_key?: string; message?: string }> {
-  const qs = new URLSearchParams({
-    limit: String(body?.limit ?? 500),
-    force: String(Boolean(body?.force)),
-  })
+  const qs = new URLSearchParams({ force: String(Boolean(body?.force)) })
+  if (body?.limit !== undefined) qs.set('limit', String(body.limit))
   return api.post(`/papers/rehydrate-metadata?${qs.toString()}`)
 }
 
@@ -2530,6 +2529,19 @@ export interface ResetFeedbackLearningResponse {
 
 export function resetFeedbackLearning(): Promise<ResetFeedbackLearningResponse> {
   return api.post('/feedback/reset')
+}
+
+export interface ResetEmbeddingsResponse {
+  success: boolean
+  cleared: Record<string, number>
+  total_rows_cleared: number
+}
+
+/** Wipes every cached SPECTER2 vector so the next AI run / S2 backfill
+ *  repopulates from scratch. Library papers and feedback survive — only
+ *  the embedding tables and their per-paper fetch markers are cleared. */
+export function resetEmbeddings(): Promise<ResetEmbeddingsResponse> {
+  return api.post('/library-mgmt/embeddings/reset')
 }
 
 /**

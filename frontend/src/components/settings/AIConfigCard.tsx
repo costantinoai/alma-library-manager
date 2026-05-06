@@ -45,13 +45,6 @@ import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup } from '@/components/ui/radio-group'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
   StatusBadge,
   type StatusBadgeTone,
 } from '@/components/ui/status-badge'
@@ -706,7 +699,7 @@ export function AIConfigCard() {
                           confirmDependencyPath()
                         }
                       }}
-                      placeholder="Leave empty to use system environment, or set /path/to/environment"
+                      placeholder="Default: .venv in this repo (Docker: /opt/venv)"
                       disabled={confirmEnvPathMutation.isPending}
                     />
                     <AsyncButton

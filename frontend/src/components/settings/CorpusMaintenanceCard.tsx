@@ -21,7 +21,7 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 // "every row" sweep is misleading and usually unnecessary — the
 // `followed_plus_library` scope captures every author you actually
 // engage with.
-type ResolveScope = Exclude<CorpusScope, 'corpus'>
+type ResolveScope = Exclude<CorpusScope, 'corpus' | 'needs_metadata'>
 type DedupScope = 'library' | 'corpus'
 
 const SCOPE_HELP: Record<ResolveScope, string> = {
@@ -46,21 +46,32 @@ export function CorpusMaintenanceCard() {
   const [dedupScope, setDedupScope] = useState<DedupScope>('library')
 
   const rehydrateMutation = useMutation({
-    mutationFn: () => rehydrateCorpusMetadata({ limit: 500, force: false }),
+    mutationFn: async () => {
+      const [papers, authors] = await Promise.all([
+        rehydrateCorpusMetadata({ force: false }),
+        refreshAllAuthors({ scope: 'needs_metadata' }),
+      ])
+      return { papers, authors }
+    },
     onSuccess: (data) => {
-      void invalidateQueries(queryClient, ['papers'], ['ai-status'], ['activity-operations'])
-      if (data?.status === 'already_running') {
+      void invalidateQueries(
+        queryClient,
+        ['papers'],
+        ['authors'],
+        ['authors-needs-attention'],
+        ['ai-status'],
+        ['activity-operations'],
+      )
+      if (data.papers?.status === 'already_running' && data.authors?.status === 'already_running') {
         toast({
           title: 'Already running',
-          description: 'A corpus metadata rehydration job is already in progress. Watch Activity.',
+          description: 'Paper and author metadata rehydration jobs are already in progress. Watch Activity.',
         })
         return
       }
       toast({
         title: 'Rehydration queued',
-        description: data?.job_id
-          ? `Job ${data.job_id} started — per-batch status is in Activity.`
-          : 'Job queued.',
+        description: 'Paper metadata and author identity/profile refresh jobs are queued in Activity.',
       })
     },
     onError: () => errorToast('Error', 'Failed to queue corpus metadata rehydration.'),
@@ -208,15 +219,15 @@ export function CorpusMaintenanceCard() {
         title={
           <span className="inline-flex items-center gap-2">
             <RefreshCw className="h-4 w-4 text-slate-500" />
-            Rehydrate paper metadata
+            Rehydrate corpus metadata
           </span>
         }
-        description="Batched OpenAlex repair for stored papers that already have a work ID but are missing DOI, abstract, URL, publication date, authorships, topics, or references. The ledger skips completed lookup/projection pairs and retries only transient failures after backoff."
+        description="Batched repair for stored papers and authors that need metadata. Papers use OpenAlex, Semantic Scholar, and Crossref fallbacks for DOI, abstract, TLDR, URL, publication date, authorships, topics, and references. Authors use the deep refresh pipeline for missing ORCID/profile fields and identity-resolution issues."
       >
         <div className="space-y-3">
           <p className="text-[11px] leading-snug text-slate-500">
-            Runs up to 500 eligible papers per pass, one OpenAlex request per 50 work IDs.
-            Re-run safely — unchanged and already-enriched papers are skipped automatically.
+            Runs all eligible papers and metadata-needing authors. Re-run safely — unchanged,
+            already-enriched, and recently exhausted rows are skipped automatically.
           </p>
           <AsyncButton
             variant="outline"
@@ -224,7 +235,7 @@ export function CorpusMaintenanceCard() {
             pending={rehydrateMutation.isPending}
             onClick={() => rehydrateMutation.mutate()}
           >
-            Rehydrate metadata
+            Rehydrate corpus metadata
           </AsyncButton>
         </div>
       </SettingsSection>

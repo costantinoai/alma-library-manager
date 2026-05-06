@@ -442,6 +442,7 @@ function CorpusExplorerBody() {
       },
       {
         id: 'date',
+        accessorFn: (row) => row.publication_date ?? (row.year != null ? String(row.year) : ''),
         header: 'Date',
         size: 110,
         cell: ({ row }) => (

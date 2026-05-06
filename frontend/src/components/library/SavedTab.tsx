@@ -879,6 +879,7 @@ function SavedCompactTable({
   const columns = useMemo<ColumnDef<Publication>[]>(() => [
     {
       id: 'title',
+      accessorKey: 'title',
       header: 'Title',
       size: 320,
       // Custom flex layout (title text + trailing external-link icon) — we
@@ -906,6 +907,7 @@ function SavedCompactTable({
     },
     {
       id: 'authors',
+      accessorKey: 'authors',
       header: 'Authors',
       size: 200,
       cell: ({ row }) => (
@@ -916,12 +918,14 @@ function SavedCompactTable({
     },
     {
       id: 'year',
+      accessorFn: (row) => row.publication_date ?? (row.year != null ? String(row.year) : ''),
       header: 'Published',
       size: 110,
       cell: ({ row }) => <span className="whitespace-nowrap text-slate-600">{formatPublicationDate(row.original)}</span>,
     },
     {
       id: 'journal',
+      accessorKey: 'journal',
       header: 'Journal',
       size: 160,
       cell: ({ row }) => (
@@ -932,6 +936,7 @@ function SavedCompactTable({
     },
     {
       id: 'rating',
+      accessorFn: (row) => row.rating ?? 0,
       header: 'Rating',
       size: 130,
       meta: { cellOverflow: 'none' },
@@ -943,6 +948,7 @@ function SavedCompactTable({
     },
     {
       id: 'signal',
+      accessorFn: (row) => row.global_signal_score ?? 0,
       // Header rendered as a JSX node so we can attach an explanatory
       // tooltip without subclassing the DataTable header component.
       // Distinct from the star "Rating" column above (user curation) —
@@ -980,6 +986,7 @@ function SavedCompactTable({
     },
     {
       id: 'cited_by_count',
+      accessorFn: (row) => row.cited_by_count ?? 0,
       header: 'Cites',
       size: 80,
       meta: { cellOverflow: 'none' },
@@ -1010,6 +1017,7 @@ function SavedCompactTable({
     },
     {
       id: 'added_at',
+      accessorKey: 'added_at',
       header: 'Added',
       size: 120,
       cell: ({ row }) => <span className="whitespace-nowrap text-slate-400">{formatDate(row.original.added_at ?? '')}</span>,
