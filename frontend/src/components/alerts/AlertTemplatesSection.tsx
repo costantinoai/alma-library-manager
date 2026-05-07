@@ -44,7 +44,7 @@ export function AlertTemplatesSection() {
         description: `${template.title} is now active as ${alert.name}.`,
       })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Could not create automation')
     },
   })

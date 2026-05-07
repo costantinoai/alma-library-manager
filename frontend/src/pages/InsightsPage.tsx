@@ -235,7 +235,7 @@ export function InsightsPage() {
         description: `Applied '${variables.action}' to the branch across matching lenses.`,
       })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Could not update branch controls')
     },
   })

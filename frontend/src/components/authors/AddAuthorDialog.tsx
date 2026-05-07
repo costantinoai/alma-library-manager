@@ -36,16 +36,21 @@ export interface AddAuthorPayload {
   orcid?: string
 }
 
+// All four fields stay as plain `z.string()` (no `.optional().default('')`).
+// `defaultValues` already supplies '' so the form is always seeded with a
+// real string, and zod 4's `.default()` splits input vs output types
+// (`string | undefined` vs `string`), which produces a Resolver shape that
+// no longer matches `useForm<TFieldValues>`'s expected single shape.
 const addAuthorFormSchema = z
   .object({
-    name: z.string().optional().default(''),
-    scholarId: z.string().optional().default(''),
-    openalexId: z.string().optional().default(''),
-    orcid: z.string().optional().default(''),
+    name: z.string(),
+    scholarId: z.string(),
+    openalexId: z.string(),
+    orcid: z.string(),
   })
   .superRefine((data, ctx) => {
     const hasIdentifier =
-      !!data.scholarId?.trim() || !!data.openalexId?.trim() || !!data.orcid?.trim()
+      !!data.scholarId.trim() || !!data.openalexId.trim() || !!data.orcid.trim()
     if (!hasIdentifier) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

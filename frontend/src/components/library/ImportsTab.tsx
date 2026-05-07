@@ -177,7 +177,10 @@ export function ImportsTab() {
                   title: paper.title,
                   authors: paper.authors,
                   year: paper.year ?? null,
-                  journal: paper.journal ?? undefined,
+                  // `journal` isn't carried on UnresolvedImportedPublication —
+                  // the import staging row only stores the bibliographic
+                  // skeleton. Once resolved against OpenAlex, the canonical
+                  // paper row gets the journal.
                   doi: paper.doi ?? undefined,
                 }
                 const { label: statusLabel, tone: statusTone } =

@@ -157,8 +157,11 @@ export function ForceGraph({
       return
     }
     // Disable the built-in center force so precomputed cluster coordinates
-    // aren't collapsed into a circular blob at the origin.
-    graph.d3Force('center', null)
+    // aren't collapsed into a circular blob at the origin. Cast through
+    // the setter form: react-force-graph's `d3Force` is overloaded
+    // (getter / setter) but TS narrows to the getter when the second
+    // arg is `null`.
+    ;(graph.d3Force as (name: string, force: unknown) => unknown)('center', null)
     const charge = graph.d3Force('charge') as { strength?: (value: number) => unknown } | undefined
     charge?.strength?.(physics.repulsion)
     const linkForce = graph.d3Force('link') as {
@@ -174,8 +177,10 @@ export function ForceGraph({
     for (const node of graphData.nodes) {
       node.x = node._initX
       node.y = node._initY
-      node.vx = 0
-      node.vy = 0
+      // `vx` / `vy` are added by d3-force at simulation runtime; they
+      // aren't on our static node shape, hence the inline cast.
+      ;(node as { vx?: number; vy?: number }).vx = 0
+      ;(node as { vx?: number; vy?: number }).vy = 0
     }
     graph.d3ReheatSimulation()
   }, [physics, graphData])

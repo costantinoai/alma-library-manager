@@ -52,7 +52,6 @@ import {
   onlineAuthorSearch,
   onlineImportSave,
   onlineImportSearchStream,
-  type FindAndAddStreamEvent,
   type OnlineAuthorSearchResult,
   type OnlineSearchItem,
   type ScoreBreakdown,
@@ -572,7 +571,7 @@ export function OnlineSearchTab({
           title="Search failed"
           description={error}
           action={
-            <Button type="button" size="sm" onClick={handleSearch}>
+            <Button type="button" size="sm" onClick={() => void handleSearch()}>
               Try again
             </Button>
           }
@@ -767,7 +766,7 @@ interface AuthorSearchCardProps {
 
 function AuthorSearchCard({ author, pending, onFollow }: AuthorSearchCardProps) {
   return (
-    <article className="flex flex-col gap-2 rounded-sm border border-alma-100 bg-[#FFFEF7] p-3 shadow-paper-sm">
+    <article className="flex flex-col gap-2 rounded-sm border border-alma-100 bg-alma-content-elev p-3 shadow-paper-sm">
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-alma-800">{author.name}</h3>

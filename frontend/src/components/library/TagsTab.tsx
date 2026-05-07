@@ -120,7 +120,7 @@ export function TagsTab() {
       void invalidateQueries(queryClient, ['library-tags'])
       toast({ title: 'Assigned', description: 'Tag assigned to publication.' })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Error')
     },
   })
@@ -145,7 +145,7 @@ export function TagsTab() {
       void invalidateQueries(queryClient, ['library-tags'], ['tag-suggestions', suggestionPaperId])
       toast({ title: 'Accepted', description: 'Tag suggestion applied.' })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Error')
     },
   })

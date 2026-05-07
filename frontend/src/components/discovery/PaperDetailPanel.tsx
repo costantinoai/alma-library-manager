@@ -56,7 +56,7 @@ import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { cn, formatPublicationDate, truncate } from '@/lib/utils'
+import { cn, formatPublicationDate } from '@/lib/utils'
 
 interface PaperTopic {
   term: string
@@ -164,7 +164,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
   const notesMutation = useMutation({
     mutationFn: ({ paperId, notes }: { paperId: string; notes: string }) =>
       updateSavedPaper(paperId, { notes }),
-    onSuccess: (updated, vars) => {
+    onSuccess: (_updated, vars) => {
       setDetails((prev) => (prev ? { ...prev, notes: vars.notes } : prev))
       invalidateQueries(queryClient, ['likes'], ['papers'], ['library-workflow'])
       toast({ title: 'Notes saved', description: 'Your notes have been updated.' })
@@ -560,7 +560,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </div>
-                  <div className="rounded-md border border-[var(--color-border)] bg-[#FFFEF7] p-3 text-slate-700 whitespace-pre-wrap">
+                  <div className="rounded-md border border-[var(--color-border)] bg-alma-content-elev p-3 text-slate-700 whitespace-pre-wrap">
                     {p.notes}
                   </div>
                 </section>
@@ -765,7 +765,7 @@ function RelatedWorksSection({
       <CollapsibleTrigger asChild>
         <button
           type="button"
-          className="group/rel flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-[#FFFEF7] px-3 py-2 text-left transition hover:bg-[#FFFEF7]/70"
+          className="group/rel flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-2 text-left transition hover:bg-alma-content-elev/70"
         >
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -947,7 +947,7 @@ function RelatedWorkRow({
       // Lighter shade than the dialog body — matches the "more
       // forefront = lighter" rule (the dialog body now sits on warm
       // parchment, the cards inside lift to off-white).
-      className="bg-[#FFFEF7]"
+      className="bg-alma-content-elev"
       isSaved={isSaved}
       reaction={reaction}
       actionDisabled={actionMutation.isPending}

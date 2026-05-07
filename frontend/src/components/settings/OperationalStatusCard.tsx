@@ -273,9 +273,9 @@ export function OperationalStatusCard() {
     onSuccess: (result, pluginName) => {
       invalidateOperationalQueries()
       toast({
-        title: `Plugin test ${result.success ? 'passed' : 'failed'}`,
+        title: `Plugin test ${result.ok ? 'passed' : 'failed'}`,
         description: result.message || pluginName,
-        variant: result.success ? 'default' : 'destructive',
+        variant: result.ok ? 'default' : 'destructive',
       })
     },
     onError: () => errorToast('Plugin test failed'),

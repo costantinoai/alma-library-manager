@@ -165,7 +165,7 @@ export function DataTable<T>({
   const deriveRowId = useCallback((row: T, index: number): string => {
     if (getRowId) return getRowId(row, index)
     if (typeof row === 'object' && row !== null && 'id' in (row as object)) {
-      return String((row as { id: unknown }).id)
+      return String((row as unknown as { id: unknown }).id)
     }
     return String(index)
   }, [getRowId])

@@ -232,7 +232,7 @@ export function FeedPage() {
       await invalidateFeedAction()
       toast({ title: 'Feed updated', description: actionLabel(vars.action) })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Action failed')
     },
   })
@@ -263,7 +263,7 @@ export function FeedPage() {
       setSelectedIds(new Set())
       toast({ title: 'Bulk action applied', description: `${appliedCount} feed items updated.` })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Bulk action failed')
     },
   })

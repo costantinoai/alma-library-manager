@@ -8,7 +8,6 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
-  BookOpen,
   X,
   AlertCircle,
   Compass,
@@ -32,7 +31,7 @@ import {
 import { useToast, errorToast} from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { formatDate, formatRelativeTime, truncate } from '@/lib/utils'
+import { formatDate, formatRelativeTime } from '@/lib/utils'
 import { type CollectionItemData, PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'

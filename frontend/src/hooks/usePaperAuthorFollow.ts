@@ -50,7 +50,7 @@ export function usePaperAuthorFollow() {
         description: `${data.author.name} will contribute to Feed on the next refresh.`,
       })
     },
-    onError: (error) => {
+    onError: () => {
       errorToast('Could not follow author')
     },
     onSettled: () => {

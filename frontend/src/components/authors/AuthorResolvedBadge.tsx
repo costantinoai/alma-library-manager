@@ -27,7 +27,7 @@ export function AuthorResolvedBadge({
   return (
     <StatusBadge
       tone={tone}
-      size={size === 'md' ? 'md' : 'sm'}
+      size={size === 'md' ? 'default' : 'sm'}
       className="gap-1"
       title={title}
     >

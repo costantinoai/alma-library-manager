@@ -9,7 +9,6 @@ import {
   Trash2,
   Edit3,
   Power,
-  Loader2,
   AlertCircle,
   Hash,
 } from 'lucide-react'
@@ -99,17 +98,22 @@ const ruleFormSchema = z
     rule_type: z.enum(RULE_TYPES),
     slack: z.boolean(),
     enabled: z.boolean(),
-    // Per-type config fields. All optional in the schema; required only
-    // for whichever rule_type the user picked (enforced in superRefine).
-    author_id: z.string().default(''),
-    collection_id: z.string().default(''),
-    keywords: z.string().default(''),
-    topic: z.string().default(''),
-    min_score: z.string().default(''),
-    lens_id: z.string().default(''),
-    monitor_id: z.string().default(''),
-    branch_id: z.string().default(''),
-    workflow: z.string().default(''),
+    // Per-type config fields. Required only for whichever rule_type the
+    // user picked (enforced in superRefine). Plain `z.string()` instead of
+    // `.default('')` because zod 4's `.default()` splits input/output
+    // types, which produces a Resolver shape that no longer matches
+    // `useForm<TFieldValues>`'s expected single shape. `defaultValues`
+    // already seeds every field with '', so the runtime behaviour is
+    // identical.
+    author_id: z.string(),
+    collection_id: z.string(),
+    keywords: z.string(),
+    topic: z.string(),
+    min_score: z.string(),
+    lens_id: z.string(),
+    monitor_id: z.string(),
+    branch_id: z.string(),
+    workflow: z.string(),
   })
   .superRefine((data, ctx) => {
     const addRequired = (field: keyof typeof data, message: string) => {
@@ -262,7 +266,12 @@ interface RuleFormDialogProps {
   lenses: Lens[]
   collections: Collection[]
   monitors: FeedMonitor[]
-  branches: Array<{ branch_id?: string; branch_label?: string; count?: number }>
+  // The parent passes `BranchTuningRow[]` from the insights API, which has
+  // `branch_id?: string | null` (the API returns explicit nulls). The
+  // dialog only reads `branch_id`, `branch_label`, `count`, so we widen
+  // the prop to accept the broader shape rather than filtering nulls
+  // upstream.
+  branches: Array<{ branch_id?: string | null; branch_label?: string; count?: number }>
 }
 
 function RuleFormDialog({

@@ -996,7 +996,11 @@ export function DiscoveryPage() {
               return (
                 <PaperCard
                   key={rec.id}
-                  size={viewMode === 'compact' ? 'compact' : 'default'}
+                  // The `compact` viewMode is handled in the earlier
+                  // branch above (line 959); by the time we reach here
+                  // viewMode is narrowed to `'normal' | 'extended'`, so
+                  // the size is always default.
+                  size="default"
                   forceShowAbstract={viewMode === 'extended'}
                   // Normal view = dense scan: no TLDR, no abstract toggle,
                   // smaller triage buttons. Extended view keeps the full

@@ -82,7 +82,7 @@ export function SuggestedAuthorCard({
   return (
     <article
       onClick={onClick}
-      className="group flex h-full flex-col gap-3 rounded-sm border border-alma-100 bg-[#FFFEF7] p-4 shadow-paper-sm text-left shadow-sm transition hover:border-alma-300 hover:shadow-md cursor-pointer"
+      className="group flex h-full flex-col gap-3 rounded-sm border border-alma-100 bg-alma-content-elev p-4 shadow-paper-sm text-left shadow-sm transition hover:border-alma-300 hover:shadow-md cursor-pointer"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
