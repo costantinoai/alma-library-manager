@@ -2229,13 +2229,17 @@ export interface MergeProfilesResponse {
   alt_author_ids: string[]
 }
 
+export type AuthorMergeFieldChoice = 'primary' | 'alt'
+export type AuthorMergeFieldChoices = Record<string, Record<string, AuthorMergeFieldChoice>>
+
 export function mergeAuthorProfiles(
   primaryAuthorId: string,
   altAuthorIds: string[],
+  fieldChoices?: AuthorMergeFieldChoices,
 ): Promise<MergeProfilesResponse> {
   return api.post(
     `/authors/${encodeURIComponent(primaryAuthorId)}/merge-profiles`,
-    { alt_author_ids: altAuthorIds },
+    { alt_author_ids: altAuthorIds, field_choices: fieldChoices ?? {} },
   )
 }
 

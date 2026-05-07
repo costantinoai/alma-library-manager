@@ -6,6 +6,7 @@ import {
   Compass,
   Database,
   ExternalLink,
+  GitMerge,
   Loader2,
   Newspaper,
   RefreshCw,
@@ -51,9 +52,9 @@ import {
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
+import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
-import { StarRating } from '@/components/StarRating'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -89,7 +90,7 @@ function MetricCard({
   icon: ComponentType<{ className?: string }>
 }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-3 shadow-paper-sm">
+    <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3 shadow-paper-sm">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
         <Icon className="h-3.5 w-3.5" />
         {label}
@@ -194,7 +195,7 @@ function OpenAlexWorkRow({
   const savedInLibrary = work.already_in_db && work.local_status === 'library'
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-100 bg-[#FFFEF7] p-3 shadow-sm">
+    <div className="space-y-2 rounded-lg border border-slate-100 bg-alma-content-elev p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-alma-800">
@@ -296,6 +297,7 @@ export function AuthorDetailPanel({
   // browse their work before following.
   const isSuggestionOnly = !!suggestion && !author?.added_at
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
+  const [mergeOpen, setMergeOpen] = useState(false)
 
   const detailQuery = useQuery({
     queryKey: ['author-detail', author?.id],
@@ -472,6 +474,7 @@ export function AuthorDetailPanel({
   const backfill = detail?.backfill ?? null
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
@@ -539,7 +542,7 @@ export function AuthorDetailPanel({
                     </AlertDescription>
                   </Alert>
                 ) : null}
-                <div className="rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-4 shadow-paper-sm">
+                <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Author signal
@@ -572,7 +575,7 @@ export function AuthorDetailPanel({
                   />
                 </div>
 
-                <div className="rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-4 shadow-paper-sm">
+                <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                     {isSuggestionOnly ? 'Shared topics' : 'Top topics'}
                   </p>
@@ -596,7 +599,7 @@ export function AuthorDetailPanel({
                 </div>
 
                 {isSuggestionOnly && suggestion && suggestion.sample_titles.length > 0 ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-4 shadow-paper-sm">
+                  <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Sample titles
                     </p>
@@ -611,7 +614,7 @@ export function AuthorDetailPanel({
                 ) : null}
 
                 {backfill ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-4 shadow-paper-sm">
+                  <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                         Background corpus
@@ -651,7 +654,7 @@ export function AuthorDetailPanel({
                       href={`https://scholar.google.com/citations?user=${resolved.scholar_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[#FFFEF7] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
                     >
                       Google Scholar <ExternalLink className="h-3 w-3" />
                     </a>
@@ -661,7 +664,7 @@ export function AuthorDetailPanel({
                       href={`https://openalex.org/${resolved.openalex_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[#FFFEF7] px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
                     >
                       OpenAlex <ExternalLink className="h-3 w-3" />
                     </a>
@@ -797,6 +800,17 @@ export function AuthorDetailPanel({
             <Compass className="h-4 w-4" />
             Open in Discovery
           </Button>
+          {!isSuggestionOnly ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setMergeOpen(true)}
+              title="Merge this author with another existing author row in the corpus."
+            >
+              <GitMerge className="h-4 w-4" />
+              Merge with author
+            </Button>
+          ) : null}
           <div className="ml-auto">
             <Button
               size="sm"
@@ -816,6 +830,12 @@ export function AuthorDetailPanel({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <AuthorMergeDialog
+      open={mergeOpen}
+      onOpenChange={setMergeOpen}
+      primaryAuthor={resolved}
+    />
+    </>
   )
 }
 

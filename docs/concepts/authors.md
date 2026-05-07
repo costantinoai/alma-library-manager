@@ -54,6 +54,25 @@ The **AuthorIdentifierResolution** panel inside the Authors page
 exposes this state per-author and lets you re-run resolution or
 pick a different candidate manually.
 
+## Duplicate profiles and merge
+
+Author identity is canonicalized around one `authors` row. When the
+same person appears twice (for example a spelling mistake, institution
+move, or split OpenAlex profile), the Author detail card exposes
+**Merge with author**. The merge flow searches existing corpus authors,
+compares profile metadata, and requires one mutually-exclusive choice
+per differing field before it writes.
+
+Merge is also the resolution path for `needs-attention` duplicate
+profile warnings. Those warnings open the same merge dialog with the
+suspected alternate profile preselected, so manual merges and
+needs-attention fixes share the same primitive and backend endpoint.
+On confirm, publications are reassigned to the primary OpenAlex ID, the
+alternate OpenAlex ID is recorded in `author_alt_identifiers`, the alt
+row is soft-removed, and the primary author centroid is invalidated.
+If hard identifiers still conflict, `author_merge_conflicts` keeps a
+follow-up row for needs-attention.
+
 ## Followed vs. tracked
 
 Two states matter on the Authors page:
@@ -264,6 +283,7 @@ DELETE /api/v1/authors/{id}                     # unfollow
 POST   /api/v1/authors/{id}/refresh
 POST   /api/v1/authors/deep-refresh-all
 POST   /api/v1/authors/{id}/resolve-identifiers
+POST   /api/v1/authors/{id}/merge-profiles
 GET    /api/v1/authors/suggestions              # multi-source
 
 GET    /api/v1/library/followed-authors

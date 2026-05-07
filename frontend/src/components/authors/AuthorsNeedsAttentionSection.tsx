@@ -5,7 +5,6 @@ import { AlertTriangle, ArrowRight, ExternalLink, GitMerge, Loader2, RefreshCw }
 import {
   api,
   discoverAuthorAliases,
-  mergeAuthorProfiles,
   resolveMergeConflict,
   setAuthorIdentifiers,
   type Author,
@@ -23,10 +22,13 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { SubPanel } from '@/components/ui/sub-panel'
+import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
 import { resolvedBadgeSpec } from '@/components/authors/AuthorResolvedBadge'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -223,7 +225,15 @@ function NeedsAttentionRow({
   onAction: () => void
   isRefreshing: boolean
 }) {
-  const spec = resolvedBadgeSpec(row)
+  // `AuthorNeedsAttentionRow` exposes the resolver state under flat
+  // names (`status` / `method` / `confidence`) while `resolvedBadgeSpec`
+  // takes the dossier-shaped `id_resolution_*` triple. Same fields,
+  // different naming at the API boundary — adapt at the call site.
+  const spec = resolvedBadgeSpec({
+    id_resolution_status: row.status,
+    id_resolution_method: row.method,
+    id_resolution_confidence: row.confidence,
+  })
   const actionCode = row.suggested_action.code
 
   // Icon picker for the action button — telegraph what kind of
@@ -314,7 +324,6 @@ function ReviewProfilesDialog({
   onClose: () => void
 }) {
   const open = row !== null
-  const queryClient = useQueryClient()
   const { toast } = useToast()
   const baseAlts: AuthorAlternateProfile[] = row?.alt_profiles ?? []
   // Aliases discovered via ORCID land here. Merged into the rendered
@@ -356,90 +365,77 @@ function ReviewProfilesDialog({
   const orcidExtras = (orcidDiscovery?.aliases ?? []).filter(
     (a) => !localAltIds.has(a.openalex_id.toLowerCase()),
   )
-
-  const mergeMutation = useMutation({
-    mutationFn: () =>
-      mergeAuthorProfiles(
-        row!.author_id,
-        baseAlts.map((a) => a.author_id),
-      ),
-    onSuccess: (data) => {
-      invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['library-followed-authors'],
-        ['author-suggestions'],
-        ['author-detail', row!.author_id],
-        ['feed-monitors'],
-      )
-      toast({
-        title: 'Profiles merged',
-        description:
-          `${data.alts_processed} alt profile${data.alts_processed === 1 ? '' : 's'} ` +
-          `collapsed · ${data.papers_reassigned} paper${data.papers_reassigned === 1 ? '' : 's'} reattached` +
-          (data.papers_dropped_as_dup > 0
-            ? ` · ${data.papers_dropped_as_dup} dropped as duplicates`
-            : ''),
-      })
-      onClose()
-    },
-    onError: () => errorToast('Error', 'Merge failed.'),
-  })
+  const primaryAuthor: Author | null = row
+    ? {
+        id: row.author_id,
+        name: row.author_name,
+        openalex_id: row.openalex_id ?? undefined,
+      }
+    : null
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Review duplicate profiles</DialogTitle>
-          <DialogDescription>
-            {row?.author_name ? (
-              <>
-                <span className="font-medium">{row.author_name}</span> appears under
-                multiple OpenAlex IDs in your followed authors. Same human, or
-                different people who happen to share a name?
-              </>
+    <AuthorMergeDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) onClose()
+      }}
+      primaryAuthor={primaryAuthor}
+      allowedTargetIds={baseAlts.map((alt) => alt.author_id)}
+      initialTargetId={baseAlts[0]?.author_id ?? null}
+      title="Review duplicate profiles"
+      description={
+        row?.author_name ? (
+          <>
+            <span className="font-medium">{row.author_name}</span> appears under multiple OpenAlex
+            IDs in your followed authors. Confirm the duplicate and choose which metadata survives.
+          </>
+        ) : null
+      }
+      emptyCandidateMessage="No followed alternate profiles are available to merge from this warning."
+      onMerged={onClose}
+      contextSlot={
+        <SubPanel tone="chrome" padded={false} className="px-3 py-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <EyebrowLabel tone="muted" className="shrink-0">
+              In this warning
+            </EyebrowLabel>
+            {row?.openalex_id ? (
+              <ProfileChip
+                tone="primary"
+                openalexId={row.openalex_id}
+                label={row.author_name}
+              />
             ) : null}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2">
-          {row?.openalex_id ? (
-            <ProfileRow
-              label="Primary"
-              openalexId={row.openalex_id}
-              displayName={row.author_name}
-              tone="primary"
-            />
-          ) : null}
-          {baseAlts.length === 0 && orcidExtras.length === 0 ? (
-            <p className="text-xs italic text-slate-500">No alternate profiles.</p>
-          ) : (
-            <>
-              {baseAlts.map((alt) => (
-                <ProfileRow
-                  key={alt.openalex_id}
-                  label="Followed"
-                  openalexId={alt.openalex_id}
-                  displayName={alt.display_name}
-                />
-              ))}
-              {orcidExtras.map((alt) => (
-                <ProfileRow
-                  key={`orcid-${alt.openalex_id}`}
-                  label={`Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`}
-                  openalexId={alt.openalex_id}
-                  displayName={alt.display_name || alt.openalex_id}
-                />
-              ))}
-            </>
-          )}
-          <div className="border-t border-[var(--color-border)] pt-2">
+            {baseAlts.length === 0 && orcidExtras.length === 0 ? (
+              <span className="text-xs italic text-slate-500">No alternate profiles.</span>
+            ) : (
+              <>
+                {baseAlts.map((alt) => (
+                  <ProfileChip
+                    key={alt.openalex_id}
+                    tone="alt"
+                    openalexId={alt.openalex_id}
+                    label={alt.display_name}
+                    title="Followed alt profile under the same canonical name"
+                  />
+                ))}
+                {orcidExtras.map((alt) => (
+                  <ProfileChip
+                    key={`orcid-${alt.openalex_id}`}
+                    tone="orcid"
+                    openalexId={alt.openalex_id}
+                    label={alt.display_name || alt.openalex_id}
+                    title={`Via ORCID${alt.institution ? ` · ${alt.institution}` : ''}`}
+                  />
+                ))}
+              </>
+            )}
             <Button
               variant="ghost"
               size="sm"
               onClick={() => discoverMutation.mutate()}
               disabled={discoverMutation.isPending || !row}
-              className="text-xs"
+              className="ml-auto h-7 px-2 text-[11px]"
               title="Looks up the primary's ORCID on OpenAlex and queries every profile sharing it. ORCID is person-level — same ORCID = same human, with very high confidence."
             >
               {discoverMutation.isPending ? (
@@ -447,35 +443,61 @@ function ReviewProfilesDialog({
               ) : (
                 <GitMerge className="h-3.5 w-3.5" />
               )}
-              Discover more profiles via ORCID
+              Discover via ORCID
             </Button>
           </div>
-        </div>
-        <DialogFooter className="flex-col gap-2 sm:flex-row">
-          <Button variant="ghost" onClick={onClose} disabled={mergeMutation.isPending}>
-            These are different people
-          </Button>
-          <Button
-            onClick={() => mergeMutation.mutate()}
-            disabled={
-              baseAlts.length === 0 || mergeMutation.isPending
-            }
-            title={
-              baseAlts.length === 0
-                ? 'Nothing to merge — only followed alts can be merged in this dialog.'
-                : `Merge ${baseAlts.length} followed alt profile${baseAlts.length === 1 ? '' : 's'} into the primary.`
-            }
-          >
-            {mergeMutation.isPending ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <GitMerge className="mr-1 h-3.5 w-3.5" />
-            )}
-            Merge as same person
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SubPanel>
+      }
+    />
+  )
+}
+
+/**
+ * Inline profile chip used in the merge dialog's contextSlot. The
+ * vertical-card pattern (`ProfileRow`) makes the warning context look
+ * like a second dialog stacked on the merge UI; the chip variant flows
+ * inline inside a `SubPanel`, telegraphing "this is the warning's
+ * frame, not its content".
+ *
+ * Tones distinguish provenance at a glance:
+ *   - `primary` — the row's canonical author (folio-blue)
+ *   - `alt`     — followed alt profile under the same canonical name
+ *   - `orcid`   — discovered via ORCID round-trip
+ */
+function ProfileChip({
+  openalexId,
+  label,
+  tone,
+  title,
+}: {
+  openalexId: string
+  label: string
+  tone: 'primary' | 'alt' | 'orcid'
+  title?: string
+}) {
+  const palette =
+    tone === 'primary'
+      ? 'border-alma-folio bg-alma-folio-soft text-alma-800'
+      : tone === 'orcid'
+        ? 'border-amber-200 bg-amber-50/70 text-alma-800'
+        : 'border-[var(--color-border)] bg-alma-content-elev text-alma-800'
+  const dotTone =
+    tone === 'primary' ? 'bg-alma-folio' : tone === 'orcid' ? 'bg-amber-500' : 'bg-slate-400'
+  return (
+    <a
+      href={`https://openalex.org/${openalexId}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title}
+      className={`group inline-flex max-w-[260px] items-center gap-1.5 rounded-sm border px-2 py-1 text-xs transition hover:shadow-paper-sm ${palette}`}
+    >
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotTone}`} />
+      <span className="truncate font-medium">{label}</span>
+      <span className="hidden font-mono text-[10px] text-slate-500 sm:inline">
+        {openalexId}
+      </span>
+      <ExternalLink className="h-3 w-3 shrink-0 opacity-50 transition group-hover:opacity-100" />
+    </a>
   )
 }
 
@@ -491,7 +513,7 @@ function ProfileRow({
   tone?: 'primary' | 'alt'
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-[#FFFEF7] p-2.5">
+    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-2.5">
       <div className="min-w-0">
         <StatusBadge tone={tone === 'primary' ? 'info' : 'neutral'} size="sm">
           {label}

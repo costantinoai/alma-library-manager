@@ -2847,6 +2847,7 @@ class MergeProfilesRequest(BaseModel):
     from the needs-attention payload directly."""
 
     alt_author_ids: List[str] = Field(default_factory=list, min_length=1)
+    field_choices: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
 
 @router.post(
@@ -2871,7 +2872,12 @@ def merge_author_profiles_route(
     from alma.application.author_merge import merge_author_profiles
 
     try:
-        return merge_author_profiles(db, author_id, body.alt_author_ids)
+        return merge_author_profiles(
+            db,
+            author_id,
+            body.alt_author_ids,
+            field_choices=body.field_choices,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

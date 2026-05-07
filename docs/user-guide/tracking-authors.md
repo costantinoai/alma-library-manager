@@ -61,6 +61,23 @@ For ambiguous / failed authors, the Authors page shows a **Needs
 attention** badge. Click in to see candidate matches and confirm
 manually.
 
+## Merging duplicate authors
+
+If the same person appears twice because of a spelling variant or a
+split OpenAlex profile, open either author's detail card and choose
+**Merge with author**. The merge dialog searches the existing corpus,
+shows the two profile rows side by side, and lists metadata
+discrepancies such as name, affiliation, ORCID, Scholar ID, image, and
+profile metrics. Pick one value per field before confirming.
+
+The same merge dialog is used from **Needs attention** when ALMa flags
+duplicate followed profiles. In that path the suspected duplicate is
+preselected, but the confirmation step is identical: choose which
+metadata survives, then merge. The primary author keeps the canonical
+row; publications from the alternate profile are reattached and the
+alternate OpenAlex ID is kept as an alias so it will not reappear as a
+new suggestion.
+
 ## Refreshing
 
 Three refresh paths:

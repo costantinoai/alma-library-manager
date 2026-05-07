@@ -55,6 +55,8 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | `authors` | Researcher profiles with OpenAlex / S2 / ORCID / Scholar IDs and `id_resolution_status`. |
 | `followed_authors` | Authors the user is actively monitoring. |
 | `author_centroids` | Per-author SPECTER2 centroid (mean of their papers' vectors). Materialised for the `semantic_similar` author suggestion source. |
+| `author_alt_identifiers` | Alias ledger for merged split profiles. Records alternate OpenAlex IDs and source author rows that now resolve to the canonical `authors.id`, so suggestion filters do not resurface merged duplicates and the dossier can show provenance. |
+| `author_merge_conflicts` | Unresolved hard-identifier disagreements found during author merge (`orcid`, `scholar_id`, `semantic_scholar_id`). Needs-attention reads these rows and the resolve endpoint records whether the primary value, alt value, or dismissal won. |
 | `author_enrichment_status` | Per-author, per-source, per-purpose ledger for the author metadata hydration job. One row per `(author_id, source, purpose)` with `source ∈ {openalex, orcid, semantic_scholar, crossref}` and `purpose ∈ {profile, affiliation, aliases}`. Records lookup key, fields key, attempts, status, and retry TTL so author profile/affiliation refreshes are idempotent and observable. |
 | `author_affiliation_evidence` | Source-backed affiliation evidence sidecar populated by author hydration. Stores OpenAlex last-known institutions, ORCID employments/educations, and Crossref recent-authorship affiliation strings; the write path recomputes `authors.affiliation` from weighted evidence and needs-attention can surface cross-source disagreements. |
 | `author_suggestion_cache` | Per-source cache of OpenAlex / S2 author suggestions. |
@@ -135,6 +137,12 @@ These are pinned by code:
 * **`publication_embeddings.source`** distinguishes S2-fetched from
   locally-computed vectors. Same vector dimension (768) and same
   model (`allenai/specter2_base`) regardless of source.
+* **Author merge keeps one canonical row.** Merging reassigns
+  `publication_authors` rows from the alt OpenAlex ID to the primary
+  OpenAlex ID, records the alt in `author_alt_identifiers`, soft-removes
+  the alt author row, and invalidates the primary author centroid. When
+  the UI sends `field_choices`, those explicit primary/alt metadata
+  decisions are applied before automatic fill/max/JSON-union logic.
 
 ## What you can edit by hand
 

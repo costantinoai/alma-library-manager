@@ -40,7 +40,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,26 @@ _HARD_IDENTIFIER_FIELDS: tuple[str, ...] = (
     "semantic_scholar_id",
 )
 
+# Fields the manual merge dialog may ask the user to resolve. `openalex_id`
+# is intentionally excluded: the primary OpenAlex ID stays canonical and the
+# alt OpenAlex ID is recorded in `author_alt_identifiers`.
+_MANUAL_CHOICE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "affiliation",
+        "email_domain",
+        "url_picture",
+        "citedby",
+        "h_index",
+        "works_count",
+        "interests",
+        "institutions",
+        "orcid",
+        "scholar_id",
+        "semantic_scholar_id",
+    }
+)
+
 
 def _union_json_list(primary_raw: object, alt_raw: object) -> Optional[str]:
     """Merge two JSON-list-shaped strings, preserving primary's order."""
@@ -155,6 +175,8 @@ def _merge_profile_fields(
     db: sqlite3.Connection,
     primary_row: sqlite3.Row,
     alt_row: sqlite3.Row,
+    *,
+    skip_fields: set[str] | None = None,
 ) -> dict[str, object]:
     """Compute + apply the field-level union of alt → primary.
 
@@ -163,7 +185,10 @@ def _merge_profile_fields(
     via the surrounding transaction.
     """
     updates: dict[str, object] = {}
+    skipped = skip_fields or set()
     for field, kind in _MERGE_PROFILE_FIELDS:
+        if field in skipped:
+            continue
         primary_val = primary_row[field] if field in primary_row.keys() else None
         alt_val = alt_row[field] if field in alt_row.keys() else None
         if alt_val in (None, "", 0):
@@ -204,11 +229,64 @@ def _merge_profile_fields(
     return updates
 
 
+def _apply_manual_field_choices(
+    db: sqlite3.Connection,
+    primary_row: sqlite3.Row,
+    alt_row: sqlite3.Row,
+    choices: Mapping[str, str] | None,
+) -> dict[str, object]:
+    """Apply explicit user field choices from the merge-confirm dialog.
+
+    `choices` maps author profile field -> side (`primary` or `alt`). Choosing
+    `primary` is represented by no database update; choosing `alt` overwrites
+    the primary field with the alt value, including blank/null when the user
+    deliberately selected the blank side in the discrepancy dialog.
+    """
+    if not choices:
+        return {}
+
+    updates: dict[str, object] = {}
+    primary_keys = set(primary_row.keys())
+    alt_keys = set(alt_row.keys())
+    for field, side in choices.items():
+        if field not in _MANUAL_CHOICE_FIELDS:
+            continue
+        if side != "alt":
+            continue
+        if field not in primary_keys or field not in alt_keys:
+            continue
+        primary_val = primary_row[field]
+        alt_val = alt_row[field]
+        if primary_val == alt_val:
+            continue
+        updates[field] = alt_val
+
+    if not updates:
+        return {}
+
+    hard_id_clears = [k for k in updates if k in _HARD_IDENTIFIER_FIELDS]
+    if hard_id_clears:
+        clear_clause = ", ".join(f"{k} = NULL" for k in hard_id_clears)
+        db.execute(
+            f"UPDATE authors SET {clear_clause} WHERE id = ?",
+            (alt_row["id"],),
+        )
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    db.execute(
+        f"UPDATE authors SET {set_clause} WHERE id = ?",
+        list(updates.values()) + [primary_row["id"]],
+    )
+    return updates
+
+
 def _detect_conflicts(
     db: sqlite3.Connection,
     primary_row: sqlite3.Row,
     alt_row: sqlite3.Row,
     alt_openalex_id: str,
+    *,
+    skip_fields: set[str] | None = None,
 ) -> list[dict]:
     """Persist + return any hard-identifier conflicts.
 
@@ -219,7 +297,10 @@ def _detect_conflicts(
     """
     out: list[dict] = []
     now = datetime.utcnow().isoformat()
+    skipped = skip_fields or set()
     for field in _HARD_IDENTIFIER_FIELDS:
+        if field in skipped:
+            continue
         if field not in primary_row.keys() or field not in alt_row.keys():
             continue
         primary_val = str(primary_row[field] or "").strip()
@@ -325,6 +406,7 @@ def merge_author_profiles(
     primary_author_id: str,
     alt_author_ids: Iterable[str],
     *,
+    field_choices: Mapping[str, Mapping[str, str]] | None = None,
     job_id: Optional[str] = None,
 ) -> dict:
     """Collapse `alt_author_ids` into `primary_author_id`.
@@ -384,6 +466,7 @@ def merge_author_profiles(
         "conflicts": [],
     }
 
+    choices_by_alt = field_choices or {}
     now = datetime.utcnow().isoformat()
     for alt_id in alt_ids_clean:
         # Pull the FULL alt row so the field-union step has every
@@ -439,10 +522,48 @@ def merge_author_profiles(
             "SELECT * FROM authors WHERE id = ?", (primary_id,),
         ).fetchone()
         if primary_row_full is not None:
-            updates = _merge_profile_fields(db, primary_row_full, alt_row)
+            alt_choices = dict(
+                choices_by_alt.get(alt_id)
+                or choices_by_alt.get(alt_oid)
+                or choices_by_alt.get(alt_oid.lower())
+                or {}
+            )
+            chosen_fields = {
+                field
+                for field, side in alt_choices.items()
+                if field in _MANUAL_CHOICE_FIELDS and side in {"primary", "alt"}
+            }
+            manual_updates = _apply_manual_field_choices(
+                db,
+                primary_row_full,
+                alt_row,
+                alt_choices,
+            )
+            if manual_updates:
+                summary["fields_unioned"][alt_oid] = list(manual_updates.keys())
+            primary_after_choices = db.execute(
+                "SELECT * FROM authors WHERE id = ?", (primary_id,),
+            ).fetchone()
+            updates = _merge_profile_fields(
+                db,
+                primary_after_choices or primary_row_full,
+                alt_row,
+                skip_fields=chosen_fields,
+            )
             if updates:
-                summary["fields_unioned"][alt_oid] = list(updates.keys())
-            conflicts = _detect_conflicts(db, primary_row_full, alt_row, alt_oid)
+                summary["fields_unioned"][alt_oid] = sorted(
+                    set(summary["fields_unioned"].get(alt_oid, [])) | set(updates.keys())
+                )
+            conflict_base = db.execute(
+                "SELECT * FROM authors WHERE id = ?", (primary_id,),
+            ).fetchone()
+            conflicts = _detect_conflicts(
+                db,
+                conflict_base or primary_after_choices or primary_row_full,
+                alt_row,
+                alt_oid,
+                skip_fields=chosen_fields,
+            )
             for c in conflicts:
                 summary["conflicts"].append({**c, "alt_openalex_id": alt_oid})
 
