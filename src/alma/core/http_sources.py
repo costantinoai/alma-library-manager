@@ -52,6 +52,18 @@ class SourcePolicy:
     # being frozen at import time.
     min_interval_factory: Optional[Callable[[], float]] = None
     max_concurrency_factory: Optional[Callable[[], int]] = None
+    # Cap on the per-attempt retry backoff. Some sources (Semantic
+    # Scholar's anonymous shared pool, Crossref under load) can stay
+    # 429-blocked for tens of seconds; an 8 s cap means we give up
+    # right when the upstream is *almost* recovered. Default is the
+    # historical 8 s; sources that need more set this higher.
+    max_retry_backoff_seconds: float = 8.0
+    # Adaptive throttle: when a 429 is observed, hold the *next*
+    # request interval at this floor for `adaptive_cooldown_seconds`
+    # so we stop hammering an upstream that's signalling overload.
+    # Set both to 0.0 to disable.
+    adaptive_throttle_floor_seconds: float = 0.0
+    adaptive_cooldown_seconds: float = 0.0
 
 
 class SourceDiagnosticsCollector:
@@ -200,9 +212,25 @@ _POLICIES: dict[str, SourcePolicy] = {
     "semantic_scholar": SourcePolicy(
         name="semantic_scholar",
         base_url="https://api.semanticscholar.org/graph/v1",
+        # 1 request per second documented limit even with an API key
+        # (per https://www.semanticscholar.org/product/api/tutorial).
+        # 1.05 s gives ~5% headroom against clock skew + GC pauses.
         min_interval_seconds=1.05,
         max_concurrency=1,
-        max_retries=3,
+        # Bumped from 3 → 5: the anonymous shared pool (5 000 req /
+        # 5 min, all users worldwide) can stay congested for tens of
+        # seconds; 3 retries × 8 s cap = ~11 s total wait, not enough
+        # when the global pool is exhausted. 5 retries × 60 s cap =
+        # up to ~2 minutes total, which clears nearly every 429 we've
+        # seen in practice.
+        max_retries=5,
+        max_retry_backoff_seconds=60.0,
+        # On any 429, freeze the per-request interval at 30 s for the
+        # next 60 s so we stop firing hot calls into a clearly-busy
+        # upstream. Resets automatically once the cooldown window
+        # elapses; a fresh 429 re-arms it.
+        adaptive_throttle_floor_seconds=30.0,
+        adaptive_cooldown_seconds=60.0,
         default_headers=(("Accept", "application/json"),),
         auth_header_factory=_semantic_headers,
     ),
@@ -256,6 +284,12 @@ class SourceHttpClient:
         self._local = threading.local()
         self._rate_lock = threading.RLock()
         self._next_request_at = 0.0
+        # Adaptive throttle: when a 429 is observed, this timestamp is
+        # set to `now + adaptive_cooldown_seconds`. Until then,
+        # `_current_min_interval` returns the larger of its normal
+        # value and `adaptive_throttle_floor_seconds`. Reset to 0
+        # automatically when the cooldown elapses.
+        self._adaptive_floor_until: float = 0.0
         # Concurrency is gated dynamically (see `_concurrency_slot`) so
         # the limit can grow/shrink with runtime config — e.g. Crossref
         # moving between anonymous and polite pool when a contact email
@@ -294,10 +328,36 @@ class SourceHttpClient:
     def _current_min_interval(self) -> float:
         if self._policy.min_interval_factory is not None:
             try:
-                return max(0.0, float(self._policy.min_interval_factory()))
+                base = max(0.0, float(self._policy.min_interval_factory()))
             except Exception:
-                pass
-        return max(0.0, float(self._policy.min_interval_seconds))
+                base = max(0.0, float(self._policy.min_interval_seconds))
+        else:
+            base = max(0.0, float(self._policy.min_interval_seconds))
+        # Adaptive 429 cooldown: while inside the cooldown window,
+        # space requests at the configured floor (e.g. 30 s for S2)
+        # so we stop hammering an upstream that just signalled
+        # overload.
+        floor = float(self._policy.adaptive_throttle_floor_seconds or 0.0)
+        if floor > 0.0:
+            now = time.monotonic()
+            with self._rate_lock:
+                if self._adaptive_floor_until > now:
+                    return max(base, floor)
+                if self._adaptive_floor_until and self._adaptive_floor_until <= now:
+                    # Window elapsed; reset so future rate-limit-free
+                    # runs don't keep paying the floor.
+                    self._adaptive_floor_until = 0.0
+        return base
+
+    def _arm_adaptive_throttle(self) -> None:
+        """Engage the adaptive cooldown after a 429."""
+        cooldown = float(self._policy.adaptive_cooldown_seconds or 0.0)
+        if cooldown <= 0.0:
+            return
+        with self._rate_lock:
+            new_until = time.monotonic() + cooldown
+            if new_until > self._adaptive_floor_until:
+                self._adaptive_floor_until = new_until
 
     def _current_max_concurrency(self) -> int:
         if self._policy.max_concurrency_factory is not None:
@@ -341,7 +401,8 @@ class SourceHttpClient:
                         return max(0.0, dt.timestamp() - time.time())
                     except Exception:
                         pass
-        base = min(8.0, 0.75 * (2 ** attempt))
+        cap = max(1.0, float(self._policy.max_retry_backoff_seconds or 8.0))
+        base = min(cap, 0.75 * (2 ** attempt))
         return base + random.uniform(0.0, 0.4)
 
     def request(
@@ -417,6 +478,12 @@ class SourceHttpClient:
 
             if response.status_code not in _RETRYABLE_STATUSES:
                 return response
+
+            # Engage adaptive cooldown the first time we see a 429 in
+            # this attempt chain; subsequent retries within the same
+            # request will already be paced by `_current_min_interval`.
+            if response.status_code == 429:
+                self._arm_adaptive_throttle()
 
             if attempt >= self._policy.max_retries:
                 return response

@@ -1115,6 +1115,38 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_embedding_fetch_status_model "
                 "ON publication_embedding_fetch_status(model, source, status)"
             )
+            # When a paper's identifiers are rewritten (typically by a
+            # corpus rehydration step that updates `doi` /
+            # `semantic_scholar_id` from a fresh OpenAlex/S2/Crossref
+            # response), drop any terminal `publication_embedding_fetch_status`
+            # rows so the next S2 vector sweep retries the paper. The
+            # terminal states (`unmatched`, `missing_vector`,
+            # `lookup_error`, `bad_local_doi`) were tied to identifiers
+            # that no longer apply. Trigger fires only on actual changes
+            # — a rewrite to the same value is a no-op. Phase 2 of
+            # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS papers_clear_fetch_status_on_id_change
+                AFTER UPDATE OF doi, semantic_scholar_id ON papers
+                WHEN (
+                    COALESCE(NULLIF(TRIM(NEW.doi), ''), '') !=
+                        COALESCE(NULLIF(TRIM(OLD.doi), ''), '')
+                    OR COALESCE(NULLIF(TRIM(NEW.semantic_scholar_id), ''), '') !=
+                        COALESCE(NULLIF(TRIM(OLD.semantic_scholar_id), ''), '')
+                )
+                BEGIN
+                    DELETE FROM publication_embedding_fetch_status
+                    WHERE paper_id = NEW.id
+                      AND status IN (
+                          'unmatched',
+                          'missing_vector',
+                          'lookup_error',
+                          'bad_local_doi'
+                      );
+                END
+                """
+            )
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS paper_enrichment_status (

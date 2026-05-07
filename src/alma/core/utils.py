@@ -6,6 +6,7 @@ the codebase, particularly for text normalization and data transformations.
 
 import re
 import sqlite3
+import urllib.parse
 import uuid
 from typing import Dict, Optional
 
@@ -131,6 +132,63 @@ def normalize_doi(doi_val: Optional[str]) -> Optional[str]:
         d = d[len('http://doi.org/'):]
 
     return d or None
+
+
+# DOI shape per the Crossref / DataCite registry: prefix `10.<4-9 digits>`,
+# slash, then any non-empty suffix. Suffixes are case-insensitive per the
+# DOI spec (https://www.doi.org/the-identifier/resources/handbook/) but
+# real-world implementations sometimes treat them case-sensitively, which
+# is the fault we're protecting against in `canonical_lookup_doi`.
+_DOI_SHAPE_RE = re.compile(r"^10\.\d{4,9}/.+$")
+# Trailing publisher fragments observed in the wild on bibtex / RIS imports.
+# Stripped only when at the end of the suffix; never inside the suffix.
+_DOI_TRAILING_FRAGMENTS = ("/abstract", "/full", "/pdf", "/epdf", "/meta")
+
+
+def canonical_lookup_doi(doi_val: Optional[str]) -> Optional[str]:
+    """Return the lowercased, URL-decoded, fragment-stripped DOI for
+    external-API lookups.
+
+    Different from `normalize_doi`:
+    - Lowercases the suffix (case-insensitive per spec; some endpoints
+      reject otherwise).
+    - URL-decodes (e.g. `10.1000%2Fxyz` → `10.1000/xyz`).
+    - Strips trailing publisher fragments (`/full`, `/pdf`, …).
+
+    Same as `normalize_doi`:
+    - Strips `DOI:` / `doi:` prefixes and `https?://doi.org/` prefixes.
+
+    Use this whenever you build a lookup id that goes to S2 / Crossref /
+    OpenAlex DOI search. **Do NOT** use it as the persisted form in
+    `papers.doi`; that's `normalize_doi`'s job.
+    """
+    base = normalize_doi(doi_val)
+    if not base:
+        return None
+    try:
+        decoded = urllib.parse.unquote(base.strip()).strip()
+    except Exception:
+        decoded = base
+    lowered = decoded.lower()
+    for fragment in _DOI_TRAILING_FRAGMENTS:
+        if lowered.endswith(fragment):
+            lowered = lowered[: -len(fragment)]
+            break
+    return lowered or None
+
+
+def validate_doi_shape(doi_val: Optional[str]) -> bool:
+    """Return True iff the DOI matches the registry-shape regex.
+
+    Operates on the canonical-lookup form (lowercased + decoded), so
+    `10.1234/Foo` and `10.1234%2FFoo` both validate. A DOI that fails
+    this check is malformed and should be marked terminally as
+    `bad_local_doi`, not sent to external APIs.
+    """
+    canonical = canonical_lookup_doi(doi_val)
+    if not canonical:
+        return False
+    return bool(_DOI_SHAPE_RE.match(canonical))
 
 
 _ORCID_RE = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")

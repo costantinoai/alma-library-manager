@@ -406,7 +406,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
-                AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error')
+                AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
                 """,
                 (model, model),
             ).fetchone()
@@ -453,6 +453,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                 SUM(CASE WHEN fs.status = 'unmatched' THEN 1 ELSE 0 END) AS unmatched,
                 SUM(CASE WHEN fs.status = 'missing_vector' THEN 1 ELSE 0 END) AS missing_vector,
                 SUM(CASE WHEN fs.status = 'lookup_error' THEN 1 ELSE 0 END) AS lookup_error,
+                SUM(CASE WHEN fs.status = 'bad_local_doi' THEN 1 ELSE 0 END) AS bad_local_doi,
                 SUM(CASE WHEN fs.status = 'error' THEN 1 ELSE 0 END) AS error
             FROM papers p
             JOIN publication_embedding_fetch_status fs
@@ -496,7 +497,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
-                AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error')
+                AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
                 GROUP BY COALESCE(NULLIF(p.status, ''), 'unknown')
                 """,
                 (model, model),
@@ -545,6 +546,9 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     terminal_unmatched = int((terminal_row["unmatched"] if terminal_row else 0) or 0)
     terminal_missing_vector = int((terminal_row["missing_vector"] if terminal_row else 0) or 0)
     terminal_lookup_error = int((terminal_row["lookup_error"] if terminal_row else 0) or 0)
+    terminal_bad_local_doi = int(
+        (terminal_row["bad_local_doi"] if terminal_row else 0) or 0
+    )
     terminal_error = int((terminal_row["error"] if terminal_row else 0) or 0)
     try:
         local_compute_row = conn.execute(
@@ -564,7 +568,11 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
         local_compute_row = None
     local_compute_candidates = int((local_compute_row["c"] if local_compute_row else 0) or 0)
     all_missing_without_vector = (
-        total_missing + terminal_unmatched + terminal_missing_vector + terminal_lookup_error
+        total_missing
+        + terminal_unmatched
+        + terminal_missing_vector
+        + terminal_lookup_error
+        + terminal_bad_local_doi
     )
     local_compute_blocked_missing_text = max(
         0,
@@ -578,6 +586,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
         "terminal_unmatched": terminal_unmatched,
         "terminal_missing_vector": terminal_missing_vector,
         "terminal_lookup_error": terminal_lookup_error,
+        "terminal_bad_local_doi": terminal_bad_local_doi,
         "terminal_error": terminal_error,
         "local_compute_candidates": local_compute_candidates,
         "local_compute_blocked_missing_text": local_compute_blocked_missing_text,

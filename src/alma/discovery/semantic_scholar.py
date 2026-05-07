@@ -275,15 +275,24 @@ def _s2_to_candidate(paper: dict, score: float = 0.5) -> Optional[dict]:
 # ------------------------------------------------------------------
 
 
-def search_papers(query: str, limit: int = 20) -> List[dict]:
+def search_papers(query: str, limit: int = 20, *, raise_on_rate_limit: bool = False) -> List[dict]:
     """Search Semantic Scholar by free-text query.
 
     Args:
         query: Search string (typically topic keywords).
         limit: Maximum number of results.
+        raise_on_rate_limit: When True, raises
+            ``SemanticScholarBatchError(status_code=429)`` after the
+            shared HTTP client exhausts its retries on a 429. Default
+            False preserves the legacy "silent empty list" behaviour
+            for non-critical callers (e.g. interactive search). The
+            hydration / vector-rescue paths pass True so a 429 marks
+            the work `retryable_error`, not `terminal_no_match`.
 
     Returns:
-        List of candidate dicts ready for ``_merge_candidate``.
+        List of candidate dicts ready for ``_merge_candidate``. Empty
+        when no results, when the query was empty, or when a non-2xx
+        response was returned and `raise_on_rate_limit=False`.
     """
     if not (query or "").strip():
         return []
@@ -299,6 +308,12 @@ def search_papers(query: str, limit: int = 20) -> List[dict]:
             timeout=15,
         )
         if resp.status_code != 200:
+            if resp.status_code == 429 and raise_on_rate_limit:
+                raise SemanticScholarBatchError(
+                    f"Semantic Scholar /paper/search rate-limited "
+                    f"(HTTP 429) for query {query[:60]!r}",
+                    status_code=429,
+                )
             logger.debug(
                 "Semantic Scholar search returned HTTP %d for query '%s'",
                 resp.status_code,
@@ -316,6 +331,8 @@ def search_papers(query: str, limit: int = 20) -> List[dict]:
                 results.append(candidate)
         return results
 
+    except SemanticScholarBatchError:
+        raise
     except Exception as exc:
         logger.warning("Semantic Scholar search failed: %s", exc)
         return []
