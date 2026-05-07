@@ -59,19 +59,54 @@ recommendations, author recommendations, related papers.
   * Only validation failures (4xx other than 429) split down to
     singleton lookups and mark only those papers as
     `lookup_error`.
+  * `search_papers(raise_on_rate_limit=True)` surfaces a 429 to its
+    caller as `SemanticScholarBatchError(status_code=429)` so the
+    title-search rescue can defer instead of stamping
+    `terminal_no_match`. The legacy default (silent empty list) is
+    preserved for non-critical callers like interactive search.
+* **Adaptive throttle**: any 429 observed by the shared HTTP client
+  (`core/http_sources.SourceHttpClient`) engages a 30-second floor
+  on the per-request interval for the next 60 seconds. Retries: 5
+  attempts, jittered exponential backoff capped at 60 seconds. Fresh
+  429s within the cooldown re-arm the floor.
 * **Terminal statuses** for vector fetch: `unmatched`,
-  `missing_vector`, `lookup_error`. Terminally-missed papers stay
-  eligible for explicit local SPECTER2 compute.
+  `missing_vector`, `lookup_error`, `bad_local_doi`.
+  `bad_local_doi` is set before any HTTP call when the local DOI
+  fails the registry-shape regex `^10\.\d{4,9}/.+`; it never reaches
+  S2. Terminally-missed papers stay eligible for explicit local
+  SPECTER2 compute. The trigger
+  `papers_clear_fetch_status_on_id_change` (see
+  `api/deps.py:init_db_schema`) drops these terminal rows whenever
+  `papers.doi` or `papers.semantic_scholar_id` actually changes — so
+  a paper hydration step that finds a better DOI re-enters the
+  fetch pool automatically.
+* **Title-search rescue**: papers that miss `/paper/batch` get one
+  `/paper/search` call each (Jaccard 0.92 + |Δyear|≤1). Per-run
+  budget cap: 50 calls (`TITLE_RESCUE_PER_RUN_BUDGET` in
+  `services/s2_vectors.py`). The first 429 short-circuits the rest of
+  the batch's rescue.
+* **DOI hygiene** (`core.utils.canonical_lookup_doi`): DOIs sent to
+  S2 are lowercased, URL-decoded, and stripped of trailing publisher
+  fragments (`/pdf`, `/full`, `/abstract`, `/epdf`, `/meta`). The
+  match-side bookkeeping uses the same canonical form so case-only
+  differences round-trip cleanly.
 
 ## Crossref
 
 [Crossref](https://api.crossref.org/) is the DOI authority and a
 metadata fallback when OpenAlex doesn't have a paper.
 
-* **Endpoints used**: `/works/{doi}` for resolving a DOI to canonical
-  metadata.
+* **Endpoints used**:
+  * `/works/{doi}` — singleton DOI lookup; used by per-paper
+    `_hydrate_via_crossref` and other one-off paths.
+  * `/works?filter=doi:DOI1,doi:DOI2,...&rows=50` — batched DOI
+    lookup via `discovery.crossref.fetch_works_by_dois`. Phase 2 of
+    the bulk corpus rehydrator uses this to resolve up to 50 DOIs
+    per HTTP call (~50× round-trip reduction at full backlog vs the
+    singleton path).
 * **Polite pool**: Set `CROSSREF_MAILTO` to identify yourself. They
-  ask for it; honour the request.
+  ask for it; honour the request. Polite pool gives 10 RPS for
+  singletons / 3 RPS for list queries; public pool is 5 RPS / 1 RPS.
 * **Used as a fallback**, not the primary path. Most papers resolve
   through OpenAlex first.
 
