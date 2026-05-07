@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 OPENALEX_SOURCE = "openalex"
 S2_SOURCE = "semantic_scholar"
 CROSSREF_SOURCE = "crossref"
+# Synthetic source used by `_resolve_identifiers_via_title`. Phase 4 of
+# `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`. Distinct from
+# `openalex` / `semantic_scholar` because the lookup is by title, not
+# by an existing identifier — different inputs, different retry policy.
+TITLE_RESOLUTION_SOURCE = "title_resolution"
 METADATA_PURPOSE = "metadata"
 PENDING_STATUS = "pending"
 OPENALEX_WORKS_FIELDS = [field.strip() for field in _WORKS_SELECT_FIELDS.split(",") if field.strip()]
@@ -708,6 +713,106 @@ def list_enrichment_status_items(
     return items
 
 
+def _select_title_resolution_candidates(
+    conn: sqlite3.Connection, *, limit: int | None
+) -> list[sqlite3.Row]:
+    """Pick title-only papers whose identifiers haven't been resolved yet.
+
+    A paper is in the pool iff:
+    - it has a non-empty title;
+    - it has none of `openalex_id` / `doi` / `semantic_scholar_id`;
+    - the `paper_enrichment_status` row for `title_resolution` is not
+      already `enriched` or `terminal_no_match` (sticky terminal states
+      keep us from hammering the same dead-end title).
+
+    Phase 4 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
+    """
+    bound = "" if limit is None else "LIMIT ?"
+    params: list[Any] = [TITLE_RESOLUTION_SOURCE, METADATA_PURPOSE]
+    if limit is not None:
+        params.append(int(limit))
+    return list(
+        conn.execute(
+            f"""
+            SELECT p.id, p.title, p.year,
+                   p.openalex_id, p.doi, p.semantic_scholar_id, p.abstract
+            FROM papers p
+            LEFT JOIN paper_enrichment_status pes
+              ON pes.paper_id = p.id
+             AND pes.source = ?
+             AND pes.purpose = ?
+            WHERE COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
+              AND COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') = ''
+              AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''
+              AND COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') = ''
+              AND (
+                  pes.status IS NULL
+                  OR pes.status NOT IN ('enriched', 'terminal_no_match')
+              )
+            {bound}
+            """,
+            params,
+        ).fetchall()
+    )
+
+
+def _run_title_resolution_phase(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    limit: int | None,
+    add_job_log: Callable[..., None],
+    is_cancellation_requested: Callable[[str], bool],
+) -> dict[str, int]:
+    """Bulk identifier resolution for title-only papers.
+
+    Runs `_resolve_identifiers_via_title` per candidate. Commits per
+    paper so a long phase doesn't hold the writer lock (per
+    `lessons.md`: "Bulk background jobs must commit per unit of work";
+    "Background jobs must release the writer lock before every remote
+    call"). Returns a small summary the parent runner attaches to its
+    own job result.
+    """
+    candidates = _select_title_resolution_candidates(conn, limit=limit)
+    summary = {"attempted": 0, "resolved": 0}
+    if not candidates:
+        return summary
+
+    add_job_log(
+        job_id,
+        "Phase 0: title-resolution for title-only papers",
+        step="title_resolution_prepare",
+        data={"candidates": len(candidates)},
+    )
+
+    for idx, row in enumerate(candidates, start=1):
+        if is_cancellation_requested(job_id):
+            break
+        try:
+            status, filled = _resolve_identifiers_via_title(
+                conn, str(row["id"]), row
+            )
+        except Exception as exc:
+            logger.warning(
+                "title-resolution phase failed for %s: %s", row["id"], exc
+            )
+            continue
+        summary["attempted"] += 1
+        if filled:
+            summary["resolved"] += 1
+        # Commit every paper so the writer lock is released before the
+        # next remote call.
+        conn.commit()
+
+    add_job_log(
+        job_id,
+        "Phase 0 title-resolution complete",
+        step="title_resolution_done",
+        data=dict(summary),
+    )
+    return summary
+
+
 def run_corpus_metadata_rehydration(
     job_id: str,
     *,
@@ -729,6 +834,24 @@ def run_corpus_metadata_rehydration(
     field_counts: Counter[str] = Counter()
     try:
         _ensure_enrichment_status_table(conn)
+
+        # Phase 0: identifier resolution for title-only papers. Runs
+        # FIRST because a successful resolution lands an openalex_id /
+        # DOI / s2_id that the OpenAlex / S2 / Crossref selectors below
+        # then pick up in the same run. Bounded by `limit` so a huge
+        # backlog of title-only papers can't starve the existing
+        # phases. Phase 4–5 of
+        # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
+        title_resolution_summary = _run_title_resolution_phase(
+            conn,
+            job_id=job_id,
+            limit=limit,
+            add_job_log=add_job_log,
+            is_cancellation_requested=is_cancellation_requested,
+        )
+        summary["title_resolution_attempted"] = title_resolution_summary["attempted"]
+        summary["title_resolution_resolved"] = title_resolution_summary["resolved"]
+
         rows = _select_openalex_candidates(conn, limit=limit, force=force)
         total = len(rows)
         summary["candidates"] = total
@@ -988,34 +1111,102 @@ def run_corpus_metadata_rehydration(
                 still_missing.append(pid)
             fallback_paper_ids = still_missing
         if fallback_paper_ids:
+            # Phase 2 — Crossref abstract fallback. Pre-batch the DOI
+            # → candidate lookups via `fetch_works_by_dois` (one HTTP
+            # call per 50 DOIs vs one per paper), then apply each
+            # cached candidate via `_apply_crossref_candidate`. Phase
+            # 8b of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md` —
+            # 50× call reduction at full backlog vs the singleton
+            # path.
+            from alma.core.utils import normalize_doi as _normalize_doi
+            from alma.discovery.crossref import fetch_works_by_dois
+
+            paper_to_doi: dict[str, str] = {}
+            for pid in fallback_paper_ids:
+                row_doi = conn.execute(
+                    "SELECT doi FROM papers WHERE id = ?", (pid,)
+                ).fetchone()
+                if row_doi is None:
+                    continue
+                norm = _normalize_doi(str(row_doi["doi"] or ""))
+                if not norm:
+                    continue
+                paper_to_doi[pid] = norm
+
+            unique_dois = list({norm for norm in paper_to_doi.values()})
             add_job_log(
                 job_id,
-                "Phase 2: Crossref abstract fallback for residual misses",
+                "Phase 2: Crossref abstract fallback (batched)",
                 step="fallback_prepare",
-                data={"papers": len(fallback_paper_ids)},
+                data={
+                    "papers": len(fallback_paper_ids),
+                    "unique_dois": len(unique_dois),
+                    "expected_http_calls": (len(unique_dois) + 49) // 50,
+                },
             )
-            for idx, paper_id_local in enumerate(fallback_paper_ids, start=1):
+            try:
+                candidates_by_doi = fetch_works_by_dois(unique_dois, batch_size=50)
+            except Exception as exc:
+                logger.warning("Phase 2 batched Crossref fetch failed: %s", exc)
+                candidates_by_doi = {}
+
+            applied = 0
+            for idx, pid in enumerate(fallback_paper_ids, start=1):
                 if is_cancellation_requested(job_id):
                     break
-                try:
-                    # S2 already ran in Phase 1.5 — only Crossref left.
-                    hyd = hydrate_paper_metadata(
+                doi = paper_to_doi.get(pid)
+                if not doi:
+                    fallback_summary["skipped_no_doi"] += 1
+                    continue
+                cand = candidates_by_doi.get(doi.lower())
+                lookup_key = f"crossref:{doi.lower()}"
+                if cand is None:
+                    _write_ledger(
                         conn,
-                        paper_id_local,
-                        sources=(CROSSREF_SOURCE,),
+                        paper_id=pid,
+                        source=CROSSREF_SOURCE,
+                        lookup_key=lookup_key,
+                        status="terminal_no_match",
+                        reason="crossref_doi_not_found",
+                        fields_filled=[],
+                        fields_key="crossref_v1",
+                    )
+                    continue
+                try:
+                    fields_filled = _apply_crossref_candidate(
+                        conn, paper_id=pid, candidate=cand
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Phase 2 hydration failed for %s: %s", paper_id_local, exc
+                        "Phase 2 apply failed for %s: %s", pid, exc
                     )
                     continue
+                applied += 1
                 fallback_summary["attempted"] += 1
-                if hyd.get("abstract_filled"):
-                    fallback_summary["abstract_filled"] += 1
-                if hyd.get("sources_filled"):
+                if fields_filled:
+                    status_value = "enriched"
+                    reason = f"filled:{len(fields_filled)}"
+                    retry: timedelta | None = None
                     fallback_summary["enriched"] += 1
-                    for src in hyd["sources_filled"]:
-                        fallback_summary[f"source.{src}"] += 1
+                    fallback_summary["source.crossref"] += 1
+                else:
+                    status_value = "unchanged"
+                    reason = "no_local_improvements"
+                    retry = UNCHANGED_RETRY_AFTER
+                _write_ledger(
+                    conn,
+                    paper_id=pid,
+                    source=CROSSREF_SOURCE,
+                    lookup_key=lookup_key,
+                    status=status_value,
+                    reason=reason,
+                    fields_filled=fields_filled,
+                    fields_key="crossref_v1",
+                    retry_after=retry,
+                )
+                row_after = _read_hydration_row(conn, pid)
+                if row_after is not None and "abstract" in (fields_filled or []):
+                    fallback_summary["abstract_filled"] += 1
                 if idx % 50 == 0 or idx == len(fallback_paper_ids):
                     conn.commit()
                     set_job_status(
@@ -1024,15 +1215,16 @@ def run_corpus_metadata_rehydration(
                         processed=processed,
                         total=total,
                         message=(
-                            f"Cross-source fallback: {idx}/{len(fallback_paper_ids)} processed, "
+                            f"Cross-source fallback: {idx}/{len(fallback_paper_ids)} applied, "
                             f"{int(fallback_summary['abstract_filled'])} abstracts filled"
                         ),
                     )
+            conn.commit()
             add_job_log(
                 job_id,
                 "Phase 2 cross-source fallback complete",
                 step="fallback_done",
-                data=dict(fallback_summary),
+                data={**dict(fallback_summary), "applied": applied},
             )
 
         result = {
@@ -1072,6 +1264,27 @@ def run_corpus_metadata_rehydration(
             finished_at=_utcnow_iso(),
         )
         add_job_log(job_id, "OpenAlex metadata rehydration complete", step="done", data=result)
+
+        # Phase 6 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`:
+        # auto-schedule the next stage of the chain (S2 vector
+        # backfill). Idempotent against an already-active job; skips
+        # silently when there are zero S2 candidates. Failures here
+        # never fail the rehydration result the user already saw —
+        # the chain is a convenience, not a contract.
+        try:
+            from alma.services.embedding_chain import schedule_post_hydration_chain
+
+            chain = schedule_post_hydration_chain(conn, trigger_reason="post_hydration")
+            if chain.get("scheduled_jobs"):
+                add_job_log(
+                    job_id,
+                    "Chained S2 vector backfill auto-scheduled",
+                    step="chain_post_hydration",
+                    data=chain,
+                )
+        except Exception as exc:
+            logger.debug("post-hydration chain skipped: %s", exc)
+
         return result
     except Exception:
         conn.rollback()
@@ -1326,6 +1539,307 @@ def _write_ledger(
     )
 
 
+def _has_any_identifier(row: sqlite3.Row) -> bool:
+    """True iff the paper carries any identifier the source helpers can use."""
+    return bool(
+        str(row["openalex_id"] or "").strip()
+        or str(row["doi"] or "").strip()
+        or str(row["semantic_scholar_id"] or "").strip()
+    )
+
+
+def _resolve_identifiers_via_title(
+    conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row
+) -> tuple[str, list[str]]:
+    """Phase 0 of `hydrate_paper_metadata`: acquire an identifier when
+    a title-only paper has none.
+
+    Calls **OpenAlex** `/works?search=...` first because:
+
+    - OpenAlex's polite pool (mailto-tagged, configured) gives us
+      ~10 RPS with consistent latency and a 100 K/day soft cap per
+      user — orders of magnitude more headroom than S2.
+    - Semantic Scholar's `/paper/search` is throttled to 1 RPS even
+      with an API key and shares an anonymous pool of 5 000 req /
+      5 min. Hitting it first burns a budget we want to spend on the
+      title-search rescue inside the vector backfill.
+
+    Falls back to S2 only when OpenAlex returned nothing acceptable.
+    The S2 search response carries `embedding.specter_v2` when present,
+    but that vector is also recoverable via the resolved DOI / s2_id
+    on the next vector-backfill pass — so calling S2 here isn't on
+    the critical path.
+
+    Accepts the top result iff title token Jaccard >= 0.92 AND
+    |year_delta| <= 1 — same threshold as the title-search rescue
+    inside `run_s2_vector_backfill` so a paper has one match contract
+    end-to-end.
+
+    On accept, fill-only writes any of `semantic_scholar_id` / `doi` /
+    `openalex_id` the candidate offers; the existing OpenAlex / S2 /
+    Crossref helpers downstream then run with the resolved id and pull
+    full metadata. Records the outcome under `TITLE_RESOLUTION_SOURCE`
+    so reruns skip resolved or terminal-no-match papers.
+
+    Returns ``("skipped" | "enriched" | "unchanged" | "terminal_no_match" | "retryable_error", filled)``.
+    """
+    if _has_any_identifier(row):
+        return ("skipped", [])
+    title = str(row["title"] or "").strip()
+    if not title:
+        return ("skipped", [])
+
+    from alma.core.utils import normalize_title_key as _norm_title_key
+
+    # Skip if a recent terminal_no_match already exhausted this title.
+    # The `unchanged` TTL applies to "we found a candidate but it gave
+    # us no new fields"; for `terminal_no_match` we leave it sticky
+    # until the title itself changes (handled below via `lookup_key`).
+    lookup_key = f"title:{_norm_title_key(title)}"
+    if not lookup_key.endswith(":") and len(lookup_key) > len("title:"):
+        existing = conn.execute(
+            """
+            SELECT status, lookup_key
+            FROM paper_enrichment_status
+            WHERE paper_id = ? AND source = ? AND purpose = ?
+            """,
+            (paper_id, TITLE_RESOLUTION_SOURCE, METADATA_PURPOSE),
+        ).fetchone()
+        if existing and str(existing["lookup_key"]) == lookup_key:
+            if str(existing["status"]) in TERMINAL_STATUSES:
+                return (str(existing["status"]), [])
+
+    try:
+        local_year = int(row["year"]) if row["year"] is not None else None
+    except (TypeError, ValueError):
+        local_year = None
+
+    from alma.services.s2_vectors import (
+        TITLE_RESCUE_JACCARD_THRESHOLD,
+        TITLE_RESCUE_MAX_RESULTS,
+        TITLE_RESCUE_QUERY_MAX_CHARS,
+        TITLE_RESCUE_YEAR_DELTA,
+        _jaccard,
+        _title_tokens,
+    )
+
+    local_tokens = _title_tokens(title)
+    query_text = title[:TITLE_RESCUE_QUERY_MAX_CHARS]
+
+    def _accepts(cand_title: str, cand_year: int | None) -> tuple[bool, float]:
+        cand_tokens = _title_tokens(cand_title or "")
+        score = _jaccard(local_tokens, cand_tokens)
+        if score < TITLE_RESCUE_JACCARD_THRESHOLD:
+            return (False, score)
+        if (
+            local_year is not None
+            and cand_year is not None
+            and abs(local_year - cand_year) > TITLE_RESCUE_YEAR_DELTA
+        ):
+            return (False, score)
+        return (True, score)
+
+    fields_filled: list[str] = []
+    matched_via: str | None = None
+
+    # 1) OpenAlex first. Polite pool (mailto-tagged, see
+    #    `core.http_sources._POLICIES["openalex"]`) gives the largest
+    #    rate budget and the most consistent latency, and OpenAlex
+    #    indexes a much larger long tail than S2 for non-STEM venues.
+    try:
+        from alma.library.enrichment import _search_work_candidates
+
+        oa_candidates = _search_work_candidates(
+            query_text, per_page=TITLE_RESCUE_MAX_RESULTS
+        )
+    except Exception as exc:
+        logger.debug(
+            "title-resolution: OpenAlex search failed for %s: %s", paper_id, exc
+        )
+        oa_candidates = []
+
+    best_oa = None
+    best_oa_score = 0.0
+    for cand in oa_candidates:
+        cand_title = str(cand.get("display_name") or "").strip()
+        try:
+            cand_year = (
+                int(cand.get("publication_year"))
+                if cand.get("publication_year") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            cand_year = None
+        accept, score = _accepts(cand_title, cand_year)
+        if accept and score > best_oa_score:
+            best_oa = cand
+            best_oa_score = score
+
+    if best_oa is not None:
+        from alma.core.utils import canonical_lookup_doi as _canonical
+
+        oa_id_raw = str(best_oa.get("id") or "").strip()
+        oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
+        new_doi = _canonical(str(best_oa.get("doi") or "")) or ""
+        conn.execute(
+            """
+            UPDATE papers
+            SET openalex_id = COALESCE(NULLIF(openalex_id, ''), ?),
+                doi = CASE
+                    WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' AND ? != ''
+                        THEN ?
+                    ELSE doi
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                oa_id or None,
+                new_doi,
+                new_doi,
+                _utcnow_iso(),
+                paper_id,
+            ),
+        )
+        after = conn.execute(
+            "SELECT openalex_id, doi FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()
+        before_oa = str(row["openalex_id"] or "")
+        before_doi = str(row["doi"] or "")
+        if str(after["openalex_id"] or "") != before_oa:
+            fields_filled.append("openalex_id")
+        if str(after["doi"] or "") != before_doi:
+            fields_filled.append("doi")
+        matched_via = f"oa_search:{best_oa_score:.2f}"
+
+    # 2) Semantic Scholar — fallback only when OpenAlex didn't resolve.
+    #    Skipping when OpenAlex already handed us identifiers saves a
+    #    1-RPS budget call we'd rather spend on the title-search rescue
+    #    inside the vector backfill (which has no OpenAlex equivalent).
+    if not _has_any_identifier(
+        conn.execute(
+            "SELECT openalex_id, doi, semantic_scholar_id FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()
+    ):
+        s2_rate_limited = False
+        try:
+            from alma.discovery import semantic_scholar
+
+            s2_candidates = semantic_scholar.search_papers(
+                query_text,
+                limit=TITLE_RESCUE_MAX_RESULTS,
+                raise_on_rate_limit=True,
+            )
+        except semantic_scholar.SemanticScholarBatchError as exc:
+            if getattr(exc, "status_code", None) == 429:
+                s2_rate_limited = True
+                s2_candidates = []
+            else:
+                logger.debug(
+                    "title-resolution: S2 search error for %s: %s", paper_id, exc
+                )
+                s2_candidates = []
+        except Exception as exc:
+            logger.debug(
+                "title-resolution: S2 search failed for %s: %s", paper_id, exc
+            )
+            s2_candidates = []
+
+        best_s2 = None
+        best_s2_score = 0.0
+        for cand in s2_candidates:
+            cand_title = str(cand.get("title") or "").strip()
+            try:
+                cand_year_raw = cand.get("year")
+                cand_year = (
+                    int(cand_year_raw) if cand_year_raw is not None else None
+                )
+            except (TypeError, ValueError):
+                cand_year = None
+            accept, score = _accepts(cand_title, cand_year)
+            if accept and score > best_s2_score:
+                best_s2 = cand
+                best_s2_score = score
+
+        if best_s2 is not None:
+            from alma.core.utils import canonical_lookup_doi as _canonical
+
+            new_s2_id = str(best_s2.get("semantic_scholar_id") or "").strip()
+            new_doi = _canonical(str(best_s2.get("doi") or "")) or ""
+            if new_s2_id or new_doi:
+                conn.execute(
+                    """
+                    UPDATE papers
+                    SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
+                        doi = CASE
+                            WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' AND ? != ''
+                                THEN ?
+                            ELSE doi
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_s2_id or None,
+                        new_doi,
+                        new_doi,
+                        _utcnow_iso(),
+                        paper_id,
+                    ),
+                )
+                after = conn.execute(
+                    "SELECT semantic_scholar_id, doi FROM papers WHERE id = ?",
+                    (paper_id,),
+                ).fetchone()
+                before_s2 = str(row["semantic_scholar_id"] or "")
+                before_doi = str(row["doi"] or "")
+                if (
+                    str(after["semantic_scholar_id"] or "") != before_s2
+                    and "semantic_scholar_id" not in fields_filled
+                ):
+                    fields_filled.append("semantic_scholar_id")
+                if (
+                    str(after["doi"] or "") != before_doi
+                    and "doi" not in fields_filled
+                ):
+                    fields_filled.append("doi")
+                matched_via = (
+                    matched_via + "+s2_search"
+                    if matched_via
+                    else f"s2_search:{best_s2_score:.2f}"
+                )
+
+    if fields_filled:
+        status_value = "enriched"
+        reason = f"title_match:{matched_via}" if matched_via else "title_match"
+        retry: timedelta | None = None
+    elif matched_via:
+        # Found a candidate but neither side gave us a new identifier
+        # the local row didn't already have. Keep retryable so a future
+        # change in upstream coverage can fill in.
+        status_value = "unchanged"
+        reason = "title_match_no_new_ids"
+        retry = UNCHANGED_RETRY_AFTER
+    else:
+        status_value = "terminal_no_match"
+        reason = "title_search_no_candidates_above_threshold"
+        retry = None
+    _write_ledger(
+        conn,
+        paper_id=paper_id,
+        source=TITLE_RESOLUTION_SOURCE,
+        lookup_key=lookup_key,
+        status=status_value,
+        reason=reason,
+        fields_filled=fields_filled,
+        fields_key="title_resolution_v1",
+        retry_after=retry,
+    )
+    return (status_value, fields_filled)
+
+
 def _hydrate_via_openalex(conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row) -> tuple[str, list[str]]:
     """Returns `(status, fields_filled)`."""
     work_id = _openalex_work_id(str(row["openalex_id"] or ""))
@@ -1502,6 +2016,8 @@ def hydrate_paper_metadata(
             "abstract_filled": False,
         }
 
+    import time as _time
+
     summary: dict[str, Any] = {
         "paper_id": paper_id,
         "exists": True,
@@ -1510,13 +2026,37 @@ def hydrate_paper_metadata(
         "fields_by_source": {},
         "abstract_filled": False,
         "abstract_already_present": _abstract_present(row),
+        # Per-source wall-clock seconds — phase 7 of
+        # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`. Empty for any
+        # source whose helper returned `skipped` (so a downstream
+        # profiler can tell "didn't run" from "ran in 0 seconds").
+        "wall_seconds_by_source": {},
     }
+
+    # Phase 0: identifier resolution by title. Runs before the source
+    # loop so a title-only paper acquires an openalex_id / DOI / s2_id
+    # the source helpers can then use. Cheap no-op when the row already
+    # carries any identifier.
+    t0 = _time.perf_counter()
+    pre_status, pre_filled = _resolve_identifiers_via_title(conn, paper_id, row)
+    if pre_status not in ("skipped",):
+        summary["wall_seconds_by_source"][TITLE_RESOLUTION_SOURCE] = round(
+            _time.perf_counter() - t0, 4
+        )
+        summary["sources_attempted"].append(TITLE_RESOLUTION_SOURCE)
+        if pre_filled:
+            summary["sources_filled"].append(TITLE_RESOLUTION_SOURCE)
+            summary["fields_by_source"][TITLE_RESOLUTION_SOURCE] = pre_filled
+            # Re-read the row so the downstream loop sees the freshly
+            # resolved identifiers.
+            row = _read_hydration_row(conn, paper_id) or row
 
     for source in sources:
         # Re-read row each iteration so a downstream source sees the
         # fields a prior source already filled (avoids redundant writes
         # and lets the ledger note "no_local_improvements" correctly).
         row = _read_hydration_row(conn, paper_id) or row
+        t_src = _time.perf_counter()
         if source == OPENALEX_SOURCE:
             status, filled = _hydrate_via_openalex(conn, paper_id, row)
         elif source == S2_SOURCE:
@@ -1528,12 +2068,18 @@ def hydrate_paper_metadata(
         if status == "skipped":
             continue
         summary["sources_attempted"].append(source)
+        summary["wall_seconds_by_source"][source] = round(
+            _time.perf_counter() - t_src, 4
+        )
         if filled:
             summary["sources_filled"].append(source)
             summary["fields_by_source"][source] = filled
 
     final_row = _read_hydration_row(conn, paper_id)
     summary["abstract_filled"] = _abstract_present(final_row) and not summary["abstract_already_present"]
+    summary["wall_seconds_total"] = round(
+        sum(summary["wall_seconds_by_source"].values()), 4
+    )
     return summary
 
 
@@ -1635,7 +2181,7 @@ def enqueue_pending_hydration(
     """
     _ensure_enrichment_status_table(conn)
     row = conn.execute(
-        "SELECT id, openalex_id, doi, semantic_scholar_id, abstract FROM papers WHERE id = ?",
+        "SELECT id, openalex_id, doi, semantic_scholar_id, title, abstract FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone()
     if row is None:
@@ -1645,11 +2191,25 @@ def enqueue_pending_hydration(
     has_oa = bool(str(row["openalex_id"] or "").strip())
     has_doi = bool(str(row["doi"] or "").strip())
     has_s2 = bool(str(row["semantic_scholar_id"] or "").strip())
-    if not (has_oa or has_doi or has_s2):
+    has_title = bool(str(row["title"] or "").strip())
+    # Phase 5 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`:
+    # title-only papers (no DOI / openalex_id / s2_id but a usable
+    # title) also enter the pool — `_resolve_identifiers_via_title`
+    # will try to acquire an identifier on the next sweep, and the
+    # downstream OpenAlex / S2 / Crossref helpers run with whatever it
+    # finds. A paper with neither identifier nor title has nothing for
+    # the rehydrator to grip; skip it.
+    if not (has_oa or has_doi or has_s2 or has_title):
         return False
     queued = False
     now = _utcnow_iso()
     sources_to_queue: list[tuple[str, str]] = []
+    if not (has_oa or has_doi or has_s2) and has_title:
+        # Title-only paper: queue under TITLE_RESOLUTION_SOURCE so the
+        # sweep's per-paper dispatcher knows to try title resolution
+        # first. The downstream sources will be queued automatically
+        # once resolution lands an identifier.
+        sources_to_queue.append((TITLE_RESOLUTION_SOURCE, "title_resolution_v1"))
     if has_oa:
         sources_to_queue.append((OPENALEX_SOURCE, OPENALEX_WORKS_FIELDS_KEY))
     if has_s2 or has_doi:

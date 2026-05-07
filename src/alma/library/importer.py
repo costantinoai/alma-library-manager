@@ -1151,6 +1151,21 @@ def _create_library_paper(
     )
     conn.commit()
 
+    # Same chain hook the Library / Feed / Discovery insert sites use:
+    # write a pending `paper_enrichment_status` row and auto-schedule
+    # the rehydration sweep. Without this, BibTeX-imported papers
+    # would never enter the chain and stay vector-less even when their
+    # DOI is fully indexable. Phase 5 / 8c of
+    # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
+    try:
+        from alma.services.corpus_rehydrate import enqueue_pending_hydration
+
+        enqueue_pending_hydration(conn, paper_id)
+    except Exception as exc:
+        logger.debug(
+            "Importer enqueue_pending_hydration skipped for %s: %s", paper_id, exc
+        )
+
     return paper_id
 
 
