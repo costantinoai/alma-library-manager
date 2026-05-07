@@ -905,7 +905,7 @@ def _select_source_candidates(
 def run_author_metadata_rehydration(
     job_id: str | None = None,
     *,
-    limit: int | None = 500,
+    limit: int | None = None,
     force: bool = False,
     set_job_status: Callable[..., Any] | None = None,
     add_job_log: Callable[..., Any] | None = None,
@@ -1009,7 +1009,7 @@ def run_author_metadata_rehydration(
 def schedule_pending_author_hydration_sweep(
     *,
     reason: str = "author_follow",
-    limit: int = 500,
+    limit: int | None = None,
 ) -> str | None:
     try:
         from alma.api.scheduler import (
@@ -1028,7 +1028,7 @@ def schedule_pending_author_hydration_sweep(
         return str(existing.get("job_id") or "") or None
 
     job_id = f"author_metadata_rehydrate_{uuid.uuid4().hex[:10]}"
-    bounded_limit = max(1, min(int(limit or 500), 100_000))
+    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
     set_job_status(
         job_id,
         status="queued",
@@ -1036,10 +1036,23 @@ def schedule_pending_author_hydration_sweep(
         trigger_source=f"auto:{reason}",
         started_at=_utcnow_iso(),
         processed=0,
-        total=bounded_limit,
-        message=f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)",
+        total=bounded_limit or 0,
+        message=(
+            f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
+            if bounded_limit is not None
+            else "Author metadata hydration auto-queued for all eligible authors"
+        ),
     )
-    add_job_log(job_id, "Auto-queued author metadata hydration", step="queued", data={"reason": reason, "limit": bounded_limit})
+    add_job_log(
+        job_id,
+        "Auto-queued author metadata hydration",
+        step="queued",
+        data={
+            "reason": reason,
+            "limit": bounded_limit,
+            "all_eligible": bounded_limit is None,
+        },
+    )
 
     def _runner() -> dict[str, Any]:
         return run_author_metadata_rehydration(

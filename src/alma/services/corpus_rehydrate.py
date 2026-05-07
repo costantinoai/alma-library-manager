@@ -1540,7 +1540,7 @@ def hydrate_paper_metadata(
 def schedule_pending_hydration_sweep(
     *,
     reason: str = "paper_insert",
-    limit: int = 500,
+    limit: int | None = None,
 ) -> str | None:
     """Kick off an Activity-enveloped rehydration job in the background.
 
@@ -1574,7 +1574,7 @@ def schedule_pending_hydration_sweep(
     import uuid as _uuid
 
     job_id = f"paper_metadata_rehydrate_{_uuid.uuid4().hex[:10]}"
-    bounded_limit = max(1, min(int(limit or 500), 100_000))
+    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
     set_job_status(
         job_id,
         status="queued",
@@ -1582,14 +1582,22 @@ def schedule_pending_hydration_sweep(
         trigger_source=f"auto:{reason}",
         started_at=_utcnow_iso(),
         processed=0,
-        total=bounded_limit,
-        message=f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)",
+        total=bounded_limit or 0,
+        message=(
+            f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)"
+            if bounded_limit is not None
+            else "OpenAlex metadata rehydration auto-queued for all eligible papers"
+        ),
     )
     add_job_log(
         job_id,
         "Auto-queued by paper-insert hook",
         step="queued",
-        data={"limit": bounded_limit, "trigger_reason": reason},
+        data={
+            "limit": bounded_limit,
+            "all_eligible": bounded_limit is None,
+            "trigger_reason": reason,
+        },
     )
 
     def _runner() -> dict[str, Any]:

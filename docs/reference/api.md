@@ -199,7 +199,7 @@ parameters and response shapes.
 | `POST` | `/authors/{id}/deep-refresh` | Full re-fetch |
 | `POST` | `/authors/deep-refresh-all` | Bulk deep refresh; `scope=needs_metadata` targets identity/profile gaps for Settings maintenance |
 | `GET` | `/authors/enrichment-status` | Pure-read author hydration ledger summary (OpenAlex / ORCID / Semantic Scholar / Crossref) + per-author rows |
-| `POST` | `/authors/rehydrate-metadata` | Queue author profile/affiliation/alias hydration through the Activity envelope |
+| `POST` | `/authors/rehydrate-metadata` | Queue author profile/affiliation/alias hydration through the Activity envelope. Omit `limit` to process all eligible authors; explicit `limit` accepts up to 100,000 authors for bounded probes. |
 | `GET` | `/authors/{id}/affiliations` | Read affiliation evidence and the current display-affiliation decision |
 | `POST` | `/authors/backfill-works` | Pull works + S2 vectors |
 | `POST` | `/authors/{id}/history-backfill` | Historical corpus backfill |
@@ -306,7 +306,7 @@ parameters and response shapes.
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
 | `GET` | `/papers/enrichment-status` | Pure-read corpus metadata rehydration ledger summary (per-source counts: OpenAlex / Semantic Scholar / Crossref) + per-paper rows |
-| `POST` | `/papers/rehydrate-metadata` | Queue a 3-phase metadata repair job (Activity envelope): Phase 1 OpenAlex batched, Phase 1.5 Semantic Scholar batched (fills `tldr` + `influential_citation_count` + abstract fallback), Phase 2 Crossref per-paper for residual abstract misses. `limit` accepts up to 100,000 papers per call. |
+| `POST` | `/papers/rehydrate-metadata` | Queue a 3-phase metadata repair job (Activity envelope): Phase 1 OpenAlex batched, Phase 1.5 Semantic Scholar batched (fills `tldr` + `influential_citation_count` + abstract fallback), Phase 2 Crossref per-paper for residual abstract misses. Omit `limit` to process all eligible papers; explicit `limit` accepts up to 100,000 papers per call for bounded probes. |
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |
