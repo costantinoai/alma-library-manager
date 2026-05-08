@@ -42,6 +42,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast, errorToast} from '@/hooks/useToast'
+import { formatPercent } from '@/lib/format'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -309,7 +310,7 @@ export function TagsTab() {
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-800">{item.tag}</p>
                         <p className="text-xs text-slate-500">
-                          confidence {(item.confidence * 100).toFixed(0)}% · source {item.source}
+                          confidence {formatPercent(item.confidence, 0)} · source {item.source}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
@@ -366,7 +367,7 @@ export function TagsTab() {
                     <span className="mx-2 text-slate-400">→</span>
                     <span className="font-medium">{item.target_tag}</span>
                     <span className="ml-2 text-xs text-slate-500">
-                      {(item.confidence * 100).toFixed(0)}% · {item.reason}
+                      {formatPercent(item.confidence, 0)} · {item.reason}
                     </span>
                   </div>
                   <Button

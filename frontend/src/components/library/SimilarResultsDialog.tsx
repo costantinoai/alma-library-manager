@@ -22,6 +22,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/progress'
+import { formatPercent } from '@/lib/format'
 
 interface SimilarResultsDialogProps {
   open: boolean
@@ -127,7 +128,7 @@ export function SimilarResultsDialog({
                                 <div key={key} className="flex justify-between">
                                   <span className="capitalize">{key.replace(/_/g, ' ')}</span>
                                   <span className="font-mono">
-                                    {(d.weighted * 100).toFixed(1)}%
+                                    {formatPercent(d.weighted, 1)}
                                     {d.description && <span className="text-slate-400 ml-1">({d.description})</span>}
                                   </span>
                                 </div>

@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { byWeightedDesc } from '@/lib/sort'
 import type { PaperCardPaper, ScoreSignal } from './PaperCard'
 
 // ── Signal palette ─────────────────────────────────────────────────────────
@@ -48,7 +49,7 @@ function TopSignals({
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)
-    .sort((a, b) => b.signal.weighted - a.signal.weighted)
+    .sort(byWeightedDesc((s) => s.signal.weighted))
     .slice(0, 3)
 
   if (signals.length === 0 && !explanation) return null

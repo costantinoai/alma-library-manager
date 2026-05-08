@@ -311,18 +311,36 @@ export function DiscoveryPage() {
 
   const allRecommendations: LensRecommendation[] = lensRecommendationsQuery.data ?? []
   // Filter out actioned papers instantly + apply the user's sort
-  // choice. Default sort is `relevance` (the ranked order returned
-  // by the API); `recent` re-sorts by paper publication date desc.
+  // choice. `relevance` sorts by raw score DESC so visible ordering
+  // tracks the score bars on each card; the diversity-aware `rank`
+  // value stays as a tie-breaker. `recent` re-sorts by publication
+  // date DESC, falling back to `year` when no full date is set.
   const recommendations = useMemo(() => {
     const visible = allRecommendations.filter(
       (rec) => !actionedIds.has(rec.id) && !rec.user_action,
     )
-    if (sort === 'relevance') return visible
+    if (sort === 'relevance') {
+      return [...visible].sort((a, b) => {
+        const sa = typeof a.score === 'number' ? a.score : 0
+        const sb = typeof b.score === 'number' ? b.score : 0
+        if (sb !== sa) return sb - sa
+        const ra = a.rank ?? Number.POSITIVE_INFINITY
+        const rb = b.rank ?? Number.POSITIVE_INFINITY
+        return ra - rb
+      })
+    }
+    const dateKey = (rec: LensRecommendation): string => {
+      const direct = rec.paper?.publication_date ?? ''
+      if (direct) return direct
+      // Fallback so older rows without a full ISO date still sort
+      // sensibly relative to one another. Year-only papers land on
+      // YYYY-01-01 — better than sinking the whole batch to the end.
+      const year = rec.paper?.year
+      return year != null ? `${String(year).padStart(4, '0')}-01-01` : ''
+    }
     return [...visible].sort((a, b) => {
-      const dateA = a.paper?.publication_date ?? ''
-      const dateB = b.paper?.publication_date ?? ''
-      // Empty dates sink to the end; otherwise lexical compare on
-      // the ISO date string is correct (descending).
+      const dateA = dateKey(a)
+      const dateB = dateKey(b)
       if (!dateA && !dateB) return 0
       if (!dateA) return 1
       if (!dateB) return -1
@@ -362,8 +380,12 @@ export function DiscoveryPage() {
       .then((res) => {
         setExplanations((prev) => ({ ...prev, [recId]: res.explanation ?? null }))
       })
-      .catch(() => {
-        // silently fail — score bars still show
+      .catch((err: unknown) => {
+        // The score bars stay visible without an explanation, so this
+        // is best-effort UX. But devs need to see when the explanation
+        // endpoint is silently 5xx-ing — the in-flight `null` would
+        // otherwise persist forever (no retry).
+        console.warn('[DiscoveryPage] explainRecommendation failed', recId, err)
       })
   }
 
@@ -967,7 +989,7 @@ export function DiscoveryPage() {
               }}
             />
           ) : (
-            (showAllRecs ? recommendations : recommendations.slice(0, DEFAULT_VISIBLE_RECS)).map((rec) => {
+            (showAllRecs ? recommendations : recommendations.slice(0, DEFAULT_VISIBLE_RECS)).map((rec, recIdx) => {
               const paper = rec.paper ?? null
               const cardPaper = {
                 id: rec.paper_id,
@@ -1015,7 +1037,7 @@ export function DiscoveryPage() {
                   }}
                   paper={cardPaper}
                   score={rec.score}
-                  rank={rec.rank ?? undefined}
+                  rank={recIdx + 1}
                   scoreBreakdown={rec.score_breakdown as Record<string, any> | null}
                   explanation={explanations[rec.id]}
                   onExpandBreakdown={() => fetchExplanation(rec.id)}

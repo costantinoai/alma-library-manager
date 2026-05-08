@@ -59,6 +59,7 @@ import { useToast, errorToast } from '@/hooks/useToast'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
+import { formatPercent, formatYearMonth } from '@/lib/format'
 
 interface AuthorDetailPanelProps {
   author: Author | null
@@ -209,15 +210,13 @@ function OpenAlexWorkRow({
                 metadata. */}
             {(() => {
               const pubDate = (work.publication_date || '').trim()
-              if (pubDate) {
-                const parsed = new Date(pubDate)
-                if (!isNaN(parsed.getTime())) {
-                  return (
-                    <span className="tabular-nums" title={pubDate}>
-                      {parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}
-                    </span>
-                  )
-                }
+              const formatted = formatYearMonth(pubDate)
+              if (formatted) {
+                return (
+                  <span className="tabular-nums" title={pubDate}>
+                    {formatted}
+                  </span>
+                )
               }
               if (work.year != null) return <span className="tabular-nums">{work.year}</span>
               return null
@@ -642,7 +641,7 @@ export function AuthorDetailPanel({
                         <span>Last success: {formatDate(backfill.last_success_at)}</span>
                       ) : null}
                       {backfill.coverage_ratio != null ? (
-                        <span>Coverage: {(backfill.coverage_ratio * 100).toFixed(0)}%</span>
+                        <span>Coverage: {formatPercent(backfill.coverage_ratio, 0)}</span>
                       ) : null}
                     </div>
                   </div>

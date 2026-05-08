@@ -12,6 +12,8 @@ import {
 } from '@/lib/signals'
 import { truncate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import { formatPercent } from '@/lib/format'
+import { byWeightedDesc } from '@/lib/sort'
 
 interface ScoreBreakdownPanelProps {
   breakdown: ScoreBreakdown
@@ -34,7 +36,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
 
   const totalWeighted = signals.reduce((sum, s) => sum + Math.max(0, s.weighted), 0)
 
-  const sortedSignals = [...signals].sort((a, b) => b.weighted - a.weighted)
+  const sortedSignals = [...signals].sort(byWeightedDesc<typeof signals[number]>())
   const topSignalKey = sortedSignals[0]?.key
 
   return (
@@ -70,7 +72,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                 backgroundColor: s.weighted > 0 ? s.color : '#CBD5E1',
                 minWidth: pct > 0 ? '3px' : '0',
               }}
-              title={`${s.label}: ${(s.weighted * 100).toFixed(1)}%`}
+              title={`${s.label}: ${formatPercent(s.weighted, 1)}`}
             />
           )
         })}
@@ -109,7 +111,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                 )}
               </span>
               <span className="w-12 shrink-0 text-right font-mono text-slate-500">
-                {(s.value * 100).toFixed(0)}%
+                {formatPercent(s.value, 0)}
               </span>
               <span className="w-10 shrink-0 text-center font-mono text-slate-400">
                 ×{s.weight.toFixed(2)}
@@ -131,7 +133,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                   s.weighted > 0 ? 'text-slate-600' : 'text-slate-300',
                 )}
               >
-                {(s.weighted * 100).toFixed(1)}
+                {formatPercent(s.weighted, 1, { withSign: false })}
               </span>
             </>
           )

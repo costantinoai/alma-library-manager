@@ -157,8 +157,12 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
         throw new Error('Suggestion is missing an actionable identifier')
       })
       // Replace the tail with a swallowing copy so an error in this
-      // call doesn't poison the queue for the next click.
-      followQueueRef.current = next.catch(() => undefined)
+      // call doesn't poison the queue for the next click. Errors are
+      // already surfaced via `onError` (toast); we log to console here
+      // so the queue's silent failure mode is visible in DevTools.
+      followQueueRef.current = next.catch((err: unknown) => {
+        console.warn('[SuggestedAuthorsRail] follow queue tail rejected', err)
+      })
       return next
     },
     onMutate: async (suggestion) => {
@@ -187,7 +191,12 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
         trackFollowedAuthorSuggestion(
           suggestion.openalex_id,
           suggestion.suggestion_type ?? null,
-        ).catch(() => undefined)
+        ).catch((err: unknown) => {
+          // Outcome-calibration tracking is best-effort but devs still
+          // need to see when the attribution endpoint is down — silent
+          // .catch used to drop these without any breadcrumb.
+          console.warn('[SuggestedAuthorsRail] follow attribution failed', err)
+        })
       }
     },
     onError: (_err, _suggestion, ctx) => {

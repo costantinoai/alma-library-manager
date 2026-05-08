@@ -11,6 +11,8 @@ import { StarRating } from '@/components/StarRating'
 import { trackInteraction } from '@/api/client'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
+import { formatPercent, formatYearMonth } from '@/lib/format'
+import { byWeightedDesc } from '@/lib/sort'
 
 export interface PaperCardPaper {
   id: string
@@ -214,7 +216,7 @@ function ScoreBreakdownTeaser({
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)
-    .sort((a, b) => b.signal.weighted - a.signal.weighted)
+    .sort(byWeightedDesc((s) => s.signal.weighted))
     .slice(0, 3)
 
   const hasSignals = signals.length > 0
@@ -266,7 +268,7 @@ function ScoreBreakdownPanel({
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)
-    .sort((a, b) => b.signal.weighted - a.signal.weighted)
+    .sort(byWeightedDesc((s) => s.signal.weighted))
 
   if (signals.length === 0) {
     if (explanation) {
@@ -294,7 +296,7 @@ function ScoreBreakdownPanel({
               <span className="tabular-nums text-[11px] text-slate-400">
                 {signal.weighted.toFixed(1)}
                 <span className="ml-1 text-slate-300">
-                  ({(signal.value * 100).toFixed(0)}% &times; {signal.weight.toFixed(2)}w)
+                  ({formatPercent(signal.value, 0)} &times; {signal.weight.toFixed(2)}w)
                 </span>
               </span>
             </div>
@@ -380,13 +382,8 @@ export function PaperCard({
   // "Feb 2024" is more scannable than "2024". Short-form via en-GB
   // locale because it's compact ("13 Feb 2024" not "February 13, 2024").
   const yearInline = ((): string | null => {
-    const pubDate = (paper.publication_date || '').trim()
-    if (pubDate) {
-      const parsed = new Date(pubDate)
-      if (!isNaN(parsed.getTime())) {
-        return parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
-      }
-    }
+    const formatted = formatYearMonth((paper.publication_date || '').trim())
+    if (formatted) return formatted
     if (paper.year != null) return String(paper.year)
     return null
   })()

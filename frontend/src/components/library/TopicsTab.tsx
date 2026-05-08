@@ -99,7 +99,12 @@ export function TopicsTab() {
 
   const invalidateAfterTopicMutation = useCallback(() => {
     void invalidateQueries(queryClient, ['library-topics'], ['insights'], ['graph'])
-    api.post('/graphs/rebuild').catch(() => undefined)
+    // Fire-and-forget: a graph-rebuild failure shouldn't block topic
+    // mutation UX, but devs need to see it in the console when the
+    // background sweep is silently 5xx-ing.
+    api.post('/graphs/rebuild').catch((err: unknown) => {
+      console.warn('[TopicsTab] graph rebuild request failed', err)
+    })
   }, [queryClient])
 
   const createTopicMutation = useMutation({

@@ -162,9 +162,13 @@ export function useOperationToasts() {
     }
   }, [])
 
-  // Poll operations
+  // Poll operations. Shares the ['activity-operations'] cache with
+  // ActivityPanel and AIConfigCard so all three subscribers ride a
+  // single network request — React Query picks the smallest active
+  // refetchInterval among observers, so each can still declare its
+  // own desired freshness without multiplying server load.
   const { data: operations } = useQuery({
-    queryKey: ['activity-operations-toasts'],
+    queryKey: ['activity-operations'],
     queryFn: () => api.get<JobStatus[]>('/activity'),
     refetchInterval: POLL_INTERVAL,
   })

@@ -209,10 +209,15 @@ export function FeedPage() {
   const invalidateFeedRefresh = () => invalidateAfterFeedRefresh(queryClient)
 
   const invalidateFeedAction = async () => {
+    // ['bootstrap'] is intentionally NOT invalidated here — per-action
+    // invalidation fired a sidebar-badge refetch on every save / like /
+    // love / dislike. The feed-unread badge now refreshes via the
+    // Sidebar's 5-min interval and after explicit feed-refresh
+    // (invalidateAfterFeedRefresh), which is plenty for a personal
+    // tool. Tradeoff: badge can lag up to 5 min after a feed action.
     await invalidateQueries(queryClient,
       ['feed-inbox'],
       ['feed-status'],
-      ['bootstrap'],
       ['feed-monitors'],
       ['papers'],
       ['library-saved'],

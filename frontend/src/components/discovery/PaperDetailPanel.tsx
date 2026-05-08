@@ -139,7 +139,16 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
     api
       .get<PaperDetails>(`/papers/${encodeURIComponent(paper.id)}/details`)
       .then((data) => { if (!cancelled) setDetails(data) })
-      .catch(() => { if (!cancelled) setDetails(null) })
+      .catch((err: unknown) => {
+        // Setting details=null silently strips the panel back to the
+        // caller-provided paper record (so the dialog still renders).
+        // Log the error so devs see backend failures vs. legitimate
+        // "no extended details" responses.
+        if (!cancelled) {
+          console.warn('[PaperDetailPanel] details fetch failed', paper.id, err)
+          setDetails(null)
+        }
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [open, paper?.id])

@@ -12,7 +12,6 @@ import {
   Clock,
   UserRound,
   X,
-  Square,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
@@ -54,6 +53,33 @@ interface JobStatus {
   stage_label?: string
   stage_index?: number
   stage_total?: number
+  chain_id?: string
+  chain_step?: string
+}
+
+// Order chain members render in. The starter step (e.g. "hydrate") gets the
+// lowest rank so it becomes the chain lead; remaining steps render beneath
+// in execution order. Unknown steps fall to the back.
+const CHAIN_STEP_ORDER: Record<string, number> = {
+  hydrate: 1,
+  s2_fetch: 2,
+  local_specter2_fill: 3,
+}
+const chainStepRank = (step?: string): number =>
+  step && step in CHAIN_STEP_ORDER ? CHAIN_STEP_ORDER[step] : Number.MAX_SAFE_INTEGER
+
+function formatChainStepLabel(step?: string): string {
+  if (!step) return ''
+  switch (step) {
+    case 'hydrate':
+      return 'Metadata hydrate'
+    case 's2_fetch':
+      return 'S2 vector fetch'
+    case 'local_specter2_fill':
+      return 'Local SPECTER2 fill'
+    default:
+      return step.replace(/_/g, ' ')
+  }
 }
 
 interface JobLogEntry {
@@ -241,10 +267,38 @@ function OperationsView({
     return map
   }, [ops])
 
+  // Compute chain leads. Within a chain (jobs sharing chain_id), the lead is
+  // whichever member has the lowest CHAIN_STEP_ORDER rank — typically
+  // "hydrate". Other members render as children of the lead.
+  const chainLeadByJobId = useMemo(() => {
+    const byChain = new Map<string, JobStatus[]>()
+    for (const op of ops) {
+      const cid = op.chain_id
+      if (!cid) continue
+      const arr = byChain.get(cid) ?? []
+      arr.push(op)
+      byChain.set(cid, arr)
+    }
+    const leads = new Map<string, string>()
+    for (const [, members] of byChain.entries()) {
+      if (members.length < 2) continue
+      members.sort((a, b) => {
+        const r = chainStepRank(a.chain_step) - chainStepRank(b.chain_step)
+        if (r !== 0) return r
+        return (a.started_at ?? '').localeCompare(b.started_at ?? '')
+      })
+      const lead = members[0].job_id
+      for (const m of members) leads.set(m.job_id, lead)
+    }
+    return leads
+  }, [ops])
+
   const parents = useMemo(() => {
     const out: JobStatus[] = []
     for (const op of ops) {
       if (op.parent_job_id && byId.has(op.parent_job_id)) continue
+      const chainLead = chainLeadByJobId.get(op.job_id)
+      if (chainLead && chainLead !== op.job_id) continue
       out.push(op)
     }
     out.sort((a, b) => {
@@ -255,19 +309,29 @@ function OperationsView({
       return opSortKey(b) - opSortKey(a)
     })
     return out.slice(0, 100)
-  }, [ops, byId])
+  }, [ops, byId, chainLeadByJobId])
 
   const childrenByParent = useMemo(() => {
     const grouped = new Map<string, JobStatus[]>()
     for (const op of ops) {
       const parentId = op.parent_job_id
-      if (!parentId || !byId.has(parentId)) continue
-      const arr = grouped.get(parentId) ?? []
-      arr.push(op)
-      grouped.set(parentId, arr)
+      if (parentId && byId.has(parentId)) {
+        const arr = grouped.get(parentId) ?? []
+        arr.push(op)
+        grouped.set(parentId, arr)
+        continue
+      }
+      const chainLead = chainLeadByJobId.get(op.job_id)
+      if (chainLead && chainLead !== op.job_id) {
+        const arr = grouped.get(chainLead) ?? []
+        arr.push(op)
+        grouped.set(chainLead, arr)
+      }
     }
     for (const [, arr] of grouped.entries()) {
       arr.sort((a, b) => {
+        const cr = chainStepRank(a.chain_step) - chainStepRank(b.chain_step)
+        if (cr !== 0) return cr
         const ai = a.stage_index ?? Number.MAX_SAFE_INTEGER
         const bi = b.stage_index ?? Number.MAX_SAFE_INTEGER
         if (ai !== bi) return ai - bi
@@ -279,7 +343,7 @@ function OperationsView({
       })
     }
     return grouped
-  }, [ops, byId])
+  }, [ops, byId, chainLeadByJobId])
 
   useEffect(() => {
     const next: Record<string, boolean> = { ...expandedParents }
@@ -357,30 +421,40 @@ function OperationsView({
               {displayMessage}
             </span>
             <div className="flex shrink-0 items-center gap-1">
-              {!terminal && (
+              {/* One X per row, never two. Semantics depend on state:
+                  • active  → kills the worker thread (POST /activity/{id}/cancel
+                    hard-kills via PyThreadState_SetAsyncExc) and the row
+                    transitions through "cancelling" → "cancelled".
+                  • terminal → just dismisses the row from Activity.
+                  Pre-2026-05-08 we showed Square+X side by side, which let users
+                  "dismiss" a running job — the operation kept running invisibly. */}
+              {terminal ? (
                 <button
                   type="button"
-                  className="rounded p-0.5 text-slate-400 hover:bg-amber-100 hover:text-amber-700"
-                  title="Cancel operation"
+                  className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                  title="Dismiss operation"
+                  aria-label="Dismiss operation"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDismiss(op.job_id)
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded p-0.5 text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                  title="Stop operation now (kills worker thread)"
+                  aria-label="Stop operation"
                   onClick={(e) => {
                     e.stopPropagation()
                     onCancel(op.job_id)
                   }}
                 >
-                  <Square className="h-3.5 w-3.5" />
+                  <X className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </button>
               )}
-              <button
-                type="button"
-                className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
-                title="Dismiss operation"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDismiss(op.job_id)
-                }}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
             </div>
           </div>
 
@@ -394,6 +468,11 @@ function OperationsView({
 
           {/* Metadata chips \u2014 canonical StatusBadge */}
           <div className="flex flex-wrap items-center gap-1.5">
+            {op.chain_step && (
+              <StatusBadge tone="info" size="sm" className="uppercase tracking-wide">
+                {formatChainStepLabel(op.chain_step)}
+              </StatusBadge>
+            )}
             {op.stage_index != null && op.stage_total != null && (
               <StatusBadge tone="neutral" size="sm" className="uppercase tracking-wide">
                 Phase {op.stage_index}/{op.stage_total}
@@ -401,7 +480,7 @@ function OperationsView({
             )}
             {childCount > 0 && !isChild && (
               <StatusBadge tone="neutral" size="sm" className="uppercase tracking-wide">
-                {childCount} subtasks
+                {op.chain_id ? `Chain \u00b7 ${childCount + 1} steps` : `${childCount} subtasks`}
               </StatusBadge>
             )}
             {op.trigger_source && (
@@ -809,6 +888,11 @@ function OperationDetailView({
                   Phase {job.stage_index}/{job.stage_total}
                 </StatusBadge>
               )}
+              {job.chain_step && (
+                <StatusBadge tone="info" size="sm" className="uppercase tracking-wide">
+                  {formatChainStepLabel(job.chain_step)}
+                </StatusBadge>
+              )}
             </div>
           </div>
         </div>
@@ -1038,10 +1122,28 @@ export function ActivityPanel() {
   })
 
   const operations = useMemo(() => opsQuery.data ?? [], [opsQuery.data])
-  const topLevelOperations = useMemo(
-    () => operations.filter((op) => !op.parent_job_id),
-    [operations],
-  )
+  const topLevelOperations = useMemo(() => {
+    // Mirror the chain grouping done inside OperationsTab so the
+    // header's active-op count reflects chains as one entry, not N.
+    const byChain = new Map<string, JobStatus[]>()
+    for (const op of operations) {
+      if (!op.chain_id) continue
+      const arr = byChain.get(op.chain_id) ?? []
+      arr.push(op)
+      byChain.set(op.chain_id, arr)
+    }
+    const chainNonLeads = new Set<string>()
+    for (const [, members] of byChain.entries()) {
+      if (members.length < 2) continue
+      members.sort((a, b) => {
+        const r = chainStepRank(a.chain_step) - chainStepRank(b.chain_step)
+        if (r !== 0) return r
+        return (a.started_at ?? '').localeCompare(b.started_at ?? '')
+      })
+      for (let i = 1; i < members.length; i++) chainNonLeads.add(members[i].job_id)
+    }
+    return operations.filter((op) => !op.parent_job_id && !chainNonLeads.has(op.job_id))
+  }, [operations])
   useEffect(() => {
     if (operations.length === 0) {
       setSelectedJobId(null)
