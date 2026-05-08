@@ -7,6 +7,8 @@ keeping per-paper bookkeeping so reruns skip already-covered work.
 from __future__ import annotations
 
 import hashlib
+import html
+from html.parser import HTMLParser
 import json
 import logging
 import sqlite3
@@ -15,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
+from alma.core.utils import utcnow as _utcnow, utcnow_iso as _utcnow_iso
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
     _normalize_openalex_work_id,
@@ -27,6 +30,7 @@ logger = logging.getLogger(__name__)
 OPENALEX_SOURCE = "openalex"
 S2_SOURCE = "semantic_scholar"
 CROSSREF_SOURCE = "crossref"
+ABSTRACT_RECOVERY_SOURCE = "abstract_recovery"
 # Synthetic source used by `_resolve_identifiers_via_title`. Phase 4 of
 # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`. Distinct from
 # `openalex` / `semantic_scholar` because the lookup is by title, not
@@ -47,14 +51,6 @@ RETRYABLE_STATUS = "retryable_error"
 # venues that publish abstracts late), so an `unchanged` outcome must
 # expire — otherwise local SPECTER2 stays starved of input text forever.
 UNCHANGED_RETRY_AFTER = timedelta(days=30)
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
-
-
-def _utcnow_iso() -> str:
-    return _utcnow().isoformat()
 
 
 def _json(value: Any) -> str:
@@ -560,6 +556,399 @@ def _run_s2_batched_phase(
     return summary
 
 
+def _select_crossref_abstract_candidates(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None,
+    seed_paper_ids: list[str] | None = None,
+) -> list[str]:
+    """Pick DOI papers that still need Crossref abstract fallback.
+
+    This selector is intentionally independent of the OpenAlex phase.
+    Insert hooks may create pending Crossref ledger rows even when the
+    OpenAlex row is already ``enriched``; those papers must not be
+    stranded just because there are zero OpenAlex candidates.
+    """
+
+    _ensure_enrichment_status_table(conn)
+    params: list[Any] = [CROSSREF_SOURCE, METADATA_PURPOSE]
+    seed_clause = ""
+    if seed_paper_ids:
+        unique = list(dict.fromkeys(str(pid) for pid in seed_paper_ids if str(pid).strip()))
+        if unique:
+            placeholders = ",".join("?" for _ in unique)
+            seed_clause = f"AND p.id IN ({placeholders})"
+            params.extend(unique)
+    params.append(_utcnow_iso())
+    limit_clause = ""
+    if limit is not None:
+        params.append(max(1, int(limit)))
+        limit_clause = "LIMIT ?"
+    rows = conn.execute(
+        f"""
+        SELECT p.id
+        FROM papers p
+        LEFT JOIN paper_enrichment_status es
+          ON es.paper_id = p.id
+         AND es.source = ?
+         AND es.purpose = ?
+        WHERE COALESCE(p.canonical_paper_id, '') = ''
+          AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
+          AND COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
+          {seed_clause}
+          AND (
+              es.paper_id IS NULL
+              OR COALESCE(es.status, '') IN ('pending', 'queued')
+              OR (
+                  es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
+                  AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+              )
+              OR COALESCE(es.status, '') NOT IN (
+                  'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
+              )
+          )
+        ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+        {limit_clause}
+        """,
+        params,
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
+
+
+def _run_crossref_abstract_phase(
+    conn: sqlite3.Connection,
+    *,
+    paper_ids: list[str],
+    job_id: str,
+    set_job_status: Callable[..., None],
+    add_job_log: Callable[..., None],
+    is_cancellation_requested: Callable[[str], bool],
+    base_processed: int,
+    base_total: int,
+) -> Counter[str]:
+    """Phase 2 — batched Crossref abstract fallback."""
+
+    fallback_summary: Counter[str] = Counter()
+    paper_ids = list(dict.fromkeys(pid for pid in paper_ids if pid))
+    if not paper_ids:
+        return fallback_summary
+
+    from alma.core.utils import normalize_doi as _normalize_doi
+    from alma.discovery.crossref import fetch_works_by_dois
+
+    paper_to_doi: dict[str, str] = {}
+    for pid in paper_ids:
+        row_doi = conn.execute("SELECT doi FROM papers WHERE id = ?", (pid,)).fetchone()
+        if row_doi is None:
+            continue
+        norm = _normalize_doi(str(row_doi["doi"] or ""))
+        if norm:
+            paper_to_doi[pid] = norm
+
+    unique_dois = list({norm for norm in paper_to_doi.values()})
+    add_job_log(
+        job_id,
+        "Phase 2: Crossref abstract fallback (batched)",
+        step="fallback_prepare",
+        data={
+            "papers": len(paper_ids),
+            "unique_dois": len(unique_dois),
+            "expected_http_calls": (len(unique_dois) + 49) // 50,
+        },
+    )
+    try:
+        candidates_by_doi = fetch_works_by_dois(unique_dois, batch_size=50)
+    except Exception as exc:
+        logger.warning("Phase 2 batched Crossref fetch failed: %s", exc)
+        candidates_by_doi = {}
+
+    applied = 0
+    for idx, pid in enumerate(paper_ids, start=1):
+        if is_cancellation_requested(job_id):
+            break
+        doi = paper_to_doi.get(pid)
+        if not doi:
+            fallback_summary["skipped_no_doi"] += 1
+            continue
+        cand = candidates_by_doi.get(doi.lower())
+        lookup_key = f"crossref:{doi.lower()}"
+        if cand is None:
+            _write_ledger(
+                conn,
+                paper_id=pid,
+                source=CROSSREF_SOURCE,
+                lookup_key=lookup_key,
+                status="terminal_no_match",
+                reason="crossref_doi_not_found",
+                fields_filled=[],
+                fields_key="crossref_v1",
+            )
+            fallback_summary["terminal_no_match"] += 1
+            continue
+        try:
+            fields_filled = _apply_crossref_candidate(
+                conn, paper_id=pid, candidate=cand
+            )
+        except Exception as exc:
+            logger.warning("Phase 2 apply failed for %s: %s", pid, exc)
+            _write_ledger(
+                conn,
+                paper_id=pid,
+                source=CROSSREF_SOURCE,
+                lookup_key=lookup_key,
+                status=RETRYABLE_STATUS,
+                reason=str(exc),
+                fields_filled=[],
+                fields_key="crossref_v1",
+                retry_after=timedelta(hours=6),
+            )
+            fallback_summary["retryable_error"] += 1
+            continue
+        applied += 1
+        fallback_summary["attempted"] += 1
+        if fields_filled:
+            status_value = "enriched"
+            reason = f"filled:{len(fields_filled)}"
+            retry: timedelta | None = None
+            fallback_summary["enriched"] += 1
+            fallback_summary["source.crossref"] += 1
+        else:
+            status_value = "unchanged"
+            reason = "no_local_improvements"
+            retry = UNCHANGED_RETRY_AFTER
+        _write_ledger(
+            conn,
+            paper_id=pid,
+            source=CROSSREF_SOURCE,
+            lookup_key=lookup_key,
+            status=status_value,
+            reason=reason,
+            fields_filled=fields_filled,
+            fields_key="crossref_v1",
+            retry_after=retry,
+        )
+        if "abstract" in (fields_filled or []):
+            fallback_summary["abstract_filled"] += 1
+        if idx % 50 == 0 or idx == len(paper_ids):
+            conn.commit()
+            set_job_status(
+                job_id,
+                status="running",
+                processed=base_processed,
+                total=base_total,
+                message=(
+                    f"Cross-source fallback: {idx}/{len(paper_ids)} applied, "
+                    f"{int(fallback_summary['abstract_filled'])} abstracts filled"
+                ),
+            )
+    conn.commit()
+    add_job_log(
+        job_id,
+        "Phase 2 cross-source fallback complete",
+        step="fallback_done",
+        data={**dict(fallback_summary), "applied": applied},
+    )
+    return fallback_summary
+
+
+class _AbstractMetaParser(HTMLParser):
+    _META_NAMES = {
+        "citation_abstract",
+        "dc.description",
+        "dcterms.description",
+        "description",
+        "og:description",
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.abstracts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "meta":
+            return
+        attr_map = {str(k).lower(): (v or "") for k, v in attrs}
+        name = (attr_map.get("name") or attr_map.get("property") or "").strip().lower()
+        content = html.unescape(attr_map.get("content") or "").strip()
+        if name in self._META_NAMES and _is_usable_recovered_abstract(content):
+            self.abstracts.append(_clean_recovered_abstract(content))
+
+
+def _clean_recovered_abstract(text: str) -> str:
+    return " ".join(html.unescape(str(text or "")).split()).strip()
+
+
+def _is_usable_recovered_abstract(text: str) -> bool:
+    cleaned = _clean_recovered_abstract(text)
+    if len(cleaned) < 40:
+        return False
+    lower = cleaned.lower()
+    if lower.startswith(("http://", "https://")):
+        return False
+    return " " in cleaned
+
+
+def _extract_abstract_from_html(text: str) -> str:
+    parser = _AbstractMetaParser()
+    try:
+        parser.feed(text or "")
+    except Exception:
+        return ""
+    return parser.abstracts[0] if parser.abstracts else ""
+
+
+def _fetch_html_abstract(url: str) -> str:
+    raw_url = str(url or "").strip()
+    if not raw_url.lower().startswith(("http://", "https://")):
+        return ""
+    try:
+        from alma.core.http_sources import get_source_http_client
+
+        resp = get_source_http_client("publisher").get(raw_url, timeout=20)
+    except Exception as exc:
+        logger.debug("abstract recovery HTML fetch failed for %s: %s", raw_url, exc)
+        return ""
+    if not (200 <= int(resp.status_code) < 400):
+        return ""
+    content_type = (resp.headers.get("content-type") or "").lower()
+    if "pdf" in content_type:
+        return ""
+    try:
+        return _extract_abstract_from_html(resp.text or "")
+    except Exception:
+        return ""
+
+
+def _unpaywall_urls_for_doi(doi: str) -> list[str]:
+    from alma.config import get_contact_email
+    from alma.core.http_sources import get_source_http_client
+
+    if not get_contact_email():
+        return []
+    try:
+        resp = get_source_http_client("unpaywall").get(f"/{doi}", timeout=20)
+    except Exception as exc:
+        logger.debug("Unpaywall lookup failed for %s: %s", doi, exc)
+        return []
+    if resp.status_code != 200:
+        return []
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        return []
+
+    urls: list[str] = []
+    locations = []
+    best = payload.get("best_oa_location")
+    if isinstance(best, dict):
+        locations.append(best)
+    if isinstance(payload.get("oa_locations"), list):
+        locations.extend(loc for loc in payload["oa_locations"] if isinstance(loc, dict))
+    for loc in locations:
+        for key in ("url_for_landing_page", "url", "url_for_pdf"):
+            value = str(loc.get(key) or "").strip()
+            if value and value not in urls:
+                urls.append(value)
+    return urls
+
+
+def _select_abstract_recovery_candidates(
+    conn: sqlite3.Connection, *, limit: int | None
+) -> list[str]:
+    _ensure_enrichment_status_table(conn)
+    params: list[Any] = [ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE, _utcnow_iso()]
+    limit_clause = ""
+    if limit is not None:
+        params.append(max(1, int(limit)))
+        limit_clause = "LIMIT ?"
+    rows = conn.execute(
+        f"""
+        SELECT p.id
+        FROM papers p
+        LEFT JOIN paper_enrichment_status es
+          ON es.paper_id = p.id
+         AND es.source = ?
+         AND es.purpose = ?
+        WHERE COALESCE(p.canonical_paper_id, '') = ''
+          AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
+          AND (
+              COALESCE(NULLIF(TRIM(p.oa_url), ''), '') != ''
+              OR COALESCE(NULLIF(TRIM(p.url), ''), '') != ''
+              OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
+          )
+          AND (
+              es.paper_id IS NULL
+              OR COALESCE(es.status, '') IN ('pending', 'queued')
+              OR (
+                  es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
+                  AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+              )
+              OR COALESCE(es.status, '') NOT IN (
+                  'enriched', 'unchanged', 'terminal_no_match', '{RETRYABLE_STATUS}', 'pending', 'queued'
+              )
+          )
+        ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+        {limit_clause}
+        """,
+        params,
+    ).fetchall()
+    return [str(row["id"]) for row in rows]
+
+
+def _run_abstract_recovery_phase(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None,
+    job_id: str,
+    set_job_status: Callable[..., None],
+    add_job_log: Callable[..., None],
+    is_cancellation_requested: Callable[[str], bool],
+    base_processed: int,
+    base_total: int,
+) -> Counter[str]:
+    summary: Counter[str] = Counter()
+    paper_ids = _select_abstract_recovery_candidates(conn, limit=limit)
+    if not paper_ids:
+        return summary
+    add_job_log(
+        job_id,
+        "Phase 3: OA / landing-page abstract recovery",
+        step="abstract_recovery_prepare",
+        data={"papers": len(paper_ids)},
+    )
+    for idx, paper_id in enumerate(paper_ids, start=1):
+        if is_cancellation_requested(job_id):
+            break
+        row = _read_hydration_row(conn, paper_id)
+        if row is None or _abstract_present(row):
+            continue
+        status, filled = _hydrate_via_abstract_recovery(conn, paper_id, row)
+        summary["attempted"] += 1
+        summary[status] += 1
+        if "abstract" in filled:
+            summary["abstract_filled"] += 1
+        if idx % 20 == 0 or idx == len(paper_ids):
+            conn.commit()
+            set_job_status(
+                job_id,
+                status="running",
+                processed=base_processed,
+                total=base_total,
+                message=(
+                    f"Abstract recovery: {idx}/{len(paper_ids)} checked, "
+                    f"{int(summary['abstract_filled'])} abstracts filled"
+                ),
+            )
+    conn.commit()
+    add_job_log(
+        job_id,
+        "Phase 3 abstract recovery complete",
+        step="abstract_recovery_done",
+        data=dict(summary),
+    )
+    return summary
+
+
 def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
     """Return pure-read corpus enrichment bookkeeping for Settings/API."""
     _ensure_enrichment_status_table(conn)
@@ -856,38 +1245,23 @@ def run_corpus_metadata_rehydration(
         total = len(rows)
         summary["candidates"] = total
         if total == 0:
-            result = {
-                "source": OPENALEX_SOURCE,
-                "purpose": METADATA_PURPOSE,
-                "fields_key": OPENALEX_WORKS_FIELDS_KEY,
-                "candidates": 0,
-                "requested": 0,
-                "fetched": 0,
-                "enriched": 0,
-                "unchanged": 0,
-                "terminal_no_match": 0,
-                "retryable_error": 0,
-                "db_writes": 0,
-                "remote_calls": 0,
-                "message": "No papers need OpenAlex metadata rehydration",
-            }
-            set_job_status(
+            add_job_log(
                 job_id,
-                status="completed",
-                processed=0,
-                total=0,
-                message=result["message"],
-                result=result,
-                finished_at=_utcnow_iso(),
+                "No papers need OpenAlex metadata rehydration; continuing downstream phases",
+                step="prepare",
+                data={"candidates": 0, "force": force},
             )
-            return result
 
         set_job_status(
             job_id,
             status="running",
             processed=0,
             total=total,
-            message=f"Rehydrating OpenAlex metadata for {total} paper(s)",
+            message=(
+                f"Rehydrating OpenAlex metadata for {total} paper(s)"
+                if total
+                else "Running downstream hydration phases"
+            ),
         )
         add_job_log(
             job_id,
@@ -903,10 +1277,6 @@ def run_corpus_metadata_rehydration(
         )
 
         processed = 0
-        # Paper IDs whose Phase 1 OpenAlex pass left abstract still missing
-        # — collected during the loop so Phase 2 can fall back to S2 and
-        # Crossref without another scan of the ledger.
-        fallback_paper_ids: list[str] = []
         for start in range(0, total, batch_size):
             if is_cancellation_requested(job_id):
                 conn.commit()
@@ -1014,18 +1384,6 @@ def run_corpus_metadata_rehydration(
                     fields_filled=fields_filled,
                     retry_after=unchanged_retry,
                 )
-                # Queue Phase 2 fallback when OpenAlex didn't fill the
-                # abstract AND we still have a DOI / s2_id to try.
-                if not _abstract_present(_read_hydration_row(conn, paper_id)):
-                    latest = conn.execute(
-                        "SELECT doi, semantic_scholar_id FROM papers WHERE id = ?",
-                        (paper_id,),
-                    ).fetchone()
-                    if latest is not None and (
-                        str(latest["doi"] or "").strip()
-                        or str(latest["semantic_scholar_id"] or "").strip()
-                    ):
-                        fallback_paper_ids.append(paper_id)
                 processed += 1
 
             conn.commit()
@@ -1085,147 +1443,57 @@ def run_corpus_metadata_rehydration(
                     data={"error": str(exc)},
                 )
 
-        # Phase 2 — cross-source abstract fallback. Per-paper (not batched)
-        # because Crossref has no batch-by-DOI endpoint. Runs only on rows
-        # OpenAlex AND S2 both left without an abstract — typically ARVO /
-        # Journal of Vision proceedings whose upstream
-        # `abstract_inverted_index` is null AND whose S2 records also
-        # lack abstracts.
+        # Phase 2 — Crossref abstract fallback. This selector is not
+        # gated on OpenAlex candidates: insert hooks can leave a pending
+        # Crossref row when OpenAlex is already enriched, and the sweep
+        # must still process it.
         fallback_summary: Counter[str] = Counter()
-        # Re-filter the Phase-1 fallback list against current paper state:
-        # Phase 1.5's batched S2 call may have filled the abstract on some
-        # of these rows, so they no longer need Crossref.
-        fallback_paper_ids = list(dict.fromkeys(fallback_paper_ids))
-        if fallback_paper_ids:
-            still_missing: list[str] = []
-            for pid in fallback_paper_ids:
-                row_now = conn.execute(
-                    "SELECT abstract, doi FROM papers WHERE id = ?", (pid,)
-                ).fetchone()
-                if row_now is None:
-                    continue
-                if str(row_now["abstract"] or "").strip():
-                    continue
-                if not str(row_now["doi"] or "").strip():
-                    continue  # Crossref needs a DOI.
-                still_missing.append(pid)
-            fallback_paper_ids = still_missing
-        if fallback_paper_ids:
-            # Phase 2 — Crossref abstract fallback. Pre-batch the DOI
-            # → candidate lookups via `fetch_works_by_dois` (one HTTP
-            # call per 50 DOIs vs one per paper), then apply each
-            # cached candidate via `_apply_crossref_candidate`. Phase
-            # 8b of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md` —
-            # 50× call reduction at full backlog vs the singleton
-            # path.
-            from alma.core.utils import normalize_doi as _normalize_doi
-            from alma.discovery.crossref import fetch_works_by_dois
-
-            paper_to_doi: dict[str, str] = {}
-            for pid in fallback_paper_ids:
-                row_doi = conn.execute(
-                    "SELECT doi FROM papers WHERE id = ?", (pid,)
-                ).fetchone()
-                if row_doi is None:
-                    continue
-                norm = _normalize_doi(str(row_doi["doi"] or ""))
-                if not norm:
-                    continue
-                paper_to_doi[pid] = norm
-
-            unique_dois = list({norm for norm in paper_to_doi.values()})
-            add_job_log(
-                job_id,
-                "Phase 2: Crossref abstract fallback (batched)",
-                step="fallback_prepare",
-                data={
-                    "papers": len(fallback_paper_ids),
-                    "unique_dois": len(unique_dois),
-                    "expected_http_calls": (len(unique_dois) + 49) // 50,
-                },
-            )
+        if not is_cancellation_requested(job_id):
+            crossref_ids = _select_crossref_abstract_candidates(conn, limit=limit)
             try:
-                candidates_by_doi = fetch_works_by_dois(unique_dois, batch_size=50)
-            except Exception as exc:
-                logger.warning("Phase 2 batched Crossref fetch failed: %s", exc)
-                candidates_by_doi = {}
-
-            applied = 0
-            for idx, pid in enumerate(fallback_paper_ids, start=1):
-                if is_cancellation_requested(job_id):
-                    break
-                doi = paper_to_doi.get(pid)
-                if not doi:
-                    fallback_summary["skipped_no_doi"] += 1
-                    continue
-                cand = candidates_by_doi.get(doi.lower())
-                lookup_key = f"crossref:{doi.lower()}"
-                if cand is None:
-                    _write_ledger(
-                        conn,
-                        paper_id=pid,
-                        source=CROSSREF_SOURCE,
-                        lookup_key=lookup_key,
-                        status="terminal_no_match",
-                        reason="crossref_doi_not_found",
-                        fields_filled=[],
-                        fields_key="crossref_v1",
-                    )
-                    continue
-                try:
-                    fields_filled = _apply_crossref_candidate(
-                        conn, paper_id=pid, candidate=cand
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Phase 2 apply failed for %s: %s", pid, exc
-                    )
-                    continue
-                applied += 1
-                fallback_summary["attempted"] += 1
-                if fields_filled:
-                    status_value = "enriched"
-                    reason = f"filled:{len(fields_filled)}"
-                    retry: timedelta | None = None
-                    fallback_summary["enriched"] += 1
-                    fallback_summary["source.crossref"] += 1
-                else:
-                    status_value = "unchanged"
-                    reason = "no_local_improvements"
-                    retry = UNCHANGED_RETRY_AFTER
-                _write_ledger(
+                fallback_summary = _run_crossref_abstract_phase(
                     conn,
-                    paper_id=pid,
-                    source=CROSSREF_SOURCE,
-                    lookup_key=lookup_key,
-                    status=status_value,
-                    reason=reason,
-                    fields_filled=fields_filled,
-                    fields_key="crossref_v1",
-                    retry_after=retry,
+                    paper_ids=crossref_ids,
+                    job_id=job_id,
+                    set_job_status=set_job_status,
+                    add_job_log=add_job_log,
+                    is_cancellation_requested=is_cancellation_requested,
+                    base_processed=processed,
+                    base_total=total,
                 )
-                row_after = _read_hydration_row(conn, pid)
-                if row_after is not None and "abstract" in (fields_filled or []):
-                    fallback_summary["abstract_filled"] += 1
-                if idx % 50 == 0 or idx == len(fallback_paper_ids):
-                    conn.commit()
-                    set_job_status(
-                        job_id,
-                        status="running",
-                        processed=processed,
-                        total=total,
-                        message=(
-                            f"Cross-source fallback: {idx}/{len(fallback_paper_ids)} applied, "
-                            f"{int(fallback_summary['abstract_filled'])} abstracts filled"
-                        ),
-                    )
-            conn.commit()
-            add_job_log(
-                job_id,
-                "Phase 2 cross-source fallback complete",
-                step="fallback_done",
-                data={**dict(fallback_summary), "applied": applied},
-            )
+            except Exception as exc:
+                logger.warning("Phase 2 Crossref fallback failed: %s", exc)
+                add_job_log(
+                    job_id,
+                    f"Phase 2 Crossref fallback failed: {exc}",
+                    level="WARNING",
+                    step="fallback_error",
+                    data={"error": str(exc)},
+                )
+
+        # Phase 3 — public landing-page/OA abstract metadata recovery.
+        abstract_recovery_summary: Counter[str] = Counter()
+        if not is_cancellation_requested(job_id):
+            try:
+                abstract_recovery_summary = _run_abstract_recovery_phase(
+                    conn,
+                    limit=limit,
+                    job_id=job_id,
+                    set_job_status=set_job_status,
+                    add_job_log=add_job_log,
+                    is_cancellation_requested=is_cancellation_requested,
+                    base_processed=processed,
+                    base_total=total,
+                )
+            except Exception as exc:
+                logger.warning("Phase 3 abstract recovery failed: %s", exc)
+                add_job_log(
+                    job_id,
+                    f"Phase 3 abstract recovery failed: {exc}",
+                    level="WARNING",
+                    step="abstract_recovery_error",
+                    data={"error": str(exc)},
+                )
 
         result = {
             "source": OPENALEX_SOURCE,
@@ -1243,6 +1511,7 @@ def run_corpus_metadata_rehydration(
             "field_counts": dict(field_counts),
             "s2_phase": dict(s2_summary),
             "fallback": dict(fallback_summary),
+            "abstract_recovery": dict(abstract_recovery_summary),
             "force": force,
             "message": (
                 "Corpus metadata rehydration complete: "
@@ -1251,7 +1520,8 @@ def run_corpus_metadata_rehydration(
                 f"S2 enriched={int(s2_summary.get('enriched', 0))} "
                 f"unchanged={int(s2_summary.get('unchanged', 0))} "
                 f"no_match={int(s2_summary.get('terminal_no_match', 0))}; "
-                f"Crossref abstracts_filled={int(fallback_summary.get('abstract_filled', 0))}"
+                f"Crossref abstracts_filled={int(fallback_summary.get('abstract_filled', 0))}; "
+                f"OA/landing abstracts_filled={int(abstract_recovery_summary.get('abstract_filled', 0))}"
             ),
         }
         set_job_status(
@@ -1265,23 +1535,46 @@ def run_corpus_metadata_rehydration(
         )
         add_job_log(job_id, "OpenAlex metadata rehydration complete", step="done", data=result)
 
-        # Phase 6 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`:
-        # auto-schedule the next stage of the chain (S2 vector
-        # backfill). Idempotent against an already-active job; skips
-        # silently when there are zero S2 candidates. Failures here
-        # never fail the rehydration result the user already saw —
-        # the chain is a convenience, not a contract.
+        # Auto-chain to the S2 vector backfill only when this run was
+        # *not* started by a manual Settings click. The per-button
+        # contract there is "do exactly what the label says": clicking
+        # "Rehydrate corpus" must not silently start an S2 vector
+        # fetch (which has its own button and its own quota cost).
+        # Auto-chain still fires for the per-insert / scheduler paths
+        # where there's no user click to confuse.
         try:
+            from alma.api.scheduler import get_job_trigger_source
             from alma.services.embedding_chain import schedule_post_hydration_chain
 
-            chain = schedule_post_hydration_chain(conn, trigger_reason="post_hydration")
-            if chain.get("scheduled_jobs"):
+            trigger_source = get_job_trigger_source(job_id) or ""
+            if trigger_source == "user":
                 add_job_log(
                     job_id,
-                    "Chained S2 vector backfill auto-scheduled",
-                    step="chain_post_hydration",
-                    data=chain,
+                    "Skipped post-hydration chain: user-triggered run",
+                    step="chain_post_hydration_skipped",
+                    data={"trigger_source": trigger_source},
                 )
+            else:
+                chain = schedule_post_hydration_chain(conn, trigger_reason="post_hydration")
+                if chain.get("scheduled_jobs"):
+                    chain_id = str(chain.get("chain_id") or "").strip()
+                    if chain_id:
+                        # Stamp the starter so /api/v1/activity exposes chain
+                        # membership on this row too — Activity UI groups
+                        # every job sharing a chain_id under one envelope.
+                        from alma.api.scheduler import set_job_status
+
+                        set_job_status(
+                            job_id,
+                            chain_id=chain_id,
+                            chain_step="hydrate",
+                        )
+                    add_job_log(
+                        job_id,
+                        "Chained S2 vector backfill auto-scheduled",
+                        step="chain_post_hydration",
+                        data=chain,
+                    )
         except Exception as exc:
             logger.debug("post-hydration chain skipped: %s", exc)
 
@@ -1320,7 +1613,9 @@ _HYDRATE_FIELDS = (
     "semantic_scholar_id",
     "semantic_scholar_corpus_id",
     "cited_by_count",
+    "influential_citation_count",
     "tldr",
+    "oa_url",
 )
 
 
@@ -1362,18 +1657,13 @@ def _apply_s2_paper(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row
     except (TypeError, ValueError):
         influential_count = 0
     if tldr_text or influential_count > 0:
-        conn.execute(
-            """
-            UPDATE papers
-            SET tldr = COALESCE(NULLIF(tldr, ''), NULLIF(?, '')),
-                influential_citation_count = CASE
-                    WHEN ? > COALESCE(influential_citation_count, 0)
-                        THEN ?
-                    ELSE influential_citation_count
-                END
-            WHERE id = ?
-            """,
-            (tldr_text, influential_count, influential_count, paper_id),
+        from alma.core.paper_updates import fill_only_update_paper
+
+        fill_only_update_paper(
+            conn,
+            paper_id,
+            fill_fields={"tldr": tldr_text},
+            max_int_fields={"influential_citation_count": influential_count},
         )
     after = _read_hydration_row(conn, paper_id)
     if before is None or after is None:
@@ -1388,21 +1678,11 @@ def _apply_s2_paper(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row
         "semantic_scholar_id",
         "semantic_scholar_corpus_id",
         "cited_by_count",
+        "influential_citation_count",
         "tldr",
     ):
         if str(before[field] or "") != str(after[field] or ""):
             filled.append(field)
-    # influential_citation_count isn't on _HYDRATE_FIELDS; check it
-    # explicitly so it shows up in fields_filled for ledger reporting.
-    if influential_count > 0:
-        old_ic = conn.execute(
-            "SELECT influential_citation_count FROM papers WHERE id = ?",
-            (paper_id,),
-        ).fetchone()
-        if old_ic is not None and int(old_ic[0] or 0) >= influential_count:
-            pass
-        else:
-            filled.append("influential_citation_count")
     return filled
 
 
@@ -1410,6 +1690,7 @@ def _apply_crossref_candidate(
     conn: sqlite3.Connection, *, paper_id: str, candidate: dict
 ) -> list[str]:
     """Fill-only paper UPDATE from a Crossref candidate dict."""
+    from alma.core.paper_updates import fill_only_update_paper
     from alma.core.utils import normalize_doi
 
     abstract = str(candidate.get("abstract") or "").strip()
@@ -1426,58 +1707,19 @@ def _apply_crossref_candidate(
     except (TypeError, ValueError):
         cited_by_count = 0
 
-    before = _read_hydration_row(conn, paper_id)
-    if before is None:
-        return []
-
-    conn.execute(
-        """
-        UPDATE papers
-        SET abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? != '' THEN ? ELSE abstract END,
-            journal = CASE WHEN COALESCE(journal, '') = '' AND ? != '' THEN ? ELSE journal END,
-            publication_date = CASE
-                WHEN COALESCE(publication_date, '') = '' AND ? != '' THEN ?
-                ELSE publication_date
-            END,
-            url = CASE WHEN COALESCE(url, '') = '' AND ? != '' THEN ? ELSE url END,
-            doi = CASE WHEN COALESCE(doi, '') = '' AND ? != '' THEN ? ELSE doi END,
-            year = COALESCE(year, ?),
-            cited_by_count = CASE
-                WHEN ? > COALESCE(cited_by_count, 0) THEN ?
-                ELSE cited_by_count
-            END,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            abstract, abstract,
-            journal, journal,
-            publication_date, publication_date,
-            url, url,
-            doi, doi,
-            year,
-            cited_by_count, cited_by_count,
-            _utcnow_iso(),
-            paper_id,
-        ),
+    return fill_only_update_paper(
+        conn,
+        paper_id,
+        fill_fields={
+            "abstract": abstract,
+            "journal": journal,
+            "publication_date": publication_date,
+            "url": url,
+            "doi": doi,
+        },
+        fill_null_fields={"year": year},
+        max_int_fields={"cited_by_count": cited_by_count},
     )
-
-    after = _read_hydration_row(conn, paper_id)
-    if after is None:
-        return []
-    filled: list[str] = []
-    for field in (
-        "abstract",
-        "journal",
-        "publication_date",
-        "url",
-        "doi",
-        "year",
-        "cited_by_count",
-    ):
-        if str(before[field] or "") != str(after[field] or ""):
-            filled.append(field)
-    return filled
 
 
 def _ledger_status(conn: sqlite3.Connection, *, paper_id: str, source: str) -> str | None:
@@ -1614,27 +1856,27 @@ def _resolve_identifiers_via_title(
     except (TypeError, ValueError):
         local_year = None
 
-    from alma.services.s2_vectors import (
-        TITLE_RESCUE_JACCARD_THRESHOLD,
-        TITLE_RESCUE_MAX_RESULTS,
-        TITLE_RESCUE_QUERY_MAX_CHARS,
-        TITLE_RESCUE_YEAR_DELTA,
+    from alma.services.title_resolution import (
+        TITLE_RESOLUTION_JACCARD_THRESHOLD,
+        TITLE_RESOLUTION_MAX_RESULTS,
+        TITLE_RESOLUTION_QUERY_MAX_CHARS,
+        TITLE_RESOLUTION_YEAR_DELTA,
         _jaccard,
         _title_tokens,
     )
 
     local_tokens = _title_tokens(title)
-    query_text = title[:TITLE_RESCUE_QUERY_MAX_CHARS]
+    query_text = title[:TITLE_RESOLUTION_QUERY_MAX_CHARS]
 
     def _accepts(cand_title: str, cand_year: int | None) -> tuple[bool, float]:
         cand_tokens = _title_tokens(cand_title or "")
         score = _jaccard(local_tokens, cand_tokens)
-        if score < TITLE_RESCUE_JACCARD_THRESHOLD:
+        if score < TITLE_RESOLUTION_JACCARD_THRESHOLD:
             return (False, score)
         if (
             local_year is not None
             and cand_year is not None
-            and abs(local_year - cand_year) > TITLE_RESCUE_YEAR_DELTA
+            and abs(local_year - cand_year) > TITLE_RESOLUTION_YEAR_DELTA
         ):
             return (False, score)
         return (True, score)
@@ -1650,7 +1892,7 @@ def _resolve_identifiers_via_title(
         from alma.library.enrichment import _search_work_candidates
 
         oa_candidates = _search_work_candidates(
-            query_text, per_page=TITLE_RESCUE_MAX_RESULTS
+            query_text, per_page=TITLE_RESOLUTION_MAX_RESULTS
         )
     except Exception as exc:
         logger.debug(
@@ -1676,60 +1918,42 @@ def _resolve_identifiers_via_title(
             best_oa_score = score
 
     if best_oa is not None:
+        from alma.core.paper_updates import fill_only_update_paper
         from alma.core.utils import canonical_lookup_doi as _canonical
 
         oa_id_raw = str(best_oa.get("id") or "").strip()
         oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
         new_doi = _canonical(str(best_oa.get("doi") or "")) or ""
-        conn.execute(
-            """
-            UPDATE papers
-            SET openalex_id = COALESCE(NULLIF(openalex_id, ''), ?),
-                doi = CASE
-                    WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' AND ? != ''
-                        THEN ?
-                    ELSE doi
-                END,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                oa_id or None,
-                new_doi,
-                new_doi,
-                _utcnow_iso(),
-                paper_id,
-            ),
+        changed = fill_only_update_paper(
+            conn,
+            paper_id,
+            fill_fields={
+                **({"openalex_id": oa_id} if oa_id else {}),
+                **({"doi": new_doi} if new_doi else {}),
+            },
         )
-        after = conn.execute(
-            "SELECT openalex_id, doi FROM papers WHERE id = ?",
-            (paper_id,),
-        ).fetchone()
-        before_oa = str(row["openalex_id"] or "")
-        before_doi = str(row["doi"] or "")
-        if str(after["openalex_id"] or "") != before_oa:
-            fields_filled.append("openalex_id")
-        if str(after["doi"] or "") != before_doi:
-            fields_filled.append("doi")
+        for field in changed:
+            if field in ("openalex_id", "doi"):
+                fields_filled.append(field)
         matched_via = f"oa_search:{best_oa_score:.2f}"
 
     # 2) Semantic Scholar — fallback only when OpenAlex didn't resolve.
     #    Skipping when OpenAlex already handed us identifiers saves a
     #    1-RPS budget call we'd rather spend on the title-search rescue
     #    inside the vector backfill (which has no OpenAlex equivalent).
+    s2_rate_limited = False
     if not _has_any_identifier(
         conn.execute(
             "SELECT openalex_id, doi, semantic_scholar_id FROM papers WHERE id = ?",
             (paper_id,),
         ).fetchone()
     ):
-        s2_rate_limited = False
         try:
             from alma.discovery import semantic_scholar
 
             s2_candidates = semantic_scholar.search_papers(
                 query_text,
-                limit=TITLE_RESCUE_MAX_RESULTS,
+                limit=TITLE_RESOLUTION_MAX_RESULTS,
                 raise_on_rate_limit=True,
             )
         except semantic_scholar.SemanticScholarBatchError as exc:
@@ -1764,47 +1988,23 @@ def _resolve_identifiers_via_title(
                 best_s2_score = score
 
         if best_s2 is not None:
+            from alma.core.paper_updates import fill_only_update_paper
             from alma.core.utils import canonical_lookup_doi as _canonical
 
             new_s2_id = str(best_s2.get("semantic_scholar_id") or "").strip()
             new_doi = _canonical(str(best_s2.get("doi") or "")) or ""
             if new_s2_id or new_doi:
-                conn.execute(
-                    """
-                    UPDATE papers
-                    SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
-                        doi = CASE
-                            WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' AND ? != ''
-                                THEN ?
-                            ELSE doi
-                        END,
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        new_s2_id or None,
-                        new_doi,
-                        new_doi,
-                        _utcnow_iso(),
-                        paper_id,
-                    ),
+                changed = fill_only_update_paper(
+                    conn,
+                    paper_id,
+                    fill_fields={
+                        **({"semantic_scholar_id": new_s2_id} if new_s2_id else {}),
+                        **({"doi": new_doi} if new_doi else {}),
+                    },
                 )
-                after = conn.execute(
-                    "SELECT semantic_scholar_id, doi FROM papers WHERE id = ?",
-                    (paper_id,),
-                ).fetchone()
-                before_s2 = str(row["semantic_scholar_id"] or "")
-                before_doi = str(row["doi"] or "")
-                if (
-                    str(after["semantic_scholar_id"] or "") != before_s2
-                    and "semantic_scholar_id" not in fields_filled
-                ):
-                    fields_filled.append("semantic_scholar_id")
-                if (
-                    str(after["doi"] or "") != before_doi
-                    and "doi" not in fields_filled
-                ):
-                    fields_filled.append("doi")
+                for field in changed:
+                    if field in ("semantic_scholar_id", "doi") and field not in fields_filled:
+                        fields_filled.append(field)
                 matched_via = (
                     matched_via + "+s2_search"
                     if matched_via
@@ -1822,6 +2022,10 @@ def _resolve_identifiers_via_title(
         status_value = "unchanged"
         reason = "title_match_no_new_ids"
         retry = UNCHANGED_RETRY_AFTER
+    elif s2_rate_limited:
+        status_value = RETRYABLE_STATUS
+        reason = "s2_rate_limited"
+        retry = timedelta(minutes=10)
     else:
         status_value = "terminal_no_match"
         reason = "title_search_no_candidates_above_threshold"
@@ -1979,11 +2183,84 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
     return (status_value, fields_filled)
 
 
+def _hydrate_via_abstract_recovery(
+    conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row
+) -> tuple[str, list[str]]:
+    """Recover an abstract from public OA / publisher metadata.
+
+    Safe default only: fetch known landing pages, parse standard
+    metadata tags, and ask Unpaywall for OA locations when the app has
+    a contact email. Scholar, Sci-Hub, and PDF parsing remain policy /
+    dependency decisions outside this default path.
+    """
+
+    from alma.core.paper_updates import fill_only_update_paper
+    from alma.core.utils import canonical_lookup_doi
+
+    if _abstract_present(row):
+        return ("skipped", [])
+
+    urls: list[str] = []
+    for field in ("oa_url", "url"):
+        value = str(row[field] or "").strip()
+        if value and value not in urls:
+            urls.append(value)
+
+    doi = canonical_lookup_doi(str(row["doi"] or "")) or ""
+    if doi:
+        for value in _unpaywall_urls_for_doi(doi):
+            if value and value not in urls:
+                urls.append(value)
+
+    lookup_key = "|".join(urls[:3]) or (f"doi:{doi}" if doi else "")
+    fields_filled: list[str] = []
+    reason = "no_candidate_urls"
+    for url in urls:
+        if url.lower().endswith(".pdf"):
+            continue
+        abstract = _fetch_html_abstract(url)
+        if not abstract:
+            reason = "no_html_meta_abstract"
+            continue
+        fields_filled = fill_only_update_paper(
+            conn,
+            paper_id,
+            fill_fields={"abstract": abstract},
+        )
+        reason = "html_meta_abstract"
+        break
+
+    if fields_filled:
+        status_value = "enriched"
+        retry: timedelta | None = None
+    else:
+        status_value = "unchanged"
+        retry = UNCHANGED_RETRY_AFTER
+
+    _write_ledger(
+        conn,
+        paper_id=paper_id,
+        source=ABSTRACT_RECOVERY_SOURCE,
+        lookup_key=lookup_key,
+        status=status_value,
+        reason=reason,
+        fields_filled=fields_filled,
+        fields_key="abstract_recovery_html_meta_v1",
+        retry_after=retry,
+    )
+    return (status_value, fields_filled)
+
+
 def hydrate_paper_metadata(
     conn: sqlite3.Connection,
     paper_id: str,
     *,
-    sources: tuple[str, ...] = (OPENALEX_SOURCE, S2_SOURCE, CROSSREF_SOURCE),
+    sources: tuple[str, ...] = (
+        OPENALEX_SOURCE,
+        S2_SOURCE,
+        CROSSREF_SOURCE,
+        ABSTRACT_RECOVERY_SOURCE,
+    ),
 ) -> dict[str, Any]:
     """Best-effort metadata hydration for ONE local paper.
 
@@ -2063,6 +2340,8 @@ def hydrate_paper_metadata(
             status, filled = _hydrate_via_s2(conn, paper_id, row)
         elif source == CROSSREF_SOURCE:
             status, filled = _hydrate_via_crossref(conn, paper_id, row)
+        elif source == ABSTRACT_RECOVERY_SOURCE:
+            status, filled = _hydrate_via_abstract_recovery(conn, paper_id, row)
         else:
             continue
         if status == "skipped":
@@ -2092,72 +2371,60 @@ def schedule_pending_hydration_sweep(
 
     Idempotent: if a job is already active for this operation key,
     returns its job_id without queueing a new one. Otherwise queues
-    a fresh `paper_metadata_rehydrate_*` job through the same
-    `schedule_immediate` + `set_job_status` + `add_job_log`
-    envelope the user-facing Settings → Corpus Maintenance route
-    uses, so on-add hydration shows up in the Activity tab and
-    cancels cleanly.
+    a fresh ``paper_metadata_rehydrate_*`` job through the canonical
+    Activity envelope (:func:`core.job_envelope.schedule_with_envelope`)
+    so on-add hydration shows up in the Activity tab and cancels
+    cleanly.
 
     Returns the active or newly-queued job_id; returns None if the
     scheduler isn't importable (e.g., during tests or CLI tools).
     """
-    try:
+    from alma.core.job_envelope import schedule_with_envelope
+
+    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
+    queued_message = (
+        f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)"
+        if bounded_limit is not None
+        else "OpenAlex metadata rehydration auto-queued for all eligible papers"
+    )
+
+    def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
         from alma.api.scheduler import (
             add_job_log,
-            find_active_job,
             is_cancellation_requested,
-            schedule_immediate,
             set_job_status,
         )
-    except Exception:
-        return None
 
-    operation_key = "papers.rehydrate_metadata:openalex:metadata"
-    existing = find_active_job(operation_key)
-    if existing:
-        return str(existing.get("job_id") or "") or None
+        def _runner() -> dict[str, Any]:
+            return run_corpus_metadata_rehydration(
+                job_id,
+                limit=bounded_limit,
+                force=False,
+                set_job_status=set_job_status,
+                add_job_log=add_job_log,
+                is_cancellation_requested=is_cancellation_requested,
+            )
 
-    import uuid as _uuid
+        return _runner
 
-    job_id = f"paper_metadata_rehydrate_{_uuid.uuid4().hex[:10]}"
-    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
+    return schedule_with_envelope(
+        operation_key="papers.rehydrate_metadata:openalex:metadata",
+        job_id_prefix="paper_metadata_rehydrate",
         trigger_source=f"auto:{reason}",
-        started_at=_utcnow_iso(),
-        processed=0,
-        total=bounded_limit or 0,
-        message=(
-            f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)"
-            if bounded_limit is not None
-            else "OpenAlex metadata rehydration auto-queued for all eligible papers"
-        ),
-    )
-    add_job_log(
-        job_id,
-        "Auto-queued by paper-insert hook",
-        step="queued",
-        data={
+        queued_message=queued_message,
+        runner_factory=_runner_factory,
+        log_message="Auto-queued by paper-insert hook",
+        log_data={
             "limit": bounded_limit,
             "all_eligible": bounded_limit is None,
             "trigger_reason": reason,
         },
+        extra_status_fields={
+            "started_at": _utcnow_iso(),
+            "processed": 0,
+            "total": bounded_limit or 0,
+        },
     )
-
-    def _runner() -> dict[str, Any]:
-        return run_corpus_metadata_rehydration(
-            job_id,
-            limit=bounded_limit,
-            force=False,
-            set_job_status=set_job_status,
-            add_job_log=add_job_log,
-            is_cancellation_requested=is_cancellation_requested,
-        )
-
-    schedule_immediate(job_id, _runner)
-    return job_id
 
 
 def enqueue_pending_hydration(
@@ -2169,10 +2436,10 @@ def enqueue_pending_hydration(
     """Mark a paper as needing hydration without fetching synchronously.
 
     Used by the canonical paper-insert sites (Library, Feed, Discovery)
-    so a freshly-added row enters the rehydration runner's candidate
-    pool on the next sweep instead of waiting for the user to click a
-    Settings button. Cheap: one INSERT OR IGNORE per identifier source
-    the paper has, no HTTP, no OpenAlex projection check.
+    so a freshly-added row enters the rehydration/vector chain on the
+    next sweep instead of waiting for the user to click a Settings
+    button. Cheap: one INSERT OR IGNORE per relevant source the paper
+    has, no HTTP, no OpenAlex projection check.
 
     When `auto_schedule=True` (the default) and at least one new pending
     ledger row was written, also schedules a background rehydration job
@@ -2186,12 +2453,11 @@ def enqueue_pending_hydration(
     ).fetchone()
     if row is None:
         return False
-    if str(row["abstract"] or "").strip():
-        return False
     has_oa = bool(str(row["openalex_id"] or "").strip())
     has_doi = bool(str(row["doi"] or "").strip())
     has_s2 = bool(str(row["semantic_scholar_id"] or "").strip())
     has_title = bool(str(row["title"] or "").strip())
+    needs_abstract = not bool(str(row["abstract"] or "").strip())
     # Phase 5 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`:
     # title-only papers (no DOI / openalex_id / s2_id but a usable
     # title) also enter the pool — `_resolve_identifiers_via_title`
@@ -2214,7 +2480,7 @@ def enqueue_pending_hydration(
         sources_to_queue.append((OPENALEX_SOURCE, OPENALEX_WORKS_FIELDS_KEY))
     if has_s2 or has_doi:
         sources_to_queue.append((S2_SOURCE, "s2_paper_v1"))
-    if has_doi:
+    if has_doi and needs_abstract:
         sources_to_queue.append((CROSSREF_SOURCE, "crossref_v1"))
     for source, fields_key in sources_to_queue:
         existing = _ledger_status(conn, paper_id=paper_id, source=source)

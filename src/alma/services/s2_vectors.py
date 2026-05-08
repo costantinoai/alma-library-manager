@@ -1,16 +1,34 @@
-"""Semantic Scholar SPECTER2 vector ingestion."""
+"""Semantic Scholar SPECTER2 vector ingestion.
+
+This module is the *vector* leg of the embedding chain. Its sole
+external trigger is ``POST /paper/batch`` against Semantic Scholar to
+retrieve SPECTER2 embeddings for papers that already carry a usable
+``semantic_scholar_id`` or DOI. Metadata (``abstract``, ``doi``,
+``year``, etc.) that arrives in the same batch response is persisted
+opportunistically as a fill-only side-effect — free data we already
+paid for, never used to overwrite a curated value.
+
+Identity resolution (title-search rescue for papers without a usable
+ID) is *not* this job's concern: it lives in
+``alma.services.title_resolution`` and runs on its own cadence. A
+paper that S2 cannot match here gets stamped ``unmatched`` /
+``bad_local_doi`` and is left for the title-resolution sweep to
+unblock; once that sweep writes a new identity, the trigger
+``papers_clear_fetch_status_on_id_change`` drops the terminal status
+and the next vector sweep picks the paper up cleanly.
+"""
 
 from __future__ import annotations
 
 import logging
 import json
-import re
 import sqlite3
 import time
 from datetime import datetime
 from typing import Callable
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import canonical_lookup_doi, normalize_doi, validate_doi_shape
 from alma.core.vector_blob import encode_vector
 from alma.discovery import semantic_scholar
@@ -178,52 +196,22 @@ def _apply_s2_metadata(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.
     except (TypeError, ValueError):
         citation_count = 0
 
-    # The S2 vector fetch already requests this metadata. Persist it as a
-    # fill-only enrichment so future local compute and source links are not
-    # starved by fields we threw away.
-    conn.execute(
-        """
-        UPDATE papers
-        SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
-            semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), ?),
-            doi = CASE WHEN COALESCE(doi, '') = '' AND ? != '' THEN ? ELSE doi END,
-            abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? != '' THEN ? ELSE abstract END,
-            url = CASE WHEN COALESCE(url, '') = '' AND ? != '' THEN ? ELSE url END,
-            publication_date = CASE
-                WHEN COALESCE(publication_date, '') = '' AND ? != '' THEN ?
-                ELSE publication_date
-            END,
-            year = COALESCE(year, ?),
-            cited_by_count = CASE
-                WHEN ? > COALESCE(cited_by_count, 0) THEN ?
-                ELSE cited_by_count
-            END,
-            source_id = COALESCE(NULLIF(source_id, ''), ?, ?, ?),
-            fetched_at = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            fetched_s2_id or None,
-            corpus_id or None,
-            doi,
-            doi,
-            abstract,
-            abstract,
-            url,
-            url,
-            publication_date,
-            publication_date,
-            year,
-            citation_count,
-            citation_count,
-            doi or None,
-            url or None,
-            str(row["title"] or "").strip() or None,
-            datetime.utcnow().isoformat(),
-            datetime.utcnow().isoformat(),
-            paper_id,
-        ),
+    source_id = doi or url or str(row["title"] or "").strip()
+    fill_only_update_paper(
+        conn,
+        paper_id,
+        fill_fields={
+            "semantic_scholar_id": fetched_s2_id,
+            "semantic_scholar_corpus_id": corpus_id,
+            "doi": doi,
+            "abstract": abstract,
+            "url": url,
+            "publication_date": publication_date,
+            "source_id": source_id,
+        },
+        fill_null_fields={"year": year},
+        max_int_fields={"cited_by_count": citation_count},
+        always_fields={"fetched_at": datetime.utcnow().isoformat()},
     )
 
 
@@ -303,232 +291,6 @@ def _fetch_lookup_ids_resilient(
         left_terminal.update(right_terminal)
         left_retryable.update(right_retryable)
         return left, left_terminal, left_retryable
-
-
-_TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
-# Threshold for the title-search rescue. Jaccard token-set on lowercased
-# alpha-only tokens. Calibrated to be tight enough that a clean
-# title-only match almost certainly identifies the same work, while
-# leaving room for differing punctuation, articles ("the"/"a"), or
-# acronym expansions in the search response. See
-# `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md` open question
-# "Title-resolution match threshold".
-TITLE_RESCUE_JACCARD_THRESHOLD = 0.92
-TITLE_RESCUE_YEAR_DELTA = 1
-TITLE_RESCUE_MAX_RESULTS = 3
-TITLE_RESCUE_QUERY_MAX_CHARS = 200
-# Cap on per-run title searches against S2 (`/paper/search` is the
-# tightest endpoint — 1 RPS even with an API key). 50 calls = ~52
-# seconds at the floor; bigger backlogs roll over to the next sweep.
-# Phase 8 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
-TITLE_RESCUE_PER_RUN_BUDGET = 50
-
-
-def _title_tokens(title: str) -> frozenset[str]:
-    """Lowercased alpha-numeric token set for Jaccard comparison."""
-    return frozenset(_TITLE_TOKEN_RE.findall((title or "").lower()))
-
-
-def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
-    """Token-set Jaccard. Empty inputs return 0.0."""
-    if not a or not b:
-        return 0.0
-    union = a | b
-    if not union:
-        return 0.0
-    return len(a & b) / len(union)
-
-
-def _title_search_rescue_one(
-    conn: sqlite3.Connection,
-    *,
-    row: sqlite3.Row,
-    model: str,
-    job_id: str,
-    add_job_log: Callable[..., None],
-    batch_label: str,
-) -> dict:
-    """Attempt one title-search rescue for an unmatched paper.
-
-    Calls Semantic Scholar `/paper/search` once with the local title.
-    Accepts the highest-Jaccard candidate iff:
-
-    - title token-set Jaccard >= ``TITLE_RESCUE_JACCARD_THRESHOLD``
-    - year delta vs local year is at most ``TITLE_RESCUE_YEAR_DELTA``
-      (pass automatically when either side has no year)
-
-    On accept, fill-only-writes the resolved s2_id / DOI / abstract back
-    to the local row (the trigger
-    ``papers_clear_fetch_status_on_id_change`` then drops the now-stale
-    `unmatched` ledger row), upserts the vector when present, and
-    explicitly clears the leftover fetch_status in case neither id
-    changed (e.g. local already had the right DOI but S2 only resolved
-    via title).
-
-    Returns ``{"rescued": bool, "stored": bool, "jaccard": float, "reason": str}``.
-    """
-    paper_id = str(row["id"])
-    title = str(row["title"] or "").strip()
-    if not title:
-        return {"rescued": False, "stored": False, "jaccard": 0.0, "reason": "no_title"}
-
-    try:
-        local_year = int(row["year"]) if row["year"] is not None else None
-    except (TypeError, ValueError):
-        local_year = None
-
-    try:
-        candidates = semantic_scholar.search_papers(
-            title[:TITLE_RESCUE_QUERY_MAX_CHARS],
-            limit=TITLE_RESCUE_MAX_RESULTS,
-            raise_on_rate_limit=True,
-        )
-    except semantic_scholar.SemanticScholarBatchError as exc:
-        # 429 / transient — defer, don't mark terminal. The `unmatched`
-        # row stays so the next sweep retries; a truly persistent
-        # mismatch will keep getting `unmatched` only after S2 actually
-        # answers with no candidates.
-        add_job_log(
-            job_id,
-            "Title-search rescue deferred by rate limit",
-            level="WARNING",
-            step="title_rescue_rate_limited",
-            data={
-                "batch": batch_label,
-                "paper_id": paper_id,
-                "status_code": getattr(exc, "status_code", None),
-            },
-        )
-        return {
-            "rescued": False,
-            "stored": False,
-            "jaccard": 0.0,
-            "reason": "rate_limited",
-        }
-    except Exception as exc:
-        add_job_log(
-            job_id,
-            "Title-search rescue raised an exception",
-            level="WARNING",
-            step="title_rescue_error",
-            data={"batch": batch_label, "paper_id": paper_id, "error": str(exc)},
-        )
-        return {"rescued": False, "stored": False, "jaccard": 0.0, "reason": "search_error"}
-
-    if not candidates:
-        return {"rescued": False, "stored": False, "jaccard": 0.0, "reason": "no_results"}
-
-    local_tokens = _title_tokens(title)
-    best = None
-    best_jaccard = 0.0
-    for cand in candidates:
-        cand_title = str(cand.get("title") or "").strip()
-        if not cand_title:
-            continue
-        cand_tokens = _title_tokens(cand_title)
-        jaccard = _jaccard(local_tokens, cand_tokens)
-        if jaccard < TITLE_RESCUE_JACCARD_THRESHOLD:
-            continue
-        cand_year_raw = cand.get("year")
-        try:
-            cand_year = int(cand_year_raw) if cand_year_raw is not None else None
-        except (TypeError, ValueError):
-            cand_year = None
-        if (
-            local_year is not None
-            and cand_year is not None
-            and abs(local_year - cand_year) > TITLE_RESCUE_YEAR_DELTA
-        ):
-            continue
-        if jaccard > best_jaccard:
-            best = cand
-            best_jaccard = jaccard
-
-    if best is None:
-        return {
-            "rescued": False,
-            "stored": False,
-            "jaccard": 0.0,
-            "reason": "no_match_above_threshold",
-        }
-
-    new_s2_id = str(best.get("semantic_scholar_id") or "").strip()
-    new_doi = canonical_lookup_doi(str(best.get("doi") or "")) or ""
-    new_abstract = str(best.get("abstract") or "").strip()
-
-    # Fill-only writes — never overwrite a local value that's already
-    # set (don't undo a hand-curated DOI just because S2 returned a
-    # different one). The trigger fires only if the column actually
-    # changed.
-    conn.execute(
-        """
-        UPDATE papers
-        SET semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), ?),
-            doi = CASE
-                WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' AND ? != ''
-                    THEN ?
-                ELSE doi
-            END,
-            abstract = CASE
-                WHEN COALESCE(NULLIF(TRIM(abstract), ''), '') = '' AND ? != ''
-                    THEN ?
-                ELSE abstract
-            END,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            new_s2_id or None,
-            new_doi,
-            new_doi,
-            new_abstract,
-            new_abstract,
-            datetime.utcnow().isoformat(),
-            paper_id,
-        ),
-    )
-
-    stored = False
-    vector = best.get("specter2_embedding")
-    if isinstance(vector, list) and vector:
-        try:
-            cursor = conn.execute(
-                """
-                INSERT INTO publication_embeddings
-                    (paper_id, embedding, model, source, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(paper_id, model) DO UPDATE SET
-                    embedding  = excluded.embedding,
-                    source     = excluded.source,
-                    created_at = excluded.created_at
-                WHERE publication_embeddings.source != ?
-                """,
-                (
-                    paper_id,
-                    encode_vector(vector),
-                    model,
-                    EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                    datetime.utcnow().isoformat(),
-                    EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                ),
-            )
-            stored = cursor.rowcount > 0
-        except Exception as exc:
-            logger.warning(
-                "Title-search rescue vector store failed for %s: %s", paper_id, exc
-            )
-            stored = False
-
-    # Belt-and-suspenders: if neither id changed (so the trigger didn't
-    # fire) but we did rescue the paper, the leftover `unmatched` row
-    # would still trap it. Clear it explicitly.
-    _clear_fetch_status(conn, paper_id=paper_id, model=model)
-    return {
-        "rescued": True,
-        "stored": stored,
-        "jaccard": round(best_jaccard, 4),
-        "reason": "title_match",
-    }
 
 
 def run_s2_vector_backfill(
@@ -633,10 +395,15 @@ def run_s2_vector_backfill(
         errors = 0
         lookup_failures = 0
         bad_local_doi = 0
-        title_rescue_calls = 0
-        title_rescue_skipped_budget = 0
-        title_rescue_rate_limited = 0
-        chunk_size = 50
+        # Bumped from 50 → 250 (2026-05-08). The S2 `/paper/batch`
+        # endpoint accepts up to 500 IDs per call (see
+        # `semantic_scholar.fetch_papers_batch` cap). At 2 lookup IDs
+        # per paper (s2_id + DOI), 250 papers fits comfortably under
+        # that. Drops a 4 909-paper queue from ~99 batches to ~20 and
+        # cuts wall-clock from ~5–8 min to ~2–3 min, which makes the
+        # in-process worker far less likely to be killed mid-flight by
+        # uvicorn `--reload` or a container restart.
+        chunk_size = 250
 
         for start in range(0, total, chunk_size):
             if is_cancellation_requested(job_id):
@@ -691,7 +458,6 @@ def run_s2_vector_backfill(
             }
 
             batch_bad_local_doi_before = bad_local_doi
-            unmatched_in_batch: list[sqlite3.Row] = []
             for row in batch_rows:
                 paper_id = str(row["id"])
                 s2_id = str(row["semantic_scholar_id"] or "").strip()
@@ -787,11 +553,10 @@ def run_s2_vector_backfill(
                         reason="Semantic Scholar returned no paper for current DOI/S2 lookup ids",
                         lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
                     )
-                    # Defer the title-search rescue until after the batch
-                    # commit so we never compete with the in-progress
-                    # writer. The rescue runs at most one search call
-                    # per paper.
-                    unmatched_in_batch.append(row)
+                    # The title-resolution sweep
+                    # (`alma.services.title_resolution`) handles the
+                    # `unmatched` backlog on its own cadence; this job
+                    # leaves the row stamped and moves on.
                     continue
 
                 lookup_ids_for_paper = batch_lookup_ids_by_paper.get(paper_id, [])
@@ -816,17 +581,13 @@ def run_s2_vector_backfill(
                 except (TypeError, ValueError):
                     influential_count = 0
                 if tldr_text or influential_count > 0:
-                    conn.execute(
-                        """
-                        UPDATE papers
-                        SET tldr = COALESCE(NULLIF(tldr, ''), ?),
-                            influential_citation_count = CASE
-                                WHEN COALESCE(influential_citation_count, 0) = 0 THEN ?
-                                ELSE influential_citation_count
-                            END
-                        WHERE id = ?
-                        """,
-                        (tldr_text or None, influential_count, paper_id),
+                    fill_only_update_paper(
+                        conn,
+                        paper_id,
+                        fill_fields={"tldr": tldr_text} if tldr_text else None,
+                        max_int_fields={"influential_citation_count": influential_count}
+                        if influential_count > 0
+                        else None,
                     )
 
                 vector = semantic_scholar.extract_specter2_vector(paper)
@@ -885,78 +646,6 @@ def run_s2_vector_backfill(
                         lookup_key=status_lookup_key,
                     )
             conn.commit()
-
-            # Title-search rescue pass for residual unmatched papers in
-            # this batch. One `/paper/search` call per paper, accepted
-            # only above the Jaccard + year-delta threshold. Runs after
-            # the batch commit so the writer lock is released between
-            # remote calls (lessons.md "Background jobs must release
-            # the writer lock before every remote call AND between
-            # phases").
-            #
-            # Three guards keep us polite (Phase 8 of
-            # `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`):
-            # - `TITLE_RESCUE_PER_RUN_BUDGET` caps total search calls
-            #   per run so a 5 000-paper backlog can't burn S2's 1 RPS
-            #   /paper/search quota in one go.
-            # - The first 429 short-circuits the rest of this batch's
-            #   rescue: more search calls into a known-overloaded
-            #   upstream just dig the hole deeper.
-            # - The shared HTTP client's adaptive throttle (engaged on
-            #   any 429) already lengthens the per-request interval to
-            #   30 s for the next minute; we respect that by stopping
-            #   here.
-            batch_rescued = 0
-            batch_rescued_with_vector = 0
-            rate_limited = False
-            for unmatched_row in unmatched_in_batch:
-                if title_rescue_calls >= TITLE_RESCUE_PER_RUN_BUDGET:
-                    title_rescue_skipped_budget += 1
-                    continue
-                title_rescue_calls += 1
-                outcome = _title_search_rescue_one(
-                    conn,
-                    row=unmatched_row,
-                    model=model,
-                    job_id=job_id,
-                    add_job_log=add_job_log,
-                    batch_label=str(start),
-                )
-                if outcome.get("reason") == "rate_limited":
-                    rate_limited = True
-                    title_rescue_rate_limited += 1
-                    # Don't keep firing into a known-overloaded
-                    # endpoint; let the adaptive throttle drain.
-                    break
-                if not outcome["rescued"]:
-                    continue
-                batch_rescued += 1
-                # Reflect the rescue in our running counters so the
-                # batch log + final summary tell a coherent story. The
-                # `unmatched` counter still reflects rows that failed
-                # both batch + title-search, exactly the
-                # ones still terminal after this run.
-                unmatched -= 1
-                if outcome["stored"]:
-                    stored += 1
-                    batch_inserted_paper_ids.append(str(unmatched_row["id"]))
-                    batch_rescued_with_vector += 1
-            if batch_rescued or rate_limited:
-                conn.commit()
-                add_job_log(
-                    job_id,
-                    "Title-search rescue pass",
-                    step="title_rescue",
-                    data={
-                        "batch_start": start,
-                        "considered": len(unmatched_in_batch),
-                        "rescued": batch_rescued,
-                        "rescued_with_vector": batch_rescued_with_vector,
-                        "rate_limited": rate_limited,
-                        "calls_so_far": title_rescue_calls,
-                        "budget": TITLE_RESCUE_PER_RUN_BUDGET,
-                    },
-                )
 
             # Keep `author_centroids` coherent with the new embeddings.
             if batch_inserted_paper_ids:
@@ -1047,22 +736,42 @@ def run_s2_vector_backfill(
             },
         )
 
-        # Phase 6 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`:
-        # auto-schedule the local SPECTER2 fill if the active provider
-        # is local SPECTER2 and there are still papers with title +
-        # abstract that lack the active-model vector. Skip silently
-        # otherwise (no provider switch, no surprise).
+        # Auto-chain to the local SPECTER2 fill only when this run
+        # was *not* started by a manual Settings click. The per-button
+        # contract there is "do exactly what the label says": clicking
+        # "Fetch Missing S2 Vectors" must not silently start a heavy
+        # local compute job. Auto-chain still fires for the per-insert
+        # / scheduler paths where there's no user click to confuse.
         try:
+            from alma.api.scheduler import get_job_trigger_source
             from alma.services.embedding_chain import schedule_post_s2_chain
 
-            chain = schedule_post_s2_chain(conn, trigger_reason="post_s2_fetch")
-            if chain.get("scheduled_jobs"):
+            trigger_source = get_job_trigger_source(job_id) or ""
+            if trigger_source == "user":
                 add_job_log(
                     job_id,
-                    "Chained local SPECTER2 fill auto-scheduled",
-                    step="chain_post_s2",
-                    data=chain,
+                    "Skipped post-S2 chain: user-triggered run",
+                    step="chain_post_s2_skipped",
+                    data={"trigger_source": trigger_source},
                 )
+            else:
+                chain = schedule_post_s2_chain(conn, trigger_reason="post_s2_fetch")
+                if chain.get("scheduled_jobs"):
+                    chain_id = str(chain.get("chain_id") or "").strip()
+                    if chain_id:
+                        from alma.api.scheduler import set_job_status
+
+                        set_job_status(
+                            job_id,
+                            chain_id=chain_id,
+                            chain_step="s2_fetch",
+                        )
+                    add_job_log(
+                        job_id,
+                        "Chained local SPECTER2 fill auto-scheduled",
+                        step="chain_post_s2",
+                        data=chain,
+                    )
         except Exception as exc:
             logger.debug("post-S2 chain skipped: %s", exc)
     except Exception as exc:

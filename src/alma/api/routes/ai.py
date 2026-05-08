@@ -1198,6 +1198,72 @@ def backfill_s2_vectors(
     )
 
 
+@router.post("/title-resolution-sweep", response_model=ComputeEmbeddingsResponse)
+def title_resolution_sweep(
+    limit: int = Query(50, ge=1, le=50),
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+) -> ComputeEmbeddingsResponse:
+    """Resolve paper identity via Semantic Scholar /paper/search.
+
+    Distinct from `/backfill-s2-vectors`: this sweep handles papers
+    without a usable s2_id / DOI (or stamped `unmatched` /
+    `bad_local_doi`). It writes the resolved identity back to the
+    `papers` row so the next vector sweep can pick the paper up.
+    """
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+
+    operation_key = "ai.title_resolution_sweep"
+    existing = find_active_job(operation_key)
+    if existing:
+        env = activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="Title resolution sweep already running",
+        )
+        return ComputeEmbeddingsResponse(
+            job_id=env["job_id"],
+            operation_id=env.get("operation_id"),
+            status=env.get("status"),
+            activity_url=env.get("activity_url"),
+            operation_key=env.get("operation_key"),
+            scope="title_resolution",
+            message=env.get("message") or "Title resolution sweep already running",
+        )
+
+    job_id = f"title_resolution_{uuid.uuid4().hex[:8]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        message="Title resolution sweep queued; remote API only, no local AI compute",
+        started_at=datetime.utcnow().isoformat(),
+    )
+    schedule_immediate(job_id, _run_title_resolution_sweep, job_id, int(limit))
+    env = activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="Title resolution sweep started; remote API only, no local AI compute",
+    )
+    return ComputeEmbeddingsResponse(
+        job_id=env["job_id"],
+        operation_id=env.get("operation_id"),
+        status=env.get("status"),
+        activity_url=env.get("activity_url"),
+        operation_key=env.get("operation_key"),
+        scope="title_resolution",
+        message=env.get("message") or "Title resolution sweep started",
+    )
+
+
 @router.delete("/embeddings/inactive", response_model=DeleteInactiveEmbeddingsResponse)
 def delete_inactive_embeddings(
     db: sqlite3.Connection = Depends(get_db),
@@ -1272,6 +1338,20 @@ def _run_s2_vector_backfill(job_id: str, limit: int = 200) -> None:
     from alma.services.s2_vectors import run_s2_vector_backfill
 
     run_s2_vector_backfill(
+        job_id,
+        limit=limit,
+        set_job_status=set_job_status,
+        add_job_log=add_job_log,
+        is_cancellation_requested=is_cancellation_requested,
+    )
+
+
+def _run_title_resolution_sweep(job_id: str, limit: int = 50) -> None:
+    """Background wrapper for the title-resolution sweep."""
+    from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
+    from alma.services.title_resolution import run_title_resolution_sweep
+
+    run_title_resolution_sweep(
         job_id,
         limit=limit,
         set_job_status=set_job_status,

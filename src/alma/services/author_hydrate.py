@@ -22,7 +22,11 @@ from alma.application.author_affiliation import (
     score_affiliation_candidates,
 )
 from alma.application.author_profile import apply_author_profile_update
-from alma.core.utils import normalize_orcid
+from alma.core.utils import (
+    normalize_orcid,
+    utcnow as _utcnow,
+    utcnow_iso as _utcnow_iso,
+)
 from alma.discovery.orcid import fetch_record_by_orcid
 from alma.openalex.client import (
     _AUTHORS_SELECT_FIELDS,
@@ -58,14 +62,6 @@ SOURCE_PURPOSES: dict[str, tuple[str, ...]] = {
     S2_SOURCE: (PROFILE_PURPOSE, ALIASES_PURPOSE),
     CROSSREF_SOURCE: (AFFILIATION_PURPOSE,),
 }
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
-
-
-def _utcnow_iso() -> str:
-    return _utcnow().isoformat()
 
 
 def _json(value: Any) -> str:
@@ -1011,61 +1007,58 @@ def schedule_pending_author_hydration_sweep(
     reason: str = "author_follow",
     limit: int | None = None,
 ) -> str | None:
-    try:
+    """Idempotent author-metadata hydration sweep.
+
+    Mirrors :func:`alma.services.corpus_rehydrate.schedule_pending_hydration_sweep`
+    but for the ``authors`` table. Both go through the canonical
+    Activity envelope (:func:`alma.core.job_envelope.schedule_with_envelope`).
+    """
+    from alma.core.job_envelope import schedule_with_envelope
+
+    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
+    queued_message = (
+        f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
+        if bounded_limit is not None
+        else "Author metadata hydration auto-queued for all eligible authors"
+    )
+
+    def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
         from alma.api.scheduler import (
             add_job_log,
-            find_active_job,
             is_cancellation_requested,
-            schedule_immediate,
             set_job_status,
         )
-    except Exception:
-        return None
 
-    operation_key = "authors.rehydrate_metadata"
-    existing = find_active_job(operation_key)
-    if existing:
-        return str(existing.get("job_id") or "") or None
+        def _runner() -> dict[str, Any]:
+            return run_author_metadata_rehydration(
+                job_id,
+                limit=bounded_limit,
+                force=False,
+                set_job_status=set_job_status,
+                add_job_log=add_job_log,
+                is_cancellation_requested=is_cancellation_requested,
+            )
 
-    job_id = f"author_metadata_rehydrate_{uuid.uuid4().hex[:10]}"
-    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
+        return _runner
+
+    return schedule_with_envelope(
+        operation_key="authors.rehydrate_metadata",
+        job_id_prefix="author_metadata_rehydrate",
         trigger_source=f"auto:{reason}",
-        started_at=_utcnow_iso(),
-        processed=0,
-        total=bounded_limit or 0,
-        message=(
-            f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
-            if bounded_limit is not None
-            else "Author metadata hydration auto-queued for all eligible authors"
-        ),
-    )
-    add_job_log(
-        job_id,
-        "Auto-queued author metadata hydration",
-        step="queued",
-        data={
+        queued_message=queued_message,
+        runner_factory=_runner_factory,
+        log_message="Auto-queued author metadata hydration",
+        log_data={
             "reason": reason,
             "limit": bounded_limit,
             "all_eligible": bounded_limit is None,
         },
+        extra_status_fields={
+            "started_at": _utcnow_iso(),
+            "processed": 0,
+            "total": bounded_limit or 0,
+        },
     )
-
-    def _runner() -> dict[str, Any]:
-        return run_author_metadata_rehydration(
-            job_id,
-            limit=bounded_limit,
-            force=False,
-            set_job_status=set_job_status,
-            add_job_log=add_job_log,
-            is_cancellation_requested=is_cancellation_requested,
-        )
-
-    schedule_immediate(job_id, _runner)
-    return job_id
 
 
 def build_author_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
