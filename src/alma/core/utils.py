@@ -8,6 +8,7 @@ import re
 import sqlite3
 import urllib.parse
 import uuid
+from datetime import datetime
 from typing import Dict, Optional
 
 from alma.plugins.base import Publication
@@ -16,6 +17,22 @@ from alma.plugins.base import Publication
 def generate_paper_id() -> str:
     """Generate a new UUID for a paper."""
     return str(uuid.uuid4())
+
+
+def utcnow() -> datetime:
+    """Naive UTC ``datetime`` used by every ledger / activity write.
+
+    SQLite's ``DATETIME`` is timezone-naive; the rest of the codebase
+    treats every timestamp as UTC implicitly. Centralizing this lets us
+    swap to ``datetime.now(timezone.utc)`` later without rippling
+    through every service module.
+    """
+    return datetime.utcnow()
+
+
+def utcnow_iso() -> str:
+    """ISO-8601 string of :func:`utcnow` — the canonical SQL-friendly form."""
+    return utcnow().isoformat()
 
 
 def normalize_text(value: str) -> str:
