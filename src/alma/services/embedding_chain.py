@@ -1,8 +1,7 @@
 """End-to-end coordinator for the hydration → vector chain.
 
-Phase 6 of `tasks/13_END_TO_END_HYDRATION_VECTOR_CHAIN.md`.
-
-Three Activity jobs run in sequence after a paper insert:
+Three Activity jobs run in sequence on the unattended path (per-paper
+insert hooks, periodic scheduler sweeps):
 
 1. `run_corpus_metadata_rehydration` — multi-source metadata fanout
    (OpenAlex + Semantic Scholar + Crossref + title-resolution).
@@ -15,6 +14,19 @@ finishes successfully:
 
 - `schedule_post_hydration_chain` — after metadata hydration.
 - `schedule_post_s2_chain` — after S2 vector backfill.
+
+**The chain only fires on unattended runs.** Each parent runner
+checks its own ``trigger_source`` via
+``alma.api.scheduler.get_job_trigger_source`` before calling its
+chain hook. A value of ``"user"`` means the parent run was kicked
+off by a manual Settings button; the per-button contract there is
+"do exactly what the label says," so chaining is suppressed and a
+``chain_*_skipped`` log line is emitted instead. Any other source
+(``"auto:..."`` from a prior chain step, ``"scheduler"`` from
+periodic sweeps, ``None`` from internal callers) chains normally.
+The user has separate Settings buttons for every step (Resolve
+Missing Identity / Fetch Missing S2 Vectors / AI Compute Missing) so
+manual control is always available without surprise side-effects.
 
 Each schedule call:
 
@@ -143,51 +155,24 @@ def _schedule_with_envelope(
     queued_message: str,
     runner_factory: Callable[[str], Callable[..., Any]],
 ) -> Optional[str]:
-    """Idempotent Activity-enveloped schedule helper.
+    """Chain-coordinator wrapper around :func:`core.job_envelope.schedule_with_envelope`.
 
-    `runner_factory(job_id)` must return a zero-arg callable that runs
-    the actual work using `set_job_status` / `add_job_log` /
-    `is_cancellation_requested` from `alma.api.scheduler`. Passing the
-    job_id explicitly avoids the holder-pattern race where the worker
-    runs before the caller can stash the id.
-
-    Imports the scheduler lazily; a missing scheduler returns None so
-    callers stay testable without the FastAPI app loaded.
+    Always stamps ``chain_id`` / ``chain_step`` on the Activity row and
+    logs ``"Auto-queued by chain coordinator"``; the underlying envelope
+    is the same one paper / author hydration sweeps use.
     """
-    try:
-        from alma.api.scheduler import (
-            add_job_log,
-            find_active_job,
-            schedule_immediate,
-            set_job_status,
-        )
-    except Exception:
-        return None
+    from alma.core.job_envelope import schedule_with_envelope
 
-    existing = find_active_job(operation_key)
-    if existing:
-        return str(existing.get("job_id") or "") or None
-
-    job_id = f"{job_id_prefix}_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
+    return schedule_with_envelope(
         operation_key=operation_key,
+        job_id_prefix=job_id_prefix,
         trigger_source=trigger_source,
-        message=queued_message,
+        queued_message=queued_message,
+        runner_factory=runner_factory,
         chain_id=chain_id,
         chain_step=chain_step,
+        log_message="Auto-queued by chain coordinator",
     )
-    add_job_log(
-        job_id,
-        "Auto-queued by chain coordinator",
-        step="queued",
-        data={"chain_id": chain_id, "chain_step": chain_step},
-    )
-
-    runner = runner_factory(job_id)
-    schedule_immediate(job_id, runner)
-    return job_id
 
 
 def schedule_post_hydration_chain(

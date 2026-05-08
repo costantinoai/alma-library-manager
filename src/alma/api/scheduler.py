@@ -49,6 +49,11 @@ _scheduler: Optional[BackgroundScheduler] = None
 _job_meta: dict[str, dict] = {}
 _job_status: dict[str, dict] = {}
 _job_logs: dict[str, collections.deque[dict]] = {}
+# Maps job_id -> threading.get_ident() of the worker currently running it.
+# Populated by `_register_running_thread` at the top of `_wrapped` and cleared
+# in the matching `finally`. Used by `kill_job_thread` to inject JobCancelled
+# straight into the thread instead of waiting for a cooperative checkpoint.
+_job_threads: dict[str, int] = {}
 _job_lock = threading.RLock()
 _ACTIVITY_STATUS_LIMIT = 2000
 _ACTIVE_STATUSES = {"queued", "scheduled", "running", "cancelling"}
@@ -57,6 +62,76 @@ _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 class JobCancelled(Exception):
     """Raised at a cooperative Activity checkpoint after user cancellation."""
+
+
+def _register_running_thread(job_id: str) -> None:
+    """Record the calling thread as the executor of `job_id`."""
+    if not job_id:
+        return
+    with _job_lock:
+        _job_threads[job_id] = threading.get_ident()
+
+
+def _unregister_running_thread(job_id: str) -> None:
+    """Forget the executor thread for `job_id` once the run finishes."""
+    if not job_id:
+        return
+    with _job_lock:
+        _job_threads.pop(job_id, None)
+
+
+def kill_job_thread(job_id: str) -> bool:
+    """Inject ``JobCancelled`` into the thread running ``job_id``.
+
+    This is the hard-kill backstop for the cooperative cancellation path.
+    APScheduler runs jobs in Python threads, so we cannot ``SIGKILL`` them;
+    the closest equivalent is ``PyThreadState_SetAsyncExc``, which raises
+    the given exception in the target thread at the next Python bytecode
+    boundary. Threads stuck in C-level blocking I/O (sockets without a
+    timeout, blocking C extensions) will still only react when control
+    returns to Python — but for any pure-Python loop or checkpoint-aware
+    runner, this turns "cancelling" into an effectively immediate kill.
+
+    Returns True if the exception was scheduled successfully.
+    """
+    import ctypes
+
+    with _job_lock:
+        thread_ident = _job_threads.get(job_id)
+    if thread_ident is None:
+        return False
+    try:
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(thread_ident),
+            ctypes.py_object(JobCancelled),
+        )
+    except Exception as exc:
+        logger.warning("kill_job_thread: ctypes call failed for %s: %s", job_id, exc)
+        return False
+    if res == 0:
+        # The thread has already exited; nothing to do.
+        with _job_lock:
+            _job_threads.pop(job_id, None)
+        return False
+    if res > 1:
+        # If more than one thread was hit, the docs say to immediately
+        # clear the async exc to avoid leaving threads in an
+        # inconsistent state. We treat this as a failure.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(thread_ident), ctypes.c_void_p(None)
+        )
+        logger.warning(
+            "kill_job_thread: PyThreadState_SetAsyncExc affected %d threads for %s",
+            res,
+            job_id,
+        )
+        return False
+    logger.info(
+        "kill_job_thread: injected JobCancelled into thread %s for job %s",
+        thread_ident,
+        job_id,
+    )
+    return True
 
 
 def _activity_conn() -> sqlite3.Connection:
@@ -287,6 +362,28 @@ def _decode_log_cursor(cursor: Optional[str]) -> Optional[int]:
         return int(raw.strip())
     except Exception:
         return None
+
+
+def get_job_trigger_source(job_id: str) -> Optional[str]:
+    """Return the recorded ``trigger_source`` for ``job_id``, if any.
+
+    Used by chain coordinators to decide whether to auto-queue the
+    next stage. A value of ``"user"`` means the job was kicked off by
+    a manual Settings click; the per-button contract there is "do
+    exactly what the label says," so callers should NOT auto-chain on
+    that source. ``"auto:..."`` and ``"scheduler"`` are unattended
+    triggers where chaining is the expected continuation.
+    """
+    if not job_id:
+        return None
+    with _job_lock:
+        cached = _job_status.get(job_id)
+        if cached and cached.get("trigger_source"):
+            return str(cached.get("trigger_source"))
+    row = _load_job_status_from_db(job_id)
+    if row and row.get("trigger_source"):
+        return str(row.get("trigger_source"))
+    return None
 
 
 def _load_job_status_from_db(job_id: str) -> Optional[dict]:
@@ -1606,23 +1703,27 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
         )
 
     def _wrapped():
-        st = get_job_status(job_id) or {}
-        if st.get("status") == "cancelled" or st.get("cancel_requested"):
-            set_job_status(
-                job_id,
-                status="cancelled",
-                finished_at=datetime.utcnow().isoformat(),
-                message=st.get("message") or f"Cancelled: {job_id}",
-            )
-            return
-        if st.get("status") in ("scheduled", "queued", "running", None):
-            set_job_status(
-                job_id,
-                status="running",
-                started_at=st.get("started_at") or datetime.utcnow().isoformat(),
-                message=st.get("message") or f"Running: {job_id}",
-            )
+        # Register the worker thread *before* anything else so a concurrent
+        # `kill_job_thread(job_id)` can inject JobCancelled even if the job
+        # is still in the pre-run set_job_status / DB roundtrip below.
+        _register_running_thread(job_id)
         try:
+            st = get_job_status(job_id) or {}
+            if st.get("status") == "cancelled" or st.get("cancel_requested"):
+                set_job_status(
+                    job_id,
+                    status="cancelled",
+                    finished_at=datetime.utcnow().isoformat(),
+                    message=st.get("message") or f"Cancelled: {job_id}",
+                )
+                return
+            if st.get("status") in ("scheduled", "queued", "running", None):
+                set_job_status(
+                    job_id,
+                    status="running",
+                    started_at=st.get("started_at") or datetime.utcnow().isoformat(),
+                    message=st.get("message") or f"Running: {job_id}",
+                )
             result = func(*args, **kwargs)
             st_after = get_job_status(job_id) or {}
             if st_after.get("cancel_requested") or st_after.get("status") in ("cancelling", "cancelled"):
@@ -1688,6 +1789,8 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 message=f"Failed: {job_id}",
             )
             raise
+        finally:
+            _unregister_running_thread(job_id)
 
     if os.getenv("PYTEST_CURRENT_TEST"):
         logger.info("Running immediate job %s inline under pytest", job_id)

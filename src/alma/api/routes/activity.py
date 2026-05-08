@@ -128,7 +128,13 @@ def cancel_operation(
     job_id: str,
     user: dict = Depends(get_current_user),
 ):
-    from alma.api.scheduler import add_job_log, get_job_status, get_scheduler, set_job_status
+    from alma.api.scheduler import (
+        add_job_log,
+        get_job_status,
+        get_scheduler,
+        kill_job_thread,
+        set_job_status,
+    )
 
     st = get_job_status(job_id)
     if not st:
@@ -174,18 +180,30 @@ def cancel_operation(
             "message": "Operation cancelled",
         }
 
-    # Running: cooperative cancellation only.
+    # Running: flag the cooperative cancel checkpoint AND inject JobCancelled
+    # straight into the worker thread via PyThreadState_SetAsyncExc. The flag
+    # lets runners that are between Python statements bail at their next
+    # `is_cancellation_requested(job_id)` check; the async-exc injection
+    # interrupts pure-Python loops at the next bytecode boundary so the user
+    # doesn't have to wait for a checkpoint to come around.
     set_job_status(
         job_id,
         status="cancelling",
         cancel_requested=True,
-        message="Cancellation requested; stopping at next checkpoint",
+        message="Cancellation requested; killing worker thread",
     )
     add_job_log(job_id, "Cancellation requested by user", step="cancel_requested")
+    killed = kill_job_thread(job_id)
+    if killed:
+        add_job_log(
+            job_id,
+            "Injected JobCancelled into worker thread",
+            step="cancel_requested",
+        )
     return {
         "success": True,
         "job_id": job_id,
         "status": "cancelling",
         "cancel_requested": True,
-        "message": "Cancellation requested",
+        "message": "Cancellation requested" + (" (thread interrupt sent)" if killed else ""),
     }
