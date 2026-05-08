@@ -2684,7 +2684,14 @@ export function trackInteraction(
     event_type: eventType,
     paper_id: paperId ?? null,
     context: context ?? null,
-  }).catch(() => {}) // Silently ignore errors — tracking must never affect UX
+    // Tracking failures must never affect UX — but we DO want them in the
+    // browser console so dev sees if the backend feedback endpoint is
+    // down. Silent .catch(() => {}) used to mask outages entirely.
+  }).catch((err: unknown) => {
+    if (typeof console !== 'undefined' && console.warn) {
+      console.warn('[trackInteraction] failed to record event', eventType, paperId, err)
+    }
+  })
 }
 
 // ── Tag Suggestion types ──

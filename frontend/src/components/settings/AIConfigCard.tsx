@@ -18,6 +18,7 @@ import {
   Loader2,
   Package,
   RefreshCw,
+  Search,
   Save,
   Server,
   Terminal,
@@ -338,7 +339,8 @@ export function AIConfigCard() {
   const { toast } = useToast()
   const [embeddingJobId, setEmbeddingJobId] = useState<string | null>(null)
   const [s2FetchJobId, setS2FetchJobId] = useState<string | null>(null)
-  const activeEmbeddingJobId = embeddingJobId || s2FetchJobId
+  const [titleResolutionJobId, setTitleResolutionJobId] = useState<string | null>(null)
+  const activeEmbeddingJobId = embeddingJobId || s2FetchJobId || titleResolutionJobId
 
   const aiStatusQuery = useQuery({
     queryKey: ['ai-status'],
@@ -347,8 +349,12 @@ export function AIConfigCard() {
     refetchInterval: activeEmbeddingJobId ? 4000 : false,
   })
 
+  // Shares the ['activity-operations'] cache with useOperationToasts
+  // and ActivityPanel — see useOperationToasts.ts. The 3s refetch only
+  // applies while an embedding job is active; otherwise this observer
+  // is disabled and the cache is fed by the slower pollers.
   const embeddingOpsQuery = useQuery({
-    queryKey: ['activity-operations', 'ai-embeddings', activeEmbeddingJobId],
+    queryKey: ['activity-operations'],
     queryFn: () =>
       api.get<Array<{ job_id: string; status: string; operation_key?: string; message?: string }>>(
         '/activity',
@@ -454,6 +460,19 @@ export function AIConfigCard() {
     onError: () => errorToast('Failed to start S2 vector fetch'),
   })
 
+  const titleResolutionMutation = useMutation({
+    mutationFn: () => api.post<ComputeEmbeddingsResponse>('/ai/title-resolution-sweep'),
+    onSuccess: async (data) => {
+      if (data.job_id) setTitleResolutionJobId(data.job_id)
+      await invalidateQueries(queryClient, ['ai-status'], ['activity-operations'])
+      toast({
+        title: 'Title resolution submitted',
+        description: data.message || `Job: ${data.job_id.slice(0, 8)}...`,
+      })
+    },
+    onError: () => errorToast('Failed to start title resolution sweep'),
+  })
+
   // Close out job tracking when the background operation finishes.
   useEffect(() => {
     if (!embeddingJobId || !embeddingOpsQuery.data) return
@@ -482,6 +501,21 @@ export function AIConfigCard() {
       variant: op.status === 'failed' ? 'destructive' : 'default',
     })
   }, [s2FetchJobId, embeddingOpsQuery.data, queryClient, toast])
+
+  useEffect(() => {
+    if (!titleResolutionJobId || !embeddingOpsQuery.data) return
+    const op = embeddingOpsQuery.data.find((item) => item.job_id === titleResolutionJobId)
+    if (!op) return
+    if (['queued', 'running', 'cancelling'].includes(op.status)) return
+    setTitleResolutionJobId(null)
+    void invalidateQueries(queryClient, ['ai-status'], ['insights-diagnostics'])
+    toast({
+      title:
+        op.status === 'completed' ? 'Title resolution completed' : 'Title resolution finished',
+      description: op.message || 'Identity resolution sweep is done.',
+      variant: op.status === 'failed' ? 'destructive' : 'default',
+    })
+  }, [titleResolutionJobId, embeddingOpsQuery.data, queryClient, toast])
 
   const missingDependencies = useMemo(() => {
     if (!aiStatusQuery.data) return []
@@ -807,27 +841,137 @@ export function AIConfigCard() {
                     Canonical SPECTER2 coverage: {status.embeddings.canonical_total ?? 0} papers (
                     {(status.embeddings.canonical_coverage_pct ?? 0).toFixed(1)}%)
                   </p>
-                  {status.embeddings.s2_backfill ? (
-                    <>
-                      <p className="mt-1">
-                        S2 fetch queue: {status.embeddings.s2_backfill.total_missing} · fetchable
-                        now: {status.embeddings.s2_backfill.eligible_missing} · need DOI/S2 ID:{' '}
-                        {status.embeddings.s2_backfill.ineligible_missing}
-                      </p>
-                      <p className="mt-1">
-                        Local SPECTER2 can fill:{' '}
-                        {status.embeddings.s2_backfill.local_compute_candidates ??
-                          status.embeddings.missing ??
-                          0}{' '}
-                        · blocked missing title/abstract:{' '}
-                        {status.embeddings.s2_backfill.local_compute_blocked_missing_text ?? 0}{' '}
-                        · S2 no-match: {status.embeddings.s2_backfill.terminal_unmatched ?? 0} · S2
-                        no-vector: {status.embeddings.s2_backfill.terminal_missing_vector ?? 0}
-                      </p>
-                    </>
-                  ) : null}
                   </AlertDescription>
                 </Alert>
+
+                {status.embeddings.s2_backfill ? (() => {
+                  const sb = status.embeddings.s2_backfill
+                  const fetchReady = sb.eligible_missing ?? 0
+                  const noIdentity = sb.ineligible_missing ?? 0
+                  const stuckUnmatched = sb.terminal_unmatched ?? 0
+                  const identityNeeded = noIdentity + stuckUnmatched
+                  const localFillReady =
+                    sb.local_compute_candidates ?? status.embeddings.missing ?? 0
+                  const noVectorAtS2 = sb.terminal_missing_vector ?? 0
+                  const blockedNoText = sb.local_compute_blocked_missing_text ?? 0
+
+                  type Lane = {
+                    Icon: LucideIcon
+                    label: string
+                    count: number
+                    detail: string
+                  }
+                  const lanes: Lane[] = [
+                    {
+                      Icon: Package,
+                      label: 'Fetch Missing S2 Vectors',
+                      count: fetchReady,
+                      detail:
+                        fetchReady === 0
+                          ? 'Idle — every paper with a usable DOI or S2 ID has been tried.'
+                          : 'Papers ready for /paper/batch.',
+                    },
+                    {
+                      Icon: Search,
+                      label: 'Resolve Missing Identity',
+                      count: identityNeeded,
+                      detail:
+                        identityNeeded === 0
+                          ? 'Idle — no papers need identity resolution.'
+                          : `${noIdentity.toLocaleString()} have no DOI or S2 ID · ${stuckUnmatched.toLocaleString()} stuck "unmatched". Drained ~50/click via /paper/search.`,
+                    },
+                    {
+                      Icon: Cpu,
+                      label: 'AI Compute Missing',
+                      count: localFillReady,
+                      detail:
+                        localFillReady === 0
+                          ? 'Idle — no papers waiting on local fill.'
+                          : noVectorAtS2 > 0
+                            ? `Papers with title + abstract. ${noVectorAtS2.toLocaleString()} are stuck because S2 has no SPECTER2 vector — only local fill helps.`
+                            : 'Papers with title + abstract.',
+                    },
+                  ]
+                  const blocked: Lane | null =
+                    blockedNoText > 0
+                      ? {
+                          Icon: AlertCircle,
+                          label: 'Blocked — no button can help',
+                          count: blockedNoText,
+                          detail:
+                            'Missing title or abstract — fix via metadata rehydration first.',
+                        }
+                      : null
+
+                  return (
+                    <div className="rounded-md border border-alma-100 bg-alma-50 p-4 shadow-paper-inset-cool">
+                      <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-alma-700">
+                        What's actionable now
+                      </p>
+                      <div className="space-y-3">
+                        {lanes.map(({ Icon, label, count, detail }) => {
+                          const idle = count === 0
+                          return (
+                            <div
+                              key={label}
+                              className="grid grid-cols-[auto_1fr_auto] items-start gap-3"
+                            >
+                              <div
+                                className={cn(
+                                  'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm transition-colors',
+                                  idle
+                                    ? 'bg-alma-100/60 text-alma-400'
+                                    : 'bg-alma-100 text-alma-700',
+                                )}
+                              >
+                                <Icon className="h-4 w-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <p
+                                  className={cn(
+                                    'text-sm font-medium leading-tight',
+                                    idle ? 'text-alma-500' : 'text-alma-800',
+                                  )}
+                                >
+                                  {label}
+                                </p>
+                                <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                                  {detail}
+                                </p>
+                              </div>
+                              <p
+                                className={cn(
+                                  'font-brand text-2xl font-semibold leading-none tabular-nums',
+                                  idle ? 'text-alma-300' : 'text-alma-800',
+                                )}
+                              >
+                                {count.toLocaleString()}
+                              </p>
+                            </div>
+                          )
+                        })}
+                        {blocked ? (
+                          <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3 border-t border-alma-100/70 pt-3">
+                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-alma-100/60 text-alma-400">
+                              <blocked.Icon className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium leading-tight text-alma-500">
+                                {blocked.label}
+                              </p>
+                              <p className="mt-0.5 text-xs leading-snug text-slate-500">
+                                {blocked.detail}
+                              </p>
+                            </div>
+                            <p className="font-brand text-2xl font-semibold leading-none tabular-nums text-alma-400">
+                              {blocked.count.toLocaleString()}
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })() : null}
                 <Alert variant="warning" className="px-3 py-2">
                   <Cpu className="h-4 w-4" />
                   <AlertTitle className="text-xs">Manual AI compute</AlertTitle>
@@ -900,6 +1044,23 @@ export function AIConfigCard() {
                     onClick={() => backfillS2VectorsMutation.mutate()}
                   >
                     {s2FetchJobId ? 'S2 Fetch In Progress' : 'Fetch Missing S2 Vectors'}
+                  </AsyncButton>
+                  <AsyncButton
+                    variant="outline"
+                    size="sm"
+                    icon={<Search className="h-4 w-4" />}
+                    pending={titleResolutionMutation.isPending || !!titleResolutionJobId}
+                    disabled={
+                      !!activeEmbeddingJobId ||
+                      ((status.embeddings.s2_backfill?.terminal_unmatched ?? 0) +
+                        (status.embeddings.s2_backfill?.ineligible_missing ?? 0)) ===
+                        0
+                    }
+                    onClick={() => titleResolutionMutation.mutate()}
+                  >
+                    {titleResolutionJobId
+                      ? 'Title Resolution In Progress'
+                      : 'Resolve Missing Identity'}
                   </AsyncButton>
                   <AsyncButton
                     variant="outline"
