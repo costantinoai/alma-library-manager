@@ -41,6 +41,21 @@ _STORAGE_BYTES = np.dtype(STORAGE_DTYPE).itemsize  # 2
 _LEGACY_BYTES = 4  # float32
 
 
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Cosine similarity between two 1-D embedding vectors.
+
+    Returns ``0.0`` when either vector is the zero vector — the
+    geometric similarity is undefined there and 0 is the contract every
+    caller already expects (callers had this exact byte-for-byte helper
+    duplicated in `discovery.similarity` and `ai.auto_tagger`).
+    """
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
 def encode_vector(vec) -> bytes:
     """Cast a vector to the storage dtype and return its raw bytes.
 

@@ -24,6 +24,7 @@ from alma.core.database import (
     convert_json_to_tuple,
     ensure_output_folder,
 )
+from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import generate_paper_id
 
 logger = logging.getLogger(__name__)
@@ -488,21 +489,18 @@ def save_updated_cache(
 
             if existing_paper_id:
                 paper_id = existing_paper_id
-                conn.execute(
-                    """UPDATE papers SET
-                           title = COALESCE(NULLIF(?, ''), title),
-                           year = COALESCE(year, ?),
-                           abstract = CASE WHEN COALESCE(abstract, '') = '' THEN ? ELSE abstract END,
-                           url = CASE WHEN COALESCE(url, '') = '' THEN ? ELSE url END,
-                           cited_by_count = CASE WHEN ? > COALESCE(cited_by_count, 0) THEN ? ELSE cited_by_count END,
-                           publication_date = COALESCE(NULLIF(publication_date, ''), ?)
-                       WHERE id = ?""",
-                    (
-                        title, year_val, abstract, url,
-                        cited_by_count, cited_by_count,
-                        pub_date_val,
-                        paper_id,
-                    ),
+                fill_only_update_paper(
+                    conn,
+                    paper_id,
+                    fill_fields={
+                        "abstract": abstract,
+                        "url": url,
+                        "publication_date": pub_date_val,
+                    },
+                    fill_null_fields={"year": year_val},
+                    max_int_fields={"cited_by_count": cited_by_count},
+                    always_fields={"title": title},
+                    touch_updated_at=False,
                 )
             else:
                 paper_id = generate_paper_id()

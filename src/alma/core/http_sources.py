@@ -264,6 +264,25 @@ _POLICIES: dict[str, SourcePolicy] = {
         max_retries=2,
         default_headers=(("Accept", "application/json"),),
     ),
+    "unpaywall": SourcePolicy(
+        name="unpaywall",
+        base_url="https://api.unpaywall.org/v2",
+        min_interval_seconds=0.12,
+        max_concurrency=1,
+        max_retries=2,
+        default_headers=(("Accept", "application/json"),),
+        auth_param_factory=lambda: (
+            {"email": get_contact_email()} if get_contact_email() else {}
+        ),
+    ),
+    "publisher": SourcePolicy(
+        name="publisher",
+        base_url="",
+        min_interval_seconds=0.5,
+        max_concurrency=1,
+        max_retries=1,
+        default_headers=(("Accept", "text/html,application/xhtml+xml"),),
+    ),
     "orcid": SourcePolicy(
         name="orcid",
         base_url="https://pub.orcid.org/v3.0",

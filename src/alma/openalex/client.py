@@ -12,13 +12,18 @@ import logging
 import sqlite3
 import re
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
 from datetime import datetime
 from difflib import SequenceMatcher
 
 import requests
 
-from alma.core.utils import normalize_doi as _normalize_doi, normalize_text as _normalize_text
+from alma.core.paper_updates import fill_only_update_paper
+from alma.core.utils import (
+    normalize_doi as _normalize_doi,
+    normalize_text as _normalize_text,
+    utcnow_iso,
+)
 from alma.openalex.http import get_client
 
 logger = logging.getLogger(__name__)
@@ -900,7 +905,11 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Opti
         year=int(year) if isinstance(year, int) or (isinstance(year, str) and year.strip().isdigit()) else None,
     )
 
-    now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+    # Canonical isoformat (no Z) — matches `core.utils.utcnow_iso` and
+    # the rest of the codebase. Avoids the half-Z / half-isoformat split
+    # that used to land in `papers.fetched_at` (Z) and `papers.updated_at`
+    # (no Z) on the same UPDATE.
+    now = utcnow_iso()
     source_id = doi or url or title
 
     if existing_paper_id:
@@ -926,31 +935,35 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Opti
                 safe_openalex_id = None
         # COALESCE each identifier so we don't clobber an already-hydrated row
         # with a bare Scholar record that re-resolved into an OpenAlex match.
-        try:
-            conn.execute(
-                """UPDATE papers SET
-                    title = COALESCE(NULLIF(?, ''), title),
-                    authors = CASE WHEN COALESCE(authors, '') = '' THEN ? ELSE authors END,
-                    year = COALESCE(year, ?),
-                    journal = CASE WHEN COALESCE(journal, '') = '' THEN ? ELSE journal END,
-                    abstract = CASE WHEN COALESCE(abstract, '') = '' THEN ? ELSE abstract END,
-                    url = CASE WHEN COALESCE(url, '') = '' THEN ? ELSE url END,
-                    doi = CASE WHEN COALESCE(doi, '') = '' AND ? IS NOT NULL THEN ? ELSE doi END,
-                    publication_date = COALESCE(NULLIF(publication_date, ''), ?),
-                    openalex_id = CASE WHEN COALESCE(openalex_id, '') = '' AND ? IS NOT NULL THEN ? ELSE openalex_id END,
-                    cited_by_count = CASE WHEN ? > COALESCE(cited_by_count, 0) THEN ? ELSE cited_by_count END,
-                    source_id = COALESCE(source_id, ?),
-                    fetched_at = ?,
-                    updated_at = ?
-                WHERE id = ?""",
-                (
-                    title, authors_str, year, journal, abstract,
-                    url, doi, doi, pub_date,
-                    safe_openalex_id, safe_openalex_id,
-                    cites, cites, source_id, now, now,
-                    existing_paper_id,
-                ),
+        def _apply(include_identifiers: bool) -> None:
+            fill: dict[str, Any] = {
+                "authors": authors_str,
+                "journal": journal,
+                "abstract": abstract,
+                "url": url,
+                "publication_date": pub_date,
+            }
+            if include_identifiers:
+                if doi is not None:
+                    fill["doi"] = doi
+                if safe_openalex_id is not None:
+                    fill["openalex_id"] = safe_openalex_id
+            fill_only_update_paper(
+                conn,
+                str(existing_paper_id),
+                fill_fields=fill,
+                fill_null_fields={"year": year, "source_id": source_id},
+                max_int_fields={"cited_by_count": cites},
+                always_fields={
+                    "title": title,
+                    "fetched_at": now,
+                    "updated_at": now,
+                },
+                touch_updated_at=False,
             )
+
+        try:
+            _apply(include_identifiers=True)
         except sqlite3.IntegrityError as exc:
             # Last-line defence: some other UNIQUE constraint fired
             # (e.g. a pre-heal URL-form row). Retry with all identifiers
@@ -964,27 +977,7 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Opti
                 doi,
                 exc,
             )
-            conn.execute(
-                """UPDATE papers SET
-                    title = COALESCE(NULLIF(?, ''), title),
-                    authors = CASE WHEN COALESCE(authors, '') = '' THEN ? ELSE authors END,
-                    year = COALESCE(year, ?),
-                    journal = CASE WHEN COALESCE(journal, '') = '' THEN ? ELSE journal END,
-                    abstract = CASE WHEN COALESCE(abstract, '') = '' THEN ? ELSE abstract END,
-                    url = CASE WHEN COALESCE(url, '') = '' THEN ? ELSE url END,
-                    publication_date = COALESCE(NULLIF(publication_date, ''), ?),
-                    cited_by_count = CASE WHEN ? > COALESCE(cited_by_count, 0) THEN ? ELSE cited_by_count END,
-                    source_id = COALESCE(source_id, ?),
-                    fetched_at = ?,
-                    updated_at = ?
-                WHERE id = ?""",
-                (
-                    title, authors_str, year, journal, abstract,
-                    url, pub_date,
-                    cites, cites, source_id, now, now,
-                    existing_paper_id,
-                ),
-            )
+            _apply(include_identifiers=False)
         paper_id = existing_paper_id
     else:
         paper_id = str(uuid.uuid4())
@@ -1032,6 +1025,13 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Opti
         authorships=authorships,
         referenced_works=referenced_works,
     )
+
+    try:
+        from alma.services.corpus_rehydrate import enqueue_pending_hydration
+
+        enqueue_pending_hydration(conn, str(paper_id))
+    except Exception as exc:
+        logger.debug("OpenAlex paper hydration enqueue skipped for %s: %s", paper_id, exc)
 
     return paper_id
 

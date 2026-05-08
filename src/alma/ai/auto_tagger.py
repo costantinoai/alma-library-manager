@@ -35,15 +35,6 @@ except ImportError:
     _SKLEARN_AVAILABLE = False
 
 
-def _cosine_similarity_np(a: "np.ndarray", b: "np.ndarray") -> float:
-    """Compute cosine similarity between two 1-D numpy vectors."""
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
-
-
 def _get_existing_tags(
     paper_id: str, conn: sqlite3.Connection,
 ) -> set[str]:
