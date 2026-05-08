@@ -1200,7 +1200,7 @@ def backfill_s2_vectors(
 
 @router.post("/title-resolution-sweep", response_model=ComputeEmbeddingsResponse)
 def title_resolution_sweep(
-    limit: int = Query(50, ge=1, le=50),
+    limit: int = Query(500, ge=1, le=500),
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ) -> ComputeEmbeddingsResponse:
@@ -1332,8 +1332,15 @@ def _run_embedding_computation(job_id: str, scope: str = "missing_stale") -> Non
     )
 
 
-def _run_s2_vector_backfill(job_id: str, limit: int = 200) -> None:
-    """Background wrapper for S2/SPECTER2 vector backfill."""
+def _run_s2_vector_backfill(
+    job_id: str, limit: int = 200, continuation_depth: int = 0
+) -> None:
+    """Background wrapper for S2/SPECTER2 vector backfill.
+
+    ``continuation_depth`` is propagated by self-rescheduling
+    continuations queued from inside the runner — see
+    ``alma.services.s2_vectors.run_s2_vector_backfill``.
+    """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.s2_vectors import run_s2_vector_backfill
 
@@ -1343,11 +1350,19 @@ def _run_s2_vector_backfill(job_id: str, limit: int = 200) -> None:
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,
+        continuation_depth=continuation_depth,
     )
 
 
-def _run_title_resolution_sweep(job_id: str, limit: int = 50) -> None:
-    """Background wrapper for the title-resolution sweep."""
+def _run_title_resolution_sweep(
+    job_id: str, limit: int = 500, continuation_depth: int = 0
+) -> None:
+    """Background wrapper for the title-resolution sweep.
+
+    ``continuation_depth`` is propagated by self-rescheduling
+    continuations queued from inside the runner — see
+    ``alma.services.title_resolution.run_title_resolution_sweep``.
+    """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.title_resolution import run_title_resolution_sweep
 
@@ -1357,4 +1372,5 @@ def _run_title_resolution_sweep(job_id: str, limit: int = 50) -> None:
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,
+        continuation_depth=continuation_depth,
     )

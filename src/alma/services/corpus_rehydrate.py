@@ -1857,29 +1857,18 @@ def _resolve_identifiers_via_title(
         local_year = None
 
     from alma.services.title_resolution import (
-        TITLE_RESOLUTION_JACCARD_THRESHOLD,
         TITLE_RESOLUTION_MAX_RESULTS,
         TITLE_RESOLUTION_QUERY_MAX_CHARS,
-        TITLE_RESOLUTION_YEAR_DELTA,
-        _jaccard,
-        _title_tokens,
+        _accept_match,
     )
 
-    local_tokens = _title_tokens(title)
     query_text = title[:TITLE_RESOLUTION_QUERY_MAX_CHARS]
 
     def _accepts(cand_title: str, cand_year: int | None) -> tuple[bool, float]:
-        cand_tokens = _title_tokens(cand_title or "")
-        score = _jaccard(local_tokens, cand_tokens)
-        if score < TITLE_RESOLUTION_JACCARD_THRESHOLD:
-            return (False, score)
-        if (
-            local_year is not None
-            and cand_year is not None
-            and abs(local_year - cand_year) > TITLE_RESOLUTION_YEAR_DELTA
-        ):
-            return (False, score)
-        return (True, score)
+        # Thin closure over the canonical helper so the per-paper
+        # local_title / local_year don't have to be threaded through
+        # every call site below.
+        return _accept_match(title, local_year, cand_title or "", cand_year)
 
     fields_filled: list[str] = []
     matched_via: str | None = None

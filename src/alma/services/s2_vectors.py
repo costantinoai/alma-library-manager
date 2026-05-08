@@ -47,6 +47,16 @@ TERMINAL_FETCH_STATUSES = {
     "bad_local_doi",
 }
 
+# Per outer-run cap on papers processed. With chunk_size=250 and S2's
+# 1.05 s/req gate, ~6 batches × 2.5 s ≈ 15–30 s wall-clock per outer
+# run — short enough that any single uvicorn `--reload` only loses one
+# chunk's worth of work, and the next continuation picks up cleanly.
+_PER_RUN_PAPERS = 1500
+# Self-rescheduling depth cap. 50 outer runs × 1500 papers = 75 000
+# papers per click — generous and bounded so a stuck loop can't run
+# away.
+_MAX_CONTINUATION_DEPTH = 50
+
 
 def _doi_from_s2(row: dict) -> str:
     """Return the canonical-lookup DOI from an S2 paper's externalIds."""
@@ -300,8 +310,15 @@ def run_s2_vector_backfill(
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
+    continuation_depth: int = 0,
 ) -> None:
-    """Fetch API-sourced S2 SPECTER2 vectors for known DOI/S2-backed papers."""
+    """Fetch API-sourced S2 SPECTER2 vectors for known DOI/S2-backed papers.
+
+    Self-rescheduling: ``limit`` is the SESSION cap (max papers across
+    all continuations of this user click); each outer run processes at
+    most ``_PER_RUN_PAPERS`` papers and queues a continuation when more
+    eligible candidates remain. See module docstring.
+    """
     from alma.api.deps import open_db_connection
 
     conn = open_db_connection()
@@ -309,6 +326,10 @@ def run_s2_vector_backfill(
     try:
         _ensure_fetch_status_table(conn)
         limit = max(1, min(int(limit or 200), 5000))
+        # Per outer-run cap. Reload-resilience: each chunk is ~30 s
+        # wall, so any single `--reload` only loses one chunk; the
+        # continuation picks up off the eligibility query.
+        inner_limit = min(limit, _PER_RUN_PAPERS)
         # Skip a paper only if it already has an *S2-sourced* vector for
         # this model. Locally-computed vectors (source='local', and any
         # other non-S2 source) are deliberately treated as upgradeable —
@@ -336,7 +357,7 @@ def run_s2_vector_backfill(
             AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
             LIMIT ?
             """,
-            (model, FETCH_SOURCE, model, FETCH_SOURCE, limit),
+            (model, FETCH_SOURCE, model, FETCH_SOURCE, inner_limit),
         ).fetchall()
 
         total = len(rows)
@@ -736,44 +757,118 @@ def run_s2_vector_backfill(
             },
         )
 
-        # Auto-chain to the local SPECTER2 fill only when this run
-        # was *not* started by a manual Settings click. The per-button
-        # contract there is "do exactly what the label says": clicking
-        # "Fetch Missing S2 Vectors" must not silently start a heavy
-        # local compute job. Auto-chain still fires for the per-insert
-        # / scheduler paths where there's no user click to confuse.
-        try:
-            from alma.api.scheduler import get_job_trigger_source
-            from alma.services.embedding_chain import schedule_post_s2_chain
+        # Self-rescheduling decision. Queue a continuation when:
+        # - we made progress this run (at least one paper got a
+        #   definitive state — vector stored or terminal status
+        #   stamped; pure-error runs from a 429 storm short-circuit
+        #   so the throttle can drain)
+        # - more eligible candidates remain in the DB
+        # - we still have session budget left (limit minus what we
+        #   just processed)
+        # - depth cap hasn't tripped (runaway guard)
+        # - not cancelled
+        from alma.services.embedding_chain import _count_s2_fetch_candidates
 
-            trigger_source = get_job_trigger_source(job_id) or ""
-            if trigger_source == "user":
-                add_job_log(
-                    job_id,
-                    "Skipped post-S2 chain: user-triggered run",
-                    step="chain_post_s2_skipped",
-                    data={"trigger_source": trigger_source},
-                )
-            else:
-                chain = schedule_post_s2_chain(conn, trigger_reason="post_s2_fetch")
-                if chain.get("scheduled_jobs"):
-                    chain_id = str(chain.get("chain_id") or "").strip()
-                    if chain_id:
-                        from alma.api.scheduler import set_job_status
+        made_progress = (
+            stored + missing + unmatched + lookup_failures + bad_local_doi
+        ) > 0
+        remaining_session_budget = max(0, limit - processed)
+        remaining_eligible = _count_s2_fetch_candidates(conn)
+        will_continue = (
+            not is_cancellation_requested(job_id)
+            and made_progress
+            and remaining_session_budget > 0
+            and remaining_eligible > 0
+            and continuation_depth < _MAX_CONTINUATION_DEPTH
+        )
 
-                        set_job_status(
-                            job_id,
-                            chain_id=chain_id,
-                            chain_step="s2_fetch",
-                        )
+        if will_continue:
+            # Defer the chain hook to the final continuation; queue
+            # the next chunk with the parent's trigger_source so the
+            # chain remains a single logical user click.
+            from uuid import uuid4
+
+            from alma.api.scheduler import (
+                get_job_trigger_source,
+                schedule_immediate,
+                set_job_status as _set_job_status,
+            )
+            # Lazy import the wrapper to avoid the routes ↔ services
+            # cycle (routes/ai.py imports this module).
+            from alma.api.routes.ai import _run_s2_vector_backfill
+
+            parent_source = get_job_trigger_source(job_id) or "auto:continuation"
+            new_job_id = f"backfill_s2_vectors_{uuid4().hex[:8]}"
+            _set_job_status(
+                new_job_id,
+                status="queued",
+                operation_key="ai.backfill_s2_vectors",
+                trigger_source=parent_source,
+                message=(
+                    f"S2/SPECTER2 vector continuation queued "
+                    f"({remaining_eligible} eligible, "
+                    f"depth {continuation_depth + 1})"
+                ),
+                started_at=datetime.utcnow().isoformat(),
+            )
+            schedule_immediate(
+                new_job_id,
+                _run_s2_vector_backfill,
+                new_job_id,
+                remaining_session_budget,
+                continuation_depth + 1,
+            )
+            add_job_log(
+                job_id,
+                "S2 vector backfill continuation queued",
+                step="continuation_queued",
+                data={
+                    "next_job_id": new_job_id,
+                    "remaining_eligible": remaining_eligible,
+                    "remaining_session_budget": remaining_session_budget,
+                    "depth": continuation_depth + 1,
+                    "trigger_source": parent_source,
+                },
+            )
+        else:
+            # Final run of this user click. Fire the chain hook only
+            # when *not* a manual Settings run — the per-button
+            # contract is "do exactly what the label says." Auto /
+            # per-insert / scheduler paths chain normally.
+            try:
+                from alma.api.scheduler import get_job_trigger_source
+                from alma.services.embedding_chain import schedule_post_s2_chain
+
+                trigger_source = get_job_trigger_source(job_id) or ""
+                if trigger_source == "user":
                     add_job_log(
                         job_id,
-                        "Chained local SPECTER2 fill auto-scheduled",
-                        step="chain_post_s2",
-                        data=chain,
+                        "Skipped post-S2 chain: user-triggered run",
+                        step="chain_post_s2_skipped",
+                        data={"trigger_source": trigger_source},
                     )
-        except Exception as exc:
-            logger.debug("post-S2 chain skipped: %s", exc)
+                else:
+                    chain = schedule_post_s2_chain(
+                        conn, trigger_reason="post_s2_fetch"
+                    )
+                    if chain.get("scheduled_jobs"):
+                        chain_id = str(chain.get("chain_id") or "").strip()
+                        if chain_id:
+                            from alma.api.scheduler import set_job_status
+
+                            set_job_status(
+                                job_id,
+                                chain_id=chain_id,
+                                chain_step="s2_fetch",
+                            )
+                        add_job_log(
+                            job_id,
+                            "Chained local SPECTER2 fill auto-scheduled",
+                            step="chain_post_s2",
+                            data=chain,
+                        )
+            except Exception as exc:
+                logger.debug("post-S2 chain skipped: %s", exc)
     except Exception as exc:
         logger.exception("S2 vector fetch failed: %s", exc)
         set_job_status(

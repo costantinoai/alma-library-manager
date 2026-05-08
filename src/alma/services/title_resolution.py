@@ -1,23 +1,43 @@
-"""Title-search-based identity resolution for Semantic Scholar papers.
+"""Title-search-based identity resolution. OpenAlex first, S2 fallback.
 
-Papers without a working ``semantic_scholar_id`` / DOI never receive a
-SPECTER2 vector — ``run_s2_vector_backfill`` either skips them outright
-(no identity at all) or stamps them ``unmatched`` / ``bad_local_doi``
-after S2 returns nothing for the lookup we tried.
+Two-tier strategy (revised 2026-05-08):
 
-This sweep covers the gap. For each paper with a title but no good
-identity, we call Semantic Scholar ``/paper/search`` with the local
-title and accept the highest-Jaccard candidate above a tight threshold.
-On match, we fill the resolved s2_id / DOI / abstract back into the
-``papers`` row (fill-only — never overwrite a curated value). The
-trigger ``papers_clear_fetch_status_on_id_change`` then drops the
-stale ``unmatched`` ledger row, and the next S2 vector sweep picks the
-paper up cleanly.
+1. **OpenAlex** ``/works?search=<title>`` first. The polite pool runs
+   at ~10 RPS — 10× S2's ``/paper/search`` cap — and OpenAlex indexes
+   a much larger long tail than S2 for non-STEM venues. On a
+   high-confidence Jaccard match we fill ``openalex_id`` and ``doi``
+   back into ``papers`` (fill-only — never overwrite a curated value).
+   The next ``/paper/batch`` sweep then picks up the SPECTER2 vector
+   cleanly using the new DOI.
+2. **S2 ``/paper/search`` fallback** only when OpenAlex misses or
+   returns nothing above the Jaccard + year-delta threshold. Capped
+   at ``S2_FALLBACK_PER_RUN_BUDGET`` (50 calls per outer run — the
+   S2 1 RPS reality) so an OpenAlex-cold corpus can't blow S2's
+   quota in one shot. Free-data side effect when S2 hits: the FIELDS
+   projection includes SPECTER2 embeddings, so the vector is
+   captured here too — same response, no extra HTTP.
 
-Free-data side effect: ``/paper/search`` already returns SPECTER2
-embeddings in the FIELDS projection. When present we capture the
-vector here too — same response, no extra HTTP cost — so we don't
-have to refetch the same paper from ``/paper/batch`` next sweep.
+Eligibility (the SELECT): papers with a non-empty title that either
+lack a usable identity (no ``semantic_scholar_id`` and no DOI) or
+carry a terminal ``unmatched`` / ``bad_local_doi`` fetch_status row
+for the active SPECTER2 model.
+
+Self-rescheduling: each invocation processes at most
+``TITLE_RESOLUTION_PER_RUN_BUDGET`` (500) papers. When eligible
+candidates remain after this run AND we made progress AND we weren't
+cancelled AND ``continuation_depth < _MAX_CONTINUATION_DEPTH``, the
+runner queues a fresh continuation job with the same ``operation_key``
+and the parent's ``trigger_source``. One user click can therefore
+drain a backlog of arbitrary size without being killed by a uvicorn
+reload — each outer chunk is short (~1 minute), and the next
+continuation picks up where the eligibility query left off.
+
+The trigger ``papers_clear_fetch_status_on_id_change`` (defined in
+``api/deps.py``) drops the stale ``unmatched`` ledger row when DOI
+or ``semantic_scholar_id`` changes; we also explicitly clear the
+row at the end of every successful resolve as a belt-and-suspenders
+for the openalex_id-only case (the trigger keys on doi + s2_id, not
+openalex_id).
 """
 
 from __future__ import annotations
@@ -26,29 +46,38 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.utils import canonical_lookup_doi
 from alma.core.vector_blob import encode_vector
 from alma.discovery import semantic_scholar
+from alma.openalex.client import _normalize_openalex_work_id
 
 logger = logging.getLogger(__name__)
 
 _TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
-# Match threshold. Jaccard token-set on lowercased alpha-numeric tokens.
-# Tight enough that a clean title-only match almost certainly identifies
-# the same work, while leaving room for differing punctuation, articles,
-# or acronym expansions in the search response.
+# Match threshold. Jaccard token-set on lowercased alpha-numeric
+# tokens. Tight enough that a clean title-only match almost certainly
+# identifies the same work, while leaving room for differing
+# punctuation, articles, or acronym expansions.
 TITLE_RESOLUTION_JACCARD_THRESHOLD = 0.92
 TITLE_RESOLUTION_YEAR_DELTA = 1
 TITLE_RESOLUTION_MAX_RESULTS = 3
 TITLE_RESOLUTION_QUERY_MAX_CHARS = 200
-# Per-run cap on /paper/search calls. S2 throttles /paper/search to
-# ~1 RPS even with an API key, so 50 calls = ~52 s at the floor;
-# larger backlogs roll over to the next sweep.
-TITLE_RESOLUTION_PER_RUN_BUDGET = 50
+# Per outer-run cap on OpenAlex `/works?search=` calls — the polite
+# pool's ~10 RPS makes 500 calls land in ~50 s wall-clock.
+TITLE_RESOLUTION_PER_RUN_BUDGET = 500
+# Per outer-run cap on S2 `/paper/search` fallback calls — the
+# endpoint runs at 1 RPS even with an API key, so 50 calls = ~52 s
+# at the floor. An OpenAlex-cold corpus that misses every OpenAlex
+# call still can't blow S2's quota in one outer run.
+S2_FALLBACK_PER_RUN_BUDGET = 50
+# Self-rescheduling depth cap. 50 outer runs × 500 papers = 25 000
+# papers per click — generous for any realistic backlog and bounded
+# so a stuck loop can't run away.
+_MAX_CONTINUATION_DEPTH = 50
 
 
 def _title_tokens(title: str) -> frozenset[str]:
@@ -59,43 +88,197 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     if not a or not b:
         return 0.0
     union = a | b
-    if not union:
-        return 0.0
-    return len(a & b) / len(union)
+    return len(a & b) / len(union) if union else 0.0
 
 
-def _resolve_one_paper(
+def _accept_match(
+    local_title: str,
+    local_year: Optional[int],
+    cand_title: str,
+    cand_year: Optional[int],
+) -> tuple[bool, float]:
+    """Score a candidate by Jaccard + year-delta. Returns (accept, score).
+
+    Public helper — also imported by ``corpus_rehydrate.py`` so the
+    rehydration-side title-resolution flow uses the same threshold
+    semantics as the standalone sweep.
+    """
+    if not cand_title:
+        return False, 0.0
+    score = _jaccard(_title_tokens(local_title), _title_tokens(cand_title))
+    if score < TITLE_RESOLUTION_JACCARD_THRESHOLD:
+        return False, score
+    if (
+        local_year is not None
+        and cand_year is not None
+        and abs(local_year - cand_year) > TITLE_RESOLUTION_YEAR_DELTA
+    ):
+        return False, score
+    return True, score
+
+
+def _pick_best_candidate(
+    candidates: list[dict],
+    *,
+    title: str,
+    local_year: Optional[int],
+    title_key: str,
+    year_key: str,
+) -> tuple[Optional[dict], float]:
+    """Return ``(best_candidate, score)`` from a candidate list.
+
+    ``title_key`` and ``year_key`` adapt for the source-specific shapes
+    (OpenAlex: ``display_name`` / ``publication_year``; S2: ``title`` /
+    ``year``). Returns ``(None, 0.0)`` when nothing clears the
+    Jaccard + year-delta thresholds.
+    """
+    best: Optional[dict] = None
+    best_score = 0.0
+    for cand in candidates:
+        cand_title = str(cand.get(title_key) or "").strip()
+        cand_year_raw = cand.get(year_key)
+        try:
+            cand_year = int(cand_year_raw) if cand_year_raw is not None else None
+        except (TypeError, ValueError):
+            cand_year = None
+        accept, score = _accept_match(title, local_year, cand_title, cand_year)
+        if accept and score > best_score:
+            best = cand
+            best_score = score
+    return best, best_score
+
+
+def _outcome(
+    *,
+    resolved: bool = False,
+    vector_stored: bool = False,
+    jaccard: float = 0.0,
+    reason: str,
+    source: str,
+) -> dict:
+    """Build a uniformly-shaped outcome dict for a single resolve attempt."""
+    return {
+        "resolved": resolved,
+        "vector_stored": vector_stored,
+        "jaccard": jaccard,
+        "reason": reason,
+        "source": source,
+    }
+
+
+# Eligibility predicate shared by the runner's SELECT and the
+# remaining-count helper. Two ? placeholders for the ON clause
+# (model, source) and two more for the NOT EXISTS subquery
+# (model, source) — callers must bind those four positionally
+# whenever they interpolate this fragment.
+_ELIGIBILITY_FROM_WHERE = """
+        FROM papers p
+        LEFT JOIN publication_embedding_fetch_status fs
+          ON fs.paper_id = p.id
+         AND fs.model = ?
+         AND fs.source = ?
+        WHERE NULLIF(TRIM(p.title), '') IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM publication_embeddings pe
+              WHERE pe.paper_id = p.id
+                AND pe.model = ?
+                AND pe.source = ?
+          )
+          AND (
+              COALESCE(fs.status, '') IN ('unmatched', 'bad_local_doi')
+              OR (
+                  COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') = ''
+                  AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''
+              )
+          )
+"""
+
+
+def _try_openalex_match(
     conn: sqlite3.Connection,
     *,
     row: sqlite3.Row,
+    title: str,
+    local_year: Optional[int],
+) -> dict:
+    """Try OpenAlex ``/works?search=`` for one paper.
+
+    Returns ``{"resolved": bool, "vector_stored": bool, "jaccard": float,
+    "reason": str, "source": "openalex"}``. On accept, fill-only writes
+    the resolved ``openalex_id`` and ``doi`` back to the local row.
+    OpenAlex doesn't expose SPECTER2 embeddings, so ``vector_stored``
+    is always False on this path — the next vector sweep handles it.
+    """
+    from alma.core.paper_updates import fill_only_update_paper
+    from alma.library.enrichment import _search_work_candidates
+
+    paper_id = str(row["id"])
+
+    try:
+        candidates = _search_work_candidates(
+            title[:TITLE_RESOLUTION_QUERY_MAX_CHARS],
+            per_page=TITLE_RESOLUTION_MAX_RESULTS,
+        )
+    except Exception as exc:
+        logger.debug("OpenAlex title search failed for %s: %s", paper_id, exc)
+        return _outcome(reason="openalex_search_error", source="openalex")
+
+    if not candidates:
+        return _outcome(reason="openalex_no_results", source="openalex")
+
+    best, best_score = _pick_best_candidate(
+        candidates,
+        title=title,
+        local_year=local_year,
+        title_key="display_name",
+        year_key="publication_year",
+    )
+    if best is None:
+        return _outcome(
+            reason="openalex_no_match_above_threshold", source="openalex"
+        )
+
+    oa_id_raw = str(best.get("id") or "").strip()
+    oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
+    new_doi = canonical_lookup_doi(str(best.get("doi") or "")) or ""
+
+    fill_fields: dict[str, str] = {}
+    if oa_id:
+        fill_fields["openalex_id"] = oa_id
+    if new_doi:
+        fill_fields["doi"] = new_doi
+    if fill_fields:
+        fill_only_update_paper(conn, paper_id, fill_fields=fill_fields)
+
+    return _outcome(
+        resolved=True,
+        jaccard=round(best_score, 4),
+        reason="openalex_title_match",
+        source="openalex",
+    )
+
+
+def _try_s2_search_match(
+    conn: sqlite3.Connection,
+    *,
+    row: sqlite3.Row,
+    title: str,
+    local_year: Optional[int],
     model: str,
     job_id: str,
     add_job_log: Callable[..., None],
 ) -> dict:
-    """One ``/paper/search`` title-resolution attempt for one paper.
+    """Try S2 ``/paper/search`` for one paper.
 
-    Returns a dict with keys ``resolved`` (bool), ``vector_stored``
-    (bool), ``jaccard`` (float), and ``reason`` (str). Side effects
-    on a successful match:
-
-    - fill-only writes of ``semantic_scholar_id`` / ``doi`` / ``abstract``
-    - optional fill-only insert of the SPECTER2 vector when the search
-      response carries it (free data — no extra HTTP call)
-    - explicit clearance of the stale fetch_status row in case the
-      trigger ``papers_clear_fetch_status_on_id_change`` didn't fire
-      (e.g. local already had the right DOI but no s2_id).
+    Returns ``{"resolved": bool, "vector_stored": bool, "jaccard": float,
+    "reason": str, "source": "s2"}``. On accept, fill-only writes the
+    resolved ``semantic_scholar_id`` / ``doi`` / ``abstract``. Captures
+    the SPECTER2 vector when the search response carries it (free
+    data, no extra HTTP).
     """
     from alma.core.paper_updates import fill_only_update_paper
 
     paper_id = str(row["id"])
-    title = str(row["title"] or "").strip()
-    if not title:
-        return {"resolved": False, "vector_stored": False, "jaccard": 0.0, "reason": "no_title"}
-
-    try:
-        local_year = int(row["year"]) if row["year"] is not None else None
-    except (TypeError, ValueError):
-        local_year = None
 
     try:
         candidates = semantic_scholar.search_papers(
@@ -108,69 +291,42 @@ def _resolve_one_paper(
         # SELECT picks the row up again on the next sweep.
         add_job_log(
             job_id,
-            "Title resolution deferred by rate limit",
+            "S2 fallback deferred by rate limit",
             level="WARNING",
-            step="rate_limited",
+            step="s2_rate_limited",
             data={
                 "paper_id": paper_id,
                 "status_code": getattr(exc, "status_code", None),
             },
         )
-        return {"resolved": False, "vector_stored": False, "jaccard": 0.0, "reason": "rate_limited"}
+        return _outcome(reason="rate_limited", source="s2")
     except Exception as exc:
         add_job_log(
             job_id,
-            "Title resolution raised an exception",
+            "S2 fallback raised an exception",
             level="WARNING",
-            step="search_error",
+            step="s2_search_error",
             data={"paper_id": paper_id, "error": str(exc)},
         )
-        return {"resolved": False, "vector_stored": False, "jaccard": 0.0, "reason": "search_error"}
+        return _outcome(reason="s2_search_error", source="s2")
 
     if not candidates:
-        return {"resolved": False, "vector_stored": False, "jaccard": 0.0, "reason": "no_results"}
+        return _outcome(reason="s2_no_results", source="s2")
 
-    local_tokens = _title_tokens(title)
-    best = None
-    best_jaccard = 0.0
-    for cand in candidates:
-        cand_title = str(cand.get("title") or "").strip()
-        if not cand_title:
-            continue
-        cand_tokens = _title_tokens(cand_title)
-        jaccard = _jaccard(local_tokens, cand_tokens)
-        if jaccard < TITLE_RESOLUTION_JACCARD_THRESHOLD:
-            continue
-        cand_year_raw = cand.get("year")
-        try:
-            cand_year = int(cand_year_raw) if cand_year_raw is not None else None
-        except (TypeError, ValueError):
-            cand_year = None
-        if (
-            local_year is not None
-            and cand_year is not None
-            and abs(local_year - cand_year) > TITLE_RESOLUTION_YEAR_DELTA
-        ):
-            continue
-        if jaccard > best_jaccard:
-            best = cand
-            best_jaccard = jaccard
-
+    best, best_score = _pick_best_candidate(
+        candidates,
+        title=title,
+        local_year=local_year,
+        title_key="title",
+        year_key="year",
+    )
     if best is None:
-        return {
-            "resolved": False,
-            "vector_stored": False,
-            "jaccard": 0.0,
-            "reason": "no_match_above_threshold",
-        }
+        return _outcome(reason="s2_no_match_above_threshold", source="s2")
 
     new_s2_id = str(best.get("semantic_scholar_id") or "").strip()
     new_doi = canonical_lookup_doi(str(best.get("doi") or "")) or ""
     new_abstract = str(best.get("abstract") or "").strip()
 
-    # Fill-only writes: never overwrite a hand-curated DOI just because
-    # S2 returned a different one. The id-change trigger fires only if
-    # a column actually changed.
     fill_only_update_paper(
         conn,
         paper_id,
@@ -208,13 +364,27 @@ def _resolve_one_paper(
             vector_stored = cursor.rowcount > 0
         except Exception as exc:
             logger.warning(
-                "Title-resolution vector store failed for %s: %s", paper_id, exc
+                "S2 fallback vector store failed for %s: %s", paper_id, exc
             )
-            vector_stored = False
 
-    # Belt-and-suspenders: if neither id changed (so the trigger didn't
-    # fire) the leftover terminal fetch_status row would still trap the
-    # paper. Clear it explicitly.
+    return _outcome(
+        resolved=True,
+        vector_stored=vector_stored,
+        jaccard=round(best_score, 4),
+        reason="s2_title_match",
+        source="s2",
+    )
+
+
+def _clear_terminal_status_row(
+    conn: sqlite3.Connection, *, paper_id: str, model: str
+) -> None:
+    """Belt-and-suspenders: drop any stale terminal status row.
+
+    The trigger ``papers_clear_fetch_status_on_id_change`` fires on
+    DOI / s2_id changes, so the openalex_id-only resolution path needs
+    explicit cleanup. Cheap (single DELETE keyed on PK).
+    """
     conn.execute(
         """
         DELETE FROM publication_embedding_fetch_status
@@ -223,62 +393,57 @@ def _resolve_one_paper(
         (paper_id, model, EMBEDDING_SOURCE_SEMANTIC_SCHOLAR),
     )
 
-    return {
-        "resolved": True,
-        "vector_stored": vector_stored,
-        "jaccard": round(best_jaccard, 4),
-        "reason": "title_match",
-    }
+
+def _count_remaining_eligible(conn: sqlite3.Connection, model: str) -> int:
+    """Count papers still eligible for title resolution after this run.
+
+    Used by the self-rescheduling decision at the end of each outer
+    run. Mirrors the eligibility predicate in the runner's SELECT
+    minus the LIMIT.
+    """
+    row = conn.execute(
+        f"SELECT COUNT(*) AS c {_ELIGIBILITY_FROM_WHERE}",
+        (
+            model,
+            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+            model,
+            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+        ),
+    ).fetchone()
+    return int(row["c"]) if row else 0
 
 
 def run_title_resolution_sweep(
     job_id: str,
     *,
-    limit: int = 50,
+    limit: int = 500,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
+    continuation_depth: int = 0,
 ) -> None:
-    """Resolve paper identity via Semantic Scholar ``/paper/search``.
+    """Resolve paper identity via OpenAlex (first) then S2 (fallback).
 
     Eligibility: papers with a non-empty title that either lack a
-    usable identity (no ``semantic_scholar_id`` and no DOI) or carry a
-    terminal ``unmatched`` / ``bad_local_doi`` fetch_status row for the
-    active SPECTER2 model. Capped at
-    ``min(limit, TITLE_RESOLUTION_PER_RUN_BUDGET)`` actual
-    ``/paper/search`` calls per run; the first 429 short-circuits the
-    rest of the run so we don't keep firing into a known-overloaded
-    upstream.
+    usable identity (no ``semantic_scholar_id`` and no DOI) or carry
+    a terminal ``unmatched`` / ``bad_local_doi`` fetch_status row for
+    the active SPECTER2 model. Bounded per outer run by
+    ``min(limit, TITLE_RESOLUTION_PER_RUN_BUDGET)`` papers
+    (OpenAlex calls) and ``S2_FALLBACK_PER_RUN_BUDGET`` (S2 calls).
+    Self-reschedules a continuation job when more remain — see module
+    docstring for the rationale.
     """
     from alma.api.deps import open_db_connection
 
     conn = open_db_connection()
     model = semantic_scholar.S2_SPECTER2_MODEL
     try:
-        budget = max(1, min(int(limit or 50), TITLE_RESOLUTION_PER_RUN_BUDGET))
+        budget = max(1, min(int(limit or 500), TITLE_RESOLUTION_PER_RUN_BUDGET))
 
         rows = conn.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.year, p.doi, p.semantic_scholar_id
-            FROM papers p
-            LEFT JOIN publication_embedding_fetch_status fs
-              ON fs.paper_id = p.id
-             AND fs.model = ?
-             AND fs.source = ?
-            WHERE NULLIF(TRIM(p.title), '') IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM publication_embeddings pe
-                  WHERE pe.paper_id = p.id
-                    AND pe.model = ?
-                    AND pe.source = ?
-              )
-              AND (
-                  COALESCE(fs.status, '') IN ('unmatched', 'bad_local_doi')
-                  OR (
-                      COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') = ''
-                      AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''
-                  )
-              )
+            {_ELIGIBILITY_FROM_WHERE}
             LIMIT ?
             """,
             (
@@ -307,21 +472,29 @@ def run_title_resolution_sweep(
             status="running",
             processed=0,
             total=total,
-            message=f"Resolving identity for {total} papers via S2 /paper/search",
+            message=(
+                f"Resolving identity for {total} papers "
+                f"(OpenAlex first, S2 fallback)"
+            ),
         )
-
         add_job_log(
             job_id,
             "Prepared title-resolution sweep",
             step="prepare",
-            data={"papers": total, "budget": budget},
+            data={
+                "papers": total,
+                "openalex_budget": budget,
+                "s2_fallback_budget": S2_FALLBACK_PER_RUN_BUDGET,
+                "continuation_depth": continuation_depth,
+            },
         )
 
         processed = 0
-        resolved = 0
+        resolved_via_openalex = 0
+        resolved_via_s2 = 0
         vectors_captured = 0
-        errors = 0
-        rate_limited = False
+        s2_fallback_calls = 0
+        s2_rate_limited = False
 
         for row in rows:
             if is_cancellation_requested(job_id):
@@ -334,30 +507,56 @@ def run_title_resolution_sweep(
                     finished_at=datetime.utcnow().isoformat(),
                 )
                 return
-            if rate_limited:
-                # Don't keep firing into a rate-limited /paper/search;
-                # let the adaptive throttle drain. Remaining rows roll
-                # over to the next sweep automatically.
-                break
 
-            outcome = _resolve_one_paper(
-                conn,
-                row=row,
-                model=model,
-                job_id=job_id,
-                add_job_log=add_job_log,
+            paper_id = str(row["id"])
+            title = str(row["title"] or "").strip()
+            try:
+                local_year = int(row["year"]) if row["year"] is not None else None
+            except (TypeError, ValueError):
+                local_year = None
+
+            if not title:
+                processed += 1
+                continue
+
+            outcome = _try_openalex_match(
+                conn, row=row, title=title, local_year=local_year,
             )
+
+            # S2 fallback only when OpenAlex didn't resolve. Bounded by
+            # S2_FALLBACK_PER_RUN_BUDGET + the rate-limit short-circuit.
+            # Skip silently when neither condition allows; the next
+            # sweep retries.
+            if not outcome["resolved"]:
+                if (
+                    not s2_rate_limited
+                    and s2_fallback_calls < S2_FALLBACK_PER_RUN_BUDGET
+                ):
+                    s2_fallback_calls += 1
+                    s2_outcome = _try_s2_search_match(
+                        conn,
+                        row=row,
+                        title=title,
+                        local_year=local_year,
+                        model=model,
+                        job_id=job_id,
+                        add_job_log=add_job_log,
+                    )
+                    if s2_outcome["reason"] == "rate_limited":
+                        s2_rate_limited = True
+                    elif s2_outcome["resolved"]:
+                        outcome = s2_outcome
+
             processed += 1
-            if outcome["reason"] == "rate_limited":
-                rate_limited = True
-                continue
-            if outcome["reason"] == "search_error":
-                errors += 1
-                continue
+
             if outcome["resolved"]:
-                resolved += 1
+                if outcome["source"] == "openalex":
+                    resolved_via_openalex += 1
+                else:
+                    resolved_via_s2 += 1
                 if outcome["vector_stored"]:
                     vectors_captured += 1
+                _clear_terminal_status_row(conn, paper_id=paper_id, model=model)
                 conn.commit()
 
             set_job_status(
@@ -365,47 +564,111 @@ def run_title_resolution_sweep(
                 status="running",
                 processed=processed,
                 total=total,
-                errors=errors,
                 message=(
-                    f"Title resolution: resolved {resolved}, "
-                    f"vectors captured {vectors_captured}, errors {errors}"
+                    f"Title resolution: openalex={resolved_via_openalex}, "
+                    f"s2_fallback={resolved_via_s2}, "
+                    f"vectors={vectors_captured}"
                 ),
             )
 
         conn.commit()
+
+        # Self-rescheduling decision. Queue a continuation when:
+        # - we made progress (avoid infinite loops on a stuck corpus)
+        # - more eligible candidates remain (work to do)
+        # - depth cap not tripped (runaway guard)
+        # - not cancelled (don't re-fire after Cancel)
+        resolved = resolved_via_openalex + resolved_via_s2
+        remaining = _count_remaining_eligible(conn, model)
+        cancelled = is_cancellation_requested(job_id)
+        will_continue = (
+            not cancelled
+            and resolved > 0
+            and remaining > 0
+            and continuation_depth < _MAX_CONTINUATION_DEPTH
+        )
+
+        result_data: dict = {
+            "processed": processed,
+            "resolved_via_openalex": resolved_via_openalex,
+            "resolved_via_s2_fallback": resolved_via_s2,
+            "vectors_captured": vectors_captured,
+            "s2_fallback_calls": s2_fallback_calls,
+            "s2_rate_limited": s2_rate_limited,
+            "remaining_eligible": remaining,
+            "continuation_depth": continuation_depth,
+            "model": model,
+        }
+
+        if will_continue:
+            from uuid import uuid4
+
+            from alma.api.scheduler import (
+                get_job_trigger_source,
+                schedule_immediate,
+                set_job_status as _set_job_status,
+            )
+            # Lazy import the route wrapper to avoid the routes ↔
+            # services cycle (routes/ai.py imports this module).
+            from alma.api.routes.ai import _run_title_resolution_sweep
+
+            parent_source = get_job_trigger_source(job_id) or "auto:continuation"
+            new_job_id = f"title_resolution_{uuid4().hex[:8]}"
+            _set_job_status(
+                new_job_id,
+                status="queued",
+                operation_key="ai.title_resolution_sweep",
+                trigger_source=parent_source,
+                message=(
+                    f"Title resolution continuation queued "
+                    f"({remaining} eligible, depth {continuation_depth + 1})"
+                ),
+                started_at=datetime.utcnow().isoformat(),
+            )
+            schedule_immediate(
+                new_job_id,
+                _run_title_resolution_sweep,
+                new_job_id,
+                budget,
+                continuation_depth + 1,
+            )
+            result_data["continuation_job_id"] = new_job_id
+            add_job_log(
+                job_id,
+                "Title resolution continuation queued",
+                step="continuation_queued",
+                data={
+                    "next_job_id": new_job_id,
+                    "remaining": remaining,
+                    "depth": continuation_depth + 1,
+                    "trigger_source": parent_source,
+                },
+            )
+
+        message = (
+            f"Title resolution complete: "
+            f"openalex={resolved_via_openalex}, "
+            f"s2_fallback={resolved_via_s2}, "
+            f"vectors={vectors_captured}, "
+            f"remaining={remaining}"
+        )
+        if will_continue:
+            message += ", continuation queued"
 
         set_job_status(
             job_id,
             status="completed",
             processed=processed,
             total=total,
-            errors=errors,
-            message=(
-                f"Title resolution complete: resolved {resolved}, "
-                f"vectors captured {vectors_captured}, errors {errors}, "
-                f"rate_limited {rate_limited}"
-            ),
-            result={
-                "processed": processed,
-                "resolved": resolved,
-                "vectors_captured": vectors_captured,
-                "errors": errors,
-                "rate_limited": rate_limited,
-                "model": model,
-            },
+            message=message,
+            result=result_data,
             finished_at=datetime.utcnow().isoformat(),
         )
         add_job_log(
             job_id,
             "Title resolution sweep complete",
             step="summary",
-            data={
-                "processed": processed,
-                "resolved": resolved,
-                "vectors_captured": vectors_captured,
-                "errors": errors,
-                "rate_limited": rate_limited,
-            },
+            data=result_data,
         )
     except Exception as exc:
         logger.exception("Title resolution sweep failed: %s", exc)
