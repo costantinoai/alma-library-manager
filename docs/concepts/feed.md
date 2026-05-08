@@ -44,17 +44,21 @@ dates.
 ## New markers
 
 The **New** marker is tied to the latest completed Feed refresh, not
-to whether this browser session has rendered a row. A Feed item is
-marked new only when:
+to whether this browser session has rendered a row. The check is
+**per-paper**, not per-row — a paper credited to multiple followed
+authors has multiple `feed_items` rows, each with its own
+`fetched_at`. A paper is marked new only when:
 
-* `feed_items.status = 'new'`
-* `feed_items.fetched_at` falls inside the latest completed full-inbox
-  or per-monitor refresh window
+* at least one of its rows still has `status = 'new'`, AND
+* the **earliest** `fetched_at` across all of its rows falls inside
+  the latest completed refresh window.
 
-Older untriaged rows can remain visible in the Feed, but they are not
-badged as new. The sidebar bubble uses the same backend count, so it
-signals only papers added by the latest fetch and clears as those rows
-are actioned.
+So a paper that was first surfaced in a previous fetch under author
+A and re-surfaced this fetch under author B is **not** new — the
+user has already seen it. Older untriaged rows still appear in the
+Feed; they're just not badged. The sidebar bubble counts distinct
+papers (not rows) using the same per-paper rule, so it tracks the
+real "new this fetch" count.
 
 ## Actions on a Feed item
 

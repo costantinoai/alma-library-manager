@@ -288,6 +288,17 @@ parameters and response shapes.
 | `GET` | `/activity/{job_id}/logs` | Per-job logs |
 | `POST` | `/activity/{job_id}/cancel` | Cancel a running job |
 | `DELETE` | `/activity/{job_id}` | Dismiss from history |
+
+Operation rows that participate in a chained workflow (e.g. Library
+save → metadata hydrate → S2 vector fetch → local SPECTER2 fill)
+carry two grouping fields:
+
+- `chain_id` — uuid hex shared by every member of the chain.
+- `chain_step` — one of `hydrate`, `s2_fetch`, `local_specter2_fill`.
+
+The Activity panel groups all rows sharing a `chain_id` under the
+member with the lowest `chain_step` rank (the starter), with the
+remaining steps rendered as children inside one envelope.
 | `GET` | `/scheduler` | Scheduler health + next runs |
 | `GET` | `/logs` | Application log ring buffer |
 
