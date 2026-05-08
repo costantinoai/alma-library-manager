@@ -521,7 +521,16 @@ def score_candidate(
         try:
             from alma.ai.providers import get_active_provider
             topic_match_mode = "semantic" if get_active_provider(conn) is not None else "keyword"
-        except Exception:
+        except Exception as exc:
+            # Loud-on-degrade: a failed provider lookup silently dropped
+            # the user from semantic to keyword matching. The score
+            # downgrade is invisible without this log; users wondering
+            # why their semantic discovery quality dropped can find the
+            # cause in the backend logs instead of guessing.
+            logger.warning(
+                "Topic-match provider lookup failed; falling back to keyword-only mode: %s",
+                exc,
+            )
             topic_match_mode = "keyword"
 
     # -- 3. Text similarity --
@@ -545,7 +554,15 @@ def score_candidate(
             )
             semantic_similarity_raw = float(semantic_details.get("raw_score") or 0.0)
         except Exception as exc:
-            logger.debug("Semantic similarity failed: %s", exc)
+            # Score 0.0 here means "couldn't compute", not "actually
+            # zero similarity" — log at warning so the operator sees
+            # when the embedding stack is silently producing neutral
+            # scores for every paper.
+            logger.warning(
+                "Semantic similarity computation failed for candidate (paper_id=%s): %s",
+                candidate.get("id") if isinstance(candidate, dict) else None,
+                exc,
+            )
             semantic_similarity_raw = 0.0
             semantic_details = {
                 "positive_centroid_raw": 0.0,

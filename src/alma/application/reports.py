@@ -44,8 +44,12 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
             (week_ago,),
         ).fetchall()
         trending_topics = [{"topic": r["term"], "papers": r["cnt"]} for r in rows]
-    except Exception:
-        pass
+    except Exception as exc:
+        # Loud-on-degrade: each report section is independently
+        # try-wrapped because schema variations can leave one table
+        # missing without taking the whole report down. The log makes
+        # those silent-empty sections visible to operators.
+        logger.warning("weekly_research_brief: trending_topics query failed: %s", exc)
 
     # Most active followed authors (papers fetched this week)
     active_authors = []
@@ -61,8 +65,8 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
             (week_ago,),
         ).fetchall()
         active_authors = [{"name": r["name"], "new_papers": r["new_papers"]} for r in rows]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("weekly_research_brief: active_authors query failed: %s", exc)
 
     # Recommendations engagement this week
     rec_stats = {"total": 0, "liked": 0, "dismissed": 0}
@@ -75,8 +79,8 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
             (week_ago,),
         ).fetchone()
         rec_stats = {"total": r["total"], "liked": r["liked"], "dismissed": r["dismissed"]}
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("weekly_research_brief: rec_stats query failed: %s", exc)
 
     return {
         "report_type": "weekly_brief",
@@ -122,8 +126,11 @@ def collection_intelligence(conn: sqlite3.Connection) -> dict[str, Any]:
                     (r["id"],),
                 ).fetchall()
                 topics = [{"topic": tr["term"], "papers": tr["cnt"]} for tr in topic_rows]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "collection_intelligence: top_topics for collection %s failed: %s",
+                    r["id"], exc,
+                )
 
             # Year range
             year_range = {"min": None, "max": None}
@@ -137,8 +144,11 @@ def collection_intelligence(conn: sqlite3.Connection) -> dict[str, Any]:
                 ).fetchone()
                 if yr:
                     year_range = {"min": yr["mn"], "max": yr["mx"]}
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "collection_intelligence: year_range for collection %s failed: %s",
+                    r["id"], exc,
+                )
 
             collections.append({
                 "id": r["id"],
@@ -184,7 +194,11 @@ def topic_drift(conn: sqlite3.Connection) -> dict[str, Any]:
                 (from_year, current_year if label == "recent" else from_year + (2 if label == "mid" else 5)),
             ).fetchall()
             topics = [{"topic": r["term"], "papers": r["cnt"]} for r in rows]
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "topic_drift: topics query for window %s (years %s-%s) failed: %s",
+                label, from_year, current_year, exc,
+            )
             topics = []
 
         windows.append({

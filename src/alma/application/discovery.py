@@ -1142,6 +1142,7 @@ def list_lens_recommendations(
                p.journal AS paper_journal,
                p.url AS paper_url,
                p.doi AS paper_doi,
+               p.publication_date AS paper_publication_date,
                p.cited_by_count AS paper_cited_by_count,
                p.status AS paper_status,
                p.rating AS paper_rating,
@@ -1154,7 +1155,7 @@ def list_lens_recommendations(
           AND r.user_action IS NULL
           AND p.status NOT IN ('library', 'dismissed', 'removed')
           AND COALESCE(TRIM(p.reading_status), '') = ''
-        ORDER BY COALESCE(r.rank, 999999) ASC, r.score DESC, r.created_at DESC
+        ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
         LIMIT ? OFFSET ?
         """,
         (lens_id, limit, offset),

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from alma.application.followed_authors import ensure_followed_author_contract
 from alma.core.scoring_math import age_decay
+from alma.core.utils import utcnow as _utcnow
 from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,6 @@ _REMOVE_DECAY_HALF_LIFE_DAYS = 180.0
 _HARD_REMOVE_HALF_LIFE_DAYS = 365.0
 _HARD_REMOVE_THRESHOLD = 3
 _SUPPRESSION_THRESHOLD = -0.18
-
-
-def _utcnow() -> datetime:
-    return datetime.utcnow()
 
 
 def _parse_dt(raw: Any) -> Optional[datetime]:

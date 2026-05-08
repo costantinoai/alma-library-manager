@@ -15,6 +15,7 @@ from alma.api.helpers import raise_internal, row_to_paper_response
 from alma.api.models import PaperResponse, ErrorResponse
 from alma.application import library as library_app
 from alma.application import authors as authors_app
+from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -889,8 +890,8 @@ def _openalex_work_to_related_work(
         primary_location.get("landing_page_url")
         if isinstance(primary_location, dict)
         else None
-    ) or (work.get("doi") and f"https://doi.org/{(work['doi'] or '').replace('https://doi.org/', '')}") or work.get("id")
-    doi_raw = (work.get("doi") or "").replace("https://doi.org/", "").strip() or None
+    ) or (work.get("doi") and f"https://doi.org/{normalize_doi(work['doi']) or ''}") or work.get("id")
+    doi_raw = normalize_doi(work.get("doi"))
 
     authorships = work.get("authorships") or []
     authors_str = ", ".join(
@@ -1038,11 +1039,7 @@ def list_prior_works(
         if w.get("id")
     ]
     oa_ids = [oid for oid in oa_ids if oid.startswith("W")]
-    dois = [
-        (w.get("doi") or "").replace("https://doi.org/", "").strip()
-        for w in oa_works
-        if w.get("doi")
-    ]
+    dois = [d for d in (normalize_doi(w.get("doi")) for w in oa_works) if d]
     local_index = _build_local_index(db, openalex_ids=oa_ids, dois=dois)
     works = [
         _openalex_work_to_related_work(w, local_index=local_index)
@@ -1111,11 +1108,7 @@ def list_derivative_works(
         if w.get("id")
     ]
     oa_ids = [oid for oid in oa_ids if oid.startswith("W")]
-    dois = [
-        (w.get("doi") or "").replace("https://doi.org/", "").strip()
-        for w in oa_works
-        if w.get("doi")
-    ]
+    dois = [d for d in (normalize_doi(w.get("doi")) for w in oa_works) if d]
     local_index = _build_local_index(db, openalex_ids=oa_ids, dois=dois)
     works = [
         _openalex_work_to_related_work(w, local_index=local_index)

@@ -33,7 +33,7 @@ from alma.api.models import (
 from alma.api.deps import get_db, get_current_user, normalize_author_id, open_db_connection
 from alma.api.deps import _data_dir, _db_path  # internal helpers for path resolution
 from alma.core.backend import fetch_publications_by_id, _settings as _fb_settings
-from alma.core.utils import normalize_orcid
+from alma.core.utils import canonical_lookup_doi, normalize_doi, normalize_orcid
 from alma.config import get_db_path, get_fetch_year
 from alma.config import get_all_settings
 from alma.api.models import PublicationResponse
@@ -3821,9 +3821,9 @@ def list_author_openalex_works(
         _normalize_openalex_author_id(str((r or {}).get("openalex_id") or (r or {}).get("id") or ""))
         for r in results
     ]
-    dois = [str((r or {}).get("doi") or "").strip().lower() for r in results]
-    # Strip https://doi.org/ prefix for comparison.
-    dois = [d.replace("https://doi.org/", "").replace("http://doi.org/", "") for d in dois if d]
+    # `canonical_lookup_doi` lowercases, URL-decodes and strips publisher
+    # fragments — same form the SQL REPLACE below targets.
+    dois = [d for d in (canonical_lookup_doi((r or {}).get("doi")) for r in results) if d]
 
     if work_ids or dois:
         try:
@@ -3845,13 +3845,7 @@ def list_author_openalex_works(
                 ).fetchall()
                 for row in rows:
                     row_oaid = str(row["openalex_id"] or "").strip().lower()
-                    row_doi = (
-                        str(row["doi"] or "")
-                        .strip()
-                        .lower()
-                        .replace("https://doi.org/", "")
-                        .replace("http://doi.org/", "")
-                    )
+                    row_doi = canonical_lookup_doi(row["doi"]) or ""
                     payload = {
                         "local_paper_id": row["id"],
                         "local_status": row["status"],
@@ -3866,7 +3860,11 @@ def list_author_openalex_works(
 
     # Inline the already-in-db lookup onto each result row.
     annotated = []
-    for r, wid, doi in zip(results, work_ids, [str((x or {}).get("doi") or "").strip().lower().replace("https://doi.org/", "").replace("http://doi.org/", "") for x in results]):
+    for r, wid, doi in zip(
+        results,
+        work_ids,
+        [canonical_lookup_doi((x or {}).get("doi")) or "" for x in results],
+    ):
         hit = already.get((wid or "").lower()) or (already.get(f"doi:{doi}") if doi else None)
         r = dict(r)
         if hit:
@@ -4785,11 +4783,12 @@ def _existing_source_ids_for_author(db: sqlite3.Connection, author_id: str) -> s
     existing: set[str] = set()
     for r in rows:
         sid = (r["sid"] or "").strip()
+        # Stored sources may be bare DOIs, URL-form DOIs, or non-DOI URLs.
+        # Only strip the `doi.org/` URL prefix; leave non-doi URLs alone
+        # (a `doi:` substring inside a non-doi URL is not a DOI marker).
         lower = sid.lower()
-        if lower.startswith("https://doi.org/"):
-            sid = sid[len("https://doi.org/"):]
-        elif lower.startswith("http://doi.org/"):
-            sid = sid[len("http://doi.org/"):]
+        if lower.startswith("https://doi.org/") or lower.startswith("http://doi.org/"):
+            sid = normalize_doi(sid) or ""
         if sid:
             existing.add(sid)
         else:

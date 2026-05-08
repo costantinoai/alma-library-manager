@@ -24,6 +24,7 @@ from alma.core.http_sources import (
     openalex_usage_snapshot,
     source_diagnostics_scope,
 )
+from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -491,56 +492,25 @@ def _upsert_candidate_paper(db: sqlite3.Connection, candidate: dict, *, now: str
     )
 
     if existing_paper_id:
-        db.execute(
-            """
-            UPDATE papers
-            SET authors = CASE WHEN COALESCE(authors, '') = '' AND ? <> '' THEN ? ELSE authors END,
-                year = COALESCE(year, ?),
-                journal = CASE WHEN COALESCE(journal, '') = '' AND ? <> '' THEN ? ELSE journal END,
-                abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? <> '' THEN ? ELSE abstract END,
-                url = CASE WHEN COALESCE(url, '') = '' AND ? <> '' THEN ? ELSE url END,
-                doi = CASE WHEN COALESCE(doi, '') = '' AND ? <> '' THEN ? ELSE doi END,
-                publication_date = CASE
-                    -- Prefer a full YYYY-MM-DD date over an empty value or a
-                    -- YYYY-01-01 fallback from an older refresh that only had
-                    -- publication_year. If the incoming date is also Jan 1st,
-                    -- only fill when empty.
-                    WHEN ? <> '' AND ? NOT LIKE '%-01-01' THEN ?
-                    WHEN COALESCE(publication_date, '') = '' AND ? <> '' THEN ?
-                    ELSE publication_date
-                END,
-                openalex_id = CASE WHEN COALESCE(openalex_id, '') = '' AND ? <> '' THEN ? ELSE openalex_id END,
-                cited_by_count = CASE
-                    WHEN ? > COALESCE(cited_by_count, 0) THEN ?
-                    ELSE cited_by_count
-                END,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                authors,
-                authors,
-                year,
-                journal,
-                journal,
-                abstract,
-                abstract,
-                url,
-                url,
-                doi,
-                doi,
-                publication_date or "",
-                publication_date or "",
-                publication_date or "",
-                publication_date or "",
-                publication_date or "",
-                openalex_id,
-                openalex_id,
-                cited_by_count,
-                cited_by_count,
-                now,
-                existing_paper_id,
-            ),
+        # `prefer_specific_date_fields` upgrades a stored YYYY-01-01
+        # year-only fallback when the candidate carries a full date,
+        # so older refreshes that only knew the year don't pin the
+        # paper to Jan 1 forever (see `tasks/lessons.md` →
+        # "Don't fabricate missing timestamps").
+        fill_only_update_paper(
+            db,
+            str(existing_paper_id),
+            fill_fields={
+                "authors": authors,
+                "journal": journal,
+                "abstract": abstract,
+                "url": url,
+                "doi": doi,
+                "openalex_id": openalex_id,
+            },
+            fill_null_fields={"year": year},
+            max_int_fields={"cited_by_count": cited_by_count},
+            prefer_specific_date_fields={"publication_date": publication_date or ""},
         )
         paper_id = str(existing_paper_id)
     else:
@@ -653,7 +623,13 @@ def _is_new_since_latest_fetch(
 
 
 def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_days: int = 60) -> int:
-    """Count untriaged feed papers created by the latest completed fetch."""
+    """Count distinct untriaged feed papers first surfaced by the latest fetch.
+
+    A paper credited to multiple authors has multiple ``feed_items`` rows; the
+    badge counts the *paper* not the row, and only when the paper's earliest
+    surfacing falls inside the latest fetch window. Otherwise a paper from a
+    prior fetch re-lights every time a different author monitor surfaces it.
+    """
     start, finish = latest_feed_fetch_window(db)
     if not start or not finish:
         return 0
@@ -661,13 +637,20 @@ def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_day
     try:
         row = db.execute(
             """
+            WITH per_paper AS (
+                SELECT paper_id,
+                       MIN(fetched_at) AS earliest,
+                       MAX(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS has_new
+                FROM feed_items
+                GROUP BY paper_id
+            )
             SELECT COUNT(*) AS c
-            FROM feed_items fi
-            LEFT JOIN papers p ON p.id = fi.paper_id
-            WHERE fi.status = 'new'
-              AND fi.fetched_at >= ?
-              AND fi.fetched_at <= ?
-              AND COALESCE(NULLIF(p.publication_date, ''), fi.fetched_at) >= ?
+            FROM per_paper pp
+            LEFT JOIN papers p ON p.id = pp.paper_id
+            WHERE pp.has_new = 1
+              AND pp.earliest >= ?
+              AND pp.earliest <= ?
+              AND COALESCE(NULLIF(p.publication_date, ''), pp.earliest) >= ?
             """,
             (start, finish, cutoff),
         ).fetchone()
@@ -701,17 +684,30 @@ def list_feed_items(
     params: list[object] = []
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
+    filter_to_new_papers = False
     if requested_status and requested_status != "all":
         if requested_status not in VALID_FEED_STATUSES:
             raise ValueError(f"Invalid feed status: {requested_status}")
-        where.append("fi.status = ?")
-        params.append(requested_status)
         if requested_status == "new":
+            # "new" is a paper-level concept (earliest row in the latest fetch
+            # window AND at least one row still untriaged). We must NOT filter
+            # rows by `fi.fetched_at IN window` here — that would hide the
+            # pre-window rows the aggregator needs to detect papers the user
+            # has already seen. Restrict to in-window paper_ids and let the
+            # aggregator make the per-paper decision; then drop is_new=False
+            # papers post-aggregation.
             if latest_fetch_window[0] and latest_fetch_window[1]:
-                where.append("fi.fetched_at >= ? AND fi.fetched_at <= ?")
+                where.append(
+                    "fi.paper_id IN (SELECT paper_id FROM feed_items "
+                    "WHERE status = 'new' AND fetched_at >= ? AND fetched_at <= ?)"
+                )
                 params.extend([latest_fetch_window[0], latest_fetch_window[1]])
+                filter_to_new_papers = True
             else:
                 where.append("1=0")
+        else:
+            where.append("fi.status = ?")
+            params.append(requested_status)
 
     if since_days is not None and since_days > 0:
         # Filter by paper publication date when known, else by the timestamp at
@@ -774,6 +770,8 @@ def list_feed_items(
     """
     rows = db.execute(query, params).fetchall()
     aggregated = _aggregate_feed_rows(rows, latest_fetch_window=latest_fetch_window)
+    if filter_to_new_papers:
+        aggregated = [item for item in aggregated if item.get("is_new")]
     total = len(aggregated)
     return aggregated[offset:offset + limit], total
 
@@ -1952,15 +1950,29 @@ def _aggregate_feed_rows(
     *,
     latest_fetch_window: tuple[str | None, str | None],
 ) -> list[dict]:
-    """Collapse duplicate papers into one inbox card while preserving author provenance."""
+    """Collapse duplicate papers into one inbox card while preserving author provenance.
+
+    `is_new` is recomputed against the paper's earliest `fetched_at` across all
+    rows, not the most recent — otherwise a paper credited to multiple authors
+    re-lights as new every time a different author monitor surfaces it in the
+    latest fetch window.
+    """
     aggregated: dict[str, dict] = {}
     ordered_ids: list[str] = []
+    earliest_fetched: dict[str, str] = {}
+    has_new_status: dict[str, bool] = {}
 
     for row in rows:
         mapped = _map_feed_row(row, latest_fetch_window=latest_fetch_window)
         group_key = str(mapped.get("paper_id") or mapped.get("id") or "").strip()
         if not group_key:
             continue
+        row_fetched = str(row["fetched_at"] or "").strip()
+        prev_fetched = earliest_fetched.get(group_key)
+        if row_fetched and (not prev_fetched or row_fetched < prev_fetched):
+            earliest_fetched[group_key] = row_fetched
+        if str(row["status"] or "").strip().lower() == "new":
+            has_new_status[group_key] = True
         existing = aggregated.get(group_key)
         if existing is None:
             aggregated[group_key] = mapped
@@ -1997,7 +2009,17 @@ def _aggregate_feed_rows(
             existing["author_name"] = mapped["author_name"]
         if mapped.get("monitor_type") == "author" and mapped.get("author_id"):
             existing["author_id"] = mapped["author_id"]
-        existing["is_new"] = bool(existing.get("is_new")) or bool(mapped.get("is_new"))
         existing["signal_value"] = max(int(existing.get("signal_value") or 0), int(mapped.get("signal_value") or 0))
+
+    start, finish = latest_fetch_window
+    for group_key, item in aggregated.items():
+        earliest = earliest_fetched.get(group_key, "")
+        item["is_new"] = bool(
+            start
+            and finish
+            and earliest
+            and start <= earliest <= finish
+            and has_new_status.get(group_key, False)
+        )
 
     return [aggregated[group_key] for group_key in ordered_ids]

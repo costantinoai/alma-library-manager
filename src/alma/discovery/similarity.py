@@ -1306,18 +1306,4 @@ def batch_compute_lexical_similarity(
     return results
 
 
-def _cosine_similarity_np(a: "numpy.ndarray", b: "numpy.ndarray") -> float:
-    """Compute cosine similarity between two 1-D numpy vectors.
-
-    Args:
-        a: First vector.
-        b: Second vector.
-
-    Returns:
-        Cosine similarity as a float in ``[-1, 1]``.
-    """
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
+from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np  # noqa: E402 — hot-path alias to canonical helper

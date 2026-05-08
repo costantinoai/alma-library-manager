@@ -18,6 +18,8 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from alma.core.utils import canonical_lookup_doi, normalize_orcid
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,12 +28,12 @@ def _norm_text(value: Optional[str]) -> str:
 
 
 def _norm_orcid(value: Optional[str]) -> str:
-    s = (value or "").strip().lower()
-    if s.startswith("https://orcid.org/"):
-        s = s[len("https://orcid.org/"):]
-    if s.startswith("http://orcid.org/"):
-        s = s[len("http://orcid.org/"):]
-    return s
+    """Dedup-friendly ORCID form. Returns ``""`` for invalid input.
+
+    Wraps the canonical :func:`alma.core.utils.normalize_orcid` so dedup
+    output matches the value persisted in ``authors.orcid``.
+    """
+    return normalize_orcid(value) or ""
 
 
 def _norm_openalex_author(value: Optional[str]) -> str:
@@ -46,16 +48,14 @@ def _norm_openalex_author(value: Optional[str]) -> str:
 
 
 def _norm_doi(value: Optional[str]) -> str:
-    s = (value or "").strip()
-    if not s:
-        return ""
-    s = s.replace("DOI:", "").replace("doi:", "").strip()
-    ls = s.lower()
-    for pfx in ("https://doi.org/", "http://doi.org/"):
-        if ls.startswith(pfx):
-            s = s[len(pfx):]
-            break
-    return s.strip().lower()
+    """Dedup-friendly DOI form. Returns ``""`` for invalid input.
+
+    Wraps :func:`alma.core.utils.canonical_lookup_doi` (lowercased,
+    URL-decoded, fragment-stripped) so dedup is robust to publisher
+    fragments (``/abstract``, ``/pdf``, …) that ``papers.doi`` would
+    otherwise treat as distinct rows.
+    """
+    return canonical_lookup_doi(value) or ""
 
 
 def _norm_url(value: Optional[str]) -> str:
@@ -193,7 +193,19 @@ def _rewire_paper_refs(conn: sqlite3.Connection, old_paper_id: str, new_paper_id
                 (new_paper_id, old_paper_id),
             )
             conn.execute(f"DELETE FROM {table} WHERE paper_id = ?", (old_paper_id,))
-        except Exception:
+        except Exception as exc:
+            # A junction-table rewire failure means rows are stranded
+            # against the old paper id and the merge is partial. Log
+            # loudly so the user can see which table couldn't be moved
+            # — silently dropping them used to mask real data loss
+            # (e.g. lost collection memberships on a merged duplicate).
+            logger.warning(
+                "Failed to rewire %s rows from paper %s → %s: %s",
+                table,
+                old_paper_id,
+                new_paper_id,
+                exc,
+            )
             continue
 
 
@@ -229,8 +241,17 @@ def _update_publication_authors_for_merge(conn: sqlite3.Connection, old_author_i
                 ),
             )
             moved += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        # publication_authors is the only authorship link we have for
+        # papers in v3 schema. Silently dropping a failure here means
+        # papers lose their author attribution after a merge — log it
+        # so a re-run or manual re-link can recover.
+        logger.warning(
+            "Failed to move publication_authors rows for author %s → %s: %s",
+            old_author_id,
+            new_author_id,
+            exc,
+        )
 
     return moved
 

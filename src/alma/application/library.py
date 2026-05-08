@@ -360,6 +360,21 @@ def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:
         f"UPDATE papers SET {set_clause} WHERE id = ?",
         list(kwargs.values()) + [paper_id],
     )
+    if cursor.rowcount > 0 and any(
+        key in kwargs
+        for key in (
+            "title",
+            "abstract",
+            "doi",
+            "openalex_id",
+            "semantic_scholar_id",
+            "url",
+            "journal",
+            "publication_date",
+            "year",
+        )
+    ):
+        _schedule_pending_hydration(db, paper_id)
     return cursor.rowcount > 0
 
 

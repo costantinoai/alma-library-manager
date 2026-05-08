@@ -33,6 +33,7 @@ from alma.application.followed_authors import (
     schedule_followed_author_historical_backfill,
 )
 from alma.application import library as library_app
+from alma.core.sql_helpers import paper_date_sort_expr
 
 
 logger = logging.getLogger(__name__)
@@ -208,16 +209,17 @@ def list_saved(
         # (one `score_papers_batch` call over the library set).
         if order_value == "signal":
             _ensure_library_signal_scores(db)
+        date_sort = paper_date_sort_expr()
         order_clause = {
-            "date": f"COALESCE(publication_date, printf('%04d-01-01', COALESCE(year, 0)), '') {direction}, title COLLATE NOCASE ASC",
+            "date": f"{date_sort} {direction}, title COLLATE NOCASE ASC",
             "rating": f"COALESCE(rating, 0) {direction}, COALESCE(added_at, created_at, publication_date, '') DESC",
             "signal": f"COALESCE(global_signal_score, 0) {direction}, COALESCE(rating, 0) DESC, title COLLATE NOCASE ASC",
             "title": f"title COLLATE NOCASE {direction}",
             "authors": f"COALESCE(authors, '') COLLATE NOCASE {direction}, title COLLATE NOCASE ASC",
             "journal": f"COALESCE(journal, '') COLLATE NOCASE {direction}, title COLLATE NOCASE ASC",
-            "citations": f"COALESCE(cited_by_count, 0) {direction}, COALESCE(publication_date, printf('%04d-01-01', COALESCE(year, 0)), '') DESC",
+            "citations": f"COALESCE(cited_by_count, 0) {direction}, {date_sort} DESC",
             "added_at": f"COALESCE(added_at, created_at, publication_date, '') {direction}, title COLLATE NOCASE ASC",
-        }.get(order_value, f"COALESCE(publication_date, printf('%04d-01-01', COALESCE(year, 0)), '') {direction}, title COLLATE NOCASE ASC")
+        }.get(order_value, f"{date_sort} {direction}, title COLLATE NOCASE ASC")
 
         # `canonical_paper_id IS NULL` excludes preprint rows that were
         # merged into a published journal twin — they stay in `papers`
@@ -400,13 +402,18 @@ def update_saved_paper(
         # Nothing to change — return the current row so the caller
         # still gets the canonical shape.
         return row_to_paper_response(row)
-    updates.append("updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
-    params.append(paper_id)
-    db.execute(
-        f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
+    update_kwargs: dict[str, object] = {}
+    if notes is not None:
+        update_kwargs["notes"] = notes
+    if rating is not None:
+        update_kwargs["rating"] = int(rating)
+    if title is not None:
+        update_kwargs["title"] = title.strip()
+    if authors is not None:
+        update_kwargs["authors"] = authors.strip()
+    if abstract is not None:
+        update_kwargs["abstract"] = abstract.strip()
+    library_app.update_paper(db, paper_id, **update_kwargs)
     if rating is not None:
         library_app.record_paper_feedback(
             db,

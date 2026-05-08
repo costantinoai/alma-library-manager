@@ -42,6 +42,7 @@ from alma.discovery.scoring import (
     compute_preference_profile,
     score_candidate,
 )
+from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -383,32 +384,18 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
             # already-existed-and-INSERT-was-ignored case AND the brand-new
             # row case (no-op when fields already match).
             try:
-                conn.execute(
-                    """
-                    UPDATE papers SET
-                        abstract = CASE WHEN COALESCE(abstract, '') = '' AND ? != '' THEN ? ELSE abstract END,
-                        journal = CASE WHEN COALESCE(journal, '') = '' AND ? != '' THEN ? ELSE journal END,
-                        publication_date = CASE
-                            WHEN COALESCE(publication_date, '') = '' AND ? != '' THEN ?
-                            ELSE publication_date
-                        END,
-                        semantic_scholar_id = COALESCE(NULLIF(semantic_scholar_id, ''), NULLIF(?, '')),
-                        semantic_scholar_corpus_id = COALESCE(NULLIF(semantic_scholar_corpus_id, ''), NULLIF(?, '')),
-                        tldr = COALESCE(NULLIF(tldr, ''), NULLIF(?, ''))
-                    WHERE id = ?
-                    """,
-                    (
-                        rec.get("abstract", "") or "",
-                        rec.get("abstract", "") or "",
-                        rec.get("journal", "") or "",
-                        rec.get("journal", "") or "",
-                        rec.get("publication_date", "") or "",
-                        rec.get("publication_date", "") or "",
-                        rec.get("semantic_scholar_id", "") or "",
-                        rec.get("semantic_scholar_corpus_id", "") or "",
-                        rec.get("tldr", "") or "",
-                        paper_id,
-                    ),
+                fill_only_update_paper(
+                    conn,
+                    paper_id,
+                    fill_fields={
+                        "abstract": rec.get("abstract", "") or "",
+                        "journal": rec.get("journal", "") or "",
+                        "publication_date": rec.get("publication_date", "") or "",
+                        "semantic_scholar_id": rec.get("semantic_scholar_id", "") or "",
+                        "semantic_scholar_corpus_id": rec.get("semantic_scholar_corpus_id", "") or "",
+                        "tldr": rec.get("tldr", "") or "",
+                    },
+                    touch_updated_at=False,
                 )
                 upsert_specter2_embedding(conn, paper_id, rec)
             except sqlite3.OperationalError:

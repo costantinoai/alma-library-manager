@@ -42,6 +42,8 @@ import uuid
 from datetime import datetime
 from typing import Iterable, Mapping, Optional
 
+from alma.core.utils import normalize_orcid
+
 logger = logging.getLogger(__name__)
 
 
@@ -699,12 +701,16 @@ def discover_aliases_via_orcid(
                 "orcid": None,
                 "aliases": [],
             }
-        # OpenAlex returns the ORCID as a full URL — strip to bare id.
-        orcid_bare = orcid_url
-        for prefix in ("https://orcid.org/", "http://orcid.org/", "orcid.org/"):
-            if orcid_bare.lower().startswith(prefix):
-                orcid_bare = orcid_bare[len(prefix):]
-                break
+        # OpenAlex returns the ORCID as a full URL — funnel through the
+        # canonical helper so the OpenAlex `orcid:` filter and the local
+        # `authors.orcid` column see the same form.
+        orcid_bare = normalize_orcid(orcid_url) or ""
+        if not orcid_bare:
+            return {
+                "primary_openalex_id": primary_oid_norm,
+                "orcid": None,
+                "aliases": [],
+            }
 
         # Step 2 — query all OpenAlex authors with the same ORCID.
         per_page = max(1, min(int(limit or 10), 25))

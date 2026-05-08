@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger(__name__)
 
 from alma.application import library as library_app
 from alma.application.feed import _upsert_candidate_paper
@@ -109,6 +112,13 @@ def _fetch_work_by_openalex_id(openalex_work_id: str) -> Optional[dict]:
         timeout=20,
     )
     if resp.status_code != 200:
+        # Loud-on-error: a 404 means OpenAlex doesn't have this id, which
+        # is information the user wants. A 5xx / 429 means the API is
+        # struggling and "no result" would otherwise look indistinguishable
+        # from "no match".
+        logger.warning(
+            "OpenAlex /works/%s returned HTTP %s", wid, resp.status_code
+        )
         return None
     data = resp.json() or {}
     if not data.get("display_name"):
@@ -127,6 +137,9 @@ def _fetch_work_by_doi(doi: str) -> Optional[dict]:
         timeout=20,
     )
     if resp.status_code != 200:
+        logger.warning(
+            "OpenAlex /works/doi:%s returned HTTP %s", clean, resp.status_code
+        )
         return None
     data = resp.json() or {}
     if not data.get("display_name"):
@@ -171,6 +184,11 @@ def search_authors_online(
         timeout=20,
     )
     if resp.status_code != 200:
+        logger.warning(
+            "OpenAlex /authors search %r returned HTTP %s — UI will show empty results",
+            raw,
+            resp.status_code,
+        )
         return []
     results = (resp.json() or {}).get("results") or []
 
@@ -244,6 +262,11 @@ def _search_works_raw(query: str, *, limit: int = 20) -> list[dict]:
             timeout=20,
         )
         if author_resp.status_code != 200:
+            logger.warning(
+                "OpenAlex /authors lookup for %r returned HTTP %s — works search aborted",
+                author_name,
+                author_resp.status_code,
+            )
             return []
         authors = (author_resp.json() or {}).get("results") or []
         author_ids = [
@@ -268,6 +291,11 @@ def _search_works_raw(query: str, *, limit: int = 20) -> list[dict]:
                 timeout=30,
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "OpenAlex /works filter author.id:%s returned HTTP %s — skipping this author",
+                    aid,
+                    resp.status_code,
+                )
                 continue
             for work in (resp.json() or {}).get("results") or []:
                 wid = str(work.get("id") or "").strip()
@@ -292,6 +320,11 @@ def _search_works_raw(query: str, *, limit: int = 20) -> list[dict]:
         timeout=30,
     )
     if resp.status_code != 200:
+        logger.warning(
+            "OpenAlex /works search %r returned HTTP %s — UI will show empty results",
+            search_q,
+            resp.status_code,
+        )
         return []
     return (resp.json() or {}).get("results") or []
 
