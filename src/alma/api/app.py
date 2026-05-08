@@ -435,34 +435,47 @@ if os.path.exists(_frontend_dist):
     if os.path.exists(_assets_dir):
         app.mount("/assets", StaticFiles(directory=_assets_dir), name="frontend-assets")
 
-    # Catch-all: serve real static files from dist when they exist, then
-    # fall back to index.html for SPA client-side routing. Vite puts
-    # files from frontend/public/ at the root of dist (favicon.svg,
-    # manifest.webmanifest, mask-icon.svg, brand/, ...), so an
-    # explicit per-prefix mount per asset would be brittle. Resolving
-    # by file existence covers every public asset uniformly.
+    # Catch-all: serve real dist files when they exist, else 404.
+    #
+    # The SPA uses hash-based client routing (`#/feed`, `#/library`,
+    # ...), so the HTTP path is always `/` for in-app navigation —
+    # the route lives in the URL fragment, which never reaches the
+    # server. That means a defensive fallback to index.html for
+    # arbitrary unknown paths has no legitimate consumer: the only
+    # things that hit it are (a) external clients probing wrong
+    # paths and (b) frontend bugs calling an unprefixed API path,
+    # both of which would silently receive `text/html` and log as
+    # 200 OK — masking the bug and bloating the access log. We
+    # 404 those paths instead so misuse is visible.
+    #
+    # Vite puts frontend/public/ files at the root of dist
+    # (favicon.svg, manifest.webmanifest, mask-icon.svg, brand/,
+    # ...), so resolving by file existence covers every public
+    # asset uniformly without per-prefix mounts.
     #
     # Path-traversal guard: rebuild the requested path under
     # _frontend_dist with realpath and verify it stays inside.
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        """Serve a real dist file if it exists, else the SPA index."""
+        """Serve a real dist file if it exists, else 404."""
         if full_path.startswith(("api/", "docs", "redoc", "openapi", "static")):
             raise HTTPException(status_code=404, detail="Not found")
 
-        if full_path:
-            candidate = os.path.realpath(os.path.join(_frontend_dist, full_path))
-            dist_root = os.path.realpath(_frontend_dist)
-            if (
-                candidate.startswith(dist_root + os.sep)
-                and os.path.isfile(candidate)
-            ):
-                return FileResponse(candidate)
+        if not full_path:
+            index_path = os.path.join(_frontend_dist, "index.html")
+            if os.path.exists(index_path):
+                return FileResponse(index_path)
+            raise HTTPException(status_code=404, detail="Frontend not built")
 
-        index_path = os.path.join(_frontend_dist, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        raise HTTPException(status_code=404, detail="Frontend not built")
+        candidate = os.path.realpath(os.path.join(_frontend_dist, full_path))
+        dist_root = os.path.realpath(_frontend_dist)
+        if (
+            candidate.startswith(dist_root + os.sep)
+            and os.path.isfile(candidate)
+        ):
+            return FileResponse(candidate)
+
+        raise HTTPException(status_code=404, detail="Not found")
 
     logger.info("React frontend mounted from %s", _frontend_dist)
 
