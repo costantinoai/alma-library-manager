@@ -995,8 +995,13 @@ def save_online_search_result(
                 paper_id,
                 reference_map.get(normalized_openalex_id) or [],
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "OpenAlex reference upsert failed for %s during %s save: %s",
+                normalized_openalex_id,
+                added_from,
+                exc,
+            )
 
     db.execute(
         """
@@ -1075,8 +1080,12 @@ def add_work_to_library(
                 paper_id,
                 reference_map.get(normalized_openalex_id) or [],
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "OpenAlex reference upsert failed for %s during manual add: %s",
+                normalized_openalex_id,
+                exc,
+            )
 
     now = datetime.utcnow().isoformat()
     library_app.add_to_library(

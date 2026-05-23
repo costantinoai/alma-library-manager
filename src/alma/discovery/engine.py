@@ -398,8 +398,12 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
                     touch_updated_at=False,
                 )
                 upsert_specter2_embedding(conn, paper_id, rec)
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "Recommendation metadata/vector fill failed for paper %s: %s",
+                    paper_id,
+                    exc,
+                )
             # `openalex_id` upsert is split out and IntegrityError-guarded
             # because the partial UNIQUE on `openalex_id` (api/deps.py:469)
             # can fire when a preprint/journal twin already owns the
@@ -422,8 +426,12 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
                         """,
                         (openalex_id_raw, paper_id, openalex_id_raw),
                     )
-                except sqlite3.IntegrityError:
-                    pass
+                except sqlite3.IntegrityError as exc:
+                    logger.warning(
+                        "Recommendation openalex_id fill skipped for paper %s: %s",
+                        paper_id,
+                        exc,
+                    )
 
             # Enqueue cross-source metadata hydration for the paper so
             # that any abstract / journal / publication_date the
@@ -454,8 +462,8 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
                 ),
             )
             count += 1
-        except sqlite3.IntegrityError:
-            pass
+        except sqlite3.IntegrityError as exc:
+            logger.warning("Recommendation insert skipped by integrity error: %s", exc)
         except Exception as exc:
             logger.debug("Failed to insert recommendation: %s", exc)
     conn.commit()
