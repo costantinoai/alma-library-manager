@@ -50,7 +50,6 @@ from typing import Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.utils import canonical_lookup_doi
-from alma.core.vector_blob import encode_vector
 from alma.discovery import semantic_scholar
 from alma.openalex.client import _normalize_openalex_work_id
 
@@ -341,27 +340,13 @@ def _try_s2_search_match(
     vector = best.get("specter2_embedding")
     if isinstance(vector, list) and vector:
         try:
-            cursor = conn.execute(
-                """
-                INSERT INTO publication_embeddings
-                    (paper_id, embedding, model, source, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(paper_id, model) DO UPDATE SET
-                    embedding  = excluded.embedding,
-                    source     = excluded.source,
-                    created_at = excluded.created_at
-                WHERE publication_embeddings.source != ?
-                """,
-                (
-                    paper_id,
-                    encode_vector(vector),
-                    model,
-                    EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                    datetime.utcnow().isoformat(),
-                    EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                ),
+            vector_stored = semantic_scholar.upsert_specter2_vector(
+                conn,
+                paper_id,
+                vector,
+                source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                created_at=datetime.utcnow().isoformat(),
             )
-            vector_stored = cursor.rowcount > 0
         except Exception as exc:
             logger.warning(
                 "S2 fallback vector store failed for %s: %s", paper_id, exc
@@ -604,6 +589,7 @@ def run_title_resolution_sweep(
             from uuid import uuid4
 
             from alma.api.scheduler import (
+                get_job_status,
                 get_job_trigger_source,
                 schedule_immediate,
                 set_job_status as _set_job_status,
@@ -613,18 +599,24 @@ def run_title_resolution_sweep(
             from alma.api.routes.ai import _run_title_resolution_sweep
 
             parent_source = get_job_trigger_source(job_id) or "auto:continuation"
+            parent_status = get_job_status(job_id) or {}
+            parent_chain_id = str(parent_status.get("chain_id") or "").strip()
+            parent_chain_step = str(parent_status.get("chain_step") or "title_resolution").strip()
             new_job_id = f"title_resolution_{uuid4().hex[:8]}"
-            _set_job_status(
-                new_job_id,
-                status="queued",
-                operation_key="ai.title_resolution_sweep",
-                trigger_source=parent_source,
-                message=(
+            status_kwargs = {
+                "status": "queued",
+                "operation_key": "ai.title_resolution_sweep",
+                "trigger_source": parent_source,
+                "message": (
                     f"Title resolution continuation queued "
                     f"({remaining} eligible, depth {continuation_depth + 1})"
                 ),
-                started_at=datetime.utcnow().isoformat(),
-            )
+                "started_at": datetime.utcnow().isoformat(),
+            }
+            if parent_chain_id:
+                status_kwargs["chain_id"] = parent_chain_id
+                status_kwargs["chain_step"] = parent_chain_step or "title_resolution"
+            _set_job_status(new_job_id, **status_kwargs)
             schedule_immediate(
                 new_job_id,
                 _run_title_resolution_sweep,
@@ -642,6 +634,7 @@ def run_title_resolution_sweep(
                     "remaining": remaining,
                     "depth": continuation_depth + 1,
                     "trigger_source": parent_source,
+                    "chain_id": parent_chain_id or None,
                 },
             )
 

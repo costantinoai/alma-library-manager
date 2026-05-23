@@ -30,7 +30,6 @@ from typing import Callable
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import canonical_lookup_doi, normalize_doi, validate_doi_shape
-from alma.core.vector_blob import encode_vector
 from alma.discovery import semantic_scholar
 
 logger = logging.getLogger(__name__)
@@ -625,32 +624,13 @@ def run_s2_vector_backfill(
                     )
                     continue
                 try:
-                    # Upsert with priority: a non-S2 vector (typically a
-                    # locally-computed SPECTER2 fill) gets overwritten by
-                    # the remote one; an existing S2 vector is left
-                    # alone (the WHERE on the conflict clause makes the
-                    # operation a no-op rather than a redundant rewrite).
-                    cursor = conn.execute(
-                        """
-                        INSERT INTO publication_embeddings
-                            (paper_id, embedding, model, source, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(paper_id, model) DO UPDATE SET
-                            embedding  = excluded.embedding,
-                            source     = excluded.source,
-                            created_at = excluded.created_at
-                        WHERE publication_embeddings.source != ?
-                        """,
-                        (
-                            paper_id,
-                            encode_vector(vector),
-                            model,
-                            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                            datetime.utcnow().isoformat(),
-                            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                        ),
-                    )
-                    if cursor.rowcount > 0:
+                    if semantic_scholar.upsert_specter2_vector(
+                        conn,
+                        paper_id,
+                        vector,
+                        source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                        created_at=datetime.utcnow().isoformat(),
+                    ):
                         stored += 1
                         batch_inserted_paper_ids.append(paper_id)
                     _clear_fetch_status(conn, paper_id=paper_id, model=model)
@@ -789,6 +769,7 @@ def run_s2_vector_backfill(
             from uuid import uuid4
 
             from alma.api.scheduler import (
+                get_job_status,
                 get_job_trigger_source,
                 schedule_immediate,
                 set_job_status as _set_job_status,
@@ -798,19 +779,25 @@ def run_s2_vector_backfill(
             from alma.api.routes.ai import _run_s2_vector_backfill
 
             parent_source = get_job_trigger_source(job_id) or "auto:continuation"
+            parent_status = get_job_status(job_id) or {}
+            parent_chain_id = str(parent_status.get("chain_id") or "").strip()
+            parent_chain_step = str(parent_status.get("chain_step") or "s2_fetch").strip()
             new_job_id = f"backfill_s2_vectors_{uuid4().hex[:8]}"
-            _set_job_status(
-                new_job_id,
-                status="queued",
-                operation_key="ai.backfill_s2_vectors",
-                trigger_source=parent_source,
-                message=(
+            status_kwargs = {
+                "status": "queued",
+                "operation_key": "ai.backfill_s2_vectors",
+                "trigger_source": parent_source,
+                "message": (
                     f"S2/SPECTER2 vector continuation queued "
                     f"({remaining_eligible} eligible, "
                     f"depth {continuation_depth + 1})"
                 ),
-                started_at=datetime.utcnow().isoformat(),
-            )
+                "started_at": datetime.utcnow().isoformat(),
+            }
+            if parent_chain_id:
+                status_kwargs["chain_id"] = parent_chain_id
+                status_kwargs["chain_step"] = parent_chain_step or "s2_fetch"
+            _set_job_status(new_job_id, **status_kwargs)
             schedule_immediate(
                 new_job_id,
                 _run_s2_vector_backfill,
@@ -828,6 +815,7 @@ def run_s2_vector_backfill(
                     "remaining_session_budget": remaining_session_budget,
                     "depth": continuation_depth + 1,
                     "trigger_source": parent_source,
+                    "chain_id": parent_chain_id or None,
                 },
             )
         else:
@@ -836,10 +824,12 @@ def run_s2_vector_backfill(
             # contract is "do exactly what the label says." Auto /
             # per-insert / scheduler paths chain normally.
             try:
-                from alma.api.scheduler import get_job_trigger_source
+                from alma.api.scheduler import get_job_status, get_job_trigger_source
                 from alma.services.embedding_chain import schedule_post_s2_chain
 
                 trigger_source = get_job_trigger_source(job_id) or ""
+                parent_status = get_job_status(job_id) or {}
+                parent_chain_id = str(parent_status.get("chain_id") or "").strip()
                 if trigger_source == "user":
                     add_job_log(
                         job_id,
@@ -849,7 +839,9 @@ def run_s2_vector_backfill(
                     )
                 else:
                     chain = schedule_post_s2_chain(
-                        conn, trigger_reason="post_s2_fetch"
+                        conn,
+                        chain_id=parent_chain_id or None,
+                        trigger_reason="post_s2_fetch",
                     )
                     if chain.get("scheduled_jobs"):
                         chain_id = str(chain.get("chain_id") or "").strip()
