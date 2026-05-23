@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
@@ -163,6 +164,115 @@ def refresh_centroids_for_papers(
     return updated
 
 
+def _fetch_missing_s2_vectors_for_author(
+    conn: sqlite3.Connection,
+    openalex_id: str,
+    *,
+    log: Optional[Callable[..., None]] = None,
+) -> Counter[str]:
+    """Fetch missing S2/SPECTER2 vectors for one author's local papers."""
+
+    oid = str(openalex_id or "").strip().lower()
+    summary: Counter[str] = Counter()
+    if not oid:
+        return summary
+    model = semantic_scholar.S2_SPECTER2_MODEL
+    pending = conn.execute(
+        """
+        SELECT p.id AS paper_id, p.doi AS doi, p.semantic_scholar_id AS s2_id
+        FROM publication_authors pa
+        JOIN papers p ON p.id = pa.paper_id
+        WHERE lower(pa.openalex_id) = ?
+          AND (
+               COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
+            OR COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') <> ''
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM publication_embeddings pe
+              WHERE pe.paper_id = p.id
+                AND pe.model = ?
+                AND pe.source = ?
+          )
+        """,
+        (oid, model, EMBEDDING_SOURCE_SEMANTIC_SCHOLAR),
+    ).fetchall()
+
+    lookups: list[tuple[str, str]] = []
+    for row in pending:
+        paper_id = str(row["paper_id"])
+        s2_id = str(row["s2_id"] or "").strip()
+        doi = normalize_doi(str(row["doi"] or "")) or str(row["doi"] or "").strip()
+        if s2_id:
+            lookups.append((paper_id, s2_id))
+        elif doi:
+            lookups.append((paper_id, f"DOI:{doi}"))
+
+    if not lookups:
+        return summary
+
+    if log is not None:
+        log(
+            "fetch_vectors",
+            f"Fetching SPECTER2 vectors for {len(lookups)} papers",
+            processed=0,
+            total=len(lookups),
+        )
+    vectors_found = 0
+    for chunk_start in range(0, len(lookups), _S2_BATCH_SIZE):
+        chunk = lookups[chunk_start:chunk_start + _S2_BATCH_SIZE]
+        lookup_ids = [lid for _, lid in chunk]
+        try:
+            batch = semantic_scholar.fetch_papers_batch(
+                lookup_ids,
+                fields=_VECTOR_FIELDS,
+                batch_size=_S2_BATCH_SIZE,
+                raise_on_error=True,
+            )
+        except semantic_scholar.SemanticScholarBatchError as exc:
+            logger.warning(
+                "author S2 vector fetch deferred for %s (%d ids): %s",
+                oid,
+                len(lookup_ids),
+                exc,
+            )
+            summary["vector_fetch_errors"] += len(chunk)
+            continue
+        by_lookup = {
+            str(v.get("_requested_id") or "").strip(): v
+            for v in batch.values()
+            if v.get("_requested_id")
+        }
+        for paper_id, lookup_id in chunk:
+            row = by_lookup.get(lookup_id)
+            if not row:
+                summary["vectors_missing"] += 1
+                continue
+            vec = semantic_scholar.extract_specter2_vector(row)
+            if not vec:
+                summary["vectors_missing"] += 1
+                continue
+            if semantic_scholar.upsert_specter2_vector(
+                conn,
+                paper_id,
+                vec,
+                source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            ):
+                vectors_found += 1
+        if conn.in_transaction:
+            conn.commit()
+        if log is not None:
+            log(
+                "fetch_vectors",
+                f"Vectors: {vectors_found}/{len(lookups)}",
+                processed=min(chunk_start + _S2_BATCH_SIZE, len(lookups)),
+                total=len(lookups),
+            )
+    summary["vectors_fetched"] = vectors_found
+    return summary
+
+
 # -- backfill runner (per author) ------------------------------------
 
 def refresh_author_works_and_vectors(
@@ -202,6 +312,7 @@ def refresh_author_works_and_vectors(
         "papers_updated": 0,
         "vectors_fetched": 0,
         "vectors_missing": 0,
+        "vector_fetch_errors": 0,
         "centroid_updated": False,
         "skipped": False,
         # Pass the OpenAlex profile we already fetched in Phase 1 back to
@@ -267,8 +378,20 @@ def refresh_author_works_and_vectors(
                 processed=declared,
                 total=declared,
             )
+            vector_summary = _fetch_missing_s2_vectors_for_author(
+                conn,
+                oid_norm,
+                log=_log,
+            )
+            summary["vectors_fetched"] = int(vector_summary.get("vectors_fetched") or 0)
+            summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
+            summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
             # still refresh centroid — embeddings may have just arrived
-            summary["centroid_updated"] = refresh_author_centroid(conn, oid_norm)
+            summary["centroid_updated"] = refresh_author_centroid(
+                conn,
+                oid_norm,
+                model=semantic_scholar.S2_SPECTER2_MODEL,
+            )
             conn.commit()
             return summary
 
@@ -320,89 +443,25 @@ def refresh_author_works_and_vectors(
         if conn.in_transaction:
             conn.commit()
 
-        # Phase 4: identify papers still missing an active-model
-        # SPECTER2 vector, then batch-fetch via Semantic Scholar.
-        try:
-            from alma.discovery.similarity import get_active_embedding_model
-
-            model = get_active_embedding_model(conn) or semantic_scholar.S2_SPECTER2_MODEL
-        except Exception:
-            model = semantic_scholar.S2_SPECTER2_MODEL
-
-        pending = conn.execute(
-            """
-            SELECT p.id AS paper_id, p.doi AS doi, p.semantic_scholar_id AS s2_id
-            FROM publication_authors pa
-            JOIN papers p ON p.id = pa.paper_id
-            LEFT JOIN publication_embeddings pe
-              ON pe.paper_id = p.id AND pe.model = ?
-            WHERE lower(pa.openalex_id) = ?
-              AND pe.paper_id IS NULL
-              AND (
-                   COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
-                OR COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') <> ''
-              )
-            """,
-            (model, oid_norm.lower()),
-        ).fetchall()
-
-        lookups: list[tuple[str, str]] = []  # (paper_id, lookup_id)
-        for row in pending:
-            paper_id = str(row["paper_id"])
-            s2_id = str(row["s2_id"] or "").strip()
-            doi = normalize_doi(str(row["doi"] or "")) or str(row["doi"] or "").strip()
-            if s2_id:
-                lookups.append((paper_id, s2_id))
-            elif doi:
-                lookups.append((paper_id, f"DOI:{doi}"))
-
-        if lookups:
-            _log(
-                "fetch_vectors",
-                f"Fetching SPECTER2 vectors for {len(lookups)} papers",
-                processed=0,
-                total=len(lookups),
-            )
-            vectors_found = 0
-            for chunk_start in range(0, len(lookups), _S2_BATCH_SIZE):
-                chunk = lookups[chunk_start:chunk_start + _S2_BATCH_SIZE]
-                lookup_ids = [lid for _, lid in chunk]
-                batch = semantic_scholar.fetch_papers_batch(
-                    lookup_ids,
-                    fields=_VECTOR_FIELDS,
-                    batch_size=_S2_BATCH_SIZE,
-                )
-                # Match results back to paper_ids via _requested_id stamp.
-                by_lookup = {
-                    str(v.get("_requested_id") or "").strip(): v
-                    for v in batch.values()
-                    if v.get("_requested_id")
-                }
-                for paper_id, lookup_id in chunk:
-                    row = by_lookup.get(lookup_id)
-                    if not row:
-                        summary["vectors_missing"] += 1
-                        continue
-                    vec = semantic_scholar.extract_specter2_vector(row)
-                    if not vec:
-                        summary["vectors_missing"] += 1
-                        continue
-                    _insert_vector(conn, paper_id, model, vec, source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR)
-                    vectors_found += 1
-                if conn.in_transaction:
-                    conn.commit()
-                _log(
-                    "fetch_vectors",
-                    f"Vectors: {vectors_found}/{len(lookups)}",
-                    processed=min(chunk_start + _S2_BATCH_SIZE, len(lookups)),
-                    total=len(lookups),
-                )
-            summary["vectors_fetched"] = vectors_found
+        # Phase 4: identify papers still missing an S2-sourced SPECTER2
+        # vector, then batch-fetch via Semantic Scholar. The vector model
+        # is always Semantic Scholar's SPECTER2 model, not the app's active
+        # provider model.
+        vector_summary = _fetch_missing_s2_vectors_for_author(
+            conn,
+            oid_norm,
+            log=_log,
+        )
+        summary["vectors_fetched"] = int(vector_summary.get("vectors_fetched") or 0)
+        summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
+        summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
 
         # Phase 5: recompute centroid.
         _log("centroid", "Recomputing author centroid")
         summary["centroid_updated"] = refresh_author_centroid(
-            conn, oid_norm, model=model
+            conn,
+            oid_norm,
+            model=semantic_scholar.S2_SPECTER2_MODEL,
         )
         conn.commit()
         return summary
@@ -429,12 +488,7 @@ def backfill_all_resolved_authors(
 
     conn = open_db_connection()
     try:
-        try:
-            from alma.discovery.similarity import get_active_embedding_model
-
-            model = get_active_embedding_model(conn) or semantic_scholar.S2_SPECTER2_MODEL
-        except Exception:
-            model = semantic_scholar.S2_SPECTER2_MODEL
+        model = semantic_scholar.S2_SPECTER2_MODEL
         cutoff_iso = (
             datetime.now(timezone.utc) - timedelta(days=_CENTROID_STALE_DAYS)
         ).isoformat()
@@ -581,38 +635,6 @@ def _ensure_authorship_row(
         VALUES (?, ?, ?)
         """,
         (paper_id, oid, display or ""),
-    )
-
-
-def _insert_vector(
-    conn: sqlite3.Connection,
-    paper_id: str,
-    model: str,
-    vector: list[float],
-    *,
-    source: str,
-) -> None:
-    """Insert one SPECTER2 vector blob into publication_embeddings."""
-
-    from alma.core.vector_blob import encode_vector
-
-    conn.execute(
-        """
-        INSERT INTO publication_embeddings
-            (paper_id, model, source, embedding, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(paper_id, model) DO UPDATE SET
-            embedding = excluded.embedding,
-            source = excluded.source,
-            created_at = excluded.created_at
-        """,
-        (
-            paper_id,
-            model,
-            source,
-            encode_vector(vector),
-            datetime.now(timezone.utc).isoformat(),
-        ),
     )
 
 
