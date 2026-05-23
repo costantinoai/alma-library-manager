@@ -81,21 +81,21 @@ def extract_specter2_vector(paper: dict) -> list[float] | None:
     return vector or None
 
 
-def upsert_specter2_embedding(
+def upsert_specter2_vector(
     conn: sqlite3.Connection,
     paper_id: str,
-    candidate: dict,
+    vector: list[float],
+    *,
+    source: str = EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+    created_at: str | None = None,
 ) -> bool:
-    """INSERT OR IGNORE the SPECTER2 vector for ``paper_id``.
+    """Store a SPECTER2 vector using canonical source-priority semantics.
 
-    Reads ``candidate["specter2_embedding"]`` (list-of-floats produced
-    by ``extract_specter2_vector``) and stores it via the canonical
-    float16 blob encoder so every writer path agrees with the reader's
-    decode dtype. Returns ``True`` on insert, ``False`` when the
-    candidate has no vector or a row already exists for this
-    (paper_id, model) pair.
+    Remote S2 vectors are the authoritative rows for
+    ``S2_SPECTER2_MODEL``. They overwrite local/provider fallbacks for
+    the same paper+model, but an existing S2-sourced row is left intact
+    to avoid redundant rewrites during repeated sweeps.
     """
-    vector = candidate.get("specter2_embedding")
     if not isinstance(vector, list) or not vector:
         return False
     try:
@@ -104,19 +104,46 @@ def upsert_specter2_embedding(
         return False
     cursor = conn.execute(
         """
-        INSERT OR IGNORE INTO publication_embeddings
+        INSERT INTO publication_embeddings
             (paper_id, embedding, model, source, created_at)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(paper_id, model) DO UPDATE SET
+            embedding  = excluded.embedding,
+            source     = excluded.source,
+            created_at = excluded.created_at
+        WHERE publication_embeddings.source != ?
         """,
         (
             paper_id,
             blob,
             S2_SPECTER2_MODEL,
-            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-            datetime.utcnow().isoformat(),
+            source,
+            created_at or datetime.utcnow().isoformat(),
+            source,
         ),
     )
     return cursor.rowcount > 0
+
+
+def upsert_specter2_embedding(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    candidate: dict,
+) -> bool:
+    """Upsert the candidate's SPECTER2 vector for ``paper_id``.
+
+    Reads ``candidate["specter2_embedding"]`` (list-of-floats produced
+    by ``extract_specter2_vector``) and stores it via the canonical
+    float16 blob encoder so every writer path agrees with the reader's
+    decode dtype. Returns ``True`` when a row was inserted or upgraded.
+    """
+    vector = candidate.get("specter2_embedding")
+    return upsert_specter2_vector(
+        conn,
+        paper_id,
+        vector,
+        source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+    )
 
 
 def fetch_papers_batch(
