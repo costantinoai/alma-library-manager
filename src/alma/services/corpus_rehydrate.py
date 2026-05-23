@@ -17,7 +17,12 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
-from alma.core.utils import utcnow as _utcnow, utcnow_iso as _utcnow_iso
+from alma.core.utils import (
+    normalize_doi,
+    normalize_title_key,
+    utcnow as _utcnow,
+    utcnow_iso as _utcnow_iso,
+)
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
     _normalize_openalex_work_id,
@@ -64,6 +69,17 @@ def _openalex_work_id(raw: str) -> str:
 def openalex_lookup_key(raw: str) -> str:
     work_id = _openalex_work_id(raw)
     return f"openalex:{work_id.lower()}" if work_id else ""
+
+
+def _s2_lookup_key_for_values(semantic_scholar_id: str, doi: str) -> str:
+    s2_id = str(semantic_scholar_id or "").strip().lower()
+    doi_value = str(doi or "").strip().lower()
+    return f"{s2_id}|{doi_value}"
+
+
+def _crossref_lookup_key(raw_doi: str) -> str:
+    doi = normalize_doi(str(raw_doi or "")) or str(raw_doi or "").strip()
+    return f"crossref:{doi.lower()}" if doi else ""
 
 
 def _ensure_enrichment_status_table(conn: sqlite3.Connection) -> None:
@@ -211,6 +227,10 @@ def _select_s2_candidates(
     if limit is not None:
         params.append(max(1, int(limit)))
         limit_clause = "LIMIT ?"
+    lookup_expr = (
+        "lower(trim(COALESCE(p.semantic_scholar_id, ''))) || '|' || "
+        "lower(trim(COALESCE(p.doi, '')))"
+    )
     return conn.execute(
         f"""
         SELECT
@@ -232,6 +252,8 @@ def _select_s2_candidates(
           )
           AND (
               es.paper_id IS NULL
+              OR COALESCE(es.lookup_key, '') != {lookup_expr}
+              OR COALESCE(es.fields_key, '') != 's2_paper_v1'
               OR COALESCE(es.status, '') NOT IN ('enriched', 'terminal_no_match')
           )
         ORDER BY
@@ -407,8 +429,11 @@ def _run_s2_batched_phase(
     (which also persists `tldr` + `influential_citation_count`).
     Writes an S2 ledger row per paper so reruns skip covered work.
     """
-    from alma.discovery import semantic_scholar
-    from alma.services.s2_vectors import _lookup_ids_for_row, _lookup_key_for_row
+    from alma.services.s2_vectors import (
+        _fetch_lookup_ids_resilient,
+        _lookup_ids_for_row,
+        _lookup_key_for_row,
+    )
 
     summary: Counter[str] = Counter()
     rows = _select_s2_candidates(conn, limit=limit)
@@ -437,16 +462,12 @@ def _run_s2_batched_phase(
         for row in chunk_rows:
             lookup_ids.extend(paper_lookup_ids.get(str(row["id"]), []))
         lookup_ids = list(dict.fromkeys(lookup_ids))
-        try:
-            fetched = semantic_scholar.fetch_papers_batch(
-                lookup_ids,
-                batch_size=len(lookup_ids),
-                raise_on_error=False,
-            )
-        except Exception as exc:
-            logger.warning("S2 batched fetch failed for chunk %d: %s", start, exc)
-            fetched = {}
-            summary["chunk_errors"] += 1
+        fetched, terminal_lookup_errors, retryable_lookup_errors = _fetch_lookup_ids_resilient(
+            lookup_ids,
+            job_id=job_id,
+            add_job_log=add_job_log,
+            batch_label=f"s2_metadata:{start}",
+        )
 
         # Index responses by paperId AND DOI for downstream matching.
         fetched_by_s2: dict[str, dict] = {}
@@ -476,13 +497,45 @@ def _run_s2_batched_phase(
             )
             lookup_key = _lookup_key_for_row(row)
             if paper is None:
+                row_lookup_ids = paper_lookup_ids.get(paper_id, [])
+                retry_reason = next(
+                    (
+                        retryable_lookup_errors.get(item)
+                        for item in row_lookup_ids
+                        if retryable_lookup_errors.get(item)
+                    ),
+                    "",
+                )
+                if retry_reason:
+                    _write_ledger(
+                        conn,
+                        paper_id=paper_id,
+                        source=S2_SOURCE,
+                        lookup_key=lookup_key,
+                        status=RETRYABLE_STATUS,
+                        reason=retry_reason,
+                        fields_filled=[],
+                        fields_key="s2_paper_v1",
+                        retry_after=timedelta(hours=6),
+                    )
+                    summary["retryable_error"] += 1
+                    processed += 1
+                    continue
+                terminal_reason = next(
+                    (
+                        terminal_lookup_errors.get(item)
+                        for item in row_lookup_ids
+                        if terminal_lookup_errors.get(item)
+                    ),
+                    "",
+                )
                 _write_ledger(
                     conn,
                     paper_id=paper_id,
                     source=S2_SOURCE,
                     lookup_key=lookup_key,
                     status="terminal_no_match",
-                    reason="s2_no_match",
+                    reason=terminal_reason or "s2_no_match",
                     fields_filled=[],
                     fields_key="s2_paper_v1",
                 )
@@ -598,6 +651,8 @@ def _select_crossref_abstract_candidates(
           {seed_clause}
           AND (
               es.paper_id IS NULL
+              OR COALESCE(es.lookup_key, '') != ('crossref:' || lower(trim(p.doi)))
+              OR COALESCE(es.fields_key, '') != 'crossref_v1'
               OR COALESCE(es.status, '') IN ('pending', 'queued')
               OR (
                   es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
@@ -1722,17 +1777,6 @@ def _apply_crossref_candidate(
     )
 
 
-def _ledger_status(conn: sqlite3.Connection, *, paper_id: str, source: str) -> str | None:
-    row = conn.execute(
-        """
-        SELECT status FROM paper_enrichment_status
-        WHERE paper_id = ? AND source = ? AND purpose = ?
-        """,
-        (paper_id, source, METADATA_PURPOSE),
-    ).fetchone()
-    return str(row["status"]) if row else None
-
-
 def _write_ledger(
     conn: sqlite3.Connection,
     *,
@@ -2082,7 +2126,31 @@ def _hydrate_via_s2(conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row) -
     if not lookup_ids:
         return ("skipped", [])
     try:
-        fetched = semantic_scholar.fetch_papers_batch(lookup_ids, batch_size=len(lookup_ids))
+        fetched = semantic_scholar.fetch_papers_batch(
+            lookup_ids,
+            batch_size=len(lookup_ids),
+            raise_on_error=True,
+        )
+    except semantic_scholar.SemanticScholarBatchError as exc:
+        status_code = getattr(exc, "status_code", None)
+        retryable = (
+            status_code is None
+            or status_code in {401, 403, 408, 425, 429}
+            or (status_code is not None and status_code >= 500)
+        )
+        if not retryable:
+            _write_ledger(
+                conn, paper_id=paper_id, source=S2_SOURCE, lookup_key=lookup_key,
+                status="terminal_no_match", reason=str(exc), fields_filled=[],
+                fields_key="s2_paper_v1",
+            )
+            return ("terminal_no_match", [])
+        _write_ledger(
+            conn, paper_id=paper_id, source=S2_SOURCE, lookup_key=lookup_key,
+            status=RETRYABLE_STATUS, reason=str(exc), fields_filled=[],
+            fields_key="s2_paper_v1", retry_after=timedelta(hours=6),
+        )
+        return (RETRYABLE_STATUS, [])
     except Exception as exc:
         _write_ledger(
             conn, paper_id=paper_id, source=S2_SOURCE, lookup_key=lookup_key,
@@ -2269,7 +2337,7 @@ def hydrate_paper_metadata(
     identifier for that source (no openalex_id → skip OpenAlex; no
     DOI/s2_id → skip S2; no DOI → skip Crossref). Already-`enriched`
     or `terminal_no_match` ledger rows from a previous run also skip
-    on this pass — see `_ledger_status` guard inside each step.
+    unless the source-specific lookup key has changed.
     """
     _ensure_enrichment_status_table(conn)
     row = _read_hydration_row(conn, paper_id)
@@ -2458,40 +2526,81 @@ def enqueue_pending_hydration(
         return False
     queued = False
     now = _utcnow_iso()
-    sources_to_queue: list[tuple[str, str]] = []
+    sources_to_queue: list[tuple[str, str, str]] = []
     if not (has_oa or has_doi or has_s2) and has_title:
         # Title-only paper: queue under TITLE_RESOLUTION_SOURCE so the
         # sweep's per-paper dispatcher knows to try title resolution
         # first. The downstream sources will be queued automatically
         # once resolution lands an identifier.
-        sources_to_queue.append((TITLE_RESOLUTION_SOURCE, "title_resolution_v1"))
+        sources_to_queue.append((
+            TITLE_RESOLUTION_SOURCE,
+            "title_resolution_v1",
+            f"title:{normalize_title_key(str(row['title'] or ''))}",
+        ))
     if has_oa:
-        sources_to_queue.append((OPENALEX_SOURCE, OPENALEX_WORKS_FIELDS_KEY))
+        sources_to_queue.append((
+            OPENALEX_SOURCE,
+            OPENALEX_WORKS_FIELDS_KEY,
+            openalex_lookup_key(str(row["openalex_id"] or "")),
+        ))
     if has_s2 or has_doi:
-        sources_to_queue.append((S2_SOURCE, "s2_paper_v1"))
+        sources_to_queue.append((
+            S2_SOURCE,
+            "s2_paper_v1",
+            _s2_lookup_key_for_values(
+                str(row["semantic_scholar_id"] or ""),
+                str(row["doi"] or ""),
+            ),
+        ))
     if has_doi and needs_abstract:
-        sources_to_queue.append((CROSSREF_SOURCE, "crossref_v1"))
-    for source, fields_key in sources_to_queue:
-        existing = _ledger_status(conn, paper_id=paper_id, source=source)
-        if existing in {"enriched", "terminal_no_match"}:
+        sources_to_queue.append((
+            CROSSREF_SOURCE,
+            "crossref_v1",
+            _crossref_lookup_key(str(row["doi"] or "")),
+        ))
+    for source, fields_key, lookup_key in sources_to_queue:
+        existing = conn.execute(
+            """
+            SELECT status, lookup_key, fields_key
+            FROM paper_enrichment_status
+            WHERE paper_id = ? AND source = ? AND purpose = ?
+            """,
+            (paper_id, source, METADATA_PURPOSE),
+        ).fetchone()
+        if (
+            existing is not None
+            and str(existing["status"] or "") in {"enriched", "terminal_no_match"}
+            and str(existing["lookup_key"] or "") == lookup_key
+            and str(existing["fields_key"] or "") == fields_key
+        ):
             continue
         conn.execute(
             """
             INSERT INTO paper_enrichment_status (
-                paper_id, source, purpose, lookup_key, fields_key, status,
+                paper_id, source, purpose, lookup_key, fields_key, status, reason,
                 fields_requested_json, fields_filled_json, attempts,
                 last_attempt_at, next_retry_at, updated_at
             )
-            VALUES (?, ?, ?, '', ?, ?, '[]', '[]', 0, NULL, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, '[]', '[]', 0, NULL, NULL, ?)
             ON CONFLICT(paper_id, source, purpose) DO UPDATE SET
+                lookup_key = excluded.lookup_key,
+                fields_key = excluded.fields_key,
                 status = CASE
-                    WHEN paper_enrichment_status.status IN ('enriched', 'terminal_no_match')
+                    WHEN paper_enrichment_status.lookup_key = excluded.lookup_key
+                     AND paper_enrichment_status.fields_key = excluded.fields_key
+                     AND paper_enrichment_status.status IN ('enriched', 'terminal_no_match')
                         THEN paper_enrichment_status.status
                     ELSE excluded.status
                 END,
+                reason = excluded.reason,
+                fields_requested_json = excluded.fields_requested_json,
+                fields_filled_json = excluded.fields_filled_json,
+                attempts = excluded.attempts,
+                last_attempt_at = excluded.last_attempt_at,
+                next_retry_at = excluded.next_retry_at,
                 updated_at = excluded.updated_at
             """,
-            (paper_id, source, METADATA_PURPOSE, fields_key, PENDING_STATUS, now),
+            (paper_id, source, METADATA_PURPOSE, lookup_key, fields_key, PENDING_STATUS, now),
         )
         queued = True
     if queued and auto_schedule:
