@@ -77,30 +77,28 @@ header automatically.
 
 ## Docker production
 
-Start from the supplied `docker-compose.yml`. Production tweaks:
+The shipped `docker-compose.yml` already encodes the production
+defaults you want: `restart: unless-stopped`, localhost-only port
+binding (`127.0.0.1:8000:8000`), read-only rootfs, `cap_drop ALL`,
+`no-new-privileges`, healthcheck on `/api/v1/health`, log rotation,
+and per-host resource limits (`ALMA_CPUS` / `ALMA_MEMORY`). For most
+deployments, the right move is to pull the prebuilt GHCR image
+through the shipped overlay rather than rebuilding locally:
 
-```yaml
-services:
-  alma:
-    build: .
-    image: alma:latest
-    container_name: alma
-    restart: unless-stopped
-    user: "${UID}:${GID}"
-    env_file: .env
-    ports:
-      - "127.0.0.1:8000:8000"   # bind to localhost only
-    volumes:
-      - .env:/app/.env:ro
-      - ./settings.json:/app/settings.json
-      - ./data:/app/data
-      - ./config:/app/config
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+```bash
+git clone https://github.com/costantinoai/alma-library-manager.git
+cd alma-library-manager
+cp .env.example .env             # API_KEY, OPENALEX_EMAIL, etc.
+mkdir -p data config
+
+# Pin a specific version in production (avoid surprise upgrades)
+ALMA_IMAGE_TAG=0.12.1 \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
+
+See [Getting started → Docker](../getting-started/docker.md#path-2--docker-compose-with-host-bind-mounts)
+for the full list of compose flags (GPU overlay, lite image, build
+locally, etc.).
 
 The image is multi-stage: a builder layer compiles the frontend,
 the runtime layer carries only the Python app + the built

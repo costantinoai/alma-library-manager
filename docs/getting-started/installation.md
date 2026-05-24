@@ -5,9 +5,17 @@ description: Install ALMa from source, build the frontend, and run the backend o
 
 # Installation
 
-This page is **bare metal only**. Docker users should use
-[Docker](docker.md); they do not need to install Python packages, Node
-packages, or a virtual environment on the host.
+!!! warning "Not the recommended install path"
+    This page covers the **bare-metal** install (no Docker). It is
+    **not recommended** unless you're actively developing on ALMa or
+    are comfortable managing a heavy native Python AI stack
+    (`torch`, `transformers`, `hdbscan`, `umap-learn`) by hand. For
+    everyday use, follow [Docker](docker.md) instead — one command,
+    every dependency pinned and tested, no host-side Python or Node.
+
+Docker users do not need to install Python packages, Node packages, or
+a virtual environment on the host — every dependency below is already
+inside the image.
 
 ## 1. Clone
 

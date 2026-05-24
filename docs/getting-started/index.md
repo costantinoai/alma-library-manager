@@ -5,30 +5,39 @@ description: Start ALMa with Docker, then complete the first-run checklist in th
 
 # Getting started
 
-For normal use, start with Docker. It is the release path and it
-includes the backend, frontend, and native dependencies in one image.
-Bare metal is for development or for users who intentionally want to
-manage Python, Node, and AI packages themselves.
+**For normal use, run ALMa with Docker.** The published image pulls
+from GitHub Container Registry in seconds and includes the FastAPI
+backend, the built React frontend, the SPECTER2 encoder, and every
+native dependency already pinned and tested. You provide a port, an
+OpenAlex email, and a place to store your library.
+
+Bare-metal Python is **not recommended** unless you're actively
+developing on ALMa itself — the AI stack (torch, transformers, hdbscan,
+umap-learn) has heavy native dependencies that are easy to mismatch in
+unmanaged Python environments. Almost every "ALMa won't start" report
+on the bare-metal path is a dependency build mismatch.
 
 <div class="grid cards" markdown>
 
--   :material-docker:{ .lg .middle } **Docker (suggested)**
+-   :material-docker:{ .lg .middle } **Docker (recommended)**
 
     ---
 
-    A single `docker run` command, named volumes that survive
-    upgrades, no compose file required. Compose is also available
-    for users who prefer host-side bind-mounts or want to build
-    from source.
+    One-line installer for Linux, macOS, and Windows — auto-detects
+    your hardware (GPU / CPU / Pi), pulls the prebuilt image from
+    GHCR, and starts ALMa with named volumes that survive upgrades.
+    Manual `docker run` and Docker Compose paths are documented too.
 
     [:octicons-arrow-right-24: Docker](docker.md)
 
--   :material-language-python:{ .lg .middle } **Bare metal**
+-   :material-language-python:{ .lg .middle } **Bare metal (advanced — not recommended)**
 
     ---
 
-    Python virtualenv / conda / uv plus a Vite frontend build. Use this
-    only when you're developing ALMa or deliberately avoiding Docker.
+    Python virtualenv / conda / uv plus a Vite frontend build. Use
+    this **only** when you're developing ALMa or are comfortable
+    managing a heavy native Python AI stack by hand. Use Docker
+    otherwise.
 
     [:octicons-arrow-right-24: Installation](installation.md)
 

@@ -5,27 +5,61 @@ description: Run ALMa as a container — the suggested install path, with named 
 
 # Docker
 
-Docker is how almost everyone should run ALMa. The published image
-includes the FastAPI backend, the built React frontend, the SPECTER2
-encoder (in the `normal` variant), and every native dependency
-already pinned and tested. You provide three things: a port, an
-OpenAlex email, and a place for ALMa to store your library.
+**Docker is the recommended way to run ALMa.** The published image
+pulls from GitHub Container Registry and includes the FastAPI
+backend, the built React frontend, the SPECTER2 encoder (in the
+`normal` variant), and every native dependency already pinned and
+tested. You provide three things: a port, an OpenAlex email, and a
+place for ALMa to store your library.
 
-There are two install paths:
+There are two install paths — both pull the same prebuilt image from
+GHCR by default:
 
-1. **One-command `docker run`** with named volumes. Suggested for
-   single-user workstations, NAS boxes, and quick evaluation. No
-   compose file, no host-side bind-mounts, no permission tinkering.
-2. **`docker compose`** with host bind-mounts. For users who want to
-   build the image from source, manage ALMa alongside other
-   compose-managed services, or directly inspect `data/` on the host.
+1. **One-command `docker run`** with named volumes — **the suggested
+   path for most users**. Single-user workstations, NAS boxes, and
+   quick evaluation. No clone, no compose file, no host-side
+   bind-mounts, no permission tinkering.
+2. **`docker compose`** with host bind-mounts. For users who already
+   manage other services with Docker Compose, want host folders they
+   can browse directly, want the security hardening shipped in
+   `docker-compose.yml` (read-only rootfs, `cap_drop ALL`,
+   localhost-only port), or want to build the image locally instead
+   of pulling.
 
-Both paths use the same image; pick by ergonomics. Three image tags
-are published — `:latest` (CPU, default), `:latest-gpu` (CUDA torch
-for NVIDIA hosts), and `:latest-lite` (no torch, for Pis). The
-README quick start has copy-paste `docker run` commands for each one.
+Both paths use the same published image; pick by ergonomics. Three
+image tags are published — `:latest` (CPU, default), `:latest-gpu`
+(CUDA torch for NVIDIA hosts), and `:latest-lite` (no torch, for
+Pis). The README quick start has copy-paste `docker run` commands
+for each one.
 
-## Path 1 — single `docker run` (suggested)
+## Path 1 — one-line installer (suggested)
+
+The fastest install is the cross-platform `setup.sh` / `setup.ps1`
+script. It checks Docker, auto-detects your hardware (NVIDIA GPU vs
+Raspberry Pi vs generic CPU host), picks the right image tag, prompts
+for your OpenAlex email, and starts the container with named volumes.
+
+=== "Linux / macOS"
+
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.sh | bash
+    ```
+
+=== "Windows (PowerShell)"
+
+    ```powershell
+    irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.ps1 | iex
+    ```
+
+Open <http://localhost:8000>. To update later, re-run the same
+command — the installer detects an existing container and pulls the
+latest image.
+
+### Or run `docker run` directly
+
+If you'd rather skip the script and copy-paste the command yourself
+(e.g. on a host without `curl`), this is exactly what the installer
+runs on a CPU host:
 
 ```bash
 docker run -d --name alma --restart unless-stopped \
@@ -36,7 +70,8 @@ docker run -d --name alma --restart unless-stopped \
   ghcr.io/costantinoai/alma-library-manager:latest
 ```
 
-Open <http://localhost:8000>.
+Swap `:latest` for `:latest-gpu` (add `--gpus all`) on an NVIDIA host
+or `:latest-lite` on a Raspberry Pi. Open <http://localhost:8000>.
 
 What this does:
 
@@ -88,57 +123,85 @@ upgrade the running stack out from under you.
 
 ## Path 2 — Docker Compose with host bind-mounts
 
-Use this when you want to build the image from source (`build: .`),
-manage ALMa alongside other compose-managed services, or have the
-SQLite file directly on your host filesystem.
+Clone the repo to get the shipped compose files (they encode all the
+volumes, security hardening, healthchecks, and resource limits in one
+place — no hand-written YAML needed):
 
 ```bash
-mkdir alma && cd alma
-mkdir -p data config
-touch .env settings.json
-chmod 666 .env settings.json   # see "File ownership" below
+git clone https://github.com/costantinoai/alma-library-manager.git
+cd alma-library-manager
+cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
+mkdir -p data config             # bind-mount targets
 ```
 
-Edit `.env` and set at least:
+Two compose files matter:
 
-```dotenv
-OPENALEX_EMAIL=you@example.com
-```
+| File | Role |
+| --- | --- |
+| `docker-compose.yml` | Base config — ports, volumes, security hardening, healthcheck, resource limits, and a `build:` block for local builds |
+| `docker-compose.ghcr.yml` | Opt-in overlay that disables `build:` and points `image:` at GHCR — use this to **pull instead of build** |
 
-Save as `docker-compose.yml`:
+### Path 2a — Pull from GHCR (recommended)
 
-```yaml
-services:
-  alma:
-    image: ghcr.io/costantinoai/alma-library-manager:latest
-    # build: .   # uncomment to build locally instead of pulling
-    container_name: alma
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-      - ./settings.json:/app/settings.json
-      - ./.env:/app/.env
-```
-
-Start:
+Layer the GHCR overlay so compose pulls the prebuilt image instead of
+building locally:
 
 ```bash
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 docker compose logs -f alma
 ```
 
-Open <http://localhost:8000>.
-
-Updating:
+Pick a different image tag via `ALMA_IMAGE_TAG` (defaults to
+`:latest`):
 
 ```bash
-docker compose pull && docker compose up -d
+# GPU image (also needs docker-compose.gpu.yml — see below)
+ALMA_IMAGE_TAG=latest-gpu \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml -f docker-compose.gpu.yml up -d
+
+# Lite image
+ALMA_IMAGE_TAG=latest-lite \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+# Pin a specific version
+ALMA_IMAGE_TAG=0.12.1 \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
+
+Update later with the same `pull` + `up -d` pair.
+
+### Path 2b — Build locally from this checkout
+
+Skip the GHCR overlay so compose uses the `build:` block in
+`docker-compose.yml`:
+
+```bash
+# CPU build (default)
+docker compose up -d --build
+
+# GPU build with passthrough
+ALMA_TORCH_VARIANT=cuda \
+  docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+
+# Lite build
+ALMA_VARIANT=lite docker compose up -d --build
+```
+
+Update with `git pull && docker compose up -d --build`.
+
+### Resource limits
+
+`docker-compose.yml` defaults to **8 vCPUs / 4 GB RAM** for the alma
+container — sized for a typical desktop host. Override per-host with
+env vars before `up -d`:
+
+```bash
+ALMA_CPUS=2.0 ALMA_MEMORY=1G docker compose up -d   # Raspberry Pi
+ALMA_CPUS=16 ALMA_MEMORY=8G docker compose up -d    # workstation
+```
+
+Open <http://localhost:8000>.
 
 ### File ownership
 
@@ -315,6 +378,52 @@ docker run --rm -v alma-data:/d -v "$PWD":/out alpine \
 # disk usage
 docker run --rm -v alma-data:/d alpine du -sh /d
 ```
+
+## Exposing on your network
+
+Every install path above binds ALMa to `127.0.0.1` — reachable only
+from `http://localhost:8000` on the host. ALMa has **no auth** in
+single-user mode, so this is the deliberate secure default.
+
+For a **headless always-on box — e.g. a Raspberry Pi you run 24/7 and
+open from a laptop** — set the `BIND_ADDR` variable (honoured by both
+the installer and the compose file) to bind other interfaces:
+
+=== "Installer"
+
+    ```bash
+    BIND_ADDR=0.0.0.0 bash setup.sh
+    ```
+
+=== "Compose"
+
+    ```bash
+    BIND_ADDR=0.0.0.0 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+    ```
+
+=== "docker run"
+
+    ```bash
+    docker run -d --name alma --restart unless-stopped \
+      -p 0.0.0.0:8000:8000 \
+      -e OPENALEX_EMAIL=you@example.com \
+      -e ALMA_SETTINGS_PATH=/app/data/settings.json \
+      -v alma-data:/app/data -v alma-config:/app/config \
+      ghcr.io/costantinoai/alma-library-manager:latest-lite
+    ```
+
+Then reach it from your laptop at `http://<pi-lan-ip>:8000`
+(`hostname -I` on the Pi prints its address). `:latest-lite` is the
+right image for a Pi.
+
+!!! warning "No auth by default — trusted networks only"
+    Because single-user ALMa is unauthenticated, only expose it on a
+    private LAN. Prefer binding to the Pi's LAN IP
+    (`BIND_ADDR=192.168.1.50`) over `0.0.0.0`, set an `API_KEY`
+    (`-e API_KEY=…`) so requests need an `X-API-Key` header, restrict
+    the port with a host firewall, and for any access beyond the LAN
+    keep the container on `127.0.0.1` behind a reverse proxy with
+    HTTPS + auth.
 
 ## After it starts
 

@@ -44,14 +44,53 @@ The app has five views:
 
 ## Quick start
 
-The suggested install is one `docker run` line that pulls the
-prebuilt image from GitHub Container Registry — no clone, no build,
-no compose file. Three paths, pick the one that matches your
-hardware. Replace `you@example.com` with the email you want to
-identify yourself to OpenAlex (free, no signup required).
+**One line, any OS.** The installer checks Docker, picks the right
+image variant for your hardware (auto-detects NVIDIA GPU and
+Raspberry Pi), prompts for your OpenAlex email, and starts ALMa with
+named Docker volumes so your library survives upgrades. **Prerequisite:**
+[Docker](https://docs.docker.com/get-docker/) installed and running.
 
-### Most laptops / desktops / servers (CPU)
+### Linux / macOS
 
+```bash
+curl -sSL https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.ps1 | iex
+```
+
+Open <http://localhost:8000>. To update later, re-run the same
+command — the installer detects an existing install and pulls the
+latest image.
+
+> Power users — three things you can do instead of the one-liner:
+> [run the `docker run` command by hand](#manual-docker-run-pick-your-image-flavor)
+> (no script), use [Docker Compose](#run-with-docker-compose-alternative)
+> (build locally or pull from GHCR with extra hardening + bind
+> mounts), or fall back to a [bare-metal Python install](#bare-metal-install-advanced--not-recommended)
+> (not recommended unless you're developing on ALMa).
+
+### What the installer does
+
+1. Confirms Docker is installed and the daemon is running.
+2. Picks an image variant:
+   - **NVIDIA GPU + Container Toolkit** detected → `:latest-gpu` (CUDA torch, ~3.2 GB image, fastest local SPECTER2 inference).
+   - **Raspberry Pi / armv7** detected → `:latest-lite` (no torch, ~1.2 GB image, ~1 GB runtime).
+   - **Anything else** → `:latest` (CPU torch, ~1.4 GB image, ~2 GB runtime). Fine for ongoing use — most papers ship pre-computed Semantic Scholar vectors so the local CPU encoder is rarely hit.
+3. Prompts for your OpenAlex polite-pool email (free, no signup — just identifies you so you don't share anonymous rate limits).
+4. Pulls the image and runs the container with `--restart unless-stopped` (auto-restarts on crashes + at boot) and named volumes for your data.
+
+Override the image tag with the `ALMA_IMAGE_TAG` env var if you want
+to force a specific variant (e.g. `ALMA_IMAGE_TAG=0.12.1`).
+
+### Manual `docker run` (pick your image flavor)
+
+If you'd rather skip the script and copy-paste a one-liner:
+
+**CPU (default):**
 ```bash
 docker run -d --name alma --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
@@ -60,27 +99,8 @@ docker run -d --name alma --restart unless-stopped \
   ghcr.io/costantinoai/alma-library-manager:latest
 ```
 
-Open <http://localhost:8000>. That's the whole install. Local
-embedding compute (the SPECTER2 encoder) runs on CPU — fine for
-ongoing use; the only time you'll notice it is when you mass-recompute
-embeddings on a large library (thousands of papers without S2
-vectors). Most papers come with pre-computed Semantic Scholar vectors
-already, so day-to-day you rarely hit the local encoder.
-
-### NVIDIA GPU host (faster embedding compute)
-
-One-time host setup — install the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
-so Docker can pass the GPU through. On Ubuntu / Debian:
-
-```bash
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
-
-On Fedora / RHEL replace `apt-get` with `dnf`. Then run the GPU image:
-
+**NVIDIA GPU** (host needs the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+installed):
 ```bash
 docker run -d --name alma --restart unless-stopped --gpus all \
   -p 127.0.0.1:8000:8000 \
@@ -89,13 +109,7 @@ docker run -d --name alma --restart unless-stopped --gpus all \
   ghcr.io/costantinoai/alma-library-manager:latest-gpu
 ```
 
-The `-gpu` tag ships the CUDA torch wheel (~3.2 GB image) so SPECTER2
-inference uses the GPU. Confirm with
-`docker exec alma python -c "import torch; print(torch.cuda.is_available())"`
-— it should print `True`.
-
-### Raspberry Pi or other low-resource host
-
+**Raspberry Pi / lite:**
 ```bash
 docker run -d --name alma --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
@@ -104,10 +118,7 @@ docker run -d --name alma --restart unless-stopped \
   ghcr.io/costantinoai/alma-library-manager:latest-lite
 ```
 
-Drops `torch` entirely (~1.2 GB image, ~1 GB runtime memory). You
-still get full embeddings via Semantic Scholar's pre-computed
-SPECTER2 vectors, and you can configure OpenAI as the embedding
-provider from Settings if you want.
+On Windows PowerShell, replace the trailing `\` line continuations with backticks (`` ` ``).
 
 ### Auto-restart and updates
 
@@ -115,12 +126,24 @@ provider from Settings if you want.
 crashes, Docker daemon restarts, and host reboots — you don't have to
 do anything for that.
 
-To pull the latest image and restart:
+To update, the easiest path is to **re-run the installer** — it
+detects an existing install, pulls the latest image, and recreates
+the container. Your data is in named volumes, so nothing is lost:
+
+```bash
+# Linux / macOS
+curl -sSL https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.sh | bash
+
+# Windows
+irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.ps1 | iex
+```
+
+Manual equivalent if you prefer:
 
 ```bash
 docker pull ghcr.io/costantinoai/alma-library-manager:latest   # or :latest-gpu / :latest-lite
 docker rm -f alma
-# rerun the same `docker run` command — your data lives in the named volumes
+# rerun your original `docker run` command — your data lives in the named volumes
 ```
 
 To automate updates daily, drop in [Watchtower](https://containrrr.dev/watchtower/):
@@ -138,6 +161,50 @@ restarts the container, and removes the old image layer.
 > `X-API-Key` header on every request, `-e SLACK_TOKEN=…` for Slack
 > digests, etc. Full env-var reference:
 > [docs/reference/configuration.md](docs/reference/configuration.md).
+
+---
+
+## Exposing on your network
+
+By default ALMa binds to `127.0.0.1` — it's reachable only from
+`http://localhost:8000` on the machine running it. In single-user
+mode ALMa has **no authentication**, so this is the deliberate, secure
+default: nothing is offered to your network or the internet.
+
+For a **headless always-on instance — e.g. a Raspberry Pi you run 24/7
+and open from your laptop** — you'll want it reachable on your LAN.
+Both the installer and the compose file honour a `BIND_ADDR` variable:
+
+```bash
+# Installer (the script passes BIND_ADDR through to the container)
+BIND_ADDR=0.0.0.0 bash setup.sh
+
+# Docker Compose
+BIND_ADDR=0.0.0.0 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+# Plain docker run — put the host IP in the -p flag
+docker run -d --name alma --restart unless-stopped \
+  -p 0.0.0.0:8000:8000 \
+  -e OPENALEX_EMAIL=you@example.com \
+  -e ALMA_SETTINGS_PATH=/app/data/settings.json \
+  -v alma-data:/app/data -v alma-config:/app/config \
+  ghcr.io/costantinoai/alma-library-manager:latest-lite
+```
+
+`0.0.0.0` binds all interfaces, so from your laptop you reach the Pi at
+`http://<pi-lan-ip>:8000` (find the Pi's IP with `hostname -I`). The
+`:latest-lite` tag above is the right ALMa image for a Pi.
+
+> **Because ALMa has no auth by default, only expose it on a trusted
+> private network.** Harden further by:
+> - binding to the Pi's LAN IP only (`BIND_ADDR=192.168.1.50`) rather
+>   than `0.0.0.0`, so it isn't offered on other interfaces (e.g. a VPN);
+> - setting an `API_KEY` (`-e API_KEY=…`) so every request needs an
+>   `X-API-Key` header;
+> - restricting the port with the host firewall (`ufw allow from
+>   192.168.1.0/24 to any port 8000`);
+> - or, for any access beyond your LAN, a reverse proxy with HTTPS +
+>   auth while keeping the container bound to `127.0.0.1`.
 
 ---
 
@@ -215,46 +282,90 @@ The CPU + lite flavors are published for `linux/amd64` and
 
 ---
 
-## Build from source with Docker Compose (alternative)
+## Run with Docker Compose (alternative)
 
-If you'd rather build the image from this checkout, run ALMa
-alongside other compose-managed services, or have a host folder you
-can browse directly instead of named volumes:
+> **Most users should use the [Quick start](#quick-start) above.** This
+> section is for users who already manage other services with Docker
+> Compose, want a host folder they can browse directly instead of named
+> volumes, or want the extra security hardening shipped in
+> `docker-compose.yml` (read-only rootfs, `cap_drop ALL`, localhost-only
+> port binding).
+
+Two paths — both use the same `docker-compose.yml`, and an overlay
+chooses whether the image is **pulled from GHCR** (recommended) or
+**built locally** from this checkout.
+
+Shared first step:
 
 ```bash
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
 cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
-docker compose up -d             # CPU build (default)
+mkdir -p data config             # bind-mount targets
 ```
 
-GPU build with passthrough — needs the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
-installed on the host (see the GPU box in the quick start above):
+### A. Pull the prebuilt image from GHCR (fast, no build)
+
+Adds `docker-compose.ghcr.yml`, which clears the `build:` block and points
+`image:` at GHCR. Pick the image tag via `ALMA_IMAGE_TAG`:
 
 ```bash
+# CPU (default — :latest)
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+
+# GPU (needs NVIDIA Container Toolkit on the host)
+ALMA_IMAGE_TAG=latest-gpu \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml -f docker-compose.gpu.yml up -d
+
+# Lite
+ALMA_IMAGE_TAG=latest-lite \
+  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+Update later with `docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull && ... up -d`.
+
+### B. Build the image locally from this checkout
+
+Useful if you've made local code changes or want to pin every layer to
+your own build. Skips GHCR entirely.
+
+```bash
+# CPU build (default)
+docker compose up -d --build
+
+# GPU build with passthrough — also needs the NVIDIA Container Toolkit
 ALMA_TORCH_VARIANT=cuda \
   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-```
 
-Lite build:
-
-```bash
+# Lite build
 ALMA_VARIANT=lite docker compose up -d --build
 ```
 
-Update with `docker compose pull && docker compose up -d`. Your data
-lives in `./data` next to the compose file; nothing personal is
-baked into the image.
+### Resource limits and other knobs
+
+`docker-compose.yml` defaults to **8 vCPUs / 4 GB RAM** for the alma
+container — sized for a typical desktop host. Override per-host with
+`ALMA_CPUS` / `ALMA_MEMORY` env vars (e.g. `ALMA_CPUS=2.0 ALMA_MEMORY=1G`
+on a Raspberry Pi). All other deployment knobs live in `.env`; nothing
+personal is baked into the image — your data is in `./data`,
+`./config`, `./settings.json`, and `./.env` next to the compose file.
 
 ---
 
-## Bare metal install (advanced)
+## Bare metal install (advanced — not recommended)
 
-Skip Docker only if you have a specific reason — the AI stack
-(`torch`, `transformers`, `hdbscan`, `umap-learn`) has heavy native
+> **Not recommended unless you're doing local development on ALMa
+> itself or are comfortable managing a heavy native Python AI stack
+> yourself.** Almost every "ALMa won't start" report we've seen on this
+> path is a `torch` / `transformers` / `hdbscan` build mismatch. Use
+> the [Quick start](#quick-start) Docker image instead — it bundles a
+> verified version of every dependency.
+
+If you still want to skip Docker, the AI stack (`torch`,
+`transformers`, `hdbscan`, `umap-learn`) has heavy native
 dependencies that are easy to mismatch in unmanaged Python
-environments.
+environments. Be ready to debug them.
 
 You'll need Python 3.11+ and Node 20+. From a clean virtualenv:
 
