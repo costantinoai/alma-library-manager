@@ -1,14 +1,24 @@
 # =============================================================================
 # ALMa — Docker Compose
 # =============================================================================
-# All user-sensitive state lives on the host and is bind-mounted in:
-#   - .env             secrets (OpenAlex / Slack keys)
-#   - settings.json    user preferences (backend, from_year, openalex_email…)
-#   - data/            scholar.db + caches + secrets.json
-#   - config/          plugin configs (slack.config, etc.)
+# User-sensitive state lives in NAMED Docker volumes (not host bind-mounts):
+#   - alma-data    /app/data   scholar.db + caches + secrets.json + settings.json
+#   - alma-config  /app/config plugin configs (slack.config, etc.)
 #
-# Nothing in this list is baked into the image — the image is reproducible
-# and shareable; the host is where personal data stays.
+# Named volumes are owned by the container's app user, so there is never a
+# host-vs-container UID/permission mismatch (the cause of "permission denied"
+# on the DB / lock / secrets in bind-mount setups). They survive container
+# removal and image upgrades; only `docker volume rm` wipes them. This matches
+# what setup.sh / setup.ps1 create. Initial secrets come from .env via the
+# `env_file:` below; the Settings UI persists rotations to the secret store
+# inside alma-data, so no host .env write-back (or bind) is needed.
+#
+# Back up / inspect the data volume with, e.g.:
+#   docker run --rm -v alma-data:/data -v "$PWD":/out alpine \
+#     tar czf /out/alma-backup.tgz -C /data .
+#
+# Nothing here is baked into the image — the image is reproducible and
+# shareable; the volumes are where personal data stays.
 #
 # Variants — choose with the ALMA_VARIANT env var:
 #   ALMA_VARIANT=normal (default)  full AI stack (~2 GB image after build)
@@ -105,9 +115,9 @@ services:
     # Environment
     # -------------------------------------------------------------------------
     # `env_file` injects values from .env as process env vars at container
-    # start. The same .env is ALSO bind-mounted below so the Settings UI's
-    # key-rotation flow (python-dotenv set_key / unset_key) can persist
-    # changes back to the host file.
+    # start (initial credentials). The Settings UI persists key rotations to
+    # the secret store inside the alma-data volume — the canonical path for
+    # named-volume installs — so there is no host .env write-back.
     env_file:
       - .env
 
@@ -120,31 +130,14 @@ services:
       - NUMBA_DISABLE_JITCACHE=1
 
     # -------------------------------------------------------------------------
-    # Bind mounts — host paths shown on the left, container paths on the right.
-    # All host paths must exist before `docker compose up`.
+    # Named volumes (declared at the bottom of this file). Owned by the
+    # container app user — no host UID/permission mismatch. settings.json and
+    # secrets.json live INSIDE alma-data (ALMA_SETTINGS_PATH=/app/data/...),
+    # so a single data volume holds all writable state.
     # -------------------------------------------------------------------------
     volumes:
-      # Database, caches, secrets.json
-      - type: bind
-        source: ./data
-        target: /app/data
-
-      # Plugin configs (slack.config, …)
-      - type: bind
-        source: ./config
-        target: /app/config
-
-      # User preferences. Mounted as a single file so the Settings API can
-      # rewrite it via the standard `update_settings` flow.
-      - type: bind
-        source: ./settings.json
-        target: /app/settings.json
-
-      # Secrets file. Mounted as a single file so `dotenv.set_key` writes
-      # propagate back to the host (key rotation in the Settings UI).
-      - type: bind
-        source: ./.env
-        target: /app/.env
+      - alma-data:/app/data        # scholar.db, caches, secrets.json, settings.json
+      - alma-config:/app/config    # plugin configs (slack.config, …)
 
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
@@ -160,3 +153,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# Named volumes — stable names (no compose project prefix) so they match
+# setup.sh / setup.ps1 and survive `docker compose down` (use `down -v` to
+# wipe). Owned by the container app user: no host UID/permission mismatch.
+volumes:
+  alma-data:
+    name: alma-data
+  alma-config:
+    name: alma-config
