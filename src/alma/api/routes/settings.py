@@ -58,10 +58,17 @@ from alma.core.secrets import (
     set_secret,
 )
 
-# Where `.env` lives. Kept next to `settings.json` at the project
-# root — the same path `alma.config._find_project_root()` resolves.
-_DOTENV_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / ".env"
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
+
+
+def _dotenv_path():
+    """Canonical ``.env`` path — the OS-standard config-dir ``.env`` (see
+    ``alma.config.get_env_file_path``). Centralised so the Settings-UI key
+    rotation writes to the same file ``config`` loads at startup, in Docker
+    (``ALMA_CONFIG_DIR=/app`` → ``/app/.env``) and bare-metal alike."""
+    from alma.config import get_env_file_path
+
+    return get_env_file_path()
 
 
 logger = logging.getLogger(__name__)
@@ -92,22 +99,24 @@ def _try_write_dotenv_rotation(new_value: str, previous: str) -> None:
     except ImportError:  # pragma: no cover — required dependency
         return
 
+    dotenv_path = _dotenv_path()
     try:
-        _DOTENV_PATH.touch(exist_ok=True)
+        dotenv_path.parent.mkdir(parents=True, exist_ok=True)
+        dotenv_path.touch(exist_ok=True)
     except (PermissionError, OSError) as exc:
         logger.info(
             "Skipping `.env` rotation for OpenAlex key (`%s` not writable: %s) — "
             "value is still persisted in the secret store",
-            _DOTENV_PATH, exc,
+            dotenv_path, exc,
         )
         return
 
     try:
         if previous and previous != new_value:
             archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
-            set_key(str(_DOTENV_PATH), archive_key, previous)
+            set_key(str(dotenv_path), archive_key, previous)
             os.environ[archive_key] = previous
-        set_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY, new_value)
+        set_key(str(dotenv_path), _OPENALEX_ENV_KEY, new_value)
     except (PermissionError, OSError) as exc:
         logger.info("`.env` write skipped for OpenAlex rotation: %s", exc)
 
@@ -122,16 +131,17 @@ def _try_delete_dotenv() -> None:
     except ImportError:
         return
 
-    if not _DOTENV_PATH.exists():
+    dotenv_path = _dotenv_path()
+    if not dotenv_path.exists():
         return
 
     previous = os.environ.get(_OPENALEX_ENV_KEY, "")
     try:
         if previous:
             archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
-            set_key(str(_DOTENV_PATH), archive_key, previous)
+            set_key(str(dotenv_path), archive_key, previous)
             os.environ[archive_key] = previous
-        unset_key(str(_DOTENV_PATH), _OPENALEX_ENV_KEY)
+        unset_key(str(dotenv_path), _OPENALEX_ENV_KEY)
     except (PermissionError, OSError) as exc:
         logger.info("`.env` delete skipped for OpenAlex rotation: %s", exc)
 

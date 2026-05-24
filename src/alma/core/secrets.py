@@ -63,7 +63,15 @@ def _resolve_store_path() -> Path:
         if not p.is_absolute():
             p = _find_project_root() / p
         return p
-    return _find_project_root() / "data" / "secrets.json"
+    # Default: alongside the database in the data dir, so secrets follow the
+    # active profile (a dev profile keeps its own secrets, never the prod
+    # keys) and Docker keeps using /app/data/secrets.json via DATA_DIR.
+    try:
+        from alma.config import get_data_dir
+
+        return get_data_dir() / "secrets.json"
+    except Exception:
+        return _find_project_root() / "data" / "secrets.json"
 
 
 def _read_store() -> dict[str, str]:
