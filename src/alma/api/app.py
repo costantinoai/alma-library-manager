@@ -68,6 +68,18 @@ async def lifespan(app: FastAPI):
     # Install the in-memory ring-buffer log handler for the /logs endpoint
     install_log_handler()
 
+    # Validate storage locations and migrate any legacy ./data before the DB
+    # is opened at its canonical (OS-standard / Docker-pinned) path. No-op in
+    # Docker (DATA_DIR=/app/data is already the data) and on an existing
+    # install; only acts when legacy data is found at the old location.
+    try:
+        from alma.core.storage_migration import validate_and_migrate_storage
+        validate_and_migrate_storage()
+    except Exception as e:
+        # A halt (StorageMigrationHalt) is deliberately fatal — surface it.
+        logger.error("Storage validation failed: %s", e)
+        raise
+
     # Initialise database schema ONCE (all DDL, seeds).
     # This keeps per-request get_db() lightweight and avoids lock contention.
     from alma.api.deps import init_db_schema
