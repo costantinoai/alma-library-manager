@@ -213,6 +213,18 @@ ENV HF_HOME=/app/data/.hf-cache \
     TRANSFORMERS_CACHE=/app/data/.hf-cache \
     HF_HUB_CACHE=/app/data/.hf-cache
 
+# numba cache. The graph endpoints import `umap`, whose layout kernels are
+# decorated `@numba.njit(cache=True)`. numba builds the on-disk cache locator
+# at IMPORT/decoration time (so NUMBA_DISABLE_JITCACHE, which only affects
+# call time, does NOT help). With appuser created `--no-create-home`,
+# `$HOME` (/home/appuser) doesn't exist and NUMBA_CACHE_DIR is unset, so the
+# user-wide locator can't initialise and import fails with
+# `RuntimeError: cannot cache function 'rdist': no locator available` —
+# every /api/v1/graphs/* request 500s. Point the cache at the writable data
+# volume: import succeeds and the compiled kernels persist across restarts,
+# so the first graph render after a deploy is fast too.
+ENV NUMBA_CACHE_DIR=/app/data/.numba-cache
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -fsS http://localhost:8000/api/v1/health || exit 1
 
