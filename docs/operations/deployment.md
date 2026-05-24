@@ -89,14 +89,15 @@ through the shipped overlay rather than rebuilding locally:
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
 cp .env.example .env             # API_KEY, OPENALEX_EMAIL, etc.
-mkdir -p data config
 
 # Pin a specific version in production (avoid surprise upgrades)
 ALMA_IMAGE_TAG=0.12.1 \
   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
-See [Getting started → Docker](../getting-started/docker.md#path-2--docker-compose-with-host-bind-mounts)
+State lives in the `alma-data` / `alma-config` named volumes (owned by
+the container app user — no host permission setup). See
+[Getting started → Docker](../getting-started/docker.md#path-2--docker-compose-named-volumes)
 for the full list of compose flags (GPU overlay, lite image, build
 locally, etc.).
 

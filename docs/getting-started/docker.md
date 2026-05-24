@@ -17,14 +17,17 @@ GHCR by default:
 
 1. **One-command `docker run`** with named volumes — **the suggested
    path for most users**. Single-user workstations, NAS boxes, and
-   quick evaluation. No clone, no compose file, no host-side
-   bind-mounts, no permission tinkering.
-2. **`docker compose`** with host bind-mounts. For users who already
-   manage other services with Docker Compose, want host folders they
-   can browse directly, want the security hardening shipped in
-   `docker-compose.yml` (read-only rootfs, `cap_drop ALL`,
-   localhost-only port), or want to build the image locally instead
-   of pulling.
+   quick evaluation. No clone, no compose file, no permission tinkering.
+2. **`docker compose`** — also named volumes. For users who already
+   manage other services with Docker Compose, want the security
+   hardening shipped in `docker-compose.yml` (read-only rootfs,
+   `cap_drop ALL`, localhost-only port), or want to build the image
+   locally instead of pulling. (Prefer host-visible folders? An
+   override re-enables bind-mounts — see
+   [Advanced: host bind-mounts](#advanced-host-bind-mounts).)
+
+Both paths use the same `alma-data` / `alma-config` named volumes, so
+your library is identical and portable between them.
 
 Both paths use the same published image; pick by ergonomics. Three
 image tags are published — `:latest` (CPU, default), `:latest-gpu`
@@ -121,7 +124,7 @@ servers or production-ish setups, pin a specific version
 (`:0.9.2`, `:0.9`, or `:0`) so an automatic refresh of `main` doesn't
 upgrade the running stack out from under you.
 
-## Path 2 — Docker Compose with host bind-mounts
+## Path 2 — Docker Compose (named volumes)
 
 Clone the repo to get the shipped compose files (they encode all the
 volumes, security hardening, healthchecks, and resource limits in one
@@ -131,8 +134,15 @@ place — no hand-written YAML needed):
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
 cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
-mkdir -p data config             # bind-mount targets
 ```
+
+The compose files use the same **named volumes** as Path 1
+(`alma-data`, `alma-config`) — Docker creates and owns them as the
+container's `appuser`, so there are no host directories to create and
+no file-permission tinkering. Your library lives in the `alma-data`
+volume (see [File ownership](#file-ownership) and the backup commands
+below). Prefer host-visible folders instead? See
+[Advanced: host bind-mounts](#advanced-host-bind-mounts).
 
 Two compose files matter:
 
@@ -206,17 +216,40 @@ Open <http://localhost:8000>.
 ### File ownership
 
 The image runs as a non-root `appuser` (UID `10001`, GID `10001`).
-With **named volumes** (Path 1) Docker manages the perms — nothing to
-configure. With **host bind-mounts** (Path 2) the host file's UID
-needs to be readable/writable by the container's `appuser`. The
-simplest fix is `chmod 666 .env settings.json` before starting; the
-broader rules are in the [configuration reference](../reference/configuration.md).
+Both install paths use **named volumes** (`alma-data`, `alma-config`),
+which Docker creates owned by `appuser` — so there is **no host-vs-
+container UID mismatch** and nothing to configure. This is the cause of
+the "permission denied" failures that plagued host bind-mount setups
+(where writes to the DB / secrets / settings would fail if the host
+files were owned by a different uid).
 
-If you see boot-time warnings like
-`Could not load .env … using environment vars only`, that's the
-graceful fallback in action — env vars from the `env_file:` directive
-have already been passed into the container, so the app keeps
-working; it just can't *also* load the file from inside.
+Initial credentials come from `.env` via the `env_file:` directive
+(compose reads the host file and injects the values as environment
+variables — no in-container file read needed). Key rotations done in
+the Settings UI persist to the secret store **inside the `alma-data`
+volume**, the canonical path for named-volume installs, so they
+survive restarts and upgrades.
+
+### Advanced: host bind-mounts
+
+Prefer host-visible folders you can browse/back up directly? Drop a
+`docker-compose.override.yml` next to the compose file (it's gitignored
+and auto-applied) that replaces the named volumes with binds:
+
+```yaml
+services:
+  alma:
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+```
+
+Then `mkdir -p data config` before `up -d`. The trade-off is the
+permission caveat the named volumes avoid: the host `./data` files must
+be writable by the container's `appuser` (UID `10001`). If you see
+"permission denied" on the DB / secrets, `chown -R 10001:10001 data
+config` (rootless Docker remaps this to your subuid range) or run a
+one-off `docker run --rm -u 0 -v "$PWD/data":/d alpine chown -R 10001:10001 /d`.
 
 ## Three image flavors
 
@@ -297,60 +330,58 @@ ALMA_TORCH_VARIANT=cuda docker compose build alma
 
 ## Where everything lives on disk
 
-There are four pieces of state to track across an upgrade. Where each
-of them lives depends on which install path you took and which OS
-your Docker daemon is on.
+Both install paths store all state in the same two **named volumes**
+(`alma-data`, `alma-config`), owned by the container's `appuser`. The
+only differences are how you launch (`docker run` / setup.sh vs compose)
+and how initial credentials are passed (`-e KEY=value` flags vs the
+`.env` `env_file:`).
 
 ### 1. The library (`scholar.db`)
 
-The single SQLite file with every paper, author, lens, feedback
-event, and the on-disk citation graph. **The most important thing to
-back up** — losing this means losing your library.
-
-| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
-|---|---|
-| In the **`alma-data`** volume at `/app/data/scholar.db` (inside the container). On Linux Docker the volume's bytes live at `/var/lib/docker/volumes/alma-data/_data/scholar.db` (root-only, no need to touch directly). On Docker Desktop (macOS / Windows), inside the LinuxKit / WSL VM — accessible via `docker run --rm -v alma-data:/d alpine ls /d`. | At `./data/scholar.db` next to your `docker-compose.yml`. Owned by the container's `appuser` (UID 10001) on Linux; on macOS/Windows the host filesystem is shared via virtiofs/9P and ownership is mapped automatically. |
+The single SQLite file with every paper, author, lens, feedback event,
+and the on-disk citation graph. **The most important thing to back up** —
+losing it means losing your library. Lives in the **`alma-data`** volume
+at `/app/data/scholar.db`. On Linux the bytes are at
+`/var/lib/docker/volumes/alma-data/_data/scholar.db` (root-only — no need
+to touch directly); on Docker Desktop (macOS / Windows) they're inside
+the LinuxKit / WSL VM, reachable via
+`docker run --rm -v alma-data:/d alpine ls /d`.
 
 ### 2. Secrets and runtime knobs (`.env` values)
 
-API keys, polite-pool email, Slack tokens, optional `API_KEY` for
-the REST endpoint, etc.
-
-| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
-|---|---|
-| **Not on disk inside the container.** Each `-e KEY=value` flag is passed to the container's process environment by the Docker daemon at start. To add or remove a key you `docker rm -f alma` and rerun the `docker run` command. No file is written; no chmod games. | At `./.env` next to your `docker-compose.yml`. Read by Docker Compose (`env_file:`) and re-read by the app at startup. Strict perms (`chmod 600`) work on Linux only when the host UID matches `appuser`; otherwise use `chmod 644` and trust your filesystem ACLs. |
+API keys, polite-pool email, Slack tokens, optional `API_KEY`. Initial
+values are passed as environment variables — `-e KEY=value` flags
+(`docker run` / setup.sh) or the `.env` `env_file:` (compose). Keys you
+add or rotate in the Settings UI persist to the **secret store inside the
+`alma-data` volume** (`secrets.json`) — the canonical path for named-
+volume installs — so they survive restarts and upgrades with no host
+`.env` write-back and no chmod games.
 
 ### 3. Bootstrap settings (`settings.json`)
 
-A small JSON file with defaults like the OpenAlex polite-pool email
-and the SQLite path. Almost everything user-tunable from the UI
-(Discovery weights, AI provider selection, scheduler intervals) is
-written into the `discovery_settings` table inside `scholar.db`, not
-this file. So `settings.json` is mostly cosmetic.
-
-| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
-|---|---|
-| Auto-created at `/app/settings.json` on first boot, populated with built-in defaults. Lives **on the container's writable layer**, so it does *not* survive `docker rm -f alma` (data and config volumes do). To persist it across rebuilds, set `-e ALMA_SETTINGS_PATH=/app/data/settings.json` so the file lives inside the `alma-data` volume. | At `./settings.json` next to your `docker-compose.yml`. Persists with the rest of the bind-mount. Boot-time write-failures (mode-600 with mismatched UID) degrade to a warning — see *File ownership* above. |
+A small JSON file (OpenAlex email, SQLite path). Almost everything
+user-tunable from the UI (Discovery weights, AI provider, scheduler
+intervals) is written to the `discovery_settings` table inside
+`scholar.db`, so this file is mostly cosmetic. The image pins
+`ALMA_SETTINGS_PATH=/app/data/settings.json`, so it lives **inside the
+`alma-data` volume** and survives `docker rm -f alma` and upgrades.
 
 ### 4. Plugin configs
 
-Slack channel mappings, etc. Used by the Slack notifier plugin.
-
-| Path 1 — `docker run` with named volumes | Path 2 — Compose with bind-mounts |
-|---|---|
-| In the **`alma-config`** volume at `/app/config/`. Same Linux-vs-VM rules as the data volume. | At `./config/` next to your `docker-compose.yml`. |
+Slack channel mappings, etc. In the **`alma-config`** volume at
+`/app/config/`.
 
 ### Quick reference
 
 ```
-container               Path 1 (named volumes)            Path 2 (bind-mounts)
-─────────────────────   ─────────────────────────────     ─────────────────────
-/app/data/scholar.db    alma-data volume                  ./data/scholar.db
-/app/data/backups/      alma-data volume                  ./data/backups/
-/app/config/            alma-config volume                ./config/
-/app/.env               not on disk (env vars only)       ./.env
-/app/settings.json      writable layer (ephemeral)        ./settings.json
-                        unless ALMA_SETTINGS_PATH set
+container                  where it lives
+────────────────────────   ─────────────────────────────────
+/app/data/scholar.db       alma-data volume
+/app/data/secrets.json     alma-data volume
+/app/data/settings.json    alma-data volume (ALMA_SETTINGS_PATH)
+/app/data/backups/         alma-data volume
+/app/config/               alma-config volume
+.env values                env vars (-e flags or env_file:)
 ```
 
 What's **never** on the host (lives only inside the image, replaced on every `docker pull`):
@@ -470,7 +501,8 @@ Check logs for the actual error: `docker logs alma`. Common causes:
 
 * OpenAlex 503s during startup probe — usually clears within a
   minute; the container has a healthcheck that retries.
-* Bind-mount perms (Path 2 only) — see *File ownership* above.
+* Permission errors only happen if you opted into host bind-mounts via
+  an override — see [Advanced: host bind-mounts](#advanced-host-bind-mounts).
 
 **Browser shows "broken image" icons in the sidebar.**
 Pull `:latest` again — versions before v0.9.2 had a static-asset

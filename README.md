@@ -301,8 +301,11 @@ Shared first step:
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
 cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
-mkdir -p data config             # bind-mount targets
 ```
+
+The compose files use **named volumes** (`alma-data`, `alma-config`),
+created and owned by the container's app user — no host directories to
+make and no permission tinkering.
 
 ### A. Pull the prebuilt image from GHCR (fast, no build)
 
@@ -348,8 +351,10 @@ ALMA_VARIANT=lite docker compose up -d --build
 container — sized for a typical desktop host. Override per-host with
 `ALMA_CPUS` / `ALMA_MEMORY` env vars (e.g. `ALMA_CPUS=2.0 ALMA_MEMORY=1G`
 on a Raspberry Pi). All other deployment knobs live in `.env`; nothing
-personal is baked into the image — your data is in `./data`,
-`./config`, `./settings.json`, and `./.env` next to the compose file.
+personal is baked into the image — your library lives in the `alma-data`
+and `alma-config` Docker volumes, which survive upgrades. See
+[docs → Docker](docs/getting-started/docker.md#where-everything-lives-on-disk)
+for backup commands and advanced options (e.g. host-visible folders).
 
 ---
 
@@ -382,8 +387,9 @@ pip install -e ".[ai,import]"
 (cd frontend && npm ci && npm run build)
 
 cp .env.example .env  # add your OpenAlex email
-mkdir -p data config
 
+# scholar.db is created automatically in your OS data dir
+# (~/.local/share/alma on Linux; set DATA_DIR=/abs/path to override).
 uvicorn alma.api.app:app --port 8000
 ```
 
