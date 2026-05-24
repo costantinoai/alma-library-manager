@@ -25,35 +25,16 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from functools import lru_cache
 
+import platformdirs
+
 logger = logging.getLogger(__name__)
 
-# Load `.env` eagerly so every `os.getenv(...)` downstream sees the
-# values the user saved through the Settings UI. `.env` lives at the
-# project root (gitignored); it's the ONLY source of truth for
-# external-API secrets. The Settings UI reads the key from env,
-# displays it redacted, and on rotation writes back via
-# `python-dotenv.set_key` after backing up the previous value under
-# `<KEY>_OLD_<timestamp>`.
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    # Walk up looking for `.env`, then load. `override=False` keeps any
-    # pre-existing shell env vars — useful for CI where a test suite
-    # wants to inject a key without touching `.env`. Failures (file
-    # missing, mode 600 owned by a different uid in a Docker bind mount,
-    # encoding glitch) are demoted to a warning: env vars passed into
-    # the process from the runtime (docker `--env-file`, compose
-    # `env_file:`, the user's shell) still apply.
-    _env_path = Path(__file__).resolve().parent.parent.parent / ".env"
-    if _env_path.exists():
-        try:
-            _load_dotenv(_env_path, override=False)
-        except (PermissionError, OSError, UnicodeDecodeError) as exc:
-            logger.warning(
-                "Could not load .env at %s (%s) — using environment vars only",
-                _env_path, exc,
-            )
-except ImportError:
-    logger.debug("python-dotenv not installed — skipping .env load")
+# `.env` is loaded at the BOTTOM of this module (see `_load_env_files`),
+# after the path-resolution helpers it depends on are defined. It reads
+# the OS-standard config dir's `.env` first, then falls back to a
+# project-root `.env` for backward compatibility. Loading eagerly at
+# config-import time means every `os.getenv(...)` downstream sees the
+# secrets the user saved through the Settings UI.
 
 # Project root is discovered from settings.json when present, otherwise
 # from other repo-root markers so a missing settings file does not break
@@ -62,7 +43,11 @@ _PROJECT_ROOT: Optional[Path] = None
 _PROJECT_ROOT_MARKERS = ("settings.json", "pyproject.toml", "docker-compose.yml", ".git")
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "database": "./data/scholar.db",
+    # NOTE: `database` is deliberately NOT defaulted here. The DB location
+    # is a computed path (DB_PATH env → explicit settings value →
+    # get_data_dir()/scholar.db), so a fresh install resolves to the
+    # OS-standard data dir rather than a CWD-relative ./data. An explicit
+    # `database` value set by an existing install is still honoured.
     "slack_config_path": "./config/slack.config",
     "api_call_delay": "1.0",
     # OpenAlex is the primary source: open citation graph, polite-pool
@@ -155,7 +140,9 @@ def get_settings_path() -> Path:
          project root is read-only (no bind-mount of settings.json) but
          the data volume is writable — point this at e.g.
          ``/app/data/settings.json``.
-      2. ``settings.json`` next to the project root.
+      2. ``settings.json`` in the OS-standard config dir (see
+         ``get_config_dir``). Docker pins ``ALMA_SETTINGS_PATH`` so it
+         keeps using ``/app/data/settings.json``.
 
     Returns:
         Path: Absolute path to settings.json
@@ -173,7 +160,7 @@ def get_settings_path() -> Path:
             candidate.parent.mkdir(parents=True, exist_ok=True)
             return candidate
         return _resolve_path(env_path)
-    return get_project_root() / "settings.json"
+    return get_config_dir() / "settings.json"
 
 
 def ensure_settings_file() -> Path:
@@ -273,21 +260,95 @@ def _resolve_path(relative_path: str, ensure_parent: bool = True) -> Path:
     return absolute_path
 
 
-def get_data_dir() -> Path:
+# ---------------------------------------------------------------------------
+# OS-standard location resolution (XDG on Linux, ~/Library on macOS,
+# %LOCALAPPDATA% / %APPDATA% on Windows) via platformdirs.
+#
+# Profiles isolate environments: the default ``prod`` profile uses the
+# canonical app namespace ("alma"); any other profile (e.g. ALMA_ENV=dev)
+# uses a sibling namespace ("alma-dev") so a dev server never reads or
+# writes production data/config. Docker pins the concrete dirs via
+# DATA_DIR / ALMA_CONFIG_DIR / ALMA_SETTINGS_PATH, so containers keep their
+# /app/data layout regardless of the OS-standard defaults below.
+# ---------------------------------------------------------------------------
+
+_APP_NAME = "alma"
+
+
+def get_env_profile() -> str:
+    """Active runtime profile, lowercased. ``prod`` (default) or another
+    namespace such as ``dev`` (set via the ``ALMA_ENV`` env var)."""
+    return (os.getenv("ALMA_ENV") or "prod").strip().lower() or "prod"
+
+
+def _app_namespace() -> str:
+    """platformdirs application name for the active profile.
+    ``prod`` → ``alma``; anything else → ``alma-<profile>`` (e.g. ``alma-dev``).
+    """
+    profile = get_env_profile()
+    return _APP_NAME if profile == "prod" else f"{_APP_NAME}-{profile}"
+
+
+def _abs_env_dir(raw: str) -> Path:
+    """Resolve an env-var directory override to an absolute path.
+    Relative values resolve against the current working directory."""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def get_config_dir(create: bool = True) -> Path:
+    """Directory for user config — ``.env`` and (by default) ``settings.json``.
+
+    Priority:
+    1. ``ALMA_CONFIG_DIR`` environment variable (Docker sets this to ``/app``).
+    2. OS-standard per-user config dir for the active profile
+       (e.g. ``~/.config/alma`` on Linux, ``~/Library/Application Support/alma``
+       on macOS, ``%APPDATA%\\alma`` on Windows).
+
+    Args:
+        create: When True (default) ensure the directory exists.
+    """
+    env_dir = os.getenv("ALMA_CONFIG_DIR")
+    if env_dir:
+        path = _abs_env_dir(env_dir)
+    else:
+        path = Path(platformdirs.user_config_dir(_app_namespace()))
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_env_file_path() -> Path:
+    """Canonical ``.env`` path (inside the config dir). This is the file the
+    Settings-UI key-rotation flow writes to."""
+    return get_config_dir() / ".env"
+
+
+def get_data_dir(create: bool = True) -> Path:
     """Get the data directory where databases and caches are stored.
 
     Priority:
-    1. DATA_DIR environment variable
-    2. Default: ./data
+    1. ``DATA_DIR`` environment variable (Docker pins this to ``/app/data``).
+    2. OS-standard per-user data dir for the active profile
+       (e.g. ``~/.local/share/alma`` on Linux, ``~/Library/Application
+       Support/alma`` on macOS, ``%LOCALAPPDATA%\\alma`` on Windows).
+
+    Args:
+        create: When True (default) ensure the directory exists.
 
     Returns:
         Path: Absolute path to data directory
     """
     env_dir = os.getenv("DATA_DIR")
     if env_dir:
-        return _resolve_path(env_dir)
-
-    return _resolve_path("./data")
+        path = _abs_env_dir(env_dir)
+    else:
+        path = Path(platformdirs.user_data_dir(_app_namespace()))
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_db_path() -> Path:
@@ -641,3 +702,48 @@ def get_all_settings() -> Dict[str, Any]:
         Dict containing all settings
     """
     return _load_settings().copy()
+
+
+def _load_env_files() -> None:
+    """Load ``.env`` into the process environment at config-import time.
+
+    Reads the OS-standard config-dir ``.env`` first (the canonical
+    location, see ``get_env_file_path``), then a project-root ``.env`` as a
+    backward-compatible fallback (older installs kept it next to the code).
+    ``override=False`` so real shell / ``docker --env-file`` values win.
+    Failures are demoted to a warning — env vars injected by the runtime
+    still apply. Uses ``create=False`` so merely importing config does not
+    materialise the config dir.
+    """
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+    except ImportError:
+        logger.debug("python-dotenv not installed — skipping .env load")
+        return
+
+    candidates: list[Path] = []
+    try:
+        candidates.append(get_config_dir(create=False) / ".env")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not resolve config-dir .env path: %s", exc)
+    # Backward-compat: a `.env` next to the project root (pre-relocation).
+    candidates.append(Path(__file__).resolve().parent.parent.parent / ".env")
+
+    seen: set[Path] = set()
+    for env_path in candidates:
+        if env_path in seen:
+            continue
+        seen.add(env_path)
+        if not env_path.exists():
+            continue
+        try:
+            _load_dotenv(env_path, override=False)
+            logger.debug("Loaded .env from %s", env_path)
+        except (PermissionError, OSError, UnicodeDecodeError) as exc:
+            logger.warning(
+                "Could not load .env at %s (%s) — using environment vars only",
+                env_path, exc,
+            )
+
+
+_load_env_files()
