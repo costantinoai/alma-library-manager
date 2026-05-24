@@ -22,9 +22,13 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    // FRONTEND_PORT / BACKEND_PORT let `scripts/start-dev.sh` run a dev
+    // stack on non-default ports (e.g. alongside a prod container already
+    // holding 8000). The proxy must target the *dev* backend, not a
+    // hardcoded :8000 which may be the production container.
+    port: Number(process.env.FRONTEND_PORT) || 5173,
     proxy: {
-      '/api': 'http://localhost:8000',
+      '/api': `http://localhost:${Number(process.env.BACKEND_PORT) || 8000}`,
     },
   },
 })
