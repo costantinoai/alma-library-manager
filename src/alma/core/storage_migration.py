@@ -162,10 +162,23 @@ def validate_and_migrate_storage(interactive: Optional[bool] = None) -> None:
         interactive = sys.stdin is not None and sys.stdin.isatty()
 
     profile = config.get_env_profile()
-    data_dir = config.get_data_dir()
-    config_dir = config.get_config_dir()
+    config_dir = config.get_config_dir(create=False)
     logger.info("[storage] profile=%s · data_dir=%s · config_dir=%s",
-                profile, data_dir, config_dir)
+                profile, config.get_data_dir(create=False), config_dir)
+
+    # Legacy ./data migration is a PROD-upgrade concern only. A non-prod
+    # profile (e.g. ALMA_ENV=dev) is an isolated namespace populated by
+    # seed_dev_profile() — it must NEVER adopt, migrate, or halt on the legacy
+    # ./data. Otherwise a dev server started non-interactively would discover
+    # the repo's ./data/scholar.db and halt on startup.
+    if profile != "prod":
+        new_db = config.get_db_path()
+        if new_db.exists():
+            logger.info("[storage] %s profile — database present at %s", profile, new_db)
+        else:
+            logger.info("[storage] %s profile — fresh isolated DB at %s "
+                        "(populate it with seed_dev_profile)", profile, new_db)
+        return
 
     # Snapshot config-file presence BEFORE touching get_db_path() — reading
     # the `database` setting auto-creates settings.json as a side effect,
