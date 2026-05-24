@@ -972,6 +972,22 @@ def init_db_schema() -> None:
                     PRIMARY KEY (paper_id, openalex_id)
                 )"""
             )
+            # The PK (paper_id, openalex_id) covers paper-side lookups, but the
+            # author-corpus joins key on openalex_id ALONE and case-folded:
+            # get_followed_author_backfill_status and the author-suggestion
+            # candidate fan-out both join
+            #   papers ⋈ publication_authors ⋈ authors
+            #     ON lower(a.openalex_id) = lower(pa.openalex_id)
+            # openalex_id is the trailing PK column (not a usable left-prefix)
+            # and the lower() wrap defeats the autoindex anyway, so without this
+            # expression index every author triggers a full scan of all
+            # publication_authors rows (N+1). On a 7.2k-paper / 33k-pa corpus
+            # that made GET /authors ~1.3s and GET /authors/suggestions ~3.3s;
+            # this single index drops them to ~120ms / ~0.8s.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_pubauthors_oid_lower "
+                "ON publication_authors(lower(openalex_id))"
+            )
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS publication_institutions (
