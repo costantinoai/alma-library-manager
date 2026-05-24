@@ -25,6 +25,8 @@ tqdm>=4.65.0
 
 # --- Config / .env loading ---
 python-dotenv>=1.0.0
+# OS-standard data/config dir resolution (XDG / ~/Library / %APPDATA%)
+platformdirs>=4.0.0
 
 # --- Sources / fallbacks ---
 scholarly
