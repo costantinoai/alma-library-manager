@@ -183,6 +183,16 @@ RUN groupadd --gid 10001 appgroup && \
     chmod -R a+rX /app/src /app/frontend /app/pyproject.toml /opt/venv && \
     chmod 1777 /app/data /app/config /tmp/pycache
 
+# --- Storage location pins (keep the container on /app/* regardless of
+# the OS-standard defaults config.py uses for bare-metal installs) ---
+# DATA_DIR pins the data dir (DB, secrets.json, caches) to the writable
+# /app/data volume; ALMA_CONFIG_DIR pins the config dir so `.env` resolves
+# to /app/.env (where the image / compose mounts it). Without these, a
+# rebuilt image would resolve platformdirs paths INSIDE the container and
+# read an empty location instead of the mounted volume.
+ENV DATA_DIR=/app/data \
+    ALMA_CONFIG_DIR=/app
+
 # Settings file lives in the writable data volume, not /app/. The
 # project root is read-only at runtime (root:root 755) so appuser
 # cannot create /app/settings.json on first boot. config.py honours

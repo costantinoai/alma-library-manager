@@ -20,6 +20,9 @@
 #                                  in src/alma is lazy.
 #
 # Resource ceilings are also overridable: ALMA_CPUS, ALMA_MEMORY.
+# Defaults: 8 vCPUs / 4 GB RAM — sized for a typical desktop host. On a
+# laptop with 4 cores, you'll want ALMA_CPUS=2.0 or 4.0; on a workstation
+# with more cores, bump it higher for faster local embedding compute.
 # For Raspberry Pi 4 (4 GB), a reasonable combo is:
 #   ALMA_VARIANT=lite ALMA_CPUS=2.0 ALMA_MEMORY=1G docker compose up -d
 #
@@ -83,15 +86,20 @@ services:
           # (transformers + sklearn) can balloon to ~2 GB once an
           # embedding model is loaded; leave headroom. Override on
           # constrained hosts (Pi: ALMA_MEMORY=1G).
-          cpus: ${ALMA_CPUS:-2.0}
+          cpus: ${ALMA_CPUS:-8.0}
           memory: ${ALMA_MEMORY:-4G}
         reservations:
           cpus: '0.5'
           memory: 512M
 
     ports:
-      # Bind to localhost only. Put a reverse proxy in front for remote access.
-      - "127.0.0.1:8000:8000"
+      # Bound to localhost (127.0.0.1) ONLY by default — ALMa is reachable
+      # only from this machine. ALMa has no auth in single-user mode, so it
+      # must not be exposed to your network without a reverse proxy + auth
+      # (or at least an API_KEY). To reach it from other devices on purpose
+      # (e.g. a headless Raspberry Pi), override BIND_ADDR=0.0.0.0 — see the
+      # README "Exposing on your network". Format: HOST_IP:HOST_PORT:CONTAINER_PORT
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
 
     # -------------------------------------------------------------------------
     # Environment

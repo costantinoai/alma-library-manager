@@ -1,0 +1,25 @@
+# =============================================================================
+# ALMa — GHCR overlay
+# =============================================================================
+# Opt-in overlay that tells `docker compose` to pull the prebuilt image from
+# GitHub Container Registry instead of building it from this checkout. Use
+# this when you cloned the repo only for the compose file + bind-mount layout
+# and don't want to wait for a local build.
+#
+# Usage (CPU image — the default `:latest` tag, normal variant):
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# Pick a different tag with ALMA_IMAGE_TAG:
+#   ALMA_IMAGE_TAG=latest-gpu  docker compose -f docker-compose.yml -f docker-compose.ghcr.yml -f docker-compose.gpu.yml up -d
+#   ALMA_IMAGE_TAG=latest-lite docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#   ALMA_IMAGE_TAG=0.12.1      docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# The `build: !reset null` clears the `build:` block inherited from
+# docker-compose.yml so compose won't fall back to building when the image
+# isn't found locally — `pull` (or `up`) will fetch it from GHCR instead.
+# =============================================================================
+services:
+  alma:
+    build: !reset null
+    image: ghcr.io/costantinoai/alma-library-manager:${ALMA_IMAGE_TAG:-latest}
