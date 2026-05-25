@@ -28,6 +28,7 @@ from alma.api.routes.feed import router as feed_router
 from alma.api.routes.imports import router as imports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.insights import router as insights_router
+from alma.api.routes.health import router as health_router
 from alma.api.routes.library_mgmt import router as library_mgmt_router
 from alma.api.routes.logs import router as logs_router, install_log_handler
 from alma.api.routes.activity import router as activity_router
@@ -427,6 +428,7 @@ app.include_router(feed_router, prefix="/api/v1/feed", tags=["feed"])
 app.include_router(lenses_router, prefix="/api/v1/lenses", tags=["discovery-lenses"])
 app.include_router(scheduler_router, prefix="/api/v1/scheduler", tags=["scheduler"])
 app.include_router(insights_router, prefix="/api/v1/insights", tags=["insights"])
+app.include_router(health_router, prefix="/api/v1/health", tags=["health"])
 app.include_router(library_mgmt_router, prefix="/api/v1/library-mgmt", tags=["library-management"])
 app.include_router(logs_router, prefix="/api/v1/logs", tags=["logs"])
 app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])

@@ -193,37 +193,40 @@ def _coverage_severity(pct: float) -> Severity:
 # existing manual endpoint so the action is usable before the registry lands.
 # --------------------------------------------------------------------------
 
+# ``operation_key`` is the maintenance-registry task key (== repair_task), so a
+# dimension's action maps directly to POST /api/v1/health/operations/{key}/run.
+# ``target`` is the bounded run-now endpoint for that task.
 _REPAIR_ACTIONS: dict[str, list[dict[str, str]]] = {
     "corpus_metadata": [
         {
             "label": "Rehydrate metadata",
             "kind": "run_now",
-            "operation_key": "maintenance.corpus_metadata",
-            "target": "/api/v1/publications/rehydrate-metadata",
+            "operation_key": "corpus_metadata",
+            "target": "/api/v1/health/operations/corpus_metadata/run",
         }
     ],
     "s2_vector": [
         {
             "label": "Fetch missing S2 vectors",
             "kind": "run_now",
-            "operation_key": "maintenance.s2_vector",
-            "target": "/api/v1/ai/backfill-s2-vectors",
+            "operation_key": "s2_vector",
+            "target": "/api/v1/health/operations/s2_vector/run",
         }
     ],
     "embedding": [
         {
             "label": "Compute embeddings locally",
             "kind": "run_now",
-            "operation_key": "maintenance.embedding",
-            "target": "/api/v1/ai/compute-embeddings",
+            "operation_key": "embedding",
+            "target": "/api/v1/health/operations/embedding/run",
         }
     ],
     "title_resolution": [
         {
             "label": "Resolve missing identity",
             "kind": "run_now",
-            "operation_key": "maintenance.title_resolution",
-            "target": "/api/v1/ai/title-resolution-sweep",
+            "operation_key": "title_resolution",
+            "target": "/api/v1/health/operations/title_resolution/run",
         }
     ],
 }
