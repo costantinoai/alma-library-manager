@@ -169,6 +169,113 @@ export async function waitForJob<T>(jobId: string, opts: WaitForJobOptions = {})
   throw new Error(`Timeout waiting for job ${jobId}`)
 }
 
+// ── Health layer (task 24) ──
+
+/** A fix/mitigation attached to a health dimension. `operation_key` is the
+ * maintenance-task key; `target` is its run-now endpoint. */
+export interface HealthAction {
+  label: string
+  kind: 'run_now' | 'auto_toggle' | 'link'
+  operation_key: string
+  target: string
+}
+
+/** One canonical health dimension (problem + metric + how to fix). */
+export interface HealthDimension {
+  key: string
+  entity: string
+  label: string
+  count: number
+  total: number
+  coverage_pct: number | null
+  severity: 'ok' | 'info' | 'warning' | 'critical'
+  explanation: string
+  impact: string
+  repair_task: string | null
+  actions: HealthAction[]
+  scope: 'corpus' | 'library' | string
+}
+
+/** GET /insights/health — flattened MV envelope (payload fields + SWR flags). */
+export interface HealthSnapshot {
+  generated_at: string
+  totals: {
+    papers_total: number
+    with_openalex_id: number
+    without_openalex_id: number
+    eligible_now: number
+    embedding_coverage_pct: number
+    embeddings_ready: boolean
+    dimensions_by_severity: Record<string, number>
+  }
+  dimensions: HealthDimension[]
+  stale?: boolean
+  rebuilding?: boolean
+  computed_at?: string | null
+}
+
+export interface MaintenanceLastRun {
+  job_id: string
+  status: string
+  message?: string | null
+  error?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+  updated_at?: string | null
+  trigger_source?: string | null
+  processed?: number | null
+  total?: number | null
+  duration_seconds?: number | null
+}
+
+/** One maintenance task in GET /health/operations. */
+export interface MaintenanceOperation {
+  key: string
+  label: string
+  description: string
+  cost: 'cheap' | 'network' | 'compute' | string
+  repairs: string[]
+  operation_key: string
+  candidates_pending: number
+  enabled: boolean
+  default_enabled: boolean
+  daily_cap: number
+  last_run: MaintenanceLastRun | null
+}
+
+export interface HealthOperationsResponse {
+  generated_at: string
+  operations: MaintenanceOperation[]
+}
+
+export interface RunMaintenanceResponse {
+  key: string
+  status: string
+  job_id: string | null
+}
+
+export function getHealthSnapshot(): Promise<HealthSnapshot> {
+  return api.get<HealthSnapshot>('/insights/health')
+}
+
+export function getHealthOperations(): Promise<HealthOperationsResponse> {
+  return api.get<HealthOperationsResponse>('/health/operations')
+}
+
+export function runMaintenanceOperation(key: string): Promise<RunMaintenanceResponse> {
+  return api.post<RunMaintenanceResponse>(`/health/operations/${encodeURIComponent(key)}/run`)
+}
+
+export function setMaintenanceConfig(
+  key: string,
+  body: { enabled?: boolean; daily_cap?: number },
+): Promise<MaintenanceOperation> {
+  return api.post<MaintenanceOperation>(
+    `/health/operations/${encodeURIComponent(key)}/config`,
+    body,
+  )
+}
+
 // ── Type definitions for API responses ──
 
 export interface Author {

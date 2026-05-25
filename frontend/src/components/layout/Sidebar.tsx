@@ -8,6 +8,7 @@ import {
   X,
   Sparkles,
   BarChart3,
+  HeartPulse,
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ export type Page =
   | 'authors'
   | 'library'
   | 'insights'
+  | 'health'
   | 'alerts'
   | 'settings'
 
@@ -56,7 +58,10 @@ const navGroups: NavGroup[] = [
   },
   {
     label: 'Analyze',
-    items: [{ id: 'insights', label: 'Insights', icon: BarChart3 }],
+    items: [
+      { id: 'insights', label: 'Insights', icon: BarChart3 },
+      { id: 'health', label: 'Health', icon: HeartPulse },
+    ],
   },
   {
     label: 'Control',

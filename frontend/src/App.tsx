@@ -10,6 +10,7 @@ const DiscoveryPage = lazy(() => import('@/pages/DiscoveryPage').then((m) => ({ 
 const AuthorsPage = lazy(() => import('@/pages/AuthorsPage').then((m) => ({ default: m.AuthorsPage })))
 const LibraryPage = lazy(() => import('@/pages/LibraryPage').then((m) => ({ default: m.LibraryPage })))
 const InsightsPage = lazy(() => import('@/pages/InsightsPage').then((m) => ({ default: m.InsightsPage })))
+const HealthPage = lazy(() => import('@/pages/HealthPage').then((m) => ({ default: m.HealthPage })))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage').then((m) => ({ default: m.AlertsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 
@@ -74,6 +75,8 @@ function AppContent() {
         return <LibraryPage />
       case 'insights':
         return <InsightsPage />
+      case 'health':
+        return <HealthPage />
       case 'alerts':
         return <AlertsPage />
       case 'settings':

@@ -8,6 +8,7 @@ const VALID_PAGES: Page[] = [
   'authors',
   'library',
   'insights',
+  'health',
   'alerts',
   'settings',
 ]
