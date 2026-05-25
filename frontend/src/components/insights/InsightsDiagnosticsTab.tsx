@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import {
-  AlertTriangle,
   Brain,
   ChartLine,
   Clock3,
@@ -9,7 +8,6 @@ import {
   GitBranch,
   Loader2,
   Radio,
-  Rss,
   Sparkles,
   TrendingUp,
   UserRound,
@@ -38,25 +36,20 @@ import type {
   DiagnosticsFeedbackSection,
   DiagnosticsOperationalSection,
 } from '@/api/client'
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  StatusBadge,
-  monitorHealthTone,
-  scoreStatusTone,
-} from '@/components/ui/status-badge'
+import { StatusBadge, scoreStatusTone } from '@/components/ui/status-badge'
 import { MetricTile, SectionHeader } from '@/components/shared'
 import {
   InsightsRecommendedActionsCard,
   type SavedDrilldown,
 } from '@/components/insights/InsightsRecommendedActionsCard'
-import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
-import { formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
+import { navigateTo } from '@/lib/hashRoute'
+import { formatTimestamp } from '@/lib/utils'
 
 // ── Trend / palette types ---------------------------------------------------
 
@@ -165,22 +158,6 @@ function SectionGate<T>({
     return null
   }
   return <>{children(section.data)}</>
-}
-
-/**
- * CalloutWarning — wraps the amber border+bg warning blocks used for monitor
- * health reasons and source last-errors. Routed through the shadcn `Alert`
- * primitive so a future restyle of warning callouts lands everywhere at once.
- */
-function CalloutWarning({ children }: { children: React.ReactNode }) {
-  return (
-    <Alert variant="warning" className="py-2 pl-3">
-      <AlertTriangle className="h-4 w-4" />
-      <AlertDescription className="pl-0 text-xs">
-        {children}
-      </AlertDescription>
-    </Alert>
-  )
 }
 
 /** Action chip for branch tuning. Loops the four identical variants instead
@@ -1164,161 +1141,6 @@ export function InsightsDiagnosticsTab({
                       />
                     </ComposedChart>
                   </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── Monitor Health + Source Diagnostics ── */}
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionHeader
-            icon={Rss}
-            accent="text-emerald-600"
-            title="Monitor Health"
-            description="Feed monitor readiness and recent yield. Degraded author monitors should usually be repaired in Authors."
-          />
-          <CardContent>
-            <SectionGate section={feed} skeletonHeight={260}>
-              {(data) =>
-                (data.monitors ?? []).length === 0 ? (
-                  <EmptyState title="No feed monitors available" />
-                ) : (
-                  <div className="space-y-3">
-                    {data.monitors.map((monitor) => (
-                      <div
-                        key={monitor.id}
-                        className="rounded-sm border border-[var(--color-border)] p-3"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium text-alma-800">{monitor.label}</p>
-                            <p className="text-xs text-slate-500">
-                              {formatMonitorTypeLabel(monitor.monitor_type)} monitor
-                              {monitor.author_name ? ` · ${monitor.author_name}` : ''}
-                            </p>
-                          </div>
-                          <StatusBadge tone={monitorHealthTone(monitor.health)}>
-                            {monitor.health}
-                          </StatusBadge>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                          <span>Checked: {formatTimestamp(monitor.last_checked_at)}</span>
-                          <span>Last success: {formatTimestamp(monitor.last_success_at)}</span>
-                          <span>Papers found: {monitor.papers_found}</span>
-                          <span>New items: {monitor.items_created}</span>
-                        </div>
-                        {(monitor.health_reason || monitor.last_error) && (
-                          <div className="mt-3">
-                            <CalloutWarning>
-                              {monitor.health_reason || monitor.last_error}
-                            </CalloutWarning>
-                          </div>
-                        )}
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {monitor.author_name && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                navigateTo('authors', {
-                                  filter: monitor.author_name ?? '',
-                                  followed: true,
-                                })
-                              }}
-                            >
-                              Authors
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              window.location.hash = monitor.author_id
-                                ? buildHashRoute('feed', { author: monitor.author_id })
-                                : buildHashRoute('feed')
-                            }}
-                          >
-                            Feed
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={Gauge}
-            accent="text-slate-500"
-            title="Source Diagnostics"
-            description="Aggregated transport diagnostics from recent Feed and Discovery refreshes."
-          />
-          <CardContent>
-            <SectionGate section={discovery} skeletonHeight={260}>
-              {(data) =>
-                (data.source_diagnostics ?? []).length === 0 ? (
-                  <EmptyState title="No source diagnostics available yet" />
-                ) : (
-                  <div className="space-y-3">
-                    {data.source_diagnostics.map((source) => (
-                      <div
-                        key={source.source}
-                        className="rounded-sm border border-[var(--color-border)] p-3"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-alma-800">{source.source}</p>
-                            <p className="text-xs text-slate-500">
-                              {source.requests} requests across {source.operations} recent operations
-                            </p>
-                          </div>
-                          <Badge variant="secondary">{source.avg_latency_ms} ms avg</Badge>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                          <span>OK: {source.ok}</span>
-                          <span>HTTP errors: {source.http_errors}</span>
-                          <span>Transport errors: {source.transport_errors}</span>
-                          <span>Retries: {source.retries}</span>
-                        </div>
-                        {source.top_endpoints.length > 0 && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {source.top_endpoints.map((endpoint) => (
-                              <Badge
-                                key={`${source.source}-${endpoint.path}`}
-                                variant="outline"
-                                className="text-[11px]"
-                              >
-                                {endpoint.path} · {endpoint.count}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                        {source.last_error && (
-                          <div className="mt-3">
-                            <CalloutWarning>{source.last_error}</CalloutWarning>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    <div className="rounded-sm border border-[var(--color-border)] p-3">
-                      <p className="font-medium text-alma-800">OpenAlex Usage</p>
-                      <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                        <span>Refreshes: {data.openalex_usage.refreshes}</span>
-                        <span>Requests: {data.openalex_usage.request_count}</span>
-                        <span>Retries: {data.openalex_usage.retry_count}</span>
-                        <span>
-                          Saved by cache: {data.openalex_usage.calls_saved_by_cache}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
                 )
               }
             </SectionGate>
