@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=360" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>ALMa Connector</title>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Header -->
+    <header class="head reveal">
+      <img class="mark" src="icons/alma.svg" alt="" />
+      <span class="wordmark">AL<b>Ma</b></span>
+      <span class="spacer"></span>
+      <div class="conn-wrap" id="conn-wrap">
+        <button id="conn" class="conn is-checking" aria-haspopup="listbox" aria-expanded="false" title="">
+          <span class="dot"></span><span id="conn-label">checking…</span>
+          <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div id="srv-menu" class="srv-menu" role="listbox" hidden></div>
+      </div>
+      <button id="gear" class="gear" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Empty / restricted state -->
+    <div id="empty" class="empty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+      </svg>
+      <div class="e-title" id="empty-title">No paper detected here</div>
+      <div class="e-sub" id="empty-sub">Open a paper's page (publisher, arXiv, or a PDF) and click the ALMa button again.</div>
+    </div>
+
+    <!-- Main: detected paper + controls -->
+    <main id="main" class="hide">
+      <section class="paper reveal d1" id="paper">
+        <h1 class="title" id="title">Reading the page…</h1>
+        <div class="badges" id="badges"></div>
+        <p class="meta" id="meta"></p>
+        <div class="detected" id="detected">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path>
+          </svg>
+          <span id="detected-text">identifying…</span>
+        </div>
+      </section>
+
+      <div class="section-label reveal d2">Save to</div>
+      <div class="segment reveal d2" id="dest" role="group" aria-label="Destination">
+        <button data-dest="library" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+          Library
+        </button>
+        <button data-dest="reading_list" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+          Reading list
+        </button>
+      </div>
+
+      <div class="actions reveal d3" id="actions">
+        <button class="chip" data-action="add" data-stars="3">
+          <span class="verb">Save</span>
+          <span class="stars" aria-label="3 stars"></span>
+        </button>
+        <button class="chip" data-action="like" data-stars="4">
+          <span class="verb">Like</span>
+          <span class="stars" aria-label="4 stars"></span>
+        </button>
+        <button class="chip" data-action="love" data-stars="5">
+          <span class="verb">Love</span>
+          <span class="stars" aria-label="5 stars"></span>
+        </button>
+      </div>
+
+      <div class="result" id="result" role="status" aria-live="polite"></div>
+    </main>
+
+    <!-- Settings: in-popup server manager (slides over main) -->
+    <section id="settings" class="panel hide">
+      <div class="panel-head">
+        <button id="settings-back" class="back-btn" aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <span class="panel-title">Servers</span>
+      </div>
+      <div id="server-manager"></div>
+    </section>
+  </div>
+
+  <script src="lib/settings.js"></script>
+  <script src="lib/servers-ui.js"></script>
+  <script src="lib/extract.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=360" />
+  <link rel="stylesheet" href="../popup.css" />
+  <title>ALMa Connector — render harness</title>
+  <style>
+    body { background: #d8d2c0; padding: 24px; }
+    .stage { width: 360px; margin: 0 auto; box-shadow: 0 18px 50px rgba(0,0,0,.25); border-radius: 14px; overflow: hidden; background: var(--canvas); }
+    .note { width: 360px; margin: 14px auto 0; font: 12px/1.5 ui-sans-serif, sans-serif; color: #4a463d; }
+  </style>
+  <!-- Mock the WebExtension APIs + network BEFORE the real scripts load,
+       so popup.js runs unchanged against sample data on a plain page. -->
+  <script>
+    const SAMPLE = {
+      doi: "10.1038/s41586-021-03819-2", arxivId: "", openalexId: "",
+      title: "Highly accurate protein structure prediction with AlphaFold",
+      authors: "Jumper, John, Evans, Richard, Pritzel, Alexander, Green, Tim, Figurnov, Michael",
+      year: 2021, journal: "Nature",
+      abstract: "Proteins are essential to life…", isPdf: false,
+      detectedVia: ["citation meta"],
+    };
+    const TAB = { id: 1, url: "https://www.nature.com/articles/s41586-021-03819-2" };
+    globalThis.browser = {
+      storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
+      tabs: { query: async () => [TAB] },
+      scripting: {
+        executeScript: async (opts) => (opts.func ? [{ result: SAMPLE }] : [{}]),
+      },
+      runtime: { openOptionsPage: () => alert("→ options.html"), getURL: (p) => p },
+      permissions: { contains: async () => true, request: async () => true },
+    };
+    window.fetch = async (url) => {
+      const u = String(url);
+      if (u.includes("/extension/ping")) {
+        // window.__ONLINE_PORTS (set by a test before load) lets us simulate
+        // only some instances being up; default: both online.
+        const ports = window.__ONLINE_PORTS || ["8000", "8001"];
+        const up = ports.some((p) => u.includes(":" + p));
+        return up
+          ? { ok: true, json: async () => ({ ok: true, connector_version: 1, alma_version: "1.0.0" }) }
+          : { ok: false, status: 0, json: async () => ({}) };
+      }
+      if (u.includes("/extension/save"))
+        return { ok: true, json: async () => ({ paper_id: "x", rating: 3, destination: "library", status: "library", reading_status: null, title: SAMPLE.title }) };
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+  </script>
+</head>
+<body>
+  <div class="stage">
+    <div class="wrap">
+      <header class="head reveal">
+        <img class="mark" src="../icons/alma.svg" alt="" />
+        <span class="wordmark">AL<b>Ma</b></span>
+        <span class="spacer"></span>
+        <div class="conn-wrap" id="conn-wrap">
+          <button id="conn" class="conn is-checking" aria-haspopup="listbox" aria-expanded="false">
+            <span class="dot"></span><span id="conn-label">checking…</span>
+            <svg class="caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div id="srv-menu" class="srv-menu" role="listbox" hidden></div>
+        </div>
+        <button id="gear" class="gear" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+      </header>
+      <div id="empty" class="empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        <div class="e-title" id="empty-title">No paper detected here</div>
+        <div class="e-sub" id="empty-sub">Open a paper's page and click the ALMa button again.</div>
+      </div>
+      <main id="main" class="hide">
+        <section class="paper reveal d1" id="paper">
+          <h1 class="title" id="title">Reading the page…</h1>
+          <div class="badges" id="badges"></div>
+          <p class="meta" id="meta"></p>
+          <div class="detected" id="detected">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>
+            <span id="detected-text">identifying…</span>
+          </div>
+        </section>
+        <div class="section-label reveal d2">Save to</div>
+        <div class="segment reveal d2" id="dest" role="group" aria-label="Destination">
+          <button data-dest="library" aria-pressed="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+            Library
+          </button>
+          <button data-dest="reading_list" aria-pressed="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            Reading list
+          </button>
+        </div>
+        <div class="actions reveal d3" id="actions">
+          <button class="chip" data-action="add" data-stars="3"><span class="verb">Save</span><span class="stars"></span></button>
+          <button class="chip" data-action="like" data-stars="4"><span class="verb">Like</span><span class="stars"></span></button>
+          <button class="chip" data-action="love" data-stars="5"><span class="verb">Love</span><span class="stars"></span></button>
+        </div>
+        <div class="result" id="result" role="status" aria-live="polite"></div>
+      </main>
+      <section id="settings" class="panel hide">
+        <div class="panel-head">
+          <button id="settings-back" class="back-btn" aria-label="Back">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <span class="panel-title">Servers</span>
+        </div>
+        <div id="server-manager"></div>
+      </section>
+    </div>
+  </div>
+  <p class="note">Render harness — mocked APIs + sample paper. Keep the body markup in sync with <code>popup.html</code>.</p>
+
+  <script src="../lib/settings.js"></script>
+  <script src="../lib/servers-ui.js"></script>
+  <script src="../lib/extract.js"></script>
+  <script src="../popup.js"></script>
+</body>
+</html>

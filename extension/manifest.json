@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "ALMa Connector",
+  "version": "0.1.0",
+  "description": "Save the paper open in your browser straight into ALMa — like the Zotero connector, for your personal ALMa library.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "alma-connector@alma.local",
+      "strict_min_version": "115.0"
+    }
+  },
+  "icons": {
+    "48": "icons/alma.svg",
+    "96": "icons/alma.svg",
+    "128": "icons/alma.svg"
+  },
+  "action": {
+    "default_title": "Save this paper to ALMa",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/alma.svg",
+      "32": "icons/alma.svg",
+      "48": "icons/alma.svg"
+    }
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8001/*",
+    "http://127.0.0.1:8001/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"]
+}

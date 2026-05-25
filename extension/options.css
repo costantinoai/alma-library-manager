@@ -1,0 +1,76 @@
+/* ALMa Connector — options page. Shares popup.css tokens. */
+body {
+  width: auto;
+  max-width: 560px;
+  margin: 0 auto;
+  background: var(--canvas);
+  padding: 0;
+}
+.opt-wrap { padding: 30px 26px 40px; }
+.opt-head { display: flex; align-items: center; gap: 11px; margin-bottom: 4px; }
+.opt-head .mark { width: 30px; height: 30px; }
+.opt-head .wordmark { font-size: 22px; }
+.opt-lede { color: var(--ink-soft); font-size: 13px; margin: 0 0 22px; line-height: 1.5; }
+
+.card {
+  background: var(--content-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px 20px 22px;
+  box-shadow: var(--shadow);
+}
+.field { margin-bottom: 18px; }
+.field:last-child { margin-bottom: 0; }
+.field label {
+  display: block;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.2px;
+  color: var(--ink); margin-bottom: 6px;
+}
+.field .hint { font-size: 11.5px; color: var(--ink-faint); margin-top: 6px; line-height: 1.45; }
+.field input[type="text"], .field input[type="password"] {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--content);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+}
+.field input:focus {
+  outline: none;
+  border-color: var(--folio);
+  box-shadow: 0 0 0 3px var(--folio-soft);
+  background: var(--content-elev);
+}
+
+.row { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+.btn {
+  appearance: none; cursor: pointer;
+  font-family: var(--sans); font-size: 13px; font-weight: 600;
+  border-radius: var(--radius-sm);
+  padding: 9px 16px;
+  border: 1px solid var(--folio);
+  background: var(--folio); color: #fff;
+}
+.btn:hover { background: var(--folio-ink); border-color: var(--folio-ink); }
+.btn.secondary { background: var(--content-elev); color: var(--folio-ink); }
+.btn.secondary:hover { background: var(--folio-soft); }
+
+.test {
+  margin-left: auto;
+  font-size: 12.5px; display: inline-flex; align-items: center; gap: 7px;
+  color: var(--ink-soft);
+}
+.test .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); }
+.test.is-on .dot { background: var(--sage); }
+.test.is-off .dot { background: var(--brick); }
+.test.is-checking .dot { background: var(--amber); }
+
+.saved-flag {
+  margin-top: 14px; font-size: 12.5px; color: #355c38;
+  background: var(--sage-soft); border: 1px solid #cfe1cc;
+  border-radius: var(--radius-sm); padding: 8px 11px;
+  display: none;
+}
+.saved-flag.show { display: block; }

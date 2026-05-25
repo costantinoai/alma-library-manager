@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+  <link rel="stylesheet" href="options.css" />
+  <title>ALMa Connector — Servers</title>
+</head>
+<body>
+  <div class="opt-wrap">
+    <div class="opt-head">
+      <img class="mark" src="icons/alma.svg" alt="" />
+      <span class="wordmark">AL<b>Ma</b> Connector</span>
+    </div>
+    <p class="opt-lede">
+      Manage the ALMa servers this connector can save into. Running instances on
+      the standard ports (<code>:8000</code> Docker, <code>:8001</code> dev) are
+      detected automatically — click one to make it active. Everything is stored
+      locally in your browser.
+    </p>
+
+    <div class="card">
+      <div id="server-manager"></div>
+    </div>
+  </div>
+
+  <script src="lib/settings.js"></script>
+  <script src="lib/servers-ui.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
