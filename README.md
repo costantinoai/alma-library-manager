@@ -409,6 +409,25 @@ fill in what you have. The full reference is in
 
 ---
 
+## Browser connector (Firefox)
+
+Save the paper open in your browser straight into ALMa, like the Zotero
+connector. Download **`alma-connector-<version>.xpi`** from the
+[release](https://github.com/costantinoai/alma-library-manager/releases)
+matching your ALMa version and open it in Firefox (`about:addons` → ⚙ →
+**Install Add-on From File**). Full guide:
+[docs/user-guide/browser-connector.md](docs/user-guide/browser-connector.md).
+
+**Releasing it (maintainer):** keep an AMO API key in
+`~/.config/alma/amo.env` and run `gh auth login` once, then from a clean
+tree run `extension/release.sh` — it switches to an up-to-date `main`,
+signs the add-on locally (unlisted AMO), and (after confirmation) uploads
+the `.xpi` to the `v<version>` release and pushes the auto-update manifest.
+`extension/release.sh --local` just builds the signed `.xpi`. See
+[`extension/README.md`](extension/README.md).
+
+---
+
 ## Tech stack
 
 Python 3.11 + FastAPI + SQLite (WAL) + APScheduler on the backend.

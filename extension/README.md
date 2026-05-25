@@ -66,26 +66,33 @@ signed **locally** and published to GitHub Releases (auto-updating).
 One-time setup (kept out of the repo):
 
 - A free **AMO API key** (addons.mozilla.org → Developer Hub → Manage API
-  Keys), exported in your shell:
+  Keys), stored in **`~/.config/alma/amo.env`** (`chmod 600`):
   ```bash
-  export AMO_JWT_ISSUER=...   AMO_JWT_SECRET=...
+  export AMO_JWT_ISSUER=...
+  export AMO_JWT_SECRET=...
   ```
 - **`gh`** (GitHub CLI), authenticated once: `gh auth login`.
 
-Per release — from a `main` checkout, after bumping the ALMa version in
-`pyproject.toml` and tagging `v<version>`:
+Per release — after bumping the ALMa version in `pyproject.toml` and
+tagging `v<version>`, from a **clean** working tree just run:
 
 ```bash
 extension/release.sh
 ```
 
-It stamps the connector version = ALMa version, **signs** the add-on
-(unlisted AMO — automated, no review), **uploads**
+It does everything: switches to an up-to-date `main`, loads your AMO key
+from `~/.config/alma/amo.env`, stamps the connector version = ALMa version,
+**signs** the add-on (unlisted AMO — automated, no review), **uploads**
 `alma-connector-<version>.xpi` to the `v<version>` GitHub Release, and
-records it in `extension/updates.json`. Then commit + push
-`extension/manifest.json` + `extension/updates.json` on `main` (the script
-prints the commands) so installed copies **auto-update** via the manifest
-`update_url`.
+**commits + pushes** `extension/updates.json` on `main` so installed copies
+**auto-update** via the manifest `update_url`. (AMO signs each version
+once, so run it once per release.)
+
+`git switch main` + `git pull` run first without prompting; every **write**
+— creating the release/tag, pushing to `main` — is gated behind a y/N
+confirmation. Use **`extension/release.sh --local`** to only build the
+signed `.xpi` (no GitHub upload, no git writes) — handy for testing or a
+personal install.
 
 ## Choosing a server
 
