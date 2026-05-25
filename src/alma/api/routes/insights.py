@@ -1579,7 +1579,8 @@ def _build_operational_snapshot(
                 "label": "Recent background operations failed",
                 "severity": "warning",
                 "detail": f"{recent_failed_operations_24h} operations failed in the last 24 hours.",
-                "page": "insights",
+                # Diagnostics moved from Insights to the Health page (task 24).
+                "page": "health",
                 "params": {"tab": "diagnostics"},
             }
         )
