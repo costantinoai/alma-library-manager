@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from alma.ai.embedding_sources import source_for_provider_name
+from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,8 @@ def run_embedding_computation(
     job_id: str,
     *,
     scope: str = "missing_stale",
+    limit: int | None = None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
@@ -130,6 +133,15 @@ def run_embedding_computation(
             if is_local_specter2
             else ""
         )
+        target_ids = normalize_id_list(target_paper_ids)
+        target_clause = ""
+        if target_ids:
+            target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+        limit_clause = ""
+        limit_params: list[object] = []
+        if limit is not None:
+            limit_clause = "LIMIT ?"
+            limit_params.append(max(1, int(limit)))
 
         if scope == "missing":
             # "Missing" means "no row for the active model", not "no row at all".
@@ -143,8 +155,11 @@ def run_embedding_computation(
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
                 {local_specter2_text_filter}
+                {target_clause}
+                ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+                {limit_clause}
                 """,
-                (model_hf_id,),
+                [model_hf_id, *target_ids, *limit_params],
             ).fetchall()
         elif scope == "stale":
             # A paper is "stale" for the active model if it has vectors under
@@ -162,8 +177,11 @@ def run_embedding_computation(
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
                 {local_specter2_text_filter}
+                {target_clause}
+                ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+                {limit_clause}
                 """,
-                (model_hf_id, model_hf_id),
+                [model_hf_id, model_hf_id, *target_ids, *limit_params],
             ).fetchall()
         elif scope == "all":
             rows = conn.execute(
@@ -172,7 +190,11 @@ def run_embedding_computation(
                 FROM papers p
                 WHERE 1 = 1
                 {local_specter2_text_filter}
+                {target_clause}
+                ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+                {limit_clause}
                 """,
+                [*target_ids, *limit_params],
             ).fetchall()
         else:
             rows = conn.execute(
@@ -183,8 +205,11 @@ def run_embedding_computation(
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
                 {local_specter2_text_filter}
+                {target_clause}
+                ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
+                {limit_clause}
                 """,
-                (model_hf_id,),
+                [model_hf_id, *target_ids, *limit_params],
             ).fetchall()
 
         total = len(rows)
@@ -224,6 +249,8 @@ def run_embedding_computation(
                     "s2_terminal_misses": local_fill_counts,
                     "requires_title_and_abstract": True,
                     "manual_user_action": True,
+                    "target_paper_ids": target_ids,
+                    "limit": limit,
                 },
             )
 
@@ -419,6 +446,8 @@ def run_embedding_computation(
                 "skipped_empty": skipped_empty,
                 "error_types": dict(error_types),
                 "scope": scope,
+                "target_paper_ids": target_ids,
+                "limit": limit,
             },
         )
         set_job_status(

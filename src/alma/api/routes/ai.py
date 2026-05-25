@@ -1333,7 +1333,10 @@ def _run_embedding_computation(job_id: str, scope: str = "missing_stale") -> Non
 
 
 def _run_s2_vector_backfill(
-    job_id: str, limit: int = 200, continuation_depth: int = 0
+    job_id: str,
+    limit: int = 200,
+    continuation_depth: int = 0,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> None:
     """Background wrapper for S2/SPECTER2 vector backfill.
 
@@ -1347,6 +1350,7 @@ def _run_s2_vector_backfill(
     run_s2_vector_backfill(
         job_id,
         limit=limit,
+        target_paper_ids=target_paper_ids,
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,

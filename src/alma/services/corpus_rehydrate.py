@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.utils import (
+    normalize_id_list,
     normalize_doi,
     normalize_title_key,
     utcnow as _utcnow,
@@ -56,6 +57,7 @@ RETRYABLE_STATUS = "retryable_error"
 # venues that publish abstracts late), so an `unchanged` outcome must
 # expire — otherwise local SPECTER2 stays starved of input text forever.
 UNCHANGED_RETRY_AFTER = timedelta(days=30)
+_AUTO_PAPER_INSERT_HYDRATION_LIMIT = 25
 
 
 def _json(value: Any) -> str:
@@ -167,11 +169,17 @@ def _select_openalex_candidates(
     *,
     limit: int | None,
     force: bool = False,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[sqlite3.Row]:
     _ensure_enrichment_status_table(conn)
     lookup_expr = _openalex_lookup_expr()
     params: list[Any] = [OPENALEX_SOURCE, METADATA_PURPOSE]
     status_clause = _eligible_status_clause(force)
+    target_ids = normalize_id_list(target_paper_ids)
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
     if not force:
         params.extend([OPENALEX_WORKS_FIELDS_KEY, _utcnow_iso()])
     limit_clause = ""
@@ -196,6 +204,7 @@ def _select_openalex_candidates(
          AND es.purpose = ?
         WHERE COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
           AND COALESCE(p.canonical_paper_id, '') = ''
+          {target_clause}
           AND {_missing_metadata_clause()}
           AND {status_clause}
         ORDER BY
@@ -212,17 +221,25 @@ def _select_s2_candidates(
     conn: sqlite3.Connection,
     *,
     limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[sqlite3.Row]:
     """Pick papers eligible for the batched Semantic Scholar phase.
 
     Eligibility: has DOI or `semantic_scholar_id`, isn't a canonical
-    duplicate, and the S2 ledger row (if any) is neither `enriched`
-    nor `terminal_no_match`. The phase exists because S2 carries fields
-    OpenAlex doesn't — `tldr`, `influentialCitationCount` — that the
-    Discovery ranker and PaperCard surfaces actively consume.
+    duplicate, and the S2 ledger row is missing, stale for a changed
+    lookup, pending, or past its retry clock. The phase exists because
+    S2 carries fields OpenAlex doesn't — `tldr`,
+    `influentialCitationCount` — that the Discovery ranker and
+    PaperCard surfaces actively consume.
     """
     _ensure_enrichment_status_table(conn)
     params: list[Any] = [S2_SOURCE, METADATA_PURPOSE]
+    target_ids = normalize_id_list(target_paper_ids)
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
+    params.append(_utcnow_iso())
     limit_clause = ""
     if limit is not None:
         params.append(max(1, int(limit)))
@@ -246,6 +263,7 @@ def _select_s2_candidates(
          AND es.source = ?
          AND es.purpose = ?
         WHERE COALESCE(p.canonical_paper_id, '') = ''
+          {target_clause}
           AND (
               COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
               OR COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') != ''
@@ -254,7 +272,15 @@ def _select_s2_candidates(
               es.paper_id IS NULL
               OR COALESCE(es.lookup_key, '') != {lookup_expr}
               OR COALESCE(es.fields_key, '') != 's2_paper_v1'
-              OR COALESCE(es.status, '') NOT IN ('enriched', 'terminal_no_match')
+              OR COALESCE(es.status, '') IN ('pending', 'queued')
+              OR (
+                  es.status IN ('{RETRYABLE_STATUS}', 'unchanged')
+                  AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+              )
+              OR COALESCE(es.status, '') NOT IN (
+                  'enriched', 'unchanged', 'terminal_no_match',
+                  '{RETRYABLE_STATUS}', 'pending', 'queued'
+              )
           )
         ORDER BY
             CASE WHEN COALESCE(NULLIF(TRIM(p.tldr), ''), '') = '' THEN 0 ELSE 1 END,
@@ -413,6 +439,7 @@ def _run_s2_batched_phase(
     conn: sqlite3.Connection,
     *,
     limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     job_id: str,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
@@ -436,7 +463,7 @@ def _run_s2_batched_phase(
     )
 
     summary: Counter[str] = Counter()
-    rows = _select_s2_candidates(conn, limit=limit)
+    rows = _select_s2_candidates(conn, limit=limit, target_paper_ids=target_paper_ids)
     summary["candidates"] = len(rows)
     if not rows:
         return summary
@@ -908,10 +935,19 @@ def _unpaywall_urls_for_doi(doi: str) -> list[str]:
 
 
 def _select_abstract_recovery_candidates(
-    conn: sqlite3.Connection, *, limit: int | None
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[str]:
     _ensure_enrichment_status_table(conn)
-    params: list[Any] = [ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE, _utcnow_iso()]
+    params: list[Any] = [ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE]
+    target_ids = normalize_id_list(target_paper_ids)
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
+    params.append(_utcnow_iso())
     limit_clause = ""
     if limit is not None:
         params.append(max(1, int(limit)))
@@ -926,6 +962,7 @@ def _select_abstract_recovery_candidates(
          AND es.purpose = ?
         WHERE COALESCE(p.canonical_paper_id, '') = ''
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
+          {target_clause}
           AND (
               COALESCE(NULLIF(TRIM(p.oa_url), ''), '') != ''
               OR COALESCE(NULLIF(TRIM(p.url), ''), '') != ''
@@ -954,6 +991,7 @@ def _run_abstract_recovery_phase(
     conn: sqlite3.Connection,
     *,
     limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     job_id: str,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
@@ -962,7 +1000,9 @@ def _run_abstract_recovery_phase(
     base_total: int,
 ) -> Counter[str]:
     summary: Counter[str] = Counter()
-    paper_ids = _select_abstract_recovery_candidates(conn, limit=limit)
+    paper_ids = _select_abstract_recovery_candidates(
+        conn, limit=limit, target_paper_ids=target_paper_ids
+    )
     if not paper_ids:
         return summary
     add_job_log(
@@ -1158,7 +1198,10 @@ def list_enrichment_status_items(
 
 
 def _select_title_resolution_candidates(
-    conn: sqlite3.Connection, *, limit: int | None
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[sqlite3.Row]:
     """Pick title-only papers whose identifiers haven't been resolved yet.
 
@@ -1173,6 +1216,11 @@ def _select_title_resolution_candidates(
     """
     bound = "" if limit is None else "LIMIT ?"
     params: list[Any] = [TITLE_RESOLUTION_SOURCE, METADATA_PURPOSE]
+    target_ids = normalize_id_list(target_paper_ids)
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
     if limit is not None:
         params.append(int(limit))
     return list(
@@ -1189,6 +1237,7 @@ def _select_title_resolution_candidates(
               AND COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') = ''
               AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''
               AND COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') = ''
+              {target_clause}
               AND (
                   pes.status IS NULL
                   OR pes.status NOT IN ('enriched', 'terminal_no_match')
@@ -1205,6 +1254,7 @@ def _run_title_resolution_phase(
     *,
     job_id: str,
     limit: int | None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
 ) -> dict[str, int]:
@@ -1217,7 +1267,9 @@ def _run_title_resolution_phase(
     call"). Returns a small summary the parent runner attaches to its
     own job result.
     """
-    candidates = _select_title_resolution_candidates(conn, limit=limit)
+    candidates = _select_title_resolution_candidates(
+        conn, limit=limit, target_paper_ids=target_paper_ids
+    )
     summary = {"attempted": 0, "resolved": 0}
     if not candidates:
         return summary
@@ -1262,6 +1314,7 @@ def run_corpus_metadata_rehydration(
     *,
     limit: int | None = None,
     force: bool = False,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
@@ -1272,6 +1325,7 @@ def run_corpus_metadata_rehydration(
     conn = open_db_connection()
     if limit is not None:
         limit = max(1, min(int(limit), 100_000))
+    target_ids = normalize_id_list(target_paper_ids)
     batch_size = 50
     retry_after = timedelta(hours=6)
     summary: Counter[str] = Counter()
@@ -1290,13 +1344,16 @@ def run_corpus_metadata_rehydration(
             conn,
             job_id=job_id,
             limit=limit,
+            target_paper_ids=target_ids,
             add_job_log=add_job_log,
             is_cancellation_requested=is_cancellation_requested,
         )
         summary["title_resolution_attempted"] = title_resolution_summary["attempted"]
         summary["title_resolution_resolved"] = title_resolution_summary["resolved"]
 
-        rows = _select_openalex_candidates(conn, limit=limit, force=force)
+        rows = _select_openalex_candidates(
+            conn, limit=limit, force=force, target_paper_ids=target_ids
+        )
         total = len(rows)
         summary["candidates"] = total
         if total == 0:
@@ -1326,6 +1383,7 @@ def run_corpus_metadata_rehydration(
                 "candidates": total,
                 "batch_size": batch_size,
                 "force": force,
+                "target_paper_ids": target_ids,
                 "fields_key": OPENALEX_WORKS_FIELDS_KEY,
                 "max_remote_calls": (total + batch_size - 1) // batch_size,
             },
@@ -1481,6 +1539,7 @@ def run_corpus_metadata_rehydration(
                 s2_summary = _run_s2_batched_phase(
                     conn,
                     limit=limit,
+                    target_paper_ids=target_ids,
                     job_id=job_id,
                     set_job_status=set_job_status,
                     add_job_log=add_job_log,
@@ -1504,7 +1563,9 @@ def run_corpus_metadata_rehydration(
         # must still process it.
         fallback_summary: Counter[str] = Counter()
         if not is_cancellation_requested(job_id):
-            crossref_ids = _select_crossref_abstract_candidates(conn, limit=limit)
+            crossref_ids = _select_crossref_abstract_candidates(
+                conn, limit=limit, seed_paper_ids=target_ids or None
+            )
             try:
                 fallback_summary = _run_crossref_abstract_phase(
                     conn,
@@ -1533,6 +1594,7 @@ def run_corpus_metadata_rehydration(
                 abstract_recovery_summary = _run_abstract_recovery_phase(
                     conn,
                     limit=limit,
+                    target_paper_ids=target_ids,
                     job_id=job_id,
                     set_job_status=set_job_status,
                     add_job_log=add_job_log,
@@ -1568,6 +1630,7 @@ def run_corpus_metadata_rehydration(
             "fallback": dict(fallback_summary),
             "abstract_recovery": dict(abstract_recovery_summary),
             "force": force,
+            "target_paper_ids": target_ids,
             "message": (
                 "Corpus metadata rehydration complete: "
                 f"OA enriched={int(summary['enriched'])} unchanged={int(summary['unchanged'])} "
@@ -1610,7 +1673,12 @@ def run_corpus_metadata_rehydration(
                     data={"trigger_source": trigger_source},
                 )
             else:
-                chain = schedule_post_hydration_chain(conn, trigger_reason="post_hydration")
+                chain = schedule_post_hydration_chain(
+                    conn,
+                    trigger_reason="post_hydration",
+                    limit=limit,
+                    target_paper_ids=target_ids,
+                )
                 if chain.get("scheduled_jobs"):
                     chain_id = str(chain.get("chain_id") or "").strip()
                     if chain_id:
@@ -1687,16 +1755,27 @@ def _abstract_present(row: sqlite3.Row | None) -> bool:
     return bool(str(row["abstract"] or "").strip())
 
 
-def _apply_s2_paper(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row, paper: dict) -> list[str]:
+def _apply_s2_paper(
+    conn: sqlite3.Connection,
+    *,
+    paper_id: str,
+    row: sqlite3.Row,
+    paper: dict,
+) -> list[str]:
     """Fill-only paper UPDATE from a Semantic Scholar paper response.
 
     Wraps `services/s2_vectors._apply_s2_metadata` (which fills the
     canonical bibliographic fields) and ALSO persists `tldr` and
-    `influential_citation_count` from the same response — those two
-    are S2-only signals that the user asked us to capture
-    everywhere we can ("enrich all possible").
+    `influential_citation_count` plus the free SPECTER2 vector from the
+    same response — those are S2-only signals that the user asked us to
+    capture everywhere we can ("enrich all possible").
     """
-    from alma.services.s2_vectors import _apply_s2_metadata as _s2_apply
+    from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+    from alma.discovery import semantic_scholar
+    from alma.services.s2_vectors import (
+        _apply_s2_metadata as _s2_apply,
+        _clear_fetch_status,
+    )
 
     before = _read_hydration_row(conn, paper_id)
     _s2_apply(conn, paper_id=paper_id, row=row, paper=paper)
@@ -1720,6 +1799,28 @@ def _apply_s2_paper(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row
             fill_fields={"tldr": tldr_text},
             max_int_fields={"influential_citation_count": influential_count},
         )
+    vector_stored = False
+    vector = semantic_scholar.extract_specter2_vector(paper)
+    if vector:
+        try:
+            vector_stored = semantic_scholar.upsert_specter2_vector(
+                conn,
+                paper_id,
+                vector,
+                source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                created_at=_utcnow_iso(),
+            )
+            _clear_fetch_status(
+                conn,
+                paper_id=paper_id,
+                model=semantic_scholar.S2_SPECTER2_MODEL,
+            )
+        except Exception as exc:
+            logger.warning(
+                "S2 vector store failed during metadata phase for %s: %s",
+                paper_id,
+                exc,
+            )
     after = _read_hydration_row(conn, paper_id)
     if before is None or after is None:
         return []
@@ -1738,6 +1839,8 @@ def _apply_s2_paper(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.Row
     ):
         if str(before[field] or "") != str(after[field] or ""):
             filled.append(field)
+    if vector_stored:
+        filled.append("specter2_vector")
     return filled
 
 
@@ -2423,6 +2526,7 @@ def schedule_pending_hydration_sweep(
     *,
     reason: str = "paper_insert",
     limit: int | None = None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> str | None:
     """Kick off an Activity-enveloped rehydration job in the background.
 
@@ -2438,12 +2542,22 @@ def schedule_pending_hydration_sweep(
     """
     from alma.core.job_envelope import schedule_with_envelope
 
+    target_ids = normalize_id_list(target_paper_ids)
+    if limit is None and reason == "paper_insert":
+        target_limit = len(target_ids) or _AUTO_PAPER_INSERT_HYDRATION_LIMIT
+        limit = max(1, min(_AUTO_PAPER_INSERT_HYDRATION_LIMIT, target_limit))
     bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
-    queued_message = (
-        f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)"
-        if bounded_limit is not None
-        else "OpenAlex metadata rehydration auto-queued for all eligible papers"
-    )
+    if target_ids:
+        queued_message = (
+            "Paper metadata rehydration auto-queued for "
+            f"{len(target_ids)} target paper(s)"
+        )
+    elif bounded_limit is not None:
+        queued_message = (
+            f"OpenAlex metadata rehydration auto-queued for up to {bounded_limit} paper(s)"
+        )
+    else:
+        queued_message = "OpenAlex metadata rehydration auto-queued for all eligible papers"
 
     def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
         from alma.api.scheduler import (
@@ -2457,6 +2571,7 @@ def schedule_pending_hydration_sweep(
                 job_id,
                 limit=bounded_limit,
                 force=False,
+                target_paper_ids=target_ids,
                 set_job_status=set_job_status,
                 add_job_log=add_job_log,
                 is_cancellation_requested=is_cancellation_requested,
@@ -2475,11 +2590,13 @@ def schedule_pending_hydration_sweep(
             "limit": bounded_limit,
             "all_eligible": bounded_limit is None,
             "trigger_reason": reason,
+            "target_paper_ids": target_ids,
+            "target_count": len(target_ids),
         },
         extra_status_fields={
             "started_at": _utcnow_iso(),
             "processed": 0,
-            "total": bounded_limit or 0,
+            "total": len(target_ids) or bounded_limit or 0,
         },
     )
 
@@ -2608,7 +2725,10 @@ def enqueue_pending_hydration(
         # scheduler import is lazy so this helper stays callable from
         # CLI / test contexts where `alma.api.scheduler` isn't wired.
         try:
-            schedule_pending_hydration_sweep(reason="paper_insert")
+            schedule_pending_hydration_sweep(
+                reason="paper_insert",
+                target_paper_ids=[paper_id],
+            )
         except Exception as exc:
             logger.debug("auto schedule_pending_hydration_sweep skipped: %s", exc)
     return queued

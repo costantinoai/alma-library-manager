@@ -29,7 +29,12 @@ from typing import Callable
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.utils import canonical_lookup_doi, normalize_doi, validate_doi_shape
+from alma.core.utils import (
+    canonical_lookup_doi,
+    normalize_doi,
+    normalize_id_list,
+    validate_doi_shape,
+)
 from alma.discovery import semantic_scholar
 
 logger = logging.getLogger(__name__)
@@ -306,6 +311,7 @@ def run_s2_vector_backfill(
     job_id: str,
     *,
     limit: int = 200,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
@@ -329,13 +335,20 @@ def run_s2_vector_backfill(
         # wall, so any single `--reload` only loses one chunk; the
         # continuation picks up off the eligibility query.
         inner_limit = min(limit, _PER_RUN_PAPERS)
+        target_ids = normalize_id_list(target_paper_ids)
+        target_clause = ""
+        params: list[object] = [model, FETCH_SOURCE]
+        if target_ids:
+            target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+            params.extend(target_ids)
+        params.extend([model, FETCH_SOURCE, inner_limit])
         # Skip a paper only if it already has an *S2-sourced* vector for
         # this model. Locally-computed vectors (source='local', and any
         # other non-S2 source) are deliberately treated as upgradeable —
         # remote S2 embeddings take priority, so as soon as S2 grows
         # coverage for a paper we re-fetch and overwrite the local fill.
         rows = conn.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.year, p.doi, p.semantic_scholar_id
             FROM papers p
             LEFT JOIN publication_embedding_fetch_status fs
@@ -347,6 +360,7 @@ def run_s2_vector_backfill(
                 COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
             )
+            {target_clause}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id
@@ -354,9 +368,10 @@ def run_s2_vector_backfill(
                   AND pe.source = ?
             )
             AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
+            ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
             LIMIT ?
             """,
-            (model, FETCH_SOURCE, model, FETCH_SOURCE, inner_limit),
+            params,
         ).fetchall()
 
         total = len(rows)
@@ -405,6 +420,7 @@ def run_s2_vector_backfill(
                 "with_bad_local_doi": raw_doi - validated_doi,
                 "remote_fetch_only": True,
                 "local_compute": False,
+                "target_paper_ids": target_ids,
             },
         )
 
@@ -718,6 +734,7 @@ def run_s2_vector_backfill(
                 "lookup_failures": lookup_failures,
                 "errors": errors,
                 "model": model,
+                "target_paper_ids": target_ids,
             },
             finished_at=datetime.utcnow().isoformat(),
         )
@@ -734,6 +751,7 @@ def run_s2_vector_backfill(
                 "errors": errors,
                 "remote_fetch_only": True,
                 "local_compute": False,
+                "target_paper_ids": target_ids,
             },
         )
 
@@ -753,7 +771,9 @@ def run_s2_vector_backfill(
             stored + missing + unmatched + lookup_failures + bad_local_doi
         ) > 0
         remaining_session_budget = max(0, limit - processed)
-        remaining_eligible = _count_s2_fetch_candidates(conn)
+        remaining_eligible = _count_s2_fetch_candidates(
+            conn, target_paper_ids=target_ids or None
+        )
         will_continue = (
             not is_cancellation_requested(job_id)
             and made_progress
@@ -804,6 +824,7 @@ def run_s2_vector_backfill(
                 new_job_id,
                 remaining_session_budget,
                 continuation_depth + 1,
+                target_ids or None,
             )
             add_job_log(
                 job_id,
@@ -842,6 +863,8 @@ def run_s2_vector_backfill(
                         conn,
                         chain_id=parent_chain_id or None,
                         trigger_reason="post_s2_fetch",
+                        limit=remaining_session_budget or limit,
+                        target_paper_ids=target_ids,
                     )
                     if chain.get("scheduled_jobs"):
                         chain_id = str(chain.get("chain_id") or "").strip()

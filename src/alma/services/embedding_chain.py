@@ -46,6 +46,8 @@ import sqlite3
 import uuid
 from typing import Any, Callable, Optional
 
+from alma.core.utils import normalize_id_list
+
 logger = logging.getLogger(__name__)
 
 # Operation keys used for `find_active_job` deduplication. These must
@@ -80,7 +82,11 @@ def _has_local_specter2_provider(conn: sqlite3.Connection) -> bool:
         return False
 
 
-def _count_s2_fetch_candidates(conn: sqlite3.Connection) -> int:
+def _count_s2_fetch_candidates(
+    conn: sqlite3.Connection,
+    *,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
+) -> int:
     """Estimate of papers eligible for the next S2 vector backfill run.
 
     Mirrors the SELECT in `run_s2_vector_backfill` (DOI or s2_id, no
@@ -92,8 +98,15 @@ def _count_s2_fetch_candidates(conn: sqlite3.Connection) -> int:
         from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
         model = S2_SPECTER2_MODEL
+        target_ids = normalize_id_list(target_paper_ids)
+        target_clause = ""
+        params: list[Any] = [model]
+        if target_ids:
+            target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+            params.extend(target_ids)
+        params.append(model)
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS c
             FROM papers p
             LEFT JOIN publication_embedding_fetch_status fs
@@ -104,6 +117,7 @@ def _count_s2_fetch_candidates(conn: sqlite3.Connection) -> int:
                 COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
             )
+            {target_clause}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id
@@ -114,31 +128,42 @@ def _count_s2_fetch_candidates(conn: sqlite3.Connection) -> int:
                 'unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi'
             )
             """,
-            (model, model),
+            params,
         ).fetchone()
         return int((row["c"] if row else 0) or 0)
     except sqlite3.OperationalError:
         return 0
 
 
-def _count_local_specter2_candidates(conn: sqlite3.Connection) -> int:
+def _count_local_specter2_candidates(
+    conn: sqlite3.Connection,
+    *,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
+) -> int:
     """Papers that local SPECTER2 *can* compute right now."""
     try:
         from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
         model = S2_SPECTER2_MODEL
+        target_ids = normalize_id_list(target_paper_ids)
+        target_clause = ""
+        params: list[Any] = [model]
+        if target_ids:
+            target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
+            params.extend(target_ids)
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS c
             FROM papers p
             WHERE NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?
             )
+            {target_clause}
             AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
             AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
             """,
-            (model,),
+            params,
         ).fetchone()
         return int((row["c"] if row else 0) or 0)
     except sqlite3.OperationalError:
@@ -154,6 +179,7 @@ def _schedule_with_envelope(
     trigger_source: str,
     queued_message: str,
     runner_factory: Callable[[str], Callable[..., Any]],
+    log_data: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
     """Chain-coordinator wrapper around :func:`core.job_envelope.schedule_with_envelope`.
 
@@ -172,6 +198,7 @@ def _schedule_with_envelope(
         chain_id=chain_id,
         chain_step=chain_step,
         log_message="Auto-queued by chain coordinator",
+        log_data=log_data,
     )
 
 
@@ -180,6 +207,8 @@ def schedule_post_hydration_chain(
     *,
     chain_id: Optional[str] = None,
     trigger_reason: str = "post_hydration",
+    limit: int | None = None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """After metadata hydration: queue the S2 vector backfill if useful.
 
@@ -187,13 +216,23 @@ def schedule_post_hydration_chain(
     """
     chain_id = chain_id or _new_chain_id()
     scheduled: list[str] = []
+    target_ids = normalize_id_list(target_paper_ids)
+    s2_limit = (
+        _AUTO_S2_FETCH_LIMIT
+        if limit is None
+        else max(1, min(int(limit), _AUTO_S2_FETCH_LIMIT))
+    )
 
-    if _count_s2_fetch_candidates(conn) <= 0:
+    candidates_text = _count_s2_fetch_candidates(
+        conn, target_paper_ids=target_ids or None
+    )
+    if candidates_text <= 0:
         logger.debug("post-hydration chain skipped S2 fetch: zero candidates")
         return {
             "chain_id": chain_id,
             "scheduled_jobs": scheduled,
             "skipped": "no_candidates",
+            "target_paper_ids": target_ids,
         }
 
     def _runner_factory(job_id: str) -> Callable[[], Any]:
@@ -207,7 +246,8 @@ def schedule_post_hydration_chain(
         def _run() -> Any:
             return run_s2_vector_backfill(
                 job_id,
-                limit=_AUTO_S2_FETCH_LIMIT,
+                limit=s2_limit,
+                target_paper_ids=target_ids,
                 set_job_status=set_job_status,
                 add_job_log=add_job_log,
                 is_cancellation_requested=is_cancellation_requested,
@@ -215,19 +255,32 @@ def schedule_post_hydration_chain(
 
         return _run
 
-    candidates_text = _count_s2_fetch_candidates(conn)
     job_id = _schedule_with_envelope(
         operation_key=_S2_FETCH_OPERATION_KEY,
         job_id_prefix="auto_s2_fetch",
         chain_id=chain_id,
         chain_step="s2_fetch",
         trigger_source=f"auto:{trigger_reason}",
-        queued_message=f"S2 vector fetch auto-queued for {candidates_text} candidate(s)",
+        queued_message=(
+            f"S2 vector fetch auto-queued for up to {min(candidates_text, s2_limit)} "
+            f"of {candidates_text} candidate(s)"
+        ),
         runner_factory=_runner_factory,
+        log_data={
+            "limit": s2_limit,
+            "target_paper_ids": target_ids,
+            "target_count": len(target_ids),
+            "candidate_count": candidates_text,
+        },
     )
     if job_id:
         scheduled.append(job_id)
-    return {"chain_id": chain_id, "scheduled_jobs": scheduled}
+    return {
+        "chain_id": chain_id,
+        "scheduled_jobs": scheduled,
+        "limit": s2_limit,
+        "target_paper_ids": target_ids,
+    }
 
 
 def schedule_post_s2_chain(
@@ -235,6 +288,8 @@ def schedule_post_s2_chain(
     *,
     chain_id: Optional[str] = None,
     trigger_reason: str = "post_s2_fetch",
+    limit: int | None = None,
+    target_paper_ids: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """After S2 vector backfill: queue local SPECTER2 fill if useful.
 
@@ -246,20 +301,26 @@ def schedule_post_s2_chain(
     """
     chain_id = chain_id or _new_chain_id()
     scheduled: list[str] = []
+    target_ids = normalize_id_list(target_paper_ids)
+    local_limit = None if limit is None else max(1, int(limit))
 
     if not _has_local_specter2_provider(conn):
         return {
             "chain_id": chain_id,
             "scheduled_jobs": scheduled,
             "skipped": "no_local_specter2",
+            "target_paper_ids": target_ids,
         }
 
-    candidates = _count_local_specter2_candidates(conn)
+    candidates = _count_local_specter2_candidates(
+        conn, target_paper_ids=target_ids or None
+    )
     if candidates == 0:
         return {
             "chain_id": chain_id,
             "scheduled_jobs": scheduled,
             "skipped": "no_candidates",
+            "target_paper_ids": target_ids,
         }
 
     def _runner_factory(job_id: str) -> Callable[[], Any]:
@@ -274,6 +335,8 @@ def schedule_post_s2_chain(
             return run_embedding_computation(
                 job_id,
                 scope="missing",
+                limit=local_limit,
+                target_paper_ids=target_ids,
                 set_job_status=set_job_status,
                 add_job_log=add_job_log,
                 is_cancellation_requested=is_cancellation_requested,
@@ -287,9 +350,23 @@ def schedule_post_s2_chain(
         chain_id=chain_id,
         chain_step="local_specter2_fill",
         trigger_source=f"auto:{trigger_reason}",
-        queued_message=f"Local SPECTER2 fill auto-queued for {candidates} candidate(s)",
+        queued_message=(
+            f"Local SPECTER2 fill auto-queued for "
+            f"{min(candidates, local_limit or candidates)} candidate(s)"
+        ),
         runner_factory=_runner_factory,
+        log_data={
+            "limit": local_limit,
+            "target_paper_ids": target_ids,
+            "target_count": len(target_ids),
+            "candidate_count": candidates,
+        },
     )
     if job_id:
         scheduled.append(job_id)
-    return {"chain_id": chain_id, "scheduled_jobs": scheduled}
+    return {
+        "chain_id": chain_id,
+        "scheduled_jobs": scheduled,
+        "limit": local_limit,
+        "target_paper_ids": target_ids,
+    }

@@ -35,6 +35,15 @@ def utcnow_iso() -> str:
     return utcnow().isoformat()
 
 
+def normalize_id_list(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Return stable, non-empty string IDs while preserving input order."""
+    if not values:
+        return []
+    return list(
+        dict.fromkeys(str(value).strip() for value in values if str(value).strip())
+    )
+
+
 def normalize_text(value: str) -> str:
     """Normalize text for comparison: lowercase, strip non-alphanumeric, collapse whitespace.
 
