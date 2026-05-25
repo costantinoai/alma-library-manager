@@ -1631,7 +1631,10 @@ def get_reading_queue(
                        WHEN reading_status = 'excluded' THEN 2
                        ELSE 3
                    END,
-                   COALESCE(publication_date, added_at, created_at, '') DESC"""
+                   -- Newest-added on top: order by when the paper entered the
+                   -- library (its only "when added" signal — reading_status has
+                   -- no own timestamp), not by publication date.
+                   COALESCE(added_at, created_at, publication_date, '') DESC"""
         ).fetchall()
 
         queue = ReadingQueueResponse()
