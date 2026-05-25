@@ -2,10 +2,11 @@
 # =============================================================================
 # ALMa — self-hosted installer (Linux / macOS)
 # =============================================================================
-# Pulls the prebuilt image from GitHub Container Registry, prompts for your
-# OpenAlex email, picks the right image variant for your hardware
-# (GPU / CPU / lite), and starts ALMa with named Docker volumes so your
-# library survives upgrades.
+# Pulls the prebuilt image from GitHub Container Registry, picks the right
+# image variant for your hardware (GPU / CPU / lite), and starts ALMa with
+# named Docker volumes so your library survives upgrades. The required
+# OpenAlex API key is added after boot via Settings → Connections (kept in
+# the volume's secret store, never in `docker inspect`).
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.sh | bash
@@ -97,27 +98,22 @@ IMAGE="${IMAGE_BASE}:${TAG}"
 ok "Selected: ${BOLD}${IMAGE}${NC} — ${VARIANT_LABEL}"
 echo
 
-# ---- 3. OpenAlex email -----------------------------------------------------
-step 3 5 "Configuring OpenAlex polite-pool email..."
+# ---- 3. OpenAlex credentials -----------------------------------------------
+# OpenAlex requires an API key on every request (since 2026-02-13). We do
+# NOT prompt for it here: the key is set after boot via Settings →
+# Connections, which persists it to the 0600 secret store inside the
+# alma-data volume — so it never lands in `docker inspect` or shell history.
+# An optional contact email (no longer affects rate limits) is passed
+# through only if it's already in the environment.
+step 3 5 "Configuring OpenAlex access..."
 OPENALEX_EMAIL="${OPENALEX_EMAIL:-}"
-if [ -z "$OPENALEX_EMAIL" ]; then
-  echo "ALMa identifies itself to OpenAlex with your email address — this is"
-  echo "free, requires no signup, and avoids anonymous rate limits."
-  echo
-  if [ -t 0 ]; then
-    while true; do
-      read -r -p "Your email: " OPENALEX_EMAIL
-      [ -n "$OPENALEX_EMAIL" ] && break
-      err "Email cannot be empty."
-    done
-  else
-    # Non-interactive (piped from curl): fall back to a placeholder + warn
-    OPENALEX_EMAIL="anonymous@example.com"
-    warn "Running non-interactively — set OPENALEX_EMAIL=you@example.com in the env"
-    warn "or update it later from Settings → External APIs in the UI."
-  fi
+EMAIL_FLAG=""
+if [ -n "$OPENALEX_EMAIL" ]; then
+  EMAIL_FLAG="-e OPENALEX_EMAIL=$OPENALEX_EMAIL"
+  ok "Optional contact email: $OPENALEX_EMAIL"
 fi
-ok "OpenAlex email: $OPENALEX_EMAIL"
+echo "OpenAlex now requires a free API key — you'll add it in the UI after"
+echo "boot (Settings → Connections). Get one in ~30s at openalex.org/settings/api."
 echo
 
 # ---- 4. Stop existing container (if any) -----------------------------------
@@ -130,7 +126,7 @@ fi
 docker pull "$IMAGE"
 
 # ---- 5. Run ---------------------------------------------------------------
-# shellcheck disable=SC2086  # we want GPU_FLAG to word-split when set
+# shellcheck disable=SC2086  # we want EMAIL_FLAG / GPU_FLAG to word-split when set
 # Bind to localhost only by default — ALMa has no auth in single-user mode.
 # Set BIND_ADDR=0.0.0.0 to reach it from other devices (e.g. a headless Pi);
 # do so only on a trusted network. See the README "Exposing on your network".
@@ -144,10 +140,10 @@ docker run -d \
   --name alma \
   --restart unless-stopped \
   -p "${BIND_ADDR}:8000:8000" \
-  -e "OPENALEX_EMAIL=$OPENALEX_EMAIL" \
   -e "ALMA_SETTINGS_PATH=/app/data/settings.json" \
   -v alma-data:/app/data \
   -v alma-config:/app/config \
+  $EMAIL_FLAG \
   $GPU_FLAG \
   "$IMAGE" >/dev/null
 
@@ -173,6 +169,12 @@ printf "${GREEN}${BOLD}Setup complete.${NC}\n"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 echo "  Open ALMa:    http://localhost:8000"
+echo
+printf "  ${BOLD}Next step (required):${NC} add your OpenAlex API key\n"
+echo "    Settings → Connections → OpenAlex, then 'Save connection settings'."
+echo "    Free key (~30s): https://openalex.org/settings/api"
+echo "    A Semantic Scholar key (Settings → Connections) is recommended too."
+echo "    Keys are stored in the alma-data volume's 0600 secret store."
 echo
 echo "  Logs:         docker logs -f alma"
 echo "  Stop:         docker stop alma"

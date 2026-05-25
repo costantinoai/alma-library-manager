@@ -1,10 +1,11 @@
 # =============================================================================
 # ALMa — self-hosted installer (Windows)
 # =============================================================================
-# Pulls the prebuilt image from GitHub Container Registry, prompts for your
-# OpenAlex email, picks the right image variant for your hardware
-# (GPU / CPU), and starts ALMa with named Docker volumes so your library
-# survives upgrades.
+# Pulls the prebuilt image from GitHub Container Registry, picks the right
+# image variant for your hardware (GPU / CPU), and starts ALMa with named
+# Docker volumes so your library survives upgrades. The required OpenAlex
+# API key is added after boot via Settings -> Connections (kept in the
+# volume's secret store, never in 'docker inspect').
 #
 # Usage (PowerShell — Run as a regular user, not Administrator):
 #   irm https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/setup.ps1 | iex
@@ -88,19 +89,22 @@ $image = "$imageBase`:$tag"
 Write-Ok "Selected: $image  -  $variantLabel"
 Write-Host ""
 
-# ---- 3. OpenAlex email -----------------------------------------------------
-Write-Step 3 5 "Configuring OpenAlex polite-pool email..."
+# ---- 3. OpenAlex credentials -----------------------------------------------
+# OpenAlex requires an API key on every request (since 2026-02-13). We do
+# NOT prompt for it here: the key is added after boot via Settings ->
+# Connections, which persists it to the 0600 secret store inside the
+# alma-data volume - so it never lands in 'docker inspect' or shell history.
+# An optional contact email (no longer affects rate limits) is passed
+# through only if it's already in the environment.
+Write-Step 3 5 "Configuring OpenAlex access..."
 $openalexEmail = $env:OPENALEX_EMAIL
-if (-not $openalexEmail) {
-    Write-Host "ALMa identifies itself to OpenAlex with your email address - this is"
-    Write-Host "free, requires no signup, and avoids anonymous rate limits."
-    Write-Host ""
-    while (-not $openalexEmail) {
-        $openalexEmail = Read-Host "Your email"
-        if (-not $openalexEmail) { Write-Err2 "Email cannot be empty." }
-    }
+$emailArgs = @()
+if ($openalexEmail) {
+    $emailArgs = @("-e", "OPENALEX_EMAIL=$openalexEmail")
+    Write-Ok "Optional contact email: $openalexEmail"
 }
-Write-Ok "OpenAlex email: $openalexEmail"
+Write-Host "OpenAlex now requires a free API key - you'll add it in the UI after"
+Write-Host "boot (Settings -> Connections). Get one in ~30s at openalex.org/settings/api."
 Write-Host ""
 
 # ---- 4. Stop existing container (if any) -----------------------------------
@@ -129,11 +133,10 @@ $runArgs = @(
     "--name", "alma",
     "--restart", "unless-stopped",
     "-p", "${bindAddr}:8000:8000",
-    "-e", "OPENALEX_EMAIL=$openalexEmail",
     "-e", "ALMA_SETTINGS_PATH=/app/data/settings.json",
     "-v", "alma-data:/app/data",
     "-v", "alma-config:/app/config"
-) + $gpuArgs + @($image)
+) + $emailArgs + $gpuArgs + @($image)
 
 & docker @runArgs | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Err2 "Container failed to start."; exit 1 }
@@ -161,6 +164,12 @@ Write-Host "Setup complete." -ForegroundColor Green
 Write-Host "----------------------------------------------------------------"
 Write-Host ""
 Write-Host "  Open ALMa:    http://localhost:8000"
+Write-Host ""
+Write-Host "  Next step (required): add your OpenAlex API key" -ForegroundColor Yellow
+Write-Host "    Settings -> Connections -> OpenAlex, then 'Save connection settings'."
+Write-Host "    Free key (~30s): https://openalex.org/settings/api"
+Write-Host "    A Semantic Scholar key (Settings -> Connections) is recommended too."
+Write-Host "    Keys are stored in the alma-data volume's 0600 secret store."
 Write-Host ""
 Write-Host "  Logs:         docker logs -f alma"
 Write-Host "  Stop:         docker stop alma"
