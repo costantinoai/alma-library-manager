@@ -100,6 +100,64 @@ def paper_attention_where_sql() -> str:
 
 
 # --------------------------------------------------------------------------
+# Authors needs-attention ladder — single source of truth for which author
+# rows the identity resolver couldn't finish and in what severity order.
+# Shared so the ``/authors/needs-attention`` row query AND ``assess_authors``
+# below select / rank the same buckets (the ladder lived only in the endpoint
+# before, so author health had no canonical counterpart). Column refs use the
+# ``a.`` alias both callers give the ``authors`` table; status strings are the
+# resolver state-machine enum.
+# --------------------------------------------------------------------------
+
+# Resolution statuses that qualify a row for attention. 'unresolved' qualifies
+# (it lands in the WHERE) but carries no dedicated severity rank → falls to 9.
+AUTHOR_ATTENTION_STATUSES: tuple[str, ...] = (
+    "error",
+    "no_match",
+    "needs_manual_review",
+    "unresolved",
+)
+
+# Status → severity rank (lower = surface first). Mirrors the endpoint's CASE.
+_AUTHOR_STATUS_RANK: tuple[tuple[str, int], ...] = (
+    ("error", 0),
+    ("no_match", 1),
+    ("needs_manual_review", 2),
+)
+
+# A *followed* author with no OpenAlex id — the resolver never bridged them.
+# Ranks just below the explicit failure statuses (severity 3 in the endpoint).
+_AUTHOR_FOLLOWED_UNRESOLVED_SQL = (
+    "EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id) "
+    "AND COALESCE(a.openalex_id, '') = ''"
+)
+
+
+def author_attention_severity_case_sql(alias: str = "severity") -> str:
+    """The ``CASE … END AS severity`` that ranks attention rows (lower first)."""
+    whens = "\n".join(
+        f"                WHEN COALESCE(a.id_resolution_status, '') = '{status}' THEN {rank}"
+        for status, rank in _AUTHOR_STATUS_RANK
+    )
+    return (
+        "CASE\n"
+        f"{whens}\n"
+        f"                WHEN {_AUTHOR_FOLLOWED_UNRESOLVED_SQL} THEN 3\n"
+        "                ELSE 9\n"
+        f"            END AS {alias}"
+    )
+
+
+def author_attention_where_sql() -> str:
+    """The ``WHERE`` predicate selecting every author row that needs attention."""
+    status_list = ", ".join(f"'{s}'" for s in AUTHOR_ATTENTION_STATUSES)
+    return (
+        f"COALESCE(a.id_resolution_status, '') IN ({status_list})\n"
+        f"           OR ({_AUTHOR_FOLLOWED_UNRESOLVED_SQL})"
+    )
+
+
+# --------------------------------------------------------------------------
 # Severity helpers
 # --------------------------------------------------------------------------
 
@@ -506,5 +564,190 @@ mv.register(
         fingerprint_sql=_HEALTH_CORPUS_FINGERPRINT_SQL,
         build_fn=assess_corpus,
         operation_key="materialize.health.corpus",
+    )
+)
+
+
+# --------------------------------------------------------------------------
+# Author identity health — the canonical counterpart to assess_corpus.
+# --------------------------------------------------------------------------
+
+HEALTH_AUTHORS_VIEW_KEY = "health:authors"
+
+_AUTHOR_REVIEW_ACTION = [
+    {
+        "label": "Review on the Authors page",
+        "kind": "link",
+        "operation_key": "",
+        "target": "/api/v1/authors/needs-attention",
+    }
+]
+
+
+def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Canonical author-identity-health snapshot — the ``health:authors`` build_fn.
+
+    Counts the same attention buckets the ``/authors/needs-attention`` endpoint
+    surfaces (via the shared ladder above) plus the unresolved-merge and
+    affiliation conflicts, so the Health page author cards reconcile with the
+    needs-attention list by construction. Read via ``mv.get`` like the corpus
+    assessor; degrades to zeros if the resolution columns aren't present yet.
+    """
+    total = 0
+    n_error = n_no_match = n_review = n_followed_unresolved = 0
+    try:
+        row = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS total,
+              SUM(CASE WHEN COALESCE(a.id_resolution_status, '') = 'error'
+                       THEN 1 ELSE 0 END) AS n_error,
+              SUM(CASE WHEN COALESCE(a.id_resolution_status, '') = 'no_match'
+                       THEN 1 ELSE 0 END) AS n_no_match,
+              SUM(CASE WHEN COALESCE(a.id_resolution_status, '') = 'needs_manual_review'
+                       THEN 1 ELSE 0 END) AS n_review,
+              SUM(CASE WHEN ({_AUTHOR_FOLLOWED_UNRESOLVED_SQL})
+                       THEN 1 ELSE 0 END) AS n_followed_unresolved
+            FROM authors a
+            """
+        ).fetchone()
+        if row:
+            total = int(row["total"] or 0)
+            n_error = int(row["n_error"] or 0)
+            n_no_match = int(row["n_no_match"] or 0)
+            n_review = int(row["n_review"] or 0)
+            n_followed_unresolved = int(row["n_followed_unresolved"] or 0)
+    except sqlite3.OperationalError:
+        pass
+
+    # Conflict counts come from the same helpers the endpoint uses, so the
+    # numbers can't diverge from the rows it renders.
+    merge_conflicts = affiliation_conflicts = 0
+    try:
+        from alma.application.author_merge import list_unresolved_conflicts
+
+        merge_conflicts = len(list_unresolved_conflicts(conn) or [])
+    except Exception:
+        pass
+    try:
+        from alma.application.author_affiliation import list_affiliation_conflicts
+
+        affiliation_conflicts = len(list_affiliation_conflicts(conn, limit=500) or [])
+    except Exception:
+        pass
+
+    dims: list[dict[str, Any]] = [
+        _dimension(
+            key="authors.resolution_error",
+            entity="author",
+            label="Refresh errors",
+            count=n_error,
+            total=total,
+            severity=_severity_from_fraction(n_error, total),
+            explanation=f"{n_error} authors hit an exception on their last identity refresh.",
+            impact="Their profile, affiliation, and corpus can't update until the refresh succeeds.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.no_match",
+            entity="author",
+            label="No OpenAlex match",
+            count=n_no_match,
+            total=total,
+            severity=_severity_from_fraction(n_no_match, total),
+            explanation=f"{n_no_match} authors returned zero OpenAlex candidates by name.",
+            impact="Without an OpenAlex id an author can't be tracked or deduped automatically.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.needs_review",
+            entity="author",
+            label="Ambiguous candidates",
+            count=n_review,
+            total=total,
+            severity="info" if n_review else "ok",
+            explanation=f"{n_review} authors had multiple OpenAlex candidates scored too close to auto-pick.",
+            impact="A human pick resolves the identity; until then the author stays unlinked.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.followed_unresolved",
+            entity="author",
+            label="Followed but unresolved",
+            count=n_followed_unresolved,
+            total=total,
+            severity="warning" if n_followed_unresolved else "ok",
+            explanation=(
+                f"{n_followed_unresolved} followed authors still have no OpenAlex id, "
+                "so their feed and corpus can't refresh cleanly."
+            ),
+            impact="A followed author with no identity bridge produces no new matches.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.merge_conflicts",
+            entity="author",
+            label="Unresolved merge conflicts",
+            count=merge_conflicts,
+            total=total,
+            severity="warning" if merge_conflicts else "ok",
+            explanation=(
+                f"{merge_conflicts} merges kept a conflicting hard identifier "
+                "(orcid / scholar id) that needs a human decision."
+            ),
+            impact="A wrong identifier can mis-attribute papers across people.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.affiliation_conflicts",
+            entity="author",
+            label="Affiliation conflicts",
+            count=affiliation_conflicts,
+            total=total,
+            severity="info" if affiliation_conflicts else "ok",
+            explanation=(
+                f"{affiliation_conflicts} authors have affiliation evidence that "
+                "disagrees across sources."
+            ),
+            impact="The displayed institution may be wrong until reviewed.",
+            extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+    ]
+
+    by_severity = {s: 0 for s in ("ok", "info", "warning", "critical")}
+    for d in dims:
+        by_severity[d["severity"]] = by_severity.get(d["severity"], 0) + 1
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "totals": {
+            "authors_total": total,
+            "attention_total": n_error
+            + n_no_match
+            + n_review
+            + n_followed_unresolved
+            + merge_conflicts
+            + affiliation_conflicts,
+            "dimensions_by_severity": by_severity,
+        },
+        "dimensions": dims,
+    }
+
+
+_HEALTH_AUTHORS_FINGERPRINT_SQL = """
+    SELECT
+      (SELECT COUNT(*) FROM authors),
+      (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
+      (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),
+      (SELECT COUNT(*) FROM followed_authors)
+"""
+
+
+mv.register(
+    mv.View(
+        key=HEALTH_AUTHORS_VIEW_KEY,
+        fingerprint_sql=_HEALTH_AUTHORS_FINGERPRINT_SQL,
+        build_fn=assess_authors,
+        operation_key="materialize.health.authors",
     )
 )

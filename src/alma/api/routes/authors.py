@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from difflib import SequenceMatcher
 
 from alma.application import authors as authors_app
+from alma.services import health as health_service
 from alma.application.followed_authors import (
     apply_follow_state,
     ensure_followed_author_contract,
@@ -2444,8 +2445,14 @@ def list_authors_needs_attention(
 
     # Severity ordering: error > no_match > needs_manual_review >
     # unresolved/followed-but-no-openalex. Lower number = surface first.
+    # The severity CASE and the WHERE predicate come from the canonical
+    # author-attention ladder in alma.services.health, so assess_authors'
+    # counts and these rows can never select / rank different buckets.
+    # Both fragments are hardcoded SQL constants — safe to interpolate.
+    _author_severity_case = health_service.author_attention_severity_case_sql()
+    _author_attention_where = health_service.author_attention_where_sql()
     ranked = db.execute(
-        """
+        f"""
         SELECT
             a.id AS author_id,
             a.name AS author_name,
@@ -2455,21 +2462,9 @@ def list_authors_needs_attention(
             COALESCE(a.id_resolution_confidence, 0.0) AS confidence,
             COALESCE(a.id_resolution_reason, '') AS reason,
             COALESCE(a.id_resolution_updated_at, a.last_fetched_at, '') AS updated_at,
-            CASE
-                WHEN COALESCE(a.id_resolution_status, '') = 'error' THEN 0
-                WHEN COALESCE(a.id_resolution_status, '') = 'no_match' THEN 1
-                WHEN COALESCE(a.id_resolution_status, '') = 'needs_manual_review' THEN 2
-                WHEN EXISTS (
-                    SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id
-                ) AND COALESCE(a.openalex_id, '') = '' THEN 3
-                ELSE 9
-            END AS severity
+            {_author_severity_case}
         FROM authors a
-        WHERE COALESCE(a.id_resolution_status, '') IN ('error', 'no_match', 'needs_manual_review', 'unresolved')
-           OR (
-                EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
-                AND COALESCE(a.openalex_id, '') = ''
-              )
+        WHERE {_author_attention_where}
         ORDER BY severity ASC, updated_at DESC, a.name ASC
         LIMIT ?
         """,
