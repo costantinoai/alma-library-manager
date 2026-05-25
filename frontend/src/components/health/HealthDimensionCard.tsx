@@ -60,7 +60,7 @@ export function HealthDimensionCard({
           onOpen()
         }
       }}
-      className="flex cursor-pointer flex-col gap-3 rounded-sm border border-alma-100 bg-alma-50 p-4 shadow-paper-sm transition-colors hover:border-alma-300 hover:bg-alma-100/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+      className="flex cursor-pointer flex-col gap-3 rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm transition-colors hover:border-alma-300 hover:shadow-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="min-w-0 font-medium text-alma-800">{dim.label}</h3>
@@ -75,7 +75,7 @@ export function HealthDimensionCard({
           value={metricValue}
           hint={metricHint}
           tone={severityMetricTone(dim.severity)}
-          className="w-32 shrink-0 bg-alma-content-elev"
+          className="w-32 shrink-0"
         />
         <div className="min-w-0 space-y-1 text-sm">
           <p className="text-slate-700">{dim.explanation}</p>
@@ -85,7 +85,7 @@ export function HealthDimensionCard({
 
       {/* Coverage progress toward the 80% ready threshold. */}
       {isCoverage ? (
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-alma-100" aria-hidden>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-parchment-200" aria-hidden>
           <div
             className={cn(
               'h-full rounded-full',
@@ -111,7 +111,7 @@ export function HealthDimensionCard({
                 icon={<Wrench className="h-4 w-4" />}
                 pending={runningKey === action.operation_key}
                 disabled={runningKey != null && runningKey !== action.operation_key}
-                className="border-alma-200 text-alma-700 hover:bg-alma-100"
+                className="border-alma-200 text-alma-700 hover:bg-alma-50"
                 onClick={(e) => {
                   e.stopPropagation()
                   onRun(action.operation_key)
