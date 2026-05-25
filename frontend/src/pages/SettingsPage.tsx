@@ -9,6 +9,7 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BackendCard } from '@/components/settings/BackendCard'
 import { OpenAlexCard } from '@/components/settings/OpenAlexCard'
+import { SemanticScholarCard } from '@/components/settings/SemanticScholarCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { ChannelsCard } from '@/components/settings/ChannelsCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
@@ -45,6 +46,7 @@ type SectionId = 'connections' | 'intelligence' | 'system'
 type AnchorId =
   | 'backend'
   | 'openalex'
+  | 'semantic-scholar'
   | 'id-resolution'
   | 'channels'
   | 'discovery-weights'
@@ -72,6 +74,7 @@ const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Ca
 const TOC: TocEntry[] = [
   { id: 'backend', label: 'Backend', section: 'connections' },
   { id: 'openalex', label: 'OpenAlex', section: 'connections' },
+  { id: 'semantic-scholar', label: 'Semantic Scholar', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
   { id: 'channels', label: 'Delivery channels', section: 'connections' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
@@ -98,6 +101,7 @@ export function SettingsPage() {
     backend: 'openalex',
     openalex_email: '',
     openalex_api_key: '',
+    semantic_scholar_api_key: '',
     slack_token: '',
     slack_channel: '',
     check_interval_hours: 24,
@@ -118,7 +122,7 @@ export function SettingsPage() {
   const saveMutation = useMutation({
     mutationFn: (data: Settings) => api.put<Settings>('/settings', data),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['settings'], ['openalex-usage'])
+      await invalidateQueries(queryClient, ['settings'], ['openalex-usage'], ['semantic-scholar-status'])
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
     },
@@ -247,6 +251,9 @@ export function SettingsPage() {
                 isSaving={saveMutation.isPending}
                 saveSuccess={saveSuccess}
               />
+            </Anchor>
+            <Anchor id="semantic-scholar">
+              <SemanticScholarCard formData={formData} onFormDataChange={setFormData} />
             </Anchor>
             <Anchor id="id-resolution">
               <IdentifierResolutionCard formData={formData} onFormDataChange={setFormData} />

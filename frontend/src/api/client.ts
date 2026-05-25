@@ -377,6 +377,7 @@ export interface Settings {
   backend: 'scholar' | 'openalex'
   openalex_email?: string
   openalex_api_key?: string
+  semantic_scholar_api_key?: string
   fetch_full_history?: boolean
   from_year?: number
   api_call_delay?: string
@@ -403,6 +404,15 @@ export interface OpenAlexUsage {
   resets_in_seconds?: number | null
   reset_at?: string | null
   summary: string
+}
+
+/** Live validity of the Semantic Scholar API key (Settings → Connections).
+ *  `valid===true` → green dot; `false` → key rejected; `null` → set but
+ *  unverified (probe couldn't complete) or not configured. */
+export interface SemanticScholarStatus {
+  configured: boolean
+  valid: boolean | null
+  detail: string
 }
 
 // ── Library types ──
