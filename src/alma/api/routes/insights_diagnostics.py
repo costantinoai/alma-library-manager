@@ -1360,6 +1360,7 @@ _EVALUATION_FINGERPRINT_SQL = """
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:alerts'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feedback'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:operational'), ''),
+      COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'health:corpus'), ''),
       COALESCE((SELECT COUNT(*) FROM papers WHERE status = 'library'), 0)
 """
 

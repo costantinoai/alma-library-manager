@@ -1253,14 +1253,28 @@ def _build_operational_snapshot(
     except Exception:
         slack_configured = bool(str(settings.get("slack_channel") or "").strip())
 
-    embeddings_ready = False
     ai_summary = ai_snapshot.get("summary") or {}
+    provider_present = False
     try:
         from alma.ai.providers import get_active_provider
 
-        embeddings_ready = get_active_provider(db) is not None
+        provider_present = get_active_provider(db) is not None
     except Exception:
-        embeddings_ready = False
+        provider_present = False
+    # Canonical embeddings readiness (task 24): a provider IS configured AND
+    # coverage ≥ 80%. One definition, shared with Insights→AI and the Health
+    # page — replaces the old bare provider-present boolean (inconsistency #1).
+    embedding_coverage_pct = 0.0
+    coverage_ready = False
+    try:
+        from alma.services.health import HEALTH_CORPUS_VIEW_KEY
+
+        _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get("totals") or {}
+        embedding_coverage_pct = float(_health_totals.get("embedding_coverage_pct") or 0.0)
+        coverage_ready = bool(_health_totals.get("embeddings_ready"))
+    except Exception:
+        pass
+    embeddings_ready = provider_present and coverage_ready
 
     unhealthy_plugins = 0
     try:
@@ -1381,12 +1395,22 @@ def _build_operational_snapshot(
             }
         )
     if not embeddings_ready:
+        if not provider_present:
+            _emb_detail = (
+                "No embedding provider is configured — vector retrieval and "
+                "semantic ranking are unavailable."
+            )
+        else:
+            _emb_detail = (
+                f"Only {embedding_coverage_pct:.0f}% of papers are embedded "
+                "(ready at ≥ 80%); semantic ranking is degraded until coverage improves."
+            )
         states.append(
             {
                 "id": "embeddings_not_ready",
                 "label": "Embeddings are not ready",
                 "severity": "critical",
-                "detail": "Vector retrieval and semantic ranking are currently degraded.",
+                "detail": _emb_detail,
                 "page": "settings",
                 "params": {"section": "ai"},
                 "targets": [
