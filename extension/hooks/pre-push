@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# ALMa connector — pre-push hook.
+#
+# When you push a `v<version>` tag, this builds + signs the browser
+# connector LOCALLY and (after a y/N confirmation) attaches
+# alma-connector-<version>.xpi to that GitHub Release. A declined or failed
+# connector step never blocks the tag push.
+#
+# Install once, from the repo root:
+#   ln -sf ../../extension/hooks/pre-push .git/hooks/pre-push
+#
+# (Needs the same prerequisites as extension/release.sh: npx, gh, and your
+# AMO key in ~/.config/alma/amo.env.)
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+RELEASE="$ROOT/extension/release.sh"
+[ -x "$RELEASE" ] || exit 0
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha> per pushed ref.
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/tags/v*)
+      version="${remote_ref#refs/tags/v}"
+      echo "[alma-connector] $remote_ref is being pushed — building the connector locally…"
+      # release.sh reads its confirmation from /dev/tty, so the prompt still
+      # works even though our stdin is the ref list.
+      "$RELEASE" --version "$version" --target "$local_sha" </dev/null \
+        || echo "[alma-connector] connector step skipped/failed — continuing with the tag push." >&2
+      ;;
+  esac
+done
+
+exit 0

@@ -36,8 +36,9 @@ nothing to build.
    matches your ALMa version).
 3. Open it in Firefox — drag it onto `about:addons`, or `about:addons` →
    ⚙ → **Install Add-on From File…**. It's signed by Mozilla, so it
-   installs **permanently**, survives restarts, and **auto-updates** with
-   future ALMa releases.
+   installs **permanently** and survives restarts. To update later,
+   download the newer `.xpi` from a later release and install it the same
+   way — ALMa shows a toast when your connector is outdated or missing.
 
 ??? note "Running from source? (contributors)"
     To load the unpackaged extension during development: **`about:debugging`**
@@ -187,13 +188,14 @@ order:
 ## How releases work (maintainer)
 
 The connector ships **with each ALMa release** at the same version, signed
-**locally** and published to GitHub Releases. After bumping the ALMa
-version and tagging `v<version>`, running `extension/release.sh` stamps the
-connector version = ALMa version, signs it as an *unlisted* add-on via
-Mozilla (automated, no review), uploads **`alma-connector-<version>.xpi`**
-to that GitHub Release, and records it in `extension/updates.json` so
-installed copies **auto-update**. Setup (a free AMO API key + `gh`) is
-documented in `extension/README.md`.
+**locally** and attached to the GitHub Release as a plain `.xpi`. With the
+pre-push hook installed (`ln -sf ../../extension/hooks/pre-push
+.git/hooks/pre-push`), pushing a `v<version>` tag builds + signs the
+connector locally and — after a `y/N` confirm — uploads
+**`alma-connector-<version>.xpi`** to that release. Setup (a free AMO API
+key + `gh`) and the manual `extension/release.sh` path are documented in
+`extension/README.md`. There's no auto-update; ALMa nudges users with a
+toast when their connector is outdated or missing.
 
 ## Troubleshooting
 

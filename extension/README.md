@@ -47,10 +47,12 @@ The connector talks to ALMa's `/api/v1/extension/*` endpoints (ALMa
    matches your ALMa version).
 2. Open it in Firefox — drag onto `about:addons`, or `about:addons` → ⚙ →
    **Install Add-on From File…**. It's signed by Mozilla, so it installs
-   **permanently** and **auto-updates** with future ALMa releases.
+   **permanently**.
 3. Start ALMa, open a paper page, click the **ALMa** toolbar button.
 
-That's all most people need — there's nothing to build.
+To update later, download the newer `.xpi` from a later release and install
+it the same way. (ALMa nudges you with a toast when your connector is out of
+date or missing.) That's all most people need — there's nothing to build.
 
 ## Develop it (contributors)
 
@@ -60,8 +62,9 @@ It's removed on restart; use the signed release for a permanent install.
 
 ## How releases work (maintainer)
 
-The connector ships **with each ALMa release** at the **same version** —
-signed **locally** and published to GitHub Releases (auto-updating).
+The connector ships **with each ALMa release** at the **same version**,
+signed **locally** and attached to the GitHub Release as a plain `.xpi`
+(no auto-update — users download the new `.xpi` to update).
 
 One-time setup (kept out of the repo):
 
@@ -72,27 +75,26 @@ One-time setup (kept out of the repo):
   export AMO_JWT_SECRET=...
   ```
 - **`gh`** (GitHub CLI), authenticated once: `gh auth login`.
+- Install the pre-push hook once, from the repo root:
+  ```bash
+  ln -sf ../../extension/hooks/pre-push .git/hooks/pre-push
+  ```
 
-Per release — after bumping the ALMa version in `pyproject.toml` and
-tagging `v<version>`, from a **clean** working tree just run:
+Then a release is just the normal ALMa tag push — **bump the version in
+`pyproject.toml`, tag `v<version>`, and push the tag**. The hook builds +
+signs the connector locally, asks for a `y/N` confirmation, and attaches
+`alma-connector-<version>.xpi` to that release. (AMO signs each version
+once, so the version must be new — it always matches the ALMa version.)
+
+To run it by hand instead of via the hook:
 
 ```bash
-extension/release.sh
+extension/release.sh            # build, sign, then (after confirm) upload
+extension/release.sh --local    # build + sign only; no upload, no git writes
 ```
 
-It does everything: switches to an up-to-date `main`, loads your AMO key
-from `~/.config/alma/amo.env`, stamps the connector version = ALMa version,
-**signs** the add-on (unlisted AMO — automated, no review), **uploads**
-`alma-connector-<version>.xpi` to the `v<version>` GitHub Release, and
-**commits + pushes** `extension/updates.json` on `main` so installed copies
-**auto-update** via the manifest `update_url`. (AMO signs each version
-once, so run it once per release.)
-
-`git switch main` + `git pull` run first without prompting; every **write**
-— creating the release/tag, pushing to `main` — is gated behind a y/N
-confirmation. Use **`extension/release.sh --local`** to only build the
-signed `.xpi` (no GitHub upload, no git writes) — handy for testing or a
-personal install.
+Signing is always local; the **only** write (creating the release/tag,
+uploading) is gated behind the confirmation.
 
 ## Choosing a server
 

@@ -418,11 +418,11 @@ matching your ALMa version and open it in Firefox (`about:addons` → ⚙ →
 **Install Add-on From File**). Full guide:
 [docs/user-guide/browser-connector.md](docs/user-guide/browser-connector.md).
 
-**Releasing it (maintainer):** keep an AMO API key in
-`~/.config/alma/amo.env` and run `gh auth login` once, then from a clean
-tree run `extension/release.sh` — it switches to an up-to-date `main`,
-signs the add-on locally (unlisted AMO), and (after confirmation) uploads
-the `.xpi` to the `v<version>` release and pushes the auto-update manifest.
+**Releasing it (maintainer):** signing is **local**. Keep an AMO API key in
+`~/.config/alma/amo.env`, run `gh auth login`, and install the pre-push hook
+once (`ln -sf ../../extension/hooks/pre-push .git/hooks/pre-push`). Then a
+normal ALMa tag push (`v<version>`) builds + signs the connector locally and
+(after a y/N confirm) attaches the `.xpi` to that release.
 `extension/release.sh --local` just builds the signed `.xpi`. See
 [`extension/README.md`](extension/README.md).
 
