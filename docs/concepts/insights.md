@@ -9,11 +9,18 @@ The **Insights** page projects your data into charts, maps, and a
 2D embedding graph. Read-only — Insights is for understanding your
 corpus, not editing it.
 
-![Insights page with the Stats / Diagnostics tabs](../screenshots/desktop-insights.png)
+!!! note "Insights is analytics; Health is fixes"
+    The old *Diagnostics* tab split in two: its **trend/quality scorecards**
+    are now the **Activity** tab here, and the actionable **operational health**
+    (what's degraded / failing) moved to the **[Health](health.md)** page's
+    Status tab. Rule of thumb: a chart you read → Insights; something wrong you
+    fix → Health.
+
+![Insights page with the Stats / Graph / Activity / Reports tabs](../screenshots/desktop-insights.png)
 
 ## Tabs
 
-### Overview
+### Stats
 
 The default tab. Aggregated metrics:
 
@@ -117,19 +124,15 @@ Time-window summaries:
 * **Topic drift** — how topic mix changes over time.
 * **Signal impact** — which ranking signals correlate with useful outcomes.
 
-### Diagnostics
+### Activity
 
-The honest underbelly:
-
-* **Feed health** — per-monitor status (healthy / degraded /
-  failing), last refresh timestamp, yield rate.
-* **Discovery branch quality** — per-branch engagement stats so
-  you can see which branches are producing useful recs and which
-  are noise.
-* **Embedding coverage** — how much of your Library has SPECTER2
-  vectors.
-* **Resolution status** — how many imports / authors are still
-  unresolved.
+Subsystem **trends, distributions, and quality over time** — the analytics half
+of the old Diagnostics tab: feed-refresh and discovery-action trends, branch
+quality, source quality, the AI similarity profile, followed-author growth,
+alert delivery + usefulness, feedback-learning activity, and the evaluation
+scorecards. Read it to understand *how the pipeline is behaving*. The actionable
+operational health (degraded monitors, failed jobs, plugins) is **not** here —
+it lives on the **[Health](health.md)** page's Status tab.
 
 ## How fresh is what I'm seeing?
 
@@ -143,18 +146,6 @@ the cache rebuilds in the background, then the page silently swaps
 to the fresh values when the background job completes. The
 **Refreshing…** pill in the header lights up whenever any tab is in
 that swap window.
-
-The **Diagnostics** tab is split into eight separately-cached
-sections: `feed`, `discovery`, `ai`, `authors`, `alerts`,
-`feedback`, `operational`, `evaluation`. Each card is fed by exactly
-one section and renders as soon as that section's response lands —
-fast sections (`ai`, `alerts`, `feedback`) typically come back in a
-few hundred milliseconds even on a cold first visit, slower sections
-(`authors`, with its citation-neighbour suggestion projection) keep
-their card in skeleton until ready. After the first build every
-cache-hit section returns ~1 ms, and individual sections only
-rebuild when their own inputs change — saving a paper invalidates
-authors + evaluation, not feed or discovery.
 
 You don't usually need to do anything. If you want to force a fresh
 graph layout (full re-clustering and re-projection — the layout may
@@ -179,16 +170,14 @@ envelope here; if it doesn't, that's a bug.
 ## API
 
 ```
-GET /api/v1/insights                                      # full overview
-GET /api/v1/insights/diagnostics                          # composed payload (8 sections)
-GET /api/v1/insights/diagnostics/sections/{section}       # one section, cached independently
-                                                          # section ∈ {feed, discovery, ai,
-                                                          #   authors, alerts, feedback,
-                                                          #   operational, evaluation}
-GET /api/v1/insights/discovery/branch-action
-GET /api/v1/graphs/library
+GET /api/v1/insights                                      # full overview (Stats)
+GET /api/v1/graphs/library                                # Graph (paper map)
 GET /api/v1/reports/weekly-brief
 GET /api/v1/reports/collection-intelligence
 GET /api/v1/reports/topic-drift
 GET /api/v1/reports/signal-impact
 ```
+
+The diagnostics endpoints (`/insights/diagnostics/sections/{section}`) power
+the **Activity** tab. Their `operational` section also feeds the
+**[Health](health.md)** page's Status tab (the actionable operational view).

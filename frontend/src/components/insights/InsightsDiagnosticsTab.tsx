@@ -14,7 +14,6 @@ import {
   TrendingUp,
   UserRound,
   Waves,
-  Wrench,
   Zap,
 } from 'lucide-react'
 import {
@@ -50,7 +49,6 @@ import {
   StatusBadge,
   monitorHealthTone,
   scoreStatusTone,
-  severityTone,
 } from '@/components/ui/status-badge'
 import { MetricTile, SectionHeader } from '@/components/shared'
 import {
@@ -279,8 +277,9 @@ export function InsightsDiagnosticsTab({
   colors,
   tooltipStyle,
 }: InsightsDiagnosticsTabProps) {
-  const { feed, discovery, ai, authors, alerts, feedback, operational, evaluation } =
-    sections
+  // `operational` is intentionally not destructured — operational health moved
+  // to the Health page's Status tab; this tab is analytics only.
+  const { feed, discovery, ai, authors, alerts, feedback, evaluation } = sections
 
   // Headline tiles depend on feed + discovery.
   const feedSummary = feed.data?.summary
@@ -781,8 +780,8 @@ export function InsightsDiagnosticsTab({
         </Card>
       </div>
 
-      {/* ── Feedback Learning + Operational ── */}
-      <div className="grid gap-6 xl:grid-cols-2">
+      {/* ── Feedback Learning ── (Operational Health moved to Health → Status) */}
+      <div className="grid gap-6">
         <Card>
           <SectionHeader
             icon={Sparkles}
@@ -854,89 +853,6 @@ export function InsightsDiagnosticsTab({
                 }}
               >
                 Discovery
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={Wrench}
-            accent="text-rose-500"
-            title="Operational Health"
-            description="Current degraded capabilities that reduce retrieval quality, automation, or observability."
-          />
-          <CardContent className="space-y-4">
-            <SectionGate section={operational} skeletonHeight={260}>
-              {(data) => (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <MetricTile
-                      label="Critical issues"
-                      value={data.summary.critical_count ?? 0}
-                      tone={(data.summary.critical_count ?? 0) > 0 ? 'critical' : 'neutral'}
-                    />
-                    <MetricTile
-                      label="Warnings"
-                      value={data.summary.warning_count ?? 0}
-                      tone={(data.summary.warning_count ?? 0) > 0 ? 'warning' : 'neutral'}
-                    />
-                    <MetricTile
-                      label="Unhealthy plugins"
-                      value={data.summary.unhealthy_plugins ?? 0}
-                    />
-                    <MetricTile
-                      label="Failed ops 24h"
-                      value={data.summary.recent_failed_operations_24h ?? 0}
-                    />
-                  </div>
-                  {(data.states ?? []).length > 0 ? (
-                    <div className="space-y-3">
-                      {data.states.slice(0, 5).map((state) => (
-                        <div
-                          key={state.id}
-                          className="rounded-sm border border-[var(--color-border)] p-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-medium text-alma-800">{state.label}</p>
-                              <p className="mt-1 text-sm text-slate-500">{state.detail}</p>
-                            </div>
-                            <StatusBadge tone={severityTone(state.severity)}>
-                              {state.severity}
-                            </StatusBadge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-400">No active operational issues right now.</p>
-                  )}
-                  {(data.plugins ?? []).length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {data.plugins
-                        .filter((plugin) => plugin.is_configured)
-                        .slice(0, 6)
-                        .map((plugin) => (
-                          <Badge key={plugin.name} variant="outline">
-                            {plugin.display_name} ·{' '}
-                            {plugin.is_healthy === false ? 'degraded' : 'ok'}
-                          </Badge>
-                        ))}
-                    </div>
-                  )}
-                </>
-              )}
-            </SectionGate>
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  navigateTo('settings', { section: 'operations' })
-                }}
-              >
-                Settings
               </Button>
             </div>
           </CardContent>

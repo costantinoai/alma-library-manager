@@ -126,6 +126,7 @@ nav:
       - Lenses: concepts/lenses.md
       - Authors: concepts/authors.md
       - Insights: concepts/insights.md
+      - Health: concepts/health.md
       - Alerts: concepts/alerts.md
       - AI capabilities: concepts/ai.md
   - User guide:
