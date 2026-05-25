@@ -48,7 +48,7 @@ jobs:
         run: |
           npx --yes web-ext sign \
             --source-dir extension \
-            --ignore-files "test/**" "updates.json" "README.md" \
+            --ignore-files "test/**" "updates.json" "README.md" "package.json" "package-lock.json" "node_modules/**" \
             --channel=unlisted \
             --api-key="$AMO_JWT_ISSUER" --api-secret="$AMO_JWT_SECRET" \
             --artifacts-dir dist

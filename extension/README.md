@@ -77,7 +77,7 @@ auto-update step pushes a `[skip ci]` commit to `main`, so `main` must
 allow the Actions token to push.
 
 To sign locally instead of via CI:
-`npx web-ext sign --source-dir extension --ignore-files "test/**" "updates.json" "README.md" --channel=unlisted --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET`.
+`npx web-ext sign --source-dir extension --ignore-files "test/**" "updates.json" "README.md" "package.json" "package-lock.json" "node_modules/**" --channel=unlisted --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET`.
 
 ## Choosing a server
 
