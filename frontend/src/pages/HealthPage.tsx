@@ -1,10 +1,18 @@
 /**
  * HealthPage — the front door for "is my data healthy, and what do I do about
- * it?" Consolidates the canonical health layer (task 24) into one surface:
- * a vitals hero, the Data Health dimension cards, and the Maintenance
- * Operations controls. Every number reads the canonical endpoints
- * (/insights/health + /health/operations) — one source of truth.
+ * it?" Consolidates the canonical health layer (task 24) into one surface.
+ *
+ * A persistent header carries the vitals ribbon + scoreboard (at-a-glance
+ * triage) and the "What is Health?" explainer; the detail splits into three
+ * tabs so the page stays scannable:
+ *   - Data health   — the canonical dimension cards (problems + fixes)
+ *   - Maintenance    — the bounded repair operations (run / auto / cap)
+ *   - Diagnostics    — the 8 subsystem scorecards (moved here from Insights)
+ *
+ * Every number reads the canonical endpoints (/insights/health +
+ * /health/operations) — one source of truth.
  */
+import { useEffect, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -16,20 +24,32 @@ import {
 } from '@/api/client'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { DataHealthSection } from '@/components/health/DataHealthSection'
 import { MaintenanceOperations } from '@/components/health/MaintenanceOperations'
+import { SystemDiagnostics } from '@/components/health/SystemDiagnostics'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
+const TABS = ['data', 'maintenance', 'diagnostics'] as const
 
 export function HealthPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  const route = useHashRoute()
+  const routeTab = route.params.get('tab')?.trim() ?? 'data'
+  const [activeTab, setActiveTab] = useState<string>(
+    (TABS as readonly string[]).includes(routeTab) ? routeTab : 'data',
+  )
+  useEffect(() => {
+    setActiveTab((TABS as readonly string[]).includes(routeTab) ? routeTab : 'data')
+  }, [routeTab])
 
   const snapshotQuery = useQuery({
     queryKey: SNAPSHOT_KEY,
@@ -125,13 +145,14 @@ export function HealthPage() {
           explanation, and the actions that fix it.
         </p>
         <p>
-          <strong>Enrichment</strong> fills missing metadata from OpenAlex / Crossref;{' '}
-          <strong>maintenance operations</strong> are the bounded background jobs that do the
-          fixing. They can run on demand or — opt-in — automatically within a daily cap.
+          <strong>Maintenance operations</strong> are the bounded background jobs that do the
+          fixing — on demand, or (opt-in) automatically within a daily cap.{' '}
+          <strong>Diagnostics</strong> are the subsystem scorecards (feed, discovery, AI, authors,
+          alerts, evaluation) showing how each part of the pipeline is performing.
         </p>
       </ConceptCallout>
 
-      {/* Error */}
+      {/* Persistent vitals triage (above the tabs). */}
       {snapshotQuery.isError ? (
         <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-200 bg-rose-50 p-4">
           <div className="flex items-center gap-3">
@@ -142,37 +163,57 @@ export function HealthPage() {
             Retry
           </Button>
         </div>
+      ) : snapshotQuery.isLoading ? (
+        <div className="h-40 animate-pulse rounded-sm bg-alma-chrome-elev" />
+      ) : snapshot ? (
+        <HealthVitals snapshot={snapshot} />
       ) : null}
 
-      {/* Loading skeleton */}
-      {snapshotQuery.isLoading ? (
-        <div className="space-y-6">
-          <div className="h-40 animate-pulse rounded-sm bg-alma-chrome-elev" />
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="h-36 animate-pulse rounded-sm bg-alma-chrome-elev" />
-            <div className="h-36 animate-pulse rounded-sm bg-alma-chrome-elev" />
-          </div>
-        </div>
-      ) : null}
+      {/* Detail tabs */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setActiveTab(value)
+          window.location.hash = buildHashRoute('health', { tab: value })
+        }}
+        className="w-full"
+      >
+        <TabsList>
+          <TabsTrigger value="data">Data health</TabsTrigger>
+          <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
+          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+        </TabsList>
 
-      {/* Content */}
-      {snapshot ? <HealthVitals snapshot={snapshot} /> : null}
-      {snapshot ? (
-        <DataHealthSection
-          dimensions={snapshot.dimensions}
-          onRun={(key) => runMutation.mutate(key)}
-          runningKey={runningKey}
-          lastSuccessByTask={lastSuccessByTask}
-        />
-      ) : null}
-      {operations.length > 0 ? (
-        <MaintenanceOperations
-          operations={operations}
-          onRun={(key) => runMutation.mutate(key)}
-          onConfig={(key, body) => configMutation.mutate({ key, body })}
-          runningKey={runningKey}
-        />
-      ) : null}
+        <TabsContent value="data" className="mt-4">
+          {snapshot ? (
+            <DataHealthSection
+              dimensions={snapshot.dimensions}
+              onRun={(key) => runMutation.mutate(key)}
+              runningKey={runningKey}
+              lastSuccessByTask={lastSuccessByTask}
+            />
+          ) : (
+            <p className="text-sm text-slate-500">Loading health dimensions…</p>
+          )}
+        </TabsContent>
+
+        <TabsContent value="maintenance" className="mt-4">
+          {operations.length > 0 ? (
+            <MaintenanceOperations
+              operations={operations}
+              onRun={(key) => runMutation.mutate(key)}
+              onConfig={(key, body) => configMutation.mutate({ key, body })}
+              runningKey={runningKey}
+            />
+          ) : (
+            <p className="text-sm text-slate-500">Loading maintenance operations…</p>
+          )}
+        </TabsContent>
+
+        <TabsContent value="diagnostics" className="mt-4">
+          <SystemDiagnostics />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
