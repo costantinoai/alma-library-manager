@@ -1266,12 +1266,17 @@ def _build_operational_snapshot(
     # page — replaces the old bare provider-present boolean (inconsistency #1).
     embedding_coverage_pct = 0.0
     coverage_ready = False
+    papers_eligible_now = 0
     try:
         from alma.services.health import HEALTH_CORPUS_VIEW_KEY
 
         _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get("totals") or {}
         embedding_coverage_pct = float(_health_totals.get("embedding_coverage_pct") or 0.0)
         coverage_ready = bool(_health_totals.get("embeddings_ready"))
+        # Canonical "enrichable right now" count — the work the corpus-metadata
+        # maintenance runner would do. Surfaced below so enrichment backlog is
+        # visible in Insights, not only in the Library landing card (inconsistency #4).
+        papers_eligible_now = int(_health_totals.get("eligible_now") or 0)
     except Exception:
         pass
     embeddings_ready = provider_present and coverage_ready
@@ -1467,6 +1472,25 @@ def _build_operational_snapshot(
                 ],
             }
         )
+    # Enrichment backlog (canonical). Info, not warning: a standing backlog of
+    # enrichable papers is normal maintenance, not a degradation — so it never
+    # inflates critical/warning counts or the health-check score, but it stays
+    # visible and links straight to the Rehydrate action (mirrors sources_disabled).
+    if papers_eligible_now > 0:
+        states.append(
+            {
+                "id": "papers_need_enrichment",
+                "label": "Papers are waiting for metadata enrichment",
+                "severity": "info",
+                "detail": (
+                    f"{papers_eligible_now} papers are eligible now for OpenAlex/Crossref "
+                    "enrichment (missing abstracts, references, topics, or other metadata)."
+                ),
+                "page": "settings",
+                "params": {"section": "corpus-maintenance"},
+            }
+        )
+
     alert_summary = alert_snapshot.get("summary") or {}
     alert_top = alert_snapshot.get("top_alerts") or []
 
