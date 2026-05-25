@@ -457,10 +457,12 @@ def _run_s2_batched_phase(
     Writes an S2 ledger row per paper so reruns skip covered work.
     """
     from alma.services.s2_vectors import (
+        _clear_fetch_status,
         _fetch_lookup_ids_resilient,
         _lookup_ids_for_row,
         _lookup_key_for_row,
     )
+    from alma.discovery import semantic_scholar
 
     summary: Counter[str] = Counter()
     rows = _select_s2_candidates(conn, limit=limit, target_paper_ids=target_paper_ids)
@@ -569,6 +571,29 @@ def _run_s2_batched_phase(
                 summary["terminal_no_match"] += 1
                 processed += 1
                 continue
+            # Reuse the SPECTER2 vector this S2 response already carries (the
+            # default `fetch_papers_batch` FIELDS request `embedding.specter_v2`).
+            # Storing it now means `run_s2_vector_backfill`'s
+            # `NOT EXISTS publication_embeddings` selector skips this paper, so
+            # the chain doesn't spend a SECOND S2 `/paper/batch` call on it —
+            # the dominant cost at the 1 req/s S2 limit. Opportunistic and
+            # non-fatal: any failure just leaves the vector to the vector phase.
+            try:
+                _reuse_vec = semantic_scholar.extract_specter2_vector(paper)
+                if _reuse_vec and semantic_scholar.upsert_specter2_vector(
+                    conn, paper_id, _reuse_vec, created_at=datetime.utcnow().isoformat()
+                ):
+                    # Keep the vector ledger honest: clear any stale
+                    # missing_vector/error row now that the vector exists.
+                    _clear_fetch_status(
+                        conn, paper_id=paper_id, model=semantic_scholar.S2_SPECTER2_MODEL
+                    )
+                    summary["vector_reused"] += 1
+            except Exception as exc:
+                logger.debug(
+                    "S2 metadata-phase vector reuse skipped for %s: %s", paper_id, exc
+                )
+
             try:
                 fields_filled = _apply_s2_paper(
                     conn, paper_id=paper_id, row=row, paper=paper
