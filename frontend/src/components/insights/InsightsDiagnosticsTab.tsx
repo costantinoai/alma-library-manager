@@ -235,11 +235,6 @@ function branchDeltaTone(delta: number): 'good' | 'attention' | 'critical' {
   if (delta <= -0.08) return 'critical'
   return 'attention'
 }
-function aiRecommendationTone(severity: string): 'good' | 'attention' | 'critical' {
-  if (severity === 'critical') return 'critical'
-  if (severity === 'warning') return 'attention'
-  return 'good'
-}
 
 // ── Main component ----------------------------------------------------------
 
@@ -451,8 +446,8 @@ export function InsightsDiagnosticsTab({
         </CardContent>
       </Card>
 
-      {/* ── AI + Recommendations ── */}
-      <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
+      {/* ── AI and Similarity Health ── (AI Recommendations moved to Health → Status) */}
+      <div className="grid gap-6">
         <Card>
           <SectionHeader
             icon={Brain}
@@ -522,54 +517,6 @@ export function InsightsDiagnosticsTab({
           </CardContent>
         </Card>
 
-        <Card>
-          <SectionHeader
-            icon={Sparkles}
-            accent="text-violet-500"
-            title="AI Recommendations"
-            description="Actionable fixes when embeddings or similarity quality are underperforming."
-          />
-          <CardContent className="space-y-3">
-            <SectionGate section={ai} skeletonHeight={140}>
-              {(data) =>
-                data.recommendations.length === 0 ? (
-                  <p className="text-sm text-slate-400">No AI-specific recommendations right now.</p>
-                ) : (
-                  <>
-                    {data.recommendations.map((item) => (
-                      <div
-                        key={item.id}
-                        className="rounded-sm border border-[var(--color-border)] p-3"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-alma-800">{item.label}</p>
-                            <p className="mt-1 text-sm text-slate-500">{item.detail}</p>
-                          </div>
-                          <StatusBadge tone={scoreStatusTone(aiRecommendationTone(item.severity))}>
-                            {item.severity}
-                          </StatusBadge>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )
-              }
-            </SectionGate>
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  navigateTo('settings', { section: 'ai' })
-                }}
-              >
-                <Brain className="mr-1 h-4 w-4" />
-                Open AI Settings
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
       {/* ── Authors + Alerts ── */}
@@ -606,28 +553,7 @@ export function InsightsDiagnosticsTab({
                       value={data.summary.background_corpus_papers ?? 0}
                     />
                   </div>
-                  {(data.degraded ?? []).length > 0 ? (
-                    <div className="space-y-3">
-                      {data.degraded.map((author) => (
-                        <div
-                          key={`${author.author_id ?? author.author_name}`}
-                          className="rounded-sm border border-[var(--color-border)] p-3"
-                        >
-                          <p className="font-medium text-alma-800">
-                            {author.author_name || 'Unknown author'}
-                          </p>
-                          <p className="mt-1 text-sm text-slate-500">
-                            {author.health_reason || author.last_error || 'Monitor degraded'}
-                          </p>
-                          <p className="mt-2 text-xs text-slate-400">
-                            Checked: {formatTimestamp(author.last_checked_at)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-slate-400">No degraded tracked authors right now.</p>
-                  )}
+                  {/* Degraded-author detail moved to Health → Status. */}
                   {(data.suggestions ?? []).length > 0 && (
                     <div className="space-y-2">
                       <p className="text-sm font-medium text-slate-700">Suggested expansion</p>
