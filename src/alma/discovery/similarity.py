@@ -336,12 +336,20 @@ def find_similar_publications(
     return results[:top_n]
 
 
+# Sentinel: "caller did not pass a provider → resolve lazily" vs "passed None
+# → no provider". Lets the lens-refresh hot loop hoist the subprocess-backed
+# `get_active_provider` out of the per-candidate path (it resolves once and
+# passes the provider in).
+_PROVIDER_UNSET = object()
+
+
 def compute_topic_overlap(
     user_topics: Dict[str, float],
     paper_topics: List[Dict[str, float]],
     *,
     conn: Optional[sqlite3.Connection] = None,
     user_topic_embeddings: Optional[Dict[str, Optional["numpy.ndarray"]]] = None,
+    provider: Any = _PROVIDER_UNSET,
 ) -> float:
     """Compute weighted topic overlap between user preferences and a paper.
 
@@ -413,8 +421,9 @@ def compute_topic_overlap(
     # logic is preserved.
     if unmatched and conn is not None:
         try:
-            from alma.ai.providers import get_active_provider
-            provider = get_active_provider(conn)
+            if provider is _PROVIDER_UNSET:
+                from alma.ai.providers import get_active_provider
+                provider = get_active_provider(conn)
             if provider is not None:
                 local_ut_embs: Dict[str, Optional["numpy.ndarray"]]
                 if user_topic_embeddings is not None:
@@ -427,6 +436,10 @@ def compute_topic_overlap(
                 stacked = _get_or_build_user_topic_matrix(local_ut_embs, user_topics)
                 if stacked is not None:
                     ut_matrix, ut_weights = stacked
+                    # F1: embed every unmatched term in ONE batched forward
+                    # before the loop, so each `_get_topic_embedding` below is
+                    # a cache hit instead of a single-item SPECTER2 inference.
+                    _batch_warm_topic_embeddings(provider, [t for t, _ in unmatched])
                     for term, relevance in unmatched:
                         term_emb = _get_topic_embedding(provider, term)
                         if term_emb is None:
@@ -490,8 +503,15 @@ def _get_or_build_user_topic_matrix(
 
 
 # Module-level cache for topic term embeddings with size limit.
+# Sized to comfortably exceed the distinct-term count of a single lens
+# refresh (a few thousand title/abstract word-tokens + curated topics) so
+# the per-refresh warm (`_batch_warm_topic_embeddings`) is NOT evicted
+# mid-scoring. The old 500-cap thrashed — every cache miss evicted
+# freshly-warmed terms, forcing re-embedding and making per-term SPECTER2
+# inference the dominant scoring cost (task 19 F1: 4.5k batch-size-1
+# forwards, ~96 s/refresh). ~16k × 768 float32 ≈ 50 MB worst case.
 _topic_embedding_cache: Dict[str, Optional["numpy.ndarray"]] = {}
-_TOPIC_CACHE_MAX_SIZE = 500
+_TOPIC_CACHE_MAX_SIZE = 16384
 
 
 def _get_topic_embedding(provider, term: str) -> Optional["numpy.ndarray"]:
@@ -514,6 +534,58 @@ def _get_topic_embedding(provider, term: str) -> Optional["numpy.ndarray"]:
         pass
     _topic_embedding_cache[term] = None
     return None
+
+
+def _batch_warm_topic_embeddings(provider, terms: list[str]) -> None:
+    """Embed every not-yet-cached term in as few provider calls as possible.
+
+    `compute_topic_overlap`'s semantic fallback otherwise embeds each
+    unmatched term one at a time (`_get_topic_embedding` →
+    ``provider.embed([term])`` = one SPECTER2 forward per term). For
+    candidates with no curated topics — which fall back to title/abstract
+    word-tokens — that is ~80 single-item forwards per candidate and was
+    the dominant lens-refresh scoring cost (task 19 F1). Embedding the
+    whole batch in one forward collapses that to ~1 forward per candidate,
+    and far fewer once the module cache warms across candidates.
+
+    Writes directly to the module cache (bypassing the per-miss eviction in
+    `_get_topic_embedding`), so it trims first to keep the cache bounded
+    across a long-lived process.
+    """
+    if provider is None:
+        return
+    seen: set[str] = set()
+    pending: list[str] = []
+    for term in terms:
+        if term and term not in _topic_embedding_cache and term not in seen:
+            seen.add(term)
+            pending.append(term)
+    if not pending:
+        return
+    # Keep the cache bounded — the warm path writes directly, so enforce the
+    # cap here the way `_get_topic_embedding` does on its miss path.
+    overflow = len(_topic_embedding_cache) + len(pending) - _TOPIC_CACHE_MAX_SIZE
+    if overflow > 0:
+        for stale_key in list(_topic_embedding_cache.keys())[:overflow]:
+            del _topic_embedding_cache[stale_key]
+    for chunk_start in range(0, len(pending), 256):
+        chunk = pending[chunk_start:chunk_start + 256]
+        try:
+            embeddings = provider.embed(chunk)
+        except Exception:
+            embeddings = []
+        if not embeddings:
+            for term in chunk:
+                _topic_embedding_cache[term] = None
+            continue
+        for term, vec in zip(chunk, embeddings):
+            if vec:
+                try:
+                    _topic_embedding_cache[term] = np.array(vec, dtype=np.float32)
+                except Exception:
+                    _topic_embedding_cache[term] = None
+            else:
+                _topic_embedding_cache[term] = None
 
 
 class SpecterEmbedder:

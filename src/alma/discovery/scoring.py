@@ -50,6 +50,12 @@ logger = logging.getLogger(__name__)
 _MAX_DISCOVERY_SCORE = 100.0
 _CONSENSUS_BONUS_FRACTION = 0.12
 
+# Sentinel for `score_candidate(topic_provider=...)`: distinguishes "caller
+# did not pass a provider → resolve lazily" from "caller explicitly passed
+# None → no provider available". Lets the hot loop hoist the subprocess-backed
+# `get_active_provider` out of the per-candidate path.
+_PROVIDER_UNSET = object()
+
 # Dismissal cluster penalty — paper-side mirror of the author rail's
 # `_dismissal_overlap_penalty` (see `alma.application.authors`).
 # Pulled out as a separate post-consensus pass (not folded into
@@ -464,14 +470,31 @@ def score_candidate(
     precomputed_lexical_details: Optional[Dict[str, float]] = None,
     user_topic_embeddings: Optional[Dict[str, Any]] = None,
     preloaded_preference_profile: Optional[Dict[str, Any]] = None,
+    topic_provider: Any = _PROVIDER_UNSET,
 ) -> Tuple[float, Dict[str, Any]]:
     """Score a candidate paper using 10 weighted signals.
+
+    ``topic_provider`` lets a hot-loop caller (the lens-refresh scoring
+    loop) pass the embedding provider it already resolved once, so we
+    don't re-run ``get_active_provider`` (a subprocess env-probe) per
+    candidate. Defaults to the sentinel ``_PROVIDER_UNSET`` → resolve
+    lazily, preserving the legacy behaviour for ad-hoc / test callers.
 
     Returns:
         Tuple of (score_0_to_100, breakdown_dict).
     """
     if settings is None:
         settings = load_settings(conn)
+
+    # Resolve the provider once for this call (or reuse the hoisted one).
+    if topic_provider is _PROVIDER_UNSET:
+        try:
+            from alma.ai.providers import get_active_provider
+            _scoring_provider = get_active_provider(conn)
+        except Exception:
+            _scoring_provider = None
+    else:
+        _scoring_provider = topic_provider
 
     current_year = datetime.utcnow().year
     recency_window = int(settings.get("limits.recency_window_years", "10"))
@@ -510,6 +533,7 @@ def score_candidate(
             preference_profile.get("topic_weights", {}), paper_topics,
             conn=conn,
             user_topic_embeddings=user_topic_embeddings,
+            provider=_scoring_provider,
         )
         if paper_topics
         else 0.0
@@ -519,8 +543,7 @@ def score_candidate(
     topic_match_mode = "none"
     if paper_topics:
         try:
-            from alma.ai.providers import get_active_provider
-            topic_match_mode = "semantic" if get_active_provider(conn) is not None else "keyword"
+            topic_match_mode = "semantic" if _scoring_provider is not None else "keyword"
         except Exception as exc:
             # Loud-on-degrade: a failed provider lookup silently dropped
             # the user from semantic to keyword matching. The score
