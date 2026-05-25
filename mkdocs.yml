@@ -132,6 +132,7 @@ nav:
       - user-guide/index.md
       - Saving papers: user-guide/saving-papers.md
       - Reading workflow: user-guide/reading-workflow.md
+      - Browser connector: user-guide/browser-connector.md
       - Importing from Zotero / BibTeX: user-guide/importing.md
       - Tracking authors: user-guide/tracking-authors.md
       - Tuning Discovery: user-guide/tuning-discovery.md

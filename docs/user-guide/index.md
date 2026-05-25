@@ -20,6 +20,11 @@ Concept pages explain *what* something is. The pages here explain
     Queue, currently reading, done, excluded — the orthogonal axis
     to saving.
 
+-   **[Browser connector](browser-connector.md)**
+
+    Install the Firefox extension and save the paper open in your
+    browser straight into ALMa — like the Zotero connector.
+
 -   **[Importing from Zotero / BibTeX](importing.md)**
 
     Walk a Zotero export or a `.bib` file into your Library and
