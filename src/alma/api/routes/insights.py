@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import json_loads, raise_internal, safe_div, table_exists
 from alma.application import materialized_views as mv
+from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 from alma.application.followed_authors import get_followed_author_backfill_status
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
@@ -1593,6 +1594,35 @@ def get_insights(
         envelope = mv.get(db, "insights:overview")
     except Exception as exc:
         raise_internal("Failed to compute insights", exc)
+    payload = envelope.get("payload") or {}
+    return {
+        **payload,
+        "stale": envelope.get("stale", False),
+        "rebuilding": envelope.get("rebuilding", False),
+        "computed_at": envelope.get("computed_at"),
+    }
+
+
+@router.get(
+    "/health",
+    summary="Canonical corpus data-health snapshot",
+    description=(
+        "The single source of truth for corpus data-health (task 24, Pillar 1). "
+        "Returns uniform dimension records — each with a count, severity, a "
+        "plain-language explanation/impact, and the fix actions — so every "
+        "surface (Health page, needs-attention, operational status) renders the "
+        "same numbers and guidance. Served via the materialised-view layer "
+        "(<1s cached read, background rebuild on change; no external calls)."
+    ),
+)
+def get_corpus_health(
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        envelope = mv.get(db, health_service.HEALTH_CORPUS_VIEW_KEY)
+    except Exception as exc:
+        raise_internal("Failed to compute corpus health", exc)
     payload = envelope.get("payload") or {}
     return {
         **payload,
