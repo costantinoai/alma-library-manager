@@ -1512,9 +1512,9 @@ def _build_operational_snapshot(
                 "label": "Recent background operations failed",
                 "severity": "warning",
                 "detail": f"{recent_failed_operations_24h} operations failed in the last 24 hours.",
-                # Lives on the Health page's Systems tab (task 24).
+                # Lives on the Health page's Status tab (operational health).
                 "page": "health",
-                "params": {"tab": "systems"},
+                "params": {"tab": "status"},
             }
         )
 

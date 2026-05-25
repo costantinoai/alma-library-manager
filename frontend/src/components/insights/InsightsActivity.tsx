@@ -1,13 +1,13 @@
 /**
- * SystemDiagnostics — the 8 subsystem scorecards (feed / discovery / ai /
- * authors / alerts / feedback / operational / evaluation), now homed on the
- * Health page. Previously the Insights "Diagnostics" tab; folded into Health
- * so all system/operational state lives in one place and Insights stays about
- * the library's content (Stats / Graph / Reports).
+ * InsightsActivity — the subsystem scorecards (feed / discovery / ai / authors /
+ * alerts / feedback / operational / evaluation): trends, distributions, and
+ * quality metrics over time. This is the analytics half of the old "Diagnostics"
+ * tab; it lives under **Insights** (alongside Stats / Graph / Reports), while the
+ * actionable operational *health* lives on the Health page's Status tab.
  *
  * Self-contained: it owns the per-section queries, the branch-action mutation,
- * and the saved-drilldown persistence, then renders the existing presentational
- * InsightsDiagnosticsTab unchanged.
+ * and the saved-drilldown persistence, then renders the presentational
+ * InsightsDiagnosticsTab.
  */
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -61,7 +61,7 @@ function toSectionState<T extends { stale?: boolean }>(query: {
   }
 }
 
-export function SystemDiagnostics() {
+export function InsightsActivity() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [savedDrilldowns, setSavedDrilldowns] = useState<SavedDrilldown[]>(() =>

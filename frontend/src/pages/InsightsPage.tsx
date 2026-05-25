@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
+import { InsightsActivity } from '@/components/insights/InsightsActivity'
 import { InsightsGraphTab } from '@/components/insights/InsightsGraphTab'
 import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
 import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
@@ -21,11 +22,12 @@ import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 
 // ── Main Page ──
 //
-// Insights is scoped to *library analytics* — the content of your corpus:
-// Stats (data overview), Graph (paper map), and Reports. System/operational
-// health (the old Diagnostics tab) now lives on the dedicated Health page.
+// Insights is scoped to *understanding your data*: Stats (corpus overview),
+// Graph (paper map), Activity (subsystem trends + quality over time), Reports.
+// Operational *health* — what's degraded / failing — lives on the Health page's
+// Status tab; Insights → Activity is the analytics half of the old Diagnostics.
 
-const INSIGHTS_TABS = ['stats', 'graph', 'reports'] as const
+const INSIGHTS_TABS = ['stats', 'graph', 'activity', 'reports'] as const
 
 export function InsightsPage() {
   const route = useHashRoute()
@@ -103,6 +105,7 @@ export function InsightsPage() {
           <TabsList>
             <TabsTrigger value="stats">Stats</TabsTrigger>
             <TabsTrigger value="graph">Graph</TabsTrigger>
+            <TabsTrigger value="activity">Activity</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
           </TabsList>
           {isRefreshing ? (
@@ -134,6 +137,9 @@ export function InsightsPage() {
           <InsightsGraphTab
             embeddingsReady={!!aiStatus?.capability_tiers?.tier1_embeddings?.ready}
           />
+        </TabsContent>
+        <TabsContent value="activity" className="mt-4">
+          <InsightsActivity />
         </TabsContent>
         <TabsContent value="reports" className="mt-4">
           <InsightsReportsTab

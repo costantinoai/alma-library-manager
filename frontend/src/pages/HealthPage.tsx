@@ -29,7 +29,7 @@ import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { DataHealthSection } from '@/components/health/DataHealthSection'
 import { MaintenanceOperations } from '@/components/health/MaintenanceOperations'
-import { SystemDiagnostics } from '@/components/health/SystemDiagnostics'
+import { OperationalStatusCard } from '@/components/settings/OperationalStatusCard'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { formatRelativeShort } from '@/lib/utils'
@@ -37,7 +37,7 @@ import { useToast, errorToast } from '@/hooks/useToast'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
-const TABS = ['data', 'systems'] as const
+const TABS = ['data', 'status'] as const
 
 export function HealthPage() {
   const queryClient = useQueryClient()
@@ -146,9 +146,10 @@ export function HealthPage() {
           automatically within a daily cap).
         </p>
         <p>
-          <strong>Systems</strong> is about <em>how the pipeline performs</em>: subsystem
-          scorecards (feed, discovery, AI, authors, alerts, feedback, evaluation, operations) with
-          trends and health — what you read to understand behaviour, not corpus completeness.
+          <strong>Status</strong> is the <em>operational health</em> of the running system — what's
+          degraded, failing, or needs a fix right now (monitors, sources, plugins, background jobs).
+          The subsystem <em>trends and analytics</em> (how feed / discovery / alerts perform over
+          time) live under <strong>Insights → Activity</strong>.
         </p>
       </ConceptCallout>
 
@@ -180,7 +181,7 @@ export function HealthPage() {
       >
         <TabsList>
           <TabsTrigger value="data">Data</TabsTrigger>
-          <TabsTrigger value="systems">Systems</TabsTrigger>
+          <TabsTrigger value="status">Status</TabsTrigger>
         </TabsList>
 
         {/* Data — your corpus's data: the dimensions + drilldowns, then the
@@ -214,9 +215,10 @@ export function HealthPage() {
           </div>
         </TabsContent>
 
-        {/* Systems — how the pipeline performs: the subsystem scorecards. */}
-        <TabsContent value="systems" className="mt-4">
-          <SystemDiagnostics />
+        {/* Status — operational health: what's degraded / failing / needs a fix.
+            (Subsystem trends + analytics live under Insights → Activity.) */}
+        <TabsContent value="status" className="mt-4">
+          <OperationalStatusCard />
         </TabsContent>
       </Tabs>
     </div>
