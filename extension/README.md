@@ -51,8 +51,10 @@ The connector talks to ALMa's `/api/v1/extension/*` endpoints (ALMa
 3. Start ALMa, open a paper page, click the **ALMa** toolbar button.
 
 To update later, download the newer `.xpi` from a later release and install
-it the same way. (ALMa nudges you with a toast when your connector is out of
-date or missing.) That's all most people need — there's nothing to build.
+it the same way. (When you open ALMa it shows a toast **only if the connector
+and ALMa no longer speak the same save format** — i.e. one of them needs
+updating; an installed, compatible connector stays silent.) That's all most
+people need — there's nothing to build.
 
 ## Develop it (contributors)
 
@@ -85,6 +87,15 @@ Then a release is just the normal ALMa tag push — **bump the version in
 signs the connector locally, asks for a `y/N` confirmation, and attaches
 `alma-connector-<version>.xpi` to that release. (AMO signs each version
 once, so the version must be new — it always matches the ALMa version.)
+
+For a **connector-only** rebuild between ALMa releases (e.g. a fix in the
+add-on itself), AMO still needs a *new* version, so sign with a fourth
+component off the current ALMa version — it stays anchored to that release
+and doesn't imply a product bump:
+
+```bash
+extension/release.sh --local --version 0.14.0.1   # connector patch on 0.14.0
+```
 
 To run it by hand instead of via the hook:
 
@@ -140,6 +151,8 @@ extension/
   popup.html/.css/.js  the toolbar popup (detect → choose → save + Servers panel)
   options.html/.css/.js  full-window server manager (about:addons → Preferences)
   background.js      toolbar green-dot badge (URL-level paper detection per tab)
+  content.js         announces the connector to the ALMa web app at startup
+                       (stamps version + save-contract on the page for detection)
   lib/extract.js     paper-identification logic (page + PDF) — shared, testable
   lib/settings.js    persisted server list + /ping probing + permissions (shared)
   lib/servers-ui.js  server-manager component used by popup panel + options (shared)
