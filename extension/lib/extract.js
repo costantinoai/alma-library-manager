@@ -83,6 +83,16 @@
   }
 
   // ---- URL-embedded DOI ----------------------------------------------
+  // Preprint hosts append a version + format to the DOI inside the URL,
+  // e.g. biorxiv "…713175v1.full.pdf" or "…123456v2" — strip those so we
+  // recover the bare DOI.
+  function stripUrlDoiSuffix(doi) {
+    return String(doi || "").replace(
+      /(v\d+)?(\.full-text|\.full|\.abstract|\.article-info|\.supplementary-material)?(\.pdf|\.html?|\.xml)?$/i,
+      ""
+    );
+  }
+
   function doiFromUrl(url) {
     if (!url) return "";
     let decoded = url;
@@ -91,10 +101,17 @@
     } catch (e) {
       /* keep raw */
     }
-    // doi.org/10.x , /doi/10.x , /doi/full/10.x , ?doi=10.x , #10.x
-    const m =
-      decoded.match(/(?:doi\.org\/|\/doi\/(?:abs\/|full\/|pdf\/)?|[?&]doi=)(10\.\d{4,9}\/[^\s?#&]+)/i);
-    if (m) return cleanDoi(m[1]);
+    // 1) Explicit DOI markers: doi.org/10.x , /doi/(abs|full|pdf/)10.x , ?doi=10.x
+    let m = decoded.match(
+      /(?:doi\.org\/|\/doi\/(?:abs\/|full\/|pdf\/)?|[?&]doi=)(10\.\d{4,9}\/[^\s?#&]+)/i
+    );
+    if (m) return cleanDoi(stripUrlDoiSuffix(m[1]));
+
+    // 2) DOI embedded directly in the path — biorxiv / medRxiv
+    //    (/content/10.x/…v1.full.pdf), OSF, and similar preprint hosts.
+    m = decoded.match(/\/(10\.\d{4,9}\/[^\s?#]+)/);
+    if (m) return cleanDoi(stripUrlDoiSuffix(m[1]));
+
     return "";
   }
 

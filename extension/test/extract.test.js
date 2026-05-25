@@ -129,6 +129,53 @@ test("doi.org URL is parsed", () => {
   assert.strictEqual(r.doi, "10.1109/CVPR.2016.90");
 });
 
+// --- Preprint hosts: DOI embedded in the path + version/format suffix -----
+test("biorxiv .full.pdf URL → DOI with version/format suffix stripped", () => {
+  assert.strictEqual(
+    A.doiFromUrl("https://www.biorxiv.org/content/10.64898/2026.03.23.713175v1.full.pdf"),
+    "10.64898/2026.03.23.713175"
+  );
+});
+
+test("biorxiv abstract URL strips the version suffix", () => {
+  assert.strictEqual(
+    A.doiFromUrl("https://www.biorxiv.org/content/10.1101/2020.01.01.123456v2"),
+    "10.1101/2020.01.01.123456"
+  );
+});
+
+test("medrxiv .full URL strips suffix", () => {
+  assert.strictEqual(
+    A.doiFromUrl("https://www.medrxiv.org/content/10.1101/2021.05.05.21256000v1.full"),
+    "10.1101/2021.05.05.21256000"
+  );
+});
+
+test("a non-DOI article URL yields no DOI (no false match)", () => {
+  assert.strictEqual(A.doiFromUrl("https://www.nature.com/articles/s41586-021-03819-2"), "");
+});
+
+// --- Non-preprint publisher PDFs with the DOI in the URL path -------------
+test("Wiley /doi/pdf/ URL", () => {
+  assert.strictEqual(A.doiFromUrl("https://onlinelibrary.wiley.com/doi/pdf/10.1002/anie.202012345"), "10.1002/anie.202012345");
+});
+
+test("Wiley /doi/epdf/ URL (caught by generic path match)", () => {
+  assert.strictEqual(A.doiFromUrl("https://onlinelibrary.wiley.com/doi/epdf/10.1002/anie.202012345"), "10.1002/anie.202012345");
+});
+
+test("publisher PDF with DOI in path + .pdf suffix", () => {
+  assert.strictEqual(A.doiFromUrl("https://example.com/articles/10.5555/abc.123.pdf"), "10.5555/abc.123");
+});
+
+test("biorxiv PDF page (no meta) is identified from the URL", () => {
+  const doc = makeDoc({ contentType: "application/pdf" });
+  const r = A.extractFromDocument(doc, "https://www.biorxiv.org/content/10.64898/2026.03.23.713175v1.full.pdf");
+  assert.strictEqual(r.doi, "10.64898/2026.03.23.713175");
+  assert.strictEqual(r.isPdf, true);
+  assert.ok(r.detectedVia.includes("page URL"));
+});
+
 // --- doi.org link in body -------------------------------------------------
 test("doi.org link in the page body is used as fallback", () => {
   const doc = makeDoc({
@@ -168,6 +215,20 @@ test("looksLikePdfUrl", () => {
   assert.ok(A.looksLikePdfUrl("https://arxiv.org/pdf/2310.01234"));
   assert.ok(A.looksLikePdfUrl("https://onlinelibrary.wiley.com/doi/pdf/10.1002/x"));
   assert.ok(!A.looksLikePdfUrl("https://x.org/article/123"));
+});
+
+// --- Toolbar badge predicate (background.js uses doiFromUrl||arxivIdFromUrl) -
+test("badge predicate: paper URLs are detected, others are not", () => {
+  const has = (u) => !!(A.doiFromUrl(u) || A.arxivIdFromUrl(u));
+  ["https://arxiv.org/abs/1706.03762",
+   "https://doi.org/10.1038/s41586-021-03819-2",
+   "https://dl.acm.org/doi/10.1145/3292500.3330701",
+   "https://www.biorxiv.org/content/10.64898/2026.03.23.713175v1.full.pdf",
+  ].forEach((u) => assert.ok(has(u), "should badge: " + u));
+  ["https://www.google.com/search?q=x",
+   "https://news.ycombinator.com/",
+   "https://www.nature.com/articles/s41586-021-03819-2", // DOI only in meta, not URL
+  ].forEach((u) => assert.ok(!has(u), "should not badge: " + u));
 });
 
 console.log("\n" + passed + " checks passed.");
