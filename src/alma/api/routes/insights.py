@@ -1264,19 +1264,12 @@ def _build_operational_snapshot(
     # Canonical embeddings readiness (task 24): a provider IS configured AND
     # coverage ≥ 80%. One definition, shared with Insights→AI and the Health
     # page — replaces the old bare provider-present boolean (inconsistency #1).
-    embedding_coverage_pct = 0.0
     coverage_ready = False
-    papers_eligible_now = 0
     try:
         from alma.services.health import HEALTH_CORPUS_VIEW_KEY
 
         _health_totals = (mv.get(db, HEALTH_CORPUS_VIEW_KEY).get("payload") or {}).get("totals") or {}
-        embedding_coverage_pct = float(_health_totals.get("embedding_coverage_pct") or 0.0)
         coverage_ready = bool(_health_totals.get("embeddings_ready"))
-        # Canonical "enrichable right now" count — the work the corpus-metadata
-        # maintenance runner would do. Surfaced below so enrichment backlog is
-        # visible in Insights, not only in the Library landing card (inconsistency #4).
-        papers_eligible_now = int(_health_totals.get("eligible_now") or 0)
     except Exception:
         pass
     embeddings_ready = provider_present and coverage_ready
@@ -1399,54 +1392,10 @@ def _build_operational_snapshot(
                 "targets": stale_backfill_targets,
             }
         )
-    if not embeddings_ready:
-        if not provider_present:
-            _emb_detail = (
-                "No embedding provider is configured — vector retrieval and "
-                "semantic ranking are unavailable."
-            )
-        else:
-            _emb_detail = (
-                f"Only {embedding_coverage_pct:.0f}% of papers are embedded "
-                "(ready at ≥ 80%); semantic ranking is degraded until coverage improves."
-            )
-        states.append(
-            {
-                "id": "embeddings_not_ready",
-                "label": "Embeddings are not ready",
-                "severity": "critical",
-                "detail": _emb_detail,
-                "page": "settings",
-                "params": {"section": "ai"},
-                "targets": [
-                    {
-                        "id": "compute_all_embeddings",
-                        "label": "all embeddings",
-                        "kind": "ai",
-                        "action": "compute_embeddings",
-                    }
-                ],
-            }
-        )
-    elif int(ai_summary.get("stale_embeddings") or 0) > 0:
-        states.append(
-            {
-                "id": "stale_embeddings",
-                "label": "Some embeddings are stale",
-                "severity": "warning",
-                "detail": f"{int(ai_summary.get('stale_embeddings') or 0)} papers still use an old embedding model.",
-                "page": "settings",
-                "params": {"section": "ai"},
-                "targets": [
-                    {
-                        "id": "compute_stale_embeddings",
-                        "label": "stale embeddings",
-                        "kind": "ai",
-                        "action": "compute_stale_embeddings",
-                    }
-                ],
-            }
-        )
+    # Embedding readiness + staleness are DATA-completeness issues now owned by
+    # the Health page's Data tab (the embeddings.coverage dimension); they were
+    # de-duplicated out of this operational scorecard (task 24). The summary
+    # still exposes `embeddings_ready` for the glance badge + healthy_checks.
     if float(ai_summary.get("compressed_similarity_rate") or 0.0) >= 0.45:
         states.append(
             {
@@ -1472,24 +1421,8 @@ def _build_operational_snapshot(
                 ],
             }
         )
-    # Enrichment backlog (canonical). Info, not warning: a standing backlog of
-    # enrichable papers is normal maintenance, not a degradation — so it never
-    # inflates critical/warning counts or the health-check score, but it stays
-    # visible and links straight to the Rehydrate action (mirrors sources_disabled).
-    if papers_eligible_now > 0:
-        states.append(
-            {
-                "id": "papers_need_enrichment",
-                "label": "Papers are waiting for metadata enrichment",
-                "severity": "info",
-                "detail": (
-                    f"{papers_eligible_now} papers are eligible now for OpenAlex/Crossref "
-                    "enrichment (missing abstracts, references, topics, or other metadata)."
-                ),
-                "page": "settings",
-                "params": {"section": "corpus-maintenance"},
-            }
-        )
+    # (The enrichment-backlog "papers_need_enrichment" state moved to the Health
+    # Data tab — the enrichment dimensions own it now; de-duplicated, task 24.)
 
     alert_summary = alert_snapshot.get("summary") or {}
     alert_top = alert_snapshot.get("top_alerts") or []
@@ -1579,9 +1512,9 @@ def _build_operational_snapshot(
                 "label": "Recent background operations failed",
                 "severity": "warning",
                 "detail": f"{recent_failed_operations_24h} operations failed in the last 24 hours.",
-                # Diagnostics moved from Insights to the Health page (task 24).
+                # Lives on the Health page's Systems tab (task 24).
                 "page": "health",
-                "params": {"tab": "diagnostics"},
+                "params": {"tab": "systems"},
             }
         )
 

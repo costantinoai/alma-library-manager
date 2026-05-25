@@ -37,7 +37,7 @@ import { useToast, errorToast } from '@/hooks/useToast'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
-const TABS = ['data', 'maintenance', 'diagnostics'] as const
+const TABS = ['data', 'systems'] as const
 
 export function HealthPage() {
   const queryClient = useQueryClient()
@@ -134,21 +134,21 @@ export function HealthPage() {
         summary="ALMa watches your corpus for fixable gaps and offers one-click or automatic repairs."
       >
         <p>
-          A <strong>dimension</strong> is one measurable aspect of corpus health — missing
-          abstracts, embedding{' '}
+          <strong>Data</strong> is about <em>your corpus's data</em>: each{' '}
+          <strong>dimension</strong> is one measurable gap — missing abstracts, embedding{' '}
           <JargonHint
             title="Coverage"
             description="The share of papers that have an embedding vector for the active model. Discovery's semantic ranking depends on it."
             className="inline-flex"
           />{' '}
-          coverage, unresolved identities, and so on. Each carries a severity, a plain-language
-          explanation, and the actions that fix it.
+          coverage, unresolved identities — with a severity, a plain-language explanation, the
+          affected papers, and the maintenance operations that fix them (on demand, or opt-in
+          automatically within a daily cap).
         </p>
         <p>
-          <strong>Maintenance operations</strong> are the bounded background jobs that do the
-          fixing — on demand, or (opt-in) automatically within a daily cap.{' '}
-          <strong>Diagnostics</strong> are the subsystem scorecards (feed, discovery, AI, authors,
-          alerts, evaluation) showing how each part of the pipeline is performing.
+          <strong>Systems</strong> is about <em>how the pipeline performs</em>: subsystem
+          scorecards (feed, discovery, AI, authors, alerts, feedback, evaluation, operations) with
+          trends and health — what you read to understand behaviour, not corpus completeness.
         </p>
       </ConceptCallout>
 
@@ -179,12 +179,13 @@ export function HealthPage() {
         className="w-full"
       >
         <TabsList>
-          <TabsTrigger value="data">Data health</TabsTrigger>
-          <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
-          <TabsTrigger value="diagnostics">Diagnostics</TabsTrigger>
+          <TabsTrigger value="data">Data</TabsTrigger>
+          <TabsTrigger value="systems">Systems</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="data" className="mt-4">
+        {/* Data — your corpus's data: the dimensions + drilldowns, then the
+            maintenance operations that fix them (detect → fix, one place). */}
+        <TabsContent value="data" className="mt-4 space-y-8">
           {snapshot ? (
             <DataHealthSection
               dimensions={snapshot.dimensions}
@@ -195,22 +196,26 @@ export function HealthPage() {
           ) : (
             <p className="text-sm text-slate-500">Loading health dimensions…</p>
           )}
+
+          <div className="space-y-3 border-t border-[var(--color-border)] pt-6">
+            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+              Maintenance operations
+            </h2>
+            {operations.length > 0 ? (
+              <MaintenanceOperations
+                operations={operations}
+                onRun={(key) => runMutation.mutate(key)}
+                onConfig={(key, body) => configMutation.mutate({ key, body })}
+                runningKey={runningKey}
+              />
+            ) : (
+              <p className="text-sm text-slate-500">Loading maintenance operations…</p>
+            )}
+          </div>
         </TabsContent>
 
-        <TabsContent value="maintenance" className="mt-4">
-          {operations.length > 0 ? (
-            <MaintenanceOperations
-              operations={operations}
-              onRun={(key) => runMutation.mutate(key)}
-              onConfig={(key, body) => configMutation.mutate({ key, body })}
-              runningKey={runningKey}
-            />
-          ) : (
-            <p className="text-sm text-slate-500">Loading maintenance operations…</p>
-          )}
-        </TabsContent>
-
-        <TabsContent value="diagnostics" className="mt-4">
+        {/* Systems — how the pipeline performs: the subsystem scorecards. */}
+        <TabsContent value="systems" className="mt-4">
           <SystemDiagnostics />
         </TabsContent>
       </Tabs>

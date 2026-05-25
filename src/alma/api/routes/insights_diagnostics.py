@@ -1338,6 +1338,8 @@ _FEEDBACK_FINGERPRINT_SQL = """
 
 _OPERATIONAL_FINGERPRINT_SQL = """
     SELECT
+      'op-logic-v2',  -- logic-version token: bump when the states-list logic changes
+                      -- (data fingerprints can't see code changes — task 24 de-dupe).
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feed'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:ai'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:authors'), ''),
