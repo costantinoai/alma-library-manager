@@ -6,11 +6,13 @@
  *    card listing the healthy dimensions as chips, so the page stays focused
  *    on what actually needs action.
  */
+import { useState } from 'react'
 import { CheckCircle2, ShieldCheck } from 'lucide-react'
 
 import { StatusBadge } from '@/components/ui/status-badge'
 import type { HealthDimension } from '@/api/client'
 import { HealthDimensionCard } from './HealthDimensionCard'
+import { HealthDimensionDrilldown } from './HealthDimensionDrilldown'
 import { isAttention, sortBySeverity } from './healthFormat'
 
 interface DataHealthSectionProps {
@@ -34,9 +36,19 @@ export function DataHealthSection({
 }: DataHealthSectionProps) {
   const attention = sortBySeverity(dimensions.filter(isAttention))
   const healthy = dimensions.filter((d) => !isAttention(d))
+  const [openDim, setOpenDim] = useState<HealthDimension | null>(null)
 
   return (
     <div className="space-y-6">
+      <HealthDimensionDrilldown
+        dim={openDim}
+        open={openDim != null}
+        onOpenChange={(o) => {
+          if (!o) setOpenDim(null)
+        }}
+        onRun={onRun}
+        runningKey={runningKey}
+      />
       {/* Needs attention */}
       <section className="space-y-3">
         <SectionLabel>Needs attention</SectionLabel>
@@ -49,6 +61,7 @@ export function DataHealthSection({
                 onRun={onRun}
                 runningKey={runningKey}
                 lastSuccessByTask={lastSuccessByTask}
+                onOpen={() => setOpenDim(dim)}
               />
             ))}
           </div>

@@ -757,3 +757,171 @@ mv.register(
         operation_key="materialize.health.authors",
     )
 )
+
+
+# --------------------------------------------------------------------------
+# Dimension drilldown — list the papers affected by a dimension, so the Health
+# page can show "which papers" + per-issue fix operations. Read-only; the
+# predicates mirror the counts in build_enrichment_status / the candidate
+# counters so the list matches the card. Always paginated (these scan papers).
+# --------------------------------------------------------------------------
+
+_SPECTER2_MODEL = "allenai/specter2_base"
+_HAS_OA = "COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') <> ''"
+
+# dim key → WHERE predicate (alias ``p`` = papers). Special dims that need a
+# join (s2 vectors, coverage, retry) are handled separately in dimension_items.
+_DIMENSION_PREDICATES: dict[str, str] = {
+    "identity.unresolved": (
+        "COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') = '' "
+        "AND COALESCE(p.canonical_paper_id, '') = ''"
+    ),
+    "papers.missing_abstract": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''",
+    "papers.missing_doi": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''",
+    "papers.missing_url": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.url), ''), '') = ''",
+    "papers.missing_publication_date": (
+        f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.publication_date), ''), '') = ''"
+    ),
+    "papers.missing_authorships": (
+        f"{_HAS_OA} AND NOT EXISTS "
+        "(SELECT 1 FROM publication_authors pa WHERE pa.paper_id = p.id)"
+    ),
+    "papers.missing_topics": (
+        f"{_HAS_OA} AND NOT EXISTS "
+        "(SELECT 1 FROM publication_topics pt WHERE pt.paper_id = p.id)"
+    ),
+    "papers.missing_references": (
+        f"{_HAS_OA} AND NOT EXISTS "
+        "(SELECT 1 FROM publication_references pr WHERE pr.paper_id = p.id)"
+    ),
+    "embeddings.local_computable": (
+        "NOT EXISTS (SELECT 1 FROM publication_embeddings pe "
+        f"WHERE pe.paper_id = p.id AND pe.model = '{_SPECTER2_MODEL}') "
+        "AND COALESCE(NULLIF(TRIM(p.title), ''), '') <> '' "
+        "AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') <> ''"
+    ),
+}
+
+# Short, dimension-specific "what's wrong with this row" label.
+_DIMENSION_DETAIL: dict[str, str] = {
+    "identity.unresolved": "No OpenAlex id",
+    "papers.missing_abstract": "Abstract empty",
+    "papers.missing_doi": "No DOI",
+    "papers.missing_url": "No URL",
+    "papers.missing_publication_date": "No publication date",
+    "papers.missing_authorships": "No author rows",
+    "papers.missing_topics": "No topics",
+    "papers.missing_references": "No references",
+    "embeddings.local_computable": "Embeddable locally (SPECTER2)",
+    "embeddings.s2_vector_missing": "Vector fetchable from Semantic Scholar",
+    "embeddings.coverage": "No vector for the active model",
+    "ledger.retry_waiting": "Cooling down before retry",
+}
+
+_ITEM_COLUMNS = (
+    "p.id AS paper_id, p.title, p.publication_date, p.authors, p.status, "
+    "p.doi, p.openalex_id, COALESCE(p.openalex_resolution_status, '') AS resolution_status"
+)
+
+
+def dimension_items(
+    conn: sqlite3.Connection, key: str, *, limit: int = 20, offset: int = 0
+) -> list[dict[str, Any]]:
+    """Paginated list of papers affected by dimension ``key`` (read-only)."""
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    order = "ORDER BY COALESCE(p.publication_date, '') DESC, p.title"
+    extra = ""  # extra selected column appended for special dims
+
+    pred = _DIMENSION_PREDICATES.get(key)
+    if pred is not None:
+        sql = f"SELECT {_ITEM_COLUMNS}, '' AS extra FROM papers p WHERE {pred} {order} LIMIT ? OFFSET ?"
+        params: tuple[Any, ...] = (limit, offset)
+    elif key == "embeddings.s2_vector_missing":
+        sql = f"""
+            SELECT {_ITEM_COLUMNS}, '' AS extra
+            FROM papers p
+            LEFT JOIN publication_embedding_fetch_status fs
+              ON fs.paper_id = p.id AND fs.model = '{_SPECTER2_MODEL}'
+                 AND fs.source = 'semantic_scholar'
+            WHERE (
+                COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') <> ''
+                OR COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM publication_embeddings pe
+                WHERE pe.paper_id = p.id AND pe.model = '{_SPECTER2_MODEL}'
+                  AND pe.source = 'semantic_scholar'
+            )
+            AND COALESCE(fs.status, '') NOT IN
+                ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
+            {order} LIMIT ? OFFSET ?
+        """
+        params = (limit, offset)
+    elif key == "embeddings.coverage":
+        try:
+            from alma.discovery.similarity import get_active_embedding_model
+
+            model = get_active_embedding_model(conn)
+        except Exception:
+            model = _SPECTER2_MODEL
+        sql = f"""
+            SELECT {_ITEM_COLUMNS}, '' AS extra
+            FROM papers p
+            WHERE COALESCE(p.canonical_paper_id, '') = ''
+              AND NOT EXISTS (
+                SELECT 1 FROM publication_embeddings pe
+                WHERE pe.paper_id = p.id AND pe.model = ?
+              )
+            {order} LIMIT ? OFFSET ?
+        """
+        params = (model, limit, offset)
+    elif key == "ledger.retry_waiting":
+        sql = f"""
+            SELECT {_ITEM_COLUMNS}, COALESCE(es.next_retry_at, '') AS extra
+            FROM papers p
+            JOIN paper_enrichment_status es ON es.paper_id = p.id
+            WHERE es.source = 'openalex' AND es.purpose = 'metadata'
+              AND es.status = 'retryable_error'
+              AND es.next_retry_at IS NOT NULL
+              AND es.next_retry_at > strftime('%Y-%m-%dT%H:%M:%f000+00:00', 'now')
+            ORDER BY es.next_retry_at ASC LIMIT ? OFFSET ?
+        """
+        params = (limit, offset)
+    else:
+        return []
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    out: list[dict[str, Any]] = []
+    base_detail = _DIMENSION_DETAIL.get(key, "")
+    for r in rows:
+        detail = base_detail
+        if key == "ledger.retry_waiting" and r["extra"]:
+            detail = f"Retry at {r['extra']}"
+        elif key == "identity.unresolved" and r["resolution_status"]:
+            detail = f"Resolution: {r['resolution_status']}"
+        out.append(
+            {
+                "paper_id": r["paper_id"],
+                "title": r["title"] or "(untitled)",
+                "publication_date": r["publication_date"] or None,
+                "authors": r["authors"] or None,
+                "status": r["status"],
+                "doi": r["doi"] or None,
+                "openalex_id": r["openalex_id"] or None,
+                "detail": detail,
+            }
+        )
+    return out
+
+
+# Valid drilldown keys = simple predicates + the special-cased dims.
+DIMENSION_ITEM_KEYS: frozenset[str] = frozenset(_DIMENSION_PREDICATES) | {
+    "embeddings.s2_vector_missing",
+    "embeddings.coverage",
+    "ledger.retry_waiting",
+}

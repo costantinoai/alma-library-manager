@@ -264,6 +264,35 @@ export function getHealthOperations(): Promise<HealthOperationsResponse> {
   return api.get<HealthOperationsResponse>('/health/operations')
 }
 
+/** One paper flagged by a health dimension (drilldown row). */
+export interface HealthDimensionItem {
+  paper_id: string
+  title: string
+  publication_date: string | null
+  authors: string | null
+  status: string
+  doi: string | null
+  openalex_id: string | null
+  detail: string
+}
+
+export interface HealthDimensionItemsResponse {
+  key: string
+  limit: number
+  offset: number
+  items: HealthDimensionItem[]
+}
+
+export function getHealthDimensionItems(
+  key: string,
+  limit = 20,
+  offset = 0,
+): Promise<HealthDimensionItemsResponse> {
+  return api.get<HealthDimensionItemsResponse>(
+    `/health/dimensions/${encodeURIComponent(key)}/items?limit=${limit}&offset=${offset}`,
+  )
+}
+
 export function runMaintenanceOperation(key: string): Promise<RunMaintenanceResponse> {
   return api.post<RunMaintenanceResponse>(`/health/operations/${encodeURIComponent(key)}/run`)
 }

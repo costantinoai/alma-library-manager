@@ -19,13 +19,35 @@ from __future__ import annotations
 import sqlite3
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
+from alma.services import health as health_service
 from alma.services import maintenance
 
 router = APIRouter()
+
+
+@router.get(
+    "/dimensions/{key}/items",
+    summary="Papers affected by a health dimension",
+    description=(
+        "Paginated list of the papers a Data Health dimension is flagging, so "
+        "the Health page can drill down to which papers and offer fixes."
+    ),
+)
+def get_dimension_items(
+    key: str,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    if key not in health_service.DIMENSION_ITEM_KEYS:
+        raise HTTPException(status_code=404, detail=f"No drilldown for dimension: {key}")
+    items = health_service.dimension_items(db, key, limit=limit, offset=offset)
+    return {"key": key, "limit": limit, "offset": offset, "items": items}
 
 
 @router.get(

@@ -21,6 +21,8 @@ interface HealthDimensionCardProps {
   runningKey: string | null
   /** task key → ISO timestamp of its last successful run, for the "last fixed" line. */
   lastSuccessByTask: Record<string, string | null>
+  /** Open the drilldown for this dimension (which papers + per-issue fixes). */
+  onOpen: () => void
 }
 
 export function HealthDimensionCard({
@@ -28,6 +30,7 @@ export function HealthDimensionCard({
   onRun,
   runningKey,
   lastSuccessByTask,
+  onOpen,
 }: HealthDimensionCardProps) {
   // The repair tasks this dimension can trigger, and when any of them last
   // completed successfully (ISO timestamps sort lexically → max = most recent).
@@ -47,7 +50,18 @@ export function HealthDimensionCard({
       : undefined
 
   return (
-    <div className="flex flex-col gap-3 rounded-sm border border-alma-100 bg-alma-50 p-4 shadow-paper-sm">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+      className="flex cursor-pointer flex-col gap-3 rounded-sm border border-alma-100 bg-alma-50 p-4 shadow-paper-sm transition-colors hover:border-alma-300 hover:bg-alma-100/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+    >
       <div className="flex items-start justify-between gap-3">
         <h3 className="min-w-0 font-medium text-alma-800">{dim.label}</h3>
         <StatusBadge tone={dimensionBadgeTone(dim.severity)} className="shrink-0 capitalize">
@@ -98,7 +112,10 @@ export function HealthDimensionCard({
                 pending={runningKey === action.operation_key}
                 disabled={runningKey != null && runningKey !== action.operation_key}
                 className="border-alma-200 text-alma-700 hover:bg-alma-100"
-                onClick={() => onRun(action.operation_key)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRun(action.operation_key)
+                }}
               >
                 {action.label}
               </AsyncButton>
@@ -106,6 +123,8 @@ export function HealthDimensionCard({
           </div>
         </div>
       ) : null}
+
+      <p className="text-[11px] font-medium text-alma-folio">View affected papers →</p>
     </div>
   )
 }
