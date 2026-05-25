@@ -56,6 +56,14 @@ after a restart. For a permanent install, see [below](#install-permanent).
 
 That's it — open a paper page and click the **ALMa** button.
 
+!!! tip "Green dot = paper here"
+    The toolbar icon shows a small **green dot** when the current page
+    looks like a savable paper (arXiv, a DOI in the URL, a publisher
+    `/doi/…` page, a preprint, a DOI-bearing PDF), so you can tell at a
+    glance before clicking. It's a URL-only hint — a page that hides its
+    DOI only in `<meta>` tags won't light up, but clicking still detects
+    it.
+
 ## First use
 
 1. Open a paper page — a publisher article (Nature, Science, ACM, IEEE,
@@ -63,13 +71,16 @@ That's it — open a paper page and click the **ALMa** button.
 2. Click the **ALMa** toolbar button. The popup reads the page and shows
    the detected paper, with a small "Detected via…" line so you can see
    how it was identified.
-3. Pick a destination:
+3. Choose a **Rating** — **Add** (3★) · **Like** (4★) · **Love** (5★) —
+   and a **destination**:
       * **Library** — saved, untriaged.
       * **Reading list** — saved **and** added to your reading list
         (reading status `reading`).
-4. Pick a rating: **Save** (3★) · **Like** (4★) · **Love** (5★). These
-   are the same [save verbs](saving-papers.md) used everywhere else in
-   ALMa.
+
+    These are selectors — **nothing is saved yet**. (The ratings are the
+    same [save verbs](saving-papers.md) used everywhere else in ALMa.)
+4. Click **Save to ALMa** to commit, or **Cancel** to close without doing
+   anything.
 
 The connector sends the DOI (preferred) to ALMa, which resolves full
 canonical metadata via OpenAlex and saves the paper with
@@ -77,11 +88,26 @@ canonical metadata via OpenAlex and saves the paper with
 (the [monotonic rule](saving-papers.md#monotonic-upgrade) applies here
 too).
 
+!!! tip "Already in your library?"
+    If the paper is already saved, the card shows a calm **"In your
+    Library ✓"** (or **"On your Reading list"**) ribbon with its current
+    rating, the rating/destination are pre-selected to match, and the
+    button reads **Update** instead of Save.
+
+!!! note "Undo"
+    Right after a save, the popup shows an **Undo** button that reverses
+    it — removing a just-created paper from your Library (back to a
+    tracked row), or restoring the previous rating/placement of a paper
+    that was already there. It also clears the feedback signal the save
+    recorded, so an undone save doesn't nudge your recommendations.
+
 !!! note "Why DOI matters"
     The connector's job is to find the **identifier**, not to scrape a
-    perfect record. With a DOI, ALMa fetches authoritative metadata
-    itself. When a page has no DOI (some preprints, working papers), the
-    connector falls back to the title/authors/year it could read.
+    perfect record. When a page has no readable metadata — a **PDF**, say —
+    but a DOI is in the URL or the file, the popup **resolves the title
+    from ALMa and shows it right there** (briefly "Resolving title…", then
+    the real title) so you see exactly what you're saving. When there's no
+    DOI at all, it falls back to the title/authors/year it could scrape.
 
 ## Choosing the ALMa server
 
@@ -143,7 +169,10 @@ order:
    (`dc.*`), PRISM (`prism.*`), bepress, EPrints, Open Graph. This covers
    most publisher landing pages.
 2. **Identifier in the page URL** — `doi.org/10.x`, `/doi/10.x`,
-   `arxiv.org/abs/…` and `…/pdf/…`.
+   `arxiv.org/abs/…` and `…/pdf/…`, and preprint paths like
+   bioRxiv/medRxiv `…/content/10.x/…v1.full.pdf` (the version/format
+   suffix is stripped). This works even on the PDF itself, where there's
+   no embedded metadata to read.
 3. **DOI in `doi.org` links or visible page text.**
 4. **PDFs** — arXiv and publisher PDF URLs resolve from the URL; for
    other PDFs the connector scans the PDF for a DOI in its XMP metadata
