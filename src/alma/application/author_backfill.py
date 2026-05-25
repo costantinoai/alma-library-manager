@@ -39,7 +39,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
-from alma.core.utils import normalize_doi, resolve_existing_paper_id
+from alma.core.utils import (
+    canonical_lookup_doi,
+    normalize_doi,
+    resolve_existing_paper_id,
+)
 from alma.discovery import semantic_scholar
 from alma.openalex import client as openalex_client
 
@@ -177,11 +181,33 @@ def _fetch_missing_s2_vectors_for_author(
     if not oid:
         return summary
     model = semantic_scholar.S2_SPECTER2_MODEL
+    from alma.services.s2_vectors import (
+        TERMINAL_FETCH_STATUSES,
+        _clear_fetch_status,
+        _doi_from_s2,
+        _ensure_fetch_status_table,
+        _lookup_ids_for_row,
+        _lookup_key_for_row,
+        _upsert_fetch_status,
+    )
+
+    _ensure_fetch_status_table(conn)
+    terminal_statuses = tuple(sorted(TERMINAL_FETCH_STATUSES))
+    terminal_clause = ",".join("?" for _ in terminal_statuses)
     pending = conn.execute(
-        """
-        SELECT p.id AS paper_id, p.doi AS doi, p.semantic_scholar_id AS s2_id
+        f"""
+        SELECT p.id, p.doi, p.semantic_scholar_id
         FROM publication_authors pa
         JOIN papers p ON p.id = pa.paper_id
+        LEFT JOIN publication_embedding_fetch_status fs
+         ON fs.paper_id = p.id
+         AND fs.model = ?
+         AND fs.source = ?
+         AND fs.lookup_key = (
+             lower(trim(COALESCE(p.semantic_scholar_id, '')))
+             || '|'
+             || lower(trim(COALESCE(p.doi, '')))
+         )
         WHERE lower(pa.openalex_id) = ?
           AND (
                COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
@@ -194,27 +220,53 @@ def _fetch_missing_s2_vectors_for_author(
                 AND pe.model = ?
                 AND pe.source = ?
           )
+          AND COALESCE(fs.status, '') NOT IN ({terminal_clause})
         """,
-        (oid, model, EMBEDDING_SOURCE_SEMANTIC_SCHOLAR),
+        (
+            model,
+            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+            oid,
+            model,
+            EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+            *terminal_statuses,
+        ),
     ).fetchall()
 
     lookups: list[tuple[str, str]] = []
+    pending_by_id: dict[str, sqlite3.Row] = {}
     for row in pending:
-        paper_id = str(row["paper_id"])
-        s2_id = str(row["s2_id"] or "").strip()
-        doi = normalize_doi(str(row["doi"] or "")) or str(row["doi"] or "").strip()
-        if s2_id:
-            lookups.append((paper_id, s2_id))
-        elif doi:
-            lookups.append((paper_id, f"DOI:{doi}"))
+        paper_id = str(row["id"])
+        pending_by_id[paper_id] = row
+        lookup_ids = _lookup_ids_for_row(row)
+        if lookup_ids:
+            # Preserve the previous one-request-per-paper author budget:
+            # prefer S2 id, fall back to a validated DOI.
+            lookups.append((paper_id, lookup_ids[0]))
+            continue
+        if str(row["doi"] or "").strip():
+            _upsert_fetch_status(
+                conn,
+                row=row,
+                model=model,
+                status="bad_local_doi",
+                reason=(
+                    "Local DOI fails registry-shape regex; fix the import "
+                    "or rerun hydration to rewrite the DOI before retrying."
+                ),
+                lookup_ids=[],
+                lookup_key=_lookup_key_for_row(row),
+            )
+            summary["bad_local_doi"] += 1
 
     if not lookups:
+        if conn.in_transaction:
+            conn.commit()
         return summary
 
     if log is not None:
         log(
             "fetch_vectors",
-            f"Fetching SPECTER2 vectors for {len(lookups)} papers",
+            f"Fetching SPECTER2 vectors for {len(lookups)} author paper(s)",
             processed=0,
             total=len(lookups),
         )
@@ -237,20 +289,76 @@ def _fetch_missing_s2_vectors_for_author(
                 exc,
             )
             summary["vector_fetch_errors"] += len(chunk)
+            for paper_id, lookup_id in chunk:
+                row = pending_by_id.get(paper_id)
+                if row is None:
+                    continue
+                _upsert_fetch_status(
+                    conn,
+                    row=row,
+                    model=model,
+                    status="error",
+                    reason=str(exc),
+                    lookup_ids=[lookup_id],
+                    lookup_key=_lookup_key_for_row(row),
+                )
             continue
         by_lookup = {
             str(v.get("_requested_id") or "").strip(): v
             for v in batch.values()
             if v.get("_requested_id")
         }
+        by_s2 = {
+            str(v.get("paperId") or "").strip(): v
+            for v in batch.values()
+            if str(v.get("paperId") or "").strip()
+        }
+        by_doi = {
+            doi: v
+            for v in batch.values()
+            if (doi := _doi_from_s2(v))
+        }
         for paper_id, lookup_id in chunk:
-            row = by_lookup.get(lookup_id)
-            if not row:
-                summary["vectors_missing"] += 1
+            local_row = pending_by_id.get(paper_id)
+            if local_row is None:
                 continue
-            vec = semantic_scholar.extract_specter2_vector(row)
+            s2_id = str(local_row["semantic_scholar_id"] or "").strip()
+            doi = canonical_lookup_doi(str(local_row["doi"] or "")) or ""
+            paper = (
+                by_lookup.get(lookup_id)
+                or (by_s2.get(s2_id) if s2_id else None)
+                or (by_doi.get(doi) if doi else None)
+            )
+            if not paper:
+                summary["vectors_missing"] += 1
+                _upsert_fetch_status(
+                    conn,
+                    row=local_row,
+                    model=model,
+                    status="unmatched",
+                    reason=(
+                        "Semantic Scholar returned no paper for current "
+                        "DOI/S2 lookup id"
+                    ),
+                    lookup_ids=[lookup_id],
+                    lookup_key=_lookup_key_for_row(local_row),
+                )
+                continue
+            vec = semantic_scholar.extract_specter2_vector(paper)
             if not vec:
                 summary["vectors_missing"] += 1
+                _upsert_fetch_status(
+                    conn,
+                    row=local_row,
+                    model=model,
+                    status="missing_vector",
+                    reason=(
+                        "Semantic Scholar returned the paper without "
+                        "embedding.specter_v2"
+                    ),
+                    lookup_ids=[lookup_id],
+                    lookup_key=_lookup_key_for_row(local_row),
+                )
                 continue
             if semantic_scholar.upsert_specter2_vector(
                 conn,
@@ -260,6 +368,7 @@ def _fetch_missing_s2_vectors_for_author(
                 created_at=datetime.now(timezone.utc).isoformat(),
             ):
                 vectors_found += 1
+            _clear_fetch_status(conn, paper_id=paper_id, model=model)
         if conn.in_transaction:
             conn.commit()
         if log is not None:
