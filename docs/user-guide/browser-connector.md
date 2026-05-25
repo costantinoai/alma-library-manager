@@ -38,7 +38,9 @@ nothing to build.
    ⚙ → **Install Add-on From File…**. It's signed by Mozilla, so it
    installs **permanently** and survives restarts. To update later,
    download the newer `.xpi` from a later release and install it the same
-   way — ALMa shows a toast when your connector is outdated or missing.
+   way — ALMa shows a toast only when the connector and ALMa no longer speak
+   the same save format (one of them needs updating); a compatible connector
+   stays silent.
 
 ??? note "Running from source? (contributors)"
     To load the unpackaged extension during development: **`about:debugging`**
@@ -195,7 +197,8 @@ connector locally and — after a `y/N` confirm — uploads
 **`alma-connector-<version>.xpi`** to that release. Setup (a free AMO API
 key + `gh`) and the manual `extension/release.sh` path are documented in
 `extension/README.md`. There's no auto-update; ALMa nudges users with a
-toast when their connector is outdated or missing.
+toast only when the installed connector's save-contract no longer matches
+the running ALMa (a compatible connector stays silent).
 
 ## Troubleshooting
 

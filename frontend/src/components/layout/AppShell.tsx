@@ -4,6 +4,7 @@ import { TopBar } from './TopBar'
 import { ActivityPanel } from '@/components/ActivityPanel'
 import { CommandPalette } from '@/components/CommandPalette'
 import { useOperationToasts } from '@/hooks/useOperationToasts'
+import { useConnectorStatus } from '@/hooks/useConnectorStatus'
 
 interface AppShellProps {
   currentPage: Page
@@ -50,6 +51,10 @@ export function AppShell({
 
   // Monitor operations and show toast notifications for completions/failures
   useOperationToasts()
+
+  // Detect the browser connector at startup; toast only on an update/problem
+  // (incompatible save-contract), never when it's installed and healthy.
+  useConnectorStatus()
 
   // Global keyboard shortcut: Ctrl+K or Cmd+K
   useEffect(() => {
