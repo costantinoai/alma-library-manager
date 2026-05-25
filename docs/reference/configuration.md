@@ -44,10 +44,10 @@ and Node environments.
 
 | Variable | Purpose |
 |---|---|
-| `OPENALEX_EMAIL` | Identifies you to OpenAlex's polite pool. **Strongly recommended.** |
-| `OPENALEX_API_KEY` | Optional, for higher quotas. |
-| `SEMANTIC_SCHOLAR_API_KEY` | Optional, for higher S2 batch / related rate limits. |
-| `CROSSREF_MAILTO` | Identifies you to Crossref's polite pool. |
+| `OPENALEX_API_KEY` | **Required** since 2026-02-13 (keyless → 100 credits/day then HTTP 409). Free at [openalex.org/settings/api](https://openalex.org/settings/api). |
+| `OPENALEX_EMAIL` | Optional contact email. The OpenAlex polite pool is retired, but this still sets a courteous User-Agent. |
+| `SEMANTIC_SCHOLAR_API_KEY` | **Strongly recommended.** Without it S2 uses the shared anonymous pool and 429s often (stalls Discovery). Free at [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api). |
+| `CROSSREF_MAILTO` | Identifies you to Crossref's polite pool (still active). |
 | `ALMA_USER_AGENT` | Override the User-Agent ALMa sends to all sources. |
 
 ### AI

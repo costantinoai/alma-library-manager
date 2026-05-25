@@ -86,14 +86,24 @@ npm run build      # writes to frontend/dist
 cd ..
 ```
 
-For active frontend development, run Vite and the backend in
-separate terminals:
+For active development, the one-command dev runner starts both servers
+**from the repo `.venv`** (so the local SPECTER2 / GPU stack is available
+in-process) against an isolated `dev` profile that never touches your prod
+data — backend on `:8001`, Vite on `:5173`:
+
+```bash
+scripts/start-dev.sh
+```
+
+It auto-selects `.venv/bin/python` as the backend interpreter. Override with
+`BACKEND_PORT` / `FRONTEND_PORT` / `BACKEND_PYTHON` if needed. To run the two
+servers manually instead, use the `.venv` Python so AI is available:
 
 ```bash
 # Terminal 1 — backend with auto-reload
-python -m uvicorn alma.api.app:app --reload
+.venv/bin/python -m uvicorn alma.api.app:app --reload
 
-# Terminal 2 — Vite dev server (proxies /api/* to :8000)
+# Terminal 2 — Vite dev server (proxies /api/* to the backend)
 cd frontend && npm run dev
 ```
 
@@ -118,9 +128,9 @@ The most useful keys to set:
 
 | Variable | Purpose |
 |---|---|
-| `OPENALEX_EMAIL` | Joins the [polite pool](https://docs.openalex.org/how-to-use-the-api/api-overview#the-polite-pool). Set this. |
-| `OPENALEX_API_KEY` | Optional, for higher quotas. |
-| `SEMANTIC_SCHOLAR_API_KEY` | Improves S2 batch/related rate limits. |
+| `OPENALEX_API_KEY` | **Required** — keyless OpenAlex returns 100 credits/day then HTTP 409. Free at [openalex.org/settings/api](https://openalex.org/settings/api). |
+| `OPENALEX_EMAIL` | Optional contact email (polite pool retired; just sets a courteous User-Agent). |
+| `SEMANTIC_SCHOLAR_API_KEY` | **Strongly recommended** — avoids shared-pool 429s. Free at [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api). |
 | `OPENAI_API_KEY` | Optional OpenAI embedding provider. |
 | `SLACK_TOKEN` / `SLACK_CHANNEL` | Slack digest alerts. |
 | `API_KEY` | Optional shared key — if set, requires `X-API-Key` on every request. |

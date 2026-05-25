@@ -17,11 +17,14 @@ metadata, citations, topics, institutions, and the works graph.
 
 * **Endpoints used**: `/works`, `/works/{id}`, `/works/{id}/related-works`,
   `/authors`, `/authors/{id}`, `/topics`, `/sources`, `/institutions`.
-* **Polite pool**: ALMa adds your `OPENALEX_EMAIL` (or
-  `mailto={email}`) to every request. Strongly recommended — it gives
-  you 100k requests/day with a higher per-second burst.
-* **API key**: Set `OPENALEX_API_KEY` for premium quotas if you have
-  one.
+* **API key — REQUIRED (since 2026-02-13)**: every request needs
+  `OPENALEX_API_KEY`. OpenAlex retired the email "polite pool"; without a
+  key you get 100 free credits/day and then **HTTP 409**. A free key
+  (openalex.org/settings/api) gives standard limits — 100k calls/day,
+  10/s. Set it in `.env` or via **Settings → Connections → OpenAlex**.
+* **Contact email (optional)**: `OPENALEX_EMAIL` no longer affects rate
+  limits (the polite pool is gone) but still sets a courteous User-Agent
+  and feeds the Crossref polite pool.
 * **Field projection**: ALMa always sends a `select=` parameter so we
   only fetch the fields we use. The select list lives in
   `alma/openalex/client.py::_WORKS_SELECT_FIELDS`. Adding a
@@ -43,9 +46,13 @@ recommendations, author recommendations, related papers.
   * `/recommendations/v1/papers/forpaper/{id}` for the
     `s2_related` recommendation channel.
   * `/author/{id}/papers` and `/author/{id}/recommendations`.
-* **API key**: Set `SEMANTIC_SCHOLAR_API_KEY` for higher quotas.
-  Without one, you'll hit the public rate limit (1 RPS, 100/day for
-  some endpoints) faster than you'd like for backfills.
+* **API key — strongly recommended**: set `SEMANTIC_SCHOLAR_API_KEY`
+  (free at semanticscholar.org/product/api), in `.env` or via
+  **Settings → Connections → Semantic Scholar**. Without one you share
+  the **anonymous worldwide pool** (~5,000 requests / 5 min across *all*
+  anonymous clients), so 429s are frequent — they're the root cause of
+  the multi-minute Discovery graph-lane stalls. With a key you get a
+  dedicated ~1 RPS.
 * **`/paper/batch` contract**:
   * Results preserve the **request order** by lookup id (DOI / S2
     ID / OpenAlex ID).

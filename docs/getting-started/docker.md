@@ -9,8 +9,10 @@ description: Run ALMa as a container — the suggested install path, with named 
 pulls from GitHub Container Registry and includes the FastAPI
 backend, the built React frontend, the SPECTER2 encoder (in the
 `normal` variant), and every native dependency already pinned and
-tested. You provide three things: a port, an OpenAlex email, and a
-place for ALMa to store your library.
+tested. You provide three things: a port, a place for ALMa to store
+your library, and an [OpenAlex API key](https://openalex.org/settings/api)
+(**required** — see [Set your OpenAlex key](#set-your-openalex-key-required)
+below).
 
 There are two install paths — both pull the same prebuilt image from
 GHCR by default:
@@ -39,8 +41,9 @@ for each one.
 
 The fastest install is the cross-platform `setup.sh` / `setup.ps1`
 script. It checks Docker, auto-detects your hardware (NVIDIA GPU vs
-Raspberry Pi vs generic CPU host), picks the right image tag, prompts
-for your OpenAlex email, and starts the container with named volumes.
+Raspberry Pi vs generic CPU host), picks the right image tag, and starts
+the container with named volumes. After it boots, add your OpenAlex key
+in **Settings → Connections** (see [Set your OpenAlex key](#set-your-openalex-key-required)).
 
 === "Linux / macOS"
 
@@ -67,11 +70,14 @@ runs on a CPU host:
 ```bash
 docker run -d --name alma --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
-  -e OPENALEX_EMAIL=you@example.com \
   -v alma-data:/app/data \
   -v alma-config:/app/config \
   ghcr.io/costantinoai/alma-library-manager:latest
 ```
+
+Then add your OpenAlex key in **Settings → Connections** (it persists in
+the `alma-data` volume's secret store). To bake it in instead, append
+`-e OPENALEX_API_KEY=...` (and optionally `-e SEMANTIC_SCHOLAR_API_KEY=...`).
 
 Swap `:latest` for `:latest-gpu` (add `--gpus all`) on an NVIDIA host
 or `:latest-lite` on a Raspberry Pi. Open <http://localhost:8000>.
@@ -86,8 +92,30 @@ What this does:
   Docker Desktop VM elsewhere.
 * Binds the API to `127.0.0.1` only. Nothing is exposed to your
   network until you put a reverse proxy in front and set `API_KEY`.
-* Sets the OpenAlex polite-pool email. ALMa runs without it, but
-  you'll be sharing rate limits with anonymous users.
+* Sets an optional OpenAlex contact email (the polite pool is retired;
+  this only sets a courteous User-Agent). The **required** OpenAlex
+  *key* is set separately — see below.
+
+### Set your OpenAlex key (required)
+
+OpenAlex requires an API key on every request (since 2026-02-13) — a
+keyless install gets 100 credits/day, then HTTP 409. A free key takes
+~30s at [openalex.org/settings/api](https://openalex.org/settings/api).
+A [Semantic Scholar key](https://www.semanticscholar.org/product/api)
+is strongly recommended too (without it S2 shares the anonymous pool and
+429s often, stalling Discovery).
+
+The **recommended, secure** way under Docker: boot the container, open
+**Settings → Connections**, paste your key(s), and **Save connection
+settings**. ALMa persists them to its encrypted-at-rest secret store
+inside the `alma-data` named volume (`secrets.json`, mode `600`) — they
+survive restarts and image upgrades, and never appear in `docker inspect`
+or your shell history.
+
+Prefer to bake them in at launch instead (e.g. headless/non-interactive)?
+Add `-e OPENALEX_API_KEY=...` (and `-e SEMANTIC_SCHOLAR_API_KEY=...`) to
+the `docker run` command, or list them in a `.env` passed via compose
+`env_file:`. Note these are visible to `docker inspect`.
 
 ### What "persistent" actually means here
 
@@ -133,7 +161,7 @@ place — no hand-written YAML needed):
 ```bash
 git clone https://github.com/costantinoai/alma-library-manager.git
 cd alma-library-manager
-cp .env.example .env             # add OPENALEX_EMAIL=you@example.com
+cp .env.example .env             # add OPENALEX_API_KEY=... (required)
 ```
 
 The compose files use the same **named volumes** as Path 1
@@ -289,7 +317,6 @@ Two pieces are required to reach a host GPU from inside the container:
 ```bash
 docker run -d --name alma --restart unless-stopped --gpus all \
   -p 127.0.0.1:8000:8000 \
-  -e OPENALEX_EMAIL=you@example.com \
   -v alma-data:/app/data -v alma-config:/app/config \
   ghcr.io/costantinoai/alma-library-manager:latest-gpu
 ```
@@ -349,7 +376,8 @@ the LinuxKit / WSL VM, reachable via
 
 ### 2. Secrets and runtime knobs (`.env` values)
 
-API keys, polite-pool email, Slack tokens, optional `API_KEY`. Initial
+API keys (OpenAlex required, Semantic Scholar recommended), optional
+contact email, Slack tokens, optional `API_KEY`. Initial
 values are passed as environment variables — `-e KEY=value` flags
 (`docker run` / setup.sh) or the `.env` `env_file:` (compose). Keys you
 add or rotate in the Settings UI persist to the **secret store inside the
@@ -359,7 +387,7 @@ volume installs — so they survive restarts and upgrades with no host
 
 ### 3. Bootstrap settings (`settings.json`)
 
-A small JSON file (OpenAlex email, SQLite path). Almost everything
+A small JSON file (optional OpenAlex contact email, SQLite path). Almost everything
 user-tunable from the UI (Discovery weights, AI provider, scheduler
 intervals) is written to the `discovery_settings` table inside
 `scholar.db`, so this file is mostly cosmetic. The image pins
@@ -437,7 +465,6 @@ the installer and the compose file) to bind other interfaces:
     ```bash
     docker run -d --name alma --restart unless-stopped \
       -p 0.0.0.0:8000:8000 \
-      -e OPENALEX_EMAIL=you@example.com \
       -e ALMA_SETTINGS_PATH=/app/data/settings.json \
       -v alma-data:/app/data -v alma-config:/app/config \
       ghcr.io/costantinoai/alma-library-manager:latest-lite

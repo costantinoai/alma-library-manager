@@ -8,8 +8,8 @@ description: Start ALMa with Docker, then complete the first-run checklist in th
 **For normal use, run ALMa with Docker.** The published image pulls
 from GitHub Container Registry in seconds and includes the FastAPI
 backend, the built React frontend, the SPECTER2 encoder, and every
-native dependency already pinned and tested. You provide a port, an
-OpenAlex email, and a place to store your library.
+native dependency already pinned and tested. You provide a port, a place
+to store your library, and a (free, required) OpenAlex API key.
 
 Bare-metal Python is **not recommended** unless you're actively
 developing on ALMa itself — the AI stack (torch, transformers, hdbscan,
@@ -43,8 +43,8 @@ on the bare-metal path is a dependency build mismatch.
 
 </div>
 
-After the app is running, do the [first-run pass](first-run.md): set
-OpenAlex email, follow authors, import papers if you have them, and
+After the app is running, do the [first-run pass](first-run.md): add your
+OpenAlex API key, follow authors, import papers if you have them, and
 refresh Feed / Discovery.
 
 ## Docker requirements
@@ -75,11 +75,11 @@ server, no Redis, no message broker.
 
 ## What you'll need before installing
 
-* An email address for [OpenAlex's polite pool](https://docs.openalex.org/how-to-use-the-api/api-overview#the-polite-pool).
-  Strongly recommended; un-throttled access in exchange for being
-  identified.
-* (Optional) A [Semantic Scholar API key](https://www.semanticscholar.org/product/api) —
-  improves rate limits on related-papers / batch / vector lookups.
+* A free [OpenAlex API key](https://openalex.org/settings/api) — **required**
+  since 2026-02-13. Keyless requests get 100 credits/day and then HTTP 409.
+* A free [Semantic Scholar API key](https://www.semanticscholar.org/product/api) —
+  **strongly recommended**. Without it S2 shares the anonymous worldwide
+  pool and 429s often, which stalls Discovery's graph lane.
 * (Optional) A [Slack bot token](https://api.slack.com/apps) if you
   want digest alerts.
 * (Optional) An `OPENAI_API_KEY` if you want OpenAI as an embedding

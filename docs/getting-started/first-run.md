@@ -11,14 +11,19 @@ open in a browser.
 
 ![Library on first run, before any saves](../screenshots/desktop-library.png)
 
-## 1. Set your OpenAlex email
+## 1. Set your API keys
 
-Go to **Settings → External APIs → OpenAlex** and enter the email you
-want to identify with. ALMa will start using OpenAlex's polite pool
-immediately. You should see a green "OK" indicator next to OpenAlex
-in the **Settings → Status** card.
+OpenAlex **requires an API key** (since 2026-02-13 — keyless requests get
+100 credits/day, then HTTP 409). A [Semantic Scholar key](https://www.semanticscholar.org/product/api)
+is strongly recommended too — without it S2 shares the anonymous worldwide
+pool and 429s often, stalling Discovery.
 
-If you started the container with `-e OPENALEX_EMAIL=...` (or
+Go to **Settings → Connections**, paste your [OpenAlex key](https://openalex.org/settings/api)
+into **OpenAlex** and (optionally) your S2 key into **Semantic Scholar**,
+then **Save connection settings**. You should see a green "OK" indicator
+next to OpenAlex in the **Settings → Status** card.
+
+If you started the container with `-e OPENALEX_API_KEY=...` (or
 `env_file:`), this is already set — no UI step needed.
 
 ![Settings page — External APIs / Backend tab](../screenshots/desktop-settings.png)
