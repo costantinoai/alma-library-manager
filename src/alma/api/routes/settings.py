@@ -6,22 +6,23 @@ Settings are stored in the repository's `settings.json` file.
 IMPORTANT: All settings access goes through alma.config module.
 This ensures all path values are relative and properly resolved.
 
-Secret handling (2026-04-29):
-- The OpenAlex API key is persisted in two places: `data/secrets.json`
-  (always-writable, the canonical store) and the project-root `.env`
-  (best-effort, for users who want their host `.env` to remain the
-  source of truth). The dual write avoids the failure mode that
-  blocked Docker named-volume installs entirely — `/app/.env` lives
-  in the read-only image layer there, so a `.env`-only rotation
-  raised a `PermissionError` and 500'd the entire PUT /settings,
-  taking the Slack save with it.
-- The Settings GET reads from env first, secret store as fallback,
-  and masks all but the last 4 characters.
-- PUT rotation: writes secret store, updates the in-process env so
-  the change takes effect immediately, and best-effort writes to
-  `.env` (preserving the previous value under
-  `OPENALEX_API_KEY_OLD_<utc-timestamp>`) — `.env` write failures
-  are logged at INFO and do not propagate.
+Secret handling (2026-04-29; generalized to S2 2026-05-25):
+- Third-party API keys (OpenAlex, Semantic Scholar) share ONE resolution
+  chain — env-first (`.env` / Docker `env_file`) → `data/secrets.json`
+  secret store — defined in `alma.config`. The `.env` is the single
+  shared config source across bare-metal dev, bare-metal prod, and
+  Docker; the secret store is the always-writable canonical mirror the
+  Settings UI rotates into (needed because Docker's `/app/.env` is a
+  read-only image layer, so a `.env`-only rotation raised a
+  `PermissionError` and 500'd the entire PUT /settings).
+- Rotation goes through the key-agnostic `_rotate_env_secret` /
+  `_delete_env_secret` helpers: write secret store (canonical), update
+  the in-process env so the change takes effect immediately (every
+  resolver is env-first), then best-effort write `.env` (preserving the
+  previous value under `<ENV_KEY>_OLD_<utc-timestamp>`). `.env` write
+  failures are logged at INFO and do not propagate.
+- The Settings GET reads each key via its `config` resolver (env first,
+  secret store fallback) and masks all but the last 4 characters.
 """
 
 import logging
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import requests
 import sqlite3
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,6 +42,7 @@ from alma.config import (
     get_all_settings,
     get_db_path,
     get_openalex_api_key,
+    get_semantic_scholar_api_key,
     update_settings as config_update_settings,
     delete_settings_keys as config_delete_settings_keys,
     reload_settings,
@@ -51,6 +54,7 @@ from alma.plugins.config import save_plugin_config
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
     SECRET_OPENALEX_API_KEY,
+    SECRET_SEMANTIC_SCHOLAR_API_KEY,
     SECRET_SLACK_BOT_TOKEN,
     delete_secret,
     get_secret,
@@ -59,6 +63,7 @@ from alma.core.secrets import (
 )
 
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
+_SEMANTIC_SCHOLAR_ENV_KEY = "SEMANTIC_SCHOLAR_API_KEY"
 
 
 def _dotenv_path():
@@ -82,10 +87,11 @@ def _archive_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
 
 
-def _try_write_dotenv_rotation(new_value: str, previous: str) -> None:
-    """Best-effort `.env` write. Mirrors the secret-store rotation onto
-    the project-root `.env` so users with a writable host `.env` (Path 2
-    bind-mount or a native install) see the new value reflected there.
+def _try_write_dotenv_rotation(env_key: str, new_value: str, previous: str) -> None:
+    """Best-effort `.env` write for any third-party credential. Mirrors the
+    secret-store rotation onto the project-root `.env` so users with a
+    writable host `.env` (Path 2 bind-mount or a native install) see the new
+    value reflected there.
 
     Logs and swallows write failures: in Docker named-volume installs
     `/app/.env` lives in the read-only image layer and `set_key` raises
@@ -105,26 +111,26 @@ def _try_write_dotenv_rotation(new_value: str, previous: str) -> None:
         dotenv_path.touch(exist_ok=True)
     except (PermissionError, OSError) as exc:
         logger.info(
-            "Skipping `.env` rotation for OpenAlex key (`%s` not writable: %s) — "
+            "Skipping `.env` rotation for `%s` (`%s` not writable: %s) — "
             "value is still persisted in the secret store",
-            dotenv_path, exc,
+            env_key, dotenv_path, exc,
         )
         return
 
     try:
         if previous and previous != new_value:
-            archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
+            archive_key = f"{env_key}_OLD_{_archive_timestamp()}"
             set_key(str(dotenv_path), archive_key, previous)
             os.environ[archive_key] = previous
-        set_key(str(dotenv_path), _OPENALEX_ENV_KEY, new_value)
+        set_key(str(dotenv_path), env_key, new_value)
     except (PermissionError, OSError) as exc:
-        logger.info("`.env` write skipped for OpenAlex rotation: %s", exc)
+        logger.info("`.env` write skipped for `%s` rotation: %s", env_key, exc)
 
 
-def _try_delete_dotenv() -> None:
-    """Best-effort `.env` removal of OPENALEX_API_KEY. Same rationale as
-    `_try_write_dotenv_rotation` — the secret-store delete has already
-    happened, so swallow filesystem errors.
+def _try_delete_dotenv(env_key: str) -> None:
+    """Best-effort `.env` removal of any third-party credential. Same
+    rationale as `_try_write_dotenv_rotation` — the secret-store delete has
+    already happened, so swallow filesystem errors.
     """
     try:
         from dotenv import set_key, unset_key
@@ -135,48 +141,49 @@ def _try_delete_dotenv() -> None:
     if not dotenv_path.exists():
         return
 
-    previous = os.environ.get(_OPENALEX_ENV_KEY, "")
+    previous = os.environ.get(env_key, "")
     try:
         if previous:
-            archive_key = f"{_OPENALEX_ENV_KEY}_OLD_{_archive_timestamp()}"
+            archive_key = f"{env_key}_OLD_{_archive_timestamp()}"
             set_key(str(dotenv_path), archive_key, previous)
             os.environ[archive_key] = previous
-        unset_key(str(dotenv_path), _OPENALEX_ENV_KEY)
+        unset_key(str(dotenv_path), env_key)
     except (PermissionError, OSError) as exc:
-        logger.info("`.env` delete skipped for OpenAlex rotation: %s", exc)
+        logger.info("`.env` delete skipped for `%s` rotation: %s", env_key, exc)
 
 
-def _rotate_openalex_env_key(new_value: str) -> None:
-    """Persist a new OpenAlex API key.
+def _rotate_env_secret(env_key: str, secret_key: str, new_value: str) -> None:
+    """Persist a new third-party API credential to ALMa's single resolution
+    chain (env-first → secret store), so it takes effect everywhere the
+    `config` resolvers read it — bare-metal dev, bare-metal prod, and Docker.
 
-    Writes to two locations:
+    Writes to two coordinated locations:
       1. The secret store (`data/secrets.json`) — the always-writable
-         canonical persistence path. Survives container restart and
-         works under Docker named volumes where `/app/.env` is in the
-         read-only image layer.
-      2. The project-root `.env` — best-effort, archives the previous
-         value under `OPENALEX_API_KEY_OLD_<timestamp>`. Failures are
-         logged at INFO and swallowed.
+         canonical persistence path. Survives container restart and works
+         under Docker named volumes where `/app/.env` is in the read-only
+         image layer.
+      2. The project-root `.env` — best-effort, archives the previous value
+         under `<ENV_KEY>_OLD_<timestamp>`. Failures are logged at INFO and
+         swallowed (expected under Docker's read-only `.env`).
 
-    Always updates the in-process env so the change takes effect
-    without a restart.
+    Always updates the in-process env so the change takes effect without a
+    restart (every resolver is env-first).
     """
-    previous = os.environ.get(_OPENALEX_ENV_KEY, "")
+    previous = os.environ.get(env_key, "")
 
     # Canonical persistent write — must succeed, propagates errors.
-    set_secret(SECRET_OPENALEX_API_KEY, new_value)
+    set_secret(secret_key, new_value)
 
-    os.environ[_OPENALEX_ENV_KEY] = new_value
-    _try_write_dotenv_rotation(new_value, previous)
+    os.environ[env_key] = new_value
+    _try_write_dotenv_rotation(env_key, new_value, previous)
 
 
-def _delete_openalex_env_key() -> None:
-    """Remove the OpenAlex API key from secret store, in-process env,
-    and (best-effort) `.env`.
-    """
-    delete_secret(SECRET_OPENALEX_API_KEY)
-    _try_delete_dotenv()
-    os.environ.pop(_OPENALEX_ENV_KEY, None)
+def _delete_env_secret(env_key: str, secret_key: str) -> None:
+    """Remove a third-party API credential from the secret store, in-process
+    env, and (best-effort) `.env`."""
+    delete_secret(secret_key)
+    _try_delete_dotenv(env_key)
+    os.environ.pop(env_key, None)
 
 
 router = APIRouter(
@@ -200,8 +207,12 @@ class SettingsModel(BaseModel):
     # Slack notification settings
     slack_token: Optional[str] = Field(None, description="Slack Bot User OAuth Token")
     slack_channel: Optional[str] = Field(None, description="Default Slack channel for notifications")
-    # OpenAlex API key (optional, for premium/institutional access)
-    openalex_api_key: Optional[str] = Field(None, description="OpenAlex API key for premium access")
+    # OpenAlex API key — REQUIRED since 2026-02-13 (the email "polite pool"
+    # was discontinued; keyless requests get 100 credits/day then HTTP 409).
+    openalex_api_key: Optional[str] = Field(None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)")
+    # Semantic Scholar API key — strongly recommended; without it S2 uses the
+    # shared anonymous worldwide pool and 429s frequently (stalls Discovery).
+    semantic_scholar_api_key: Optional[str] = Field(None, description="Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)")
     # Identifier resolution strategy settings
     id_resolution_semantic_scholar_enabled: Optional[bool] = Field(
         True,
@@ -246,7 +257,11 @@ def _write_settings(data: dict) -> None:
     logger.info("Settings updated via centralized config: %s", list(updates.keys()))
 
 
-def _is_masked_openalex_key(value: object) -> bool:
+def _is_masked_secret_value(value: object) -> bool:
+    """True when the incoming value is a redacted echo of the GET mask
+    (`****<suffix>`), i.e. the UI re-submitted the masked display rather
+    than a new credential. Shared by every `mask_secret(..., suffix=4)`
+    field (OpenAlex key, S2 key)."""
     return isinstance(value, str) and value.startswith("****")
 
 
@@ -262,10 +277,12 @@ def _export_settings_sanitized(raw: dict) -> dict:
     """Return settings safe for export payloads."""
     out = dict(raw or {})
     out["slack_token"] = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
-    # `get_openalex_api_key` resolves env-then-secret-store, so the
-    # masked display reflects whichever location actually holds the
-    # value — consistent with how the OpenAlex client itself reads it.
+    # `get_openalex_api_key` / `get_semantic_scholar_api_key` resolve
+    # env-then-secret-store, so the masked display reflects whichever
+    # location actually holds the value — consistent with how each client
+    # itself reads it.
     out["openalex_api_key"] = mask_secret(get_openalex_api_key(), suffix=4)
+    out["semantic_scholar_api_key"] = mask_secret(get_semantic_scholar_api_key(), suffix=4)
     return out
 
 
@@ -291,6 +308,7 @@ def get_settings():
     raw = _read_settings()
     slack_token_masked = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
     openalex_api_key_masked = mask_secret(get_openalex_api_key(), suffix=4)
+    semantic_scholar_api_key_masked = mask_secret(get_semantic_scholar_api_key(), suffix=4)
 
     return SettingsModel(
         backend=raw.get("backend", "openalex"),
@@ -303,6 +321,7 @@ def get_settings():
         slack_token=slack_token_masked,
         slack_channel=raw.get("slack_channel"),
         openalex_api_key=openalex_api_key_masked,
+        semantic_scholar_api_key=semantic_scholar_api_key_masked,
         id_resolution_semantic_scholar_enabled=bool(
             raw.get("id_resolution_semantic_scholar_enabled", True)
         ),
@@ -387,16 +406,27 @@ def update_settings(payload: SettingsModel):
 
         # Secrets are persisted in the secret store, not settings.json.
         incoming_openalex_key = data.pop("openalex_api_key", None)
+        incoming_s2_key = data.pop("semantic_scholar_api_key", None)
         incoming_slack_token = data.pop("slack_token", None)
 
-        if incoming_openalex_key is not None and not _is_masked_openalex_key(incoming_openalex_key):
+        if incoming_openalex_key is not None and not _is_masked_secret_value(incoming_openalex_key):
             clean_openalex_key = str(incoming_openalex_key).strip()
             if clean_openalex_key:
-                _rotate_openalex_env_key(clean_openalex_key)
+                _rotate_env_secret(_OPENALEX_ENV_KEY, SECRET_OPENALEX_API_KEY, clean_openalex_key)
             else:
-                _delete_openalex_env_key()
+                _delete_env_secret(_OPENALEX_ENV_KEY, SECRET_OPENALEX_API_KEY)
             # The shared OpenAlex client is reset below (single call
             # for either rotation or delete + any email change).
+
+        if incoming_s2_key is not None and not _is_masked_secret_value(incoming_s2_key):
+            clean_s2_key = str(incoming_s2_key).strip()
+            if clean_s2_key:
+                _rotate_env_secret(_SEMANTIC_SCHOLAR_ENV_KEY, SECRET_SEMANTIC_SCHOLAR_API_KEY, clean_s2_key)
+            else:
+                _delete_env_secret(_SEMANTIC_SCHOLAR_ENV_KEY, SECRET_SEMANTIC_SCHOLAR_API_KEY)
+            # No client reset needed: `core.http_sources._semantic_headers`
+            # reads `get_semantic_scholar_api_key()` fresh on every request,
+            # and the in-process env was just updated.
 
         if incoming_slack_token is not None and not _is_masked_slack_token(incoming_slack_token):
             clean_slack_token = str(incoming_slack_token).strip()
@@ -408,7 +438,7 @@ def update_settings(payload: SettingsModel):
         # Write settings first (this validates that paths are relative)
         _write_settings(data)
         # Ensure plaintext credential keys are absent from settings.json.
-        config_delete_settings_keys(["slack_token", "openalex_api_key"])
+        config_delete_settings_keys(["slack_token", "openalex_api_key", "semantic_scholar_api_key"])
 
         # Validate DB path can be accessed using the resolved absolute path
         from alma.config import get_db_path
@@ -559,6 +589,65 @@ def get_openalex_usage():
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to read OpenAlex usage",
         )
+
+
+@router.get("/semantic-scholar/status")
+def get_semantic_scholar_status():
+    """Report whether the Semantic Scholar key is configured and, if so,
+    whether a live authenticated probe accepts it. Drives the connection dot
+    in Settings → Connections → Semantic Scholar.
+
+    States (green dot = ``valid is True``):
+      - ``configured=False``         — no key set (env or secret store).
+      - ``valid=True``               — probe returned 200, OR 429 (the key
+                                       was accepted; S2 authenticates before
+                                       applying the 1 req/s throttle).
+      - ``valid=False``              — S2 rejected the key (401 / 403).
+      - ``valid=None``               — probe could not complete (network /
+                                       timeout / unexpected status); unknown.
+
+    The probe is a single cheapest-possible `/paper/search?limit=1` call with
+    a short timeout and no retries — it is on-demand only (card mount / manual
+    refresh), so it doesn't meaningfully spend the 1 req/s budget.
+    """
+    key = get_semantic_scholar_api_key()
+    if not key:
+        return {"configured": False, "valid": None, "detail": "No API key set."}
+
+    try:
+        resp = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": "machine learning", "limit": 1, "fields": "title"},
+            headers={"x-api-key": key, "Accept": "application/json"},
+            timeout=8,
+        )
+    except requests.RequestException as exc:
+        logger.info("Semantic Scholar key probe could not complete: %s", exc)
+        return {
+            "configured": True,
+            "valid": None,
+            "detail": f"Could not reach Semantic Scholar ({exc.__class__.__name__}).",
+        }
+
+    if resp.status_code == 200:
+        return {"configured": True, "valid": True, "detail": "Key accepted."}
+    if resp.status_code == 429:
+        return {
+            "configured": True,
+            "valid": True,
+            "detail": "Key accepted (rate-limited right now — 1 req/s).",
+        }
+    if resp.status_code in (401, 403):
+        return {
+            "configured": True,
+            "valid": False,
+            "detail": "Semantic Scholar rejected the key (invalid or unauthorized).",
+        }
+    return {
+        "configured": True,
+        "valid": None,
+        "detail": f"Unexpected Semantic Scholar response ({resp.status_code}).",
+    }
 
 
 @router.get("/test/scholar")
