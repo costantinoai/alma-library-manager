@@ -4,10 +4,19 @@ Save the paper open in your browser straight into ALMa — like the Zotero
 connector, for your personal ALMa library.
 
 Click the toolbar button on any paper page and a popup shows what was
-detected (title, DOI/arXiv, authors). Choose a destination
-(**Library** or **Reading list**) and a rating (**Save** 3★ / **Like** 4★
-/ **Love** 5★). The connector sends the identifier to your local ALMa,
-which resolves full metadata via OpenAlex and saves the paper.
+detected (title, DOI/arXiv, authors). Pick a **rating** (Add 3★ / Like 4★
+/ Love 5★) and a **destination** (Library or Reading list) — these are
+selectors; **nothing is saved until you press Save** (Cancel closes). The
+connector sends the identifier to your local ALMa, which resolves full
+metadata via OpenAlex and saves the paper.
+
+If the paper is **already in your Library / Reading list**, the card shows
+a clear ribbon with its current rating and the button becomes **Update**.
+Right after saving, an **Undo** button reverses it.
+
+The toolbar icon shows a **green dot** when the current page looks like a
+savable paper (URL-level detection — arXiv, DOI-in-URL, `/doi/…`,
+preprints, DOI-bearing PDFs), so you can tell before clicking.
 
 ## How paper identification works
 
@@ -86,6 +95,7 @@ extension/
   manifest.json      MV3 manifest (action popup, activeTab + scripting + storage)
   popup.html/.css/.js  the toolbar popup (detect → choose → save + Servers panel)
   options.html/.css/.js  full-window server manager (about:addons → Preferences)
+  background.js      toolbar green-dot badge (URL-level paper detection per tab)
   lib/extract.js     paper-identification logic (page + PDF) — shared, testable
   lib/settings.js    persisted server list + /ping probing + permissions (shared)
   lib/servers-ui.js  server-manager component used by popup panel + options (shared)

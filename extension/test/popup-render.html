@@ -21,12 +21,14 @@
       abstract: "Proteins are essential to life…", isPdf: false,
       detectedVia: ["citation meta"],
     };
-    const TAB = { id: 1, url: "https://www.nature.com/articles/s41586-021-03819-2" };
+    const TAB = { id: 1, url: window.__TAB_URL || "https://www.nature.com/articles/s41586-021-03819-2" };
+    const EMPTY_EXTRACT = { doi: "", arxivId: "", openalexId: "", title: "", authors: "", year: null, journal: "", abstract: "", isPdf: true, detectedVia: [] };
     globalThis.browser = {
       storage: { local: { get: async () => ({}), set: async () => {}, remove: async () => {} } },
       tabs: { query: async () => [TAB] },
       scripting: {
-        executeScript: async (opts) => (opts.func ? [{ result: SAMPLE }] : [{}]),
+        // __EMPTY_EXTRACT simulates a PDF page with no scrapable metadata.
+        executeScript: async (opts) => (opts.func ? [{ result: (window.__EMPTY_EXTRACT ? EMPTY_EXTRACT : SAMPLE) }] : [{}]),
       },
       runtime: { openOptionsPage: () => alert("→ options.html"), getURL: (p) => p },
       permissions: { contains: async () => true, request: async () => true },
@@ -42,8 +44,20 @@
           ? { ok: true, json: async () => ({ ok: true, connector_version: 1, alma_version: "1.0.0" }) }
           : { ok: false, status: 0, json: async () => ({}) };
       }
+      if (u.includes("/extension/lookup")) {
+        // __RESOLVE_TITLE simulates an upstream title resolve for a PDF.
+        if (window.__RESOLVE_TITLE)
+          return { ok: true, json: async () => ({ found: false, in_library: false, title: window.__RESOLVE_TITLE, authors: "A. Author", year: 2026, journal: "bioRxiv", doi: "10.64898/2026.03.23.713175", openalex_id: "W1" }) };
+        // __ALREADY_SAVED = {reading?:bool, rating?:int} simulates membership.
+        const s = window.__ALREADY_SAVED;
+        return { ok: true, json: async () => (s
+          ? { found: true, in_library: true, reading_status: s.reading ? "reading" : null, rating: s.rating || 4, paper_id: "x" }
+          : { found: false }) };
+      }
       if (u.includes("/extension/save"))
-        return { ok: true, json: async () => ({ paper_id: "x", rating: 3, destination: "library", status: "library", reading_status: null, title: SAMPLE.title }) };
+        return { ok: true, json: async () => ({ paper_id: "x", rating: 4, destination: "library", status: "library", reading_status: null, title: SAMPLE.title, undo: { paper_id: "x", prior: null } }) };
+      if (u.includes("/extension/undo"))
+        return { ok: true, json: async () => ({ ok: true, paper_id: "x", result: "removed_from_library" }) };
       return { ok: false, status: 404, json: async () => ({}) };
     };
   </script>
@@ -76,6 +90,11 @@
       </div>
       <main id="main" class="hide">
         <section class="paper reveal d1" id="paper">
+          <div class="saved-ribbon" id="saved-ribbon" hidden>
+            <svg class="sr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+            <span class="sr-text" id="saved-ribbon-text">In your Library</span>
+            <span class="saved-rating" id="saved-rating"></span>
+          </div>
           <h1 class="title" id="title">Reading the page…</h1>
           <div class="badges" id="badges"></div>
           <p class="meta" id="meta"></p>
@@ -84,6 +103,12 @@
             <span id="detected-text">identifying…</span>
           </div>
         </section>
+        <div class="section-label reveal d2">Rating</div>
+        <div class="segment seg-rating reveal d2" id="rating" role="group" aria-label="Rating">
+          <button data-rating="add" data-stars="3" aria-pressed="true"><span class="verb">Add</span><span class="stars"></span></button>
+          <button data-rating="like" data-stars="4" aria-pressed="false"><span class="verb">Like</span><span class="stars"></span></button>
+          <button data-rating="love" data-stars="5" aria-pressed="false"><span class="verb">Love</span><span class="stars"></span></button>
+        </div>
         <div class="section-label reveal d2">Save to</div>
         <div class="segment reveal d2" id="dest" role="group" aria-label="Destination">
           <button data-dest="library" aria-pressed="true">
@@ -95,10 +120,13 @@
             Reading list
           </button>
         </div>
-        <div class="actions reveal d3" id="actions">
-          <button class="chip" data-action="add" data-stars="3"><span class="verb">Save</span><span class="stars"></span></button>
-          <button class="chip" data-action="like" data-stars="4"><span class="verb">Like</span><span class="stars"></span></button>
-          <button class="chip" data-action="love" data-stars="5"><span class="verb">Love</span><span class="stars"></span></button>
+        <div class="commit-row reveal d3" id="commit-pre">
+          <button class="btn-quiet" id="cancel">Cancel</button>
+          <button class="btn-primary" id="save-btn">Save to ALMa</button>
+        </div>
+        <div class="commit-row hide" id="commit-post">
+          <button class="btn-quiet" id="undo-btn">Undo</button>
+          <button class="btn-primary" id="done-btn">Done</button>
         </div>
         <div class="result" id="result" role="status" aria-live="polite"></div>
       </main>

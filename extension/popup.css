@@ -303,29 +303,56 @@ html, body {
   box-shadow: 0 1px 2px rgba(43,42,38,0.08);
 }
 
-/* ---- Action chips ---- */
-.actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
-.chip {
-  appearance: none;
-  border: 1px solid var(--line-cool);
-  background: var(--content-elev);
-  border-radius: var(--radius-sm);
-  padding: 9px 6px 8px;
-  cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  color: var(--ink);
-  transition: border-color 0.12s ease, background 0.12s ease, transform 0.06s ease;
+/* ---- Rating selector (stacked segment: verb + stars) ---- */
+.seg-rating { grid-template-columns: repeat(3, 1fr); }
+.seg-rating button { flex-direction: column; gap: 3px; padding: 7px 4px; }
+.seg-rating .verb { font-size: 12px; font-weight: 600; letter-spacing: 0.2px; }
+.seg-rating .stars { display: inline-flex; gap: 1px; }
+.seg-rating .stars svg { width: 10px; height: 10px; }
+.star-on { color: var(--folio); }
+.star-off { color: var(--ink-faint); opacity: 0.4; }
+.seg-rating button[aria-pressed="true"] .star-on { color: var(--folio-ink); }
+
+/* ---- Commit row (Cancel / Save  ·  Undo / Done) ---- */
+.commit-row { display: flex; gap: 8px; margin-top: 14px; }
+.btn-primary {
+  appearance: none; cursor: pointer; flex: 1;
+  font-family: var(--sans); font-size: 13px; font-weight: 600;
+  color: #fff; background: var(--folio); border: 1px solid var(--folio);
+  border-radius: var(--radius-sm); padding: 10px 14px;
+  transition: background 0.12s ease;
 }
-.chip:hover { border-color: var(--folio); background: var(--folio-soft); }
-.chip:active { transform: translateY(1px); }
-.chip:disabled { opacity: 0.5; cursor: not-allowed; }
-.chip .verb { font-size: 12.5px; font-weight: 600; letter-spacing: 0.2px; }
-.chip .stars { display: inline-flex; gap: 1px; }
-.chip .stars svg { width: 11px; height: 11px; }
-.chip .star-on { color: var(--folio); }
-.chip .star-off { color: var(--ink-faint); opacity: 0.45; }
-.chip[data-action="love"]:hover { border-color: var(--brick); background: var(--brick-soft); }
-.chip[data-action="love"]:hover .star-on { color: var(--brick); }
+.btn-primary:hover { background: var(--folio-ink); }
+.btn-primary:disabled { opacity: 0.6; cursor: progress; }
+.btn-quiet {
+  appearance: none; cursor: pointer;
+  font-family: var(--sans); font-size: 13px; font-weight: 500;
+  color: var(--ink-soft); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px 16px;
+}
+.btn-quiet:hover { color: var(--ink); border-color: var(--ink-faint); background: var(--content-elev); }
+#undo-btn { color: var(--brick); border-color: #e4cabf; }
+#undo-btn:hover { background: var(--brick-soft); border-color: var(--brick); }
+
+/* ---- Already-saved ribbon on the paper card ---- */
+.saved-ribbon {
+  display: flex; align-items: center; gap: 7px;
+  margin: -2px 0 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px; font-weight: 600;
+  background: var(--sage-soft); color: #355c38; border: 1px solid #cfe1cc;
+}
+.saved-ribbon .sr-icon { width: 14px; height: 14px; flex: 0 0 auto; }
+.saved-ribbon .saved-rating { margin-left: auto; display: inline-flex; gap: 1px; color: var(--sage); }
+.saved-ribbon .saved-rating svg { width: 12px; height: 12px; }
+.saved-ribbon[hidden] { display: none; }
+/* reading-list variant: folio instead of sage */
+.saved-ribbon.is-reading { background: var(--folio-soft); color: var(--folio-ink); border-color: #cddff0; }
+.saved-ribbon.is-reading .saved-rating { color: var(--folio); }
+/* tint the card's bookmark ribbon to match the saved state */
+.paper.is-saved::before { background: linear-gradient(var(--sage), #3c6340); }
+.paper.is-reading::before { background: linear-gradient(var(--folio), var(--folio-ink)); }
 
 /* ---- Result / status ---- */
 .result {

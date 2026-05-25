@@ -43,6 +43,12 @@
     <!-- Main: detected paper + controls -->
     <main id="main" class="hide">
       <section class="paper reveal d1" id="paper">
+        <div class="saved-ribbon" id="saved-ribbon" hidden>
+          <svg class="sr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          <span class="sr-text" id="saved-ribbon-text">In your Library</span>
+          <span class="saved-rating" id="saved-rating"></span>
+        </div>
         <h1 class="title" id="title">Reading the page…</h1>
         <div class="badges" id="badges"></div>
         <p class="meta" id="meta"></p>
@@ -54,6 +60,19 @@
           <span id="detected-text">identifying…</span>
         </div>
       </section>
+
+      <div class="section-label reveal d2">Rating</div>
+      <div class="segment seg-rating reveal d2" id="rating" role="group" aria-label="Rating">
+        <button data-rating="add" data-stars="3" aria-pressed="true">
+          <span class="verb">Add</span><span class="stars" aria-label="3 stars"></span>
+        </button>
+        <button data-rating="like" data-stars="4" aria-pressed="false">
+          <span class="verb">Like</span><span class="stars" aria-label="4 stars"></span>
+        </button>
+        <button data-rating="love" data-stars="5" aria-pressed="false">
+          <span class="verb">Love</span><span class="stars" aria-label="5 stars"></span>
+        </button>
+      </div>
 
       <div class="section-label reveal d2">Save to</div>
       <div class="segment reveal d2" id="dest" role="group" aria-label="Destination">
@@ -69,19 +88,13 @@
         </button>
       </div>
 
-      <div class="actions reveal d3" id="actions">
-        <button class="chip" data-action="add" data-stars="3">
-          <span class="verb">Save</span>
-          <span class="stars" aria-label="3 stars"></span>
-        </button>
-        <button class="chip" data-action="like" data-stars="4">
-          <span class="verb">Like</span>
-          <span class="stars" aria-label="4 stars"></span>
-        </button>
-        <button class="chip" data-action="love" data-stars="5">
-          <span class="verb">Love</span>
-          <span class="stars" aria-label="5 stars"></span>
-        </button>
+      <div class="commit-row reveal d3" id="commit-pre">
+        <button class="btn-quiet" id="cancel">Cancel</button>
+        <button class="btn-primary" id="save-btn">Save to ALMa</button>
+      </div>
+      <div class="commit-row hide" id="commit-post">
+        <button class="btn-quiet" id="undo-btn">Undo</button>
+        <button class="btn-primary" id="done-btn">Done</button>
       </div>
 
       <div class="result" id="result" role="status" aria-live="polite"></div>
