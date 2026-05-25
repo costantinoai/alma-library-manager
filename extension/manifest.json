@@ -27,7 +27,10 @@
     "page": "options.html",
     "open_in_tab": true
   },
-  "permissions": ["activeTab", "scripting", "storage"],
+  "background": {
+    "scripts": ["lib/extract.js", "background.js"]
+  },
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
