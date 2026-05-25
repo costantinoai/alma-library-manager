@@ -21,22 +21,28 @@ It talks **only** to your own running ALMa (by default a local install at
   listens on `http://localhost:8001` — you'll set that in the
   connector's Settings (below).
 * **Firefox 115 or newer.**
-* **A copy of the `extension/` folder** from the ALMa repository (it
-  ships in the source tree, not in the Docker image):
+* **The signed connector `.xpi`** from your ALMa release (see Install
+  below) — nothing to build or clone.
 
-    ```bash
-    git clone https://github.com/costantinoai/alma-library-manager.git
-    # the connector lives in:  alma-library-manager/extension/
-    ```
+## Install
 
-    (Or download the repo as a ZIP from GitHub and unzip it — you only
-    need the `extension/` directory.)
+The connector ships **with each ALMa release** as a signed add-on — there's
+nothing to build.
 
-## Install (temporary add-on)
+1. Make sure **ALMa is running** (open `http://localhost:8000` — or your
+   address — and confirm the app loads).
+2. On the [ALMa release](https://github.com/costantinoai/alma-library-manager/releases)
+   you're running, download **`alma-connector-<version>.xpi`** (its version
+   matches your ALMa version).
+3. Open it in Firefox — drag it onto `about:addons`, or `about:addons` →
+   ⚙ → **Install Add-on From File…**. It's signed by Mozilla, so it
+   installs **permanently**, survives restarts, and **auto-updates** with
+   future ALMa releases.
 
-This is the quickest way and needs no signing. The trade-off: Firefox
-removes temporary add-ons when it restarts, so you redo these steps
-after a restart. For a permanent install, see [below](#install-permanent).
+??? note "Running from source? (contributors)"
+    To load the unpackaged extension during development: **`about:debugging`**
+    → **This Firefox** → **Load Temporary Add-on…** → pick
+    `extension/manifest.json`. It's removed when Firefox restarts.
 
 1. Make sure **ALMa is running** (open `http://localhost:8000` — or your
    address — and confirm the app loads).
@@ -178,21 +184,17 @@ order:
    other PDFs the connector scans the PDF for a DOI in its XMP metadata
    or text.
 
-## Install (permanent) {#install-permanent}
+## How releases work (maintainer)
 
-To avoid reinstalling after each Firefox restart, build a packaged
-add-on with Mozilla's [`web-ext`](https://github.com/mozilla/web-ext):
-
-```bash
-cd alma-library-manager/extension
-npx web-ext build          # produces a .zip under web-ext-artifacts/
-```
-
-Then either install the zip in a Firefox build that allows unsigned
-add-ons (Developer Edition / Nightly with
-`xpinstall.signatures.required = false`), or
-[self-distribute a signed build](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/)
-via `web-ext sign` with an AMO API key.
+The connector ships **with each ALMa release** — no separate version or tag.
+When a `v<version>` tag is pushed, the **Release browser connector** workflow
+(`.github/workflows/release-connector.yml`) reads the version from
+`pyproject.toml` (so the connector version always equals the ALMa version),
+signs the add-on as an *unlisted* add-on via Mozilla (automated, no review),
+attaches **`alma-connector-<version>.xpi`** to that GitHub Release, and
+refreshes `extension/updates.json` on `main` so installed copies
+**auto-update**. One-time setup (AMO API secrets) and the local-signing
+command are documented in `extension/README.md`.
 
 ## Troubleshooting
 

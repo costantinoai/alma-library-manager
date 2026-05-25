@@ -37,20 +37,47 @@ The DOI is the high-value output: ALMa resolves it to canonical metadata,
 so a perfect scrape isn't needed — just the identifier. Scraped
 title/authors/year are the fallback for DOI-less pages.
 
-## Install (temporary, for development)
-
 The connector talks to ALMa's `/api/v1/extension/*` endpoints (ALMa
 ≥ the build that added them).
 
-1. Start ALMa so its API is reachable (default `http://localhost:8000`;
-   the dev server uses `:8001` — set that in the connector's Settings).
-2. In Firefox open **`about:debugging`** → **This Firefox** →
-   **Load Temporary Add-on…** and pick `extension/manifest.json`.
-3. Open a paper page and click the **ALMa** toolbar button.
+## Install (for users)
 
-Temporary add-ons are removed when Firefox restarts. To package a
-permanent build: `cd extension && web-ext build` (requires
-[`web-ext`](https://github.com/mozilla/web-ext)), then load/sign the zip.
+1. On the ALMa [release](https://github.com/costantinoai/alma-library-manager/releases)
+   you're running, download **`alma-connector-<version>.xpi`** (its version
+   matches your ALMa version).
+2. Open it in Firefox — drag onto `about:addons`, or `about:addons` → ⚙ →
+   **Install Add-on From File…**. It's signed by Mozilla, so it installs
+   **permanently** and **auto-updates** with future ALMa releases.
+3. Start ALMa, open a paper page, click the **ALMa** toolbar button.
+
+That's all most people need — there's nothing to build.
+
+## Develop it (contributors)
+
+Load the source as a temporary add-on: **`about:debugging`** → **This
+Firefox** → **Load Temporary Add-on…** → pick `extension/manifest.json`.
+It's removed on restart; use the signed release for a permanent install.
+
+## How releases work (maintainer)
+
+The connector ships **with each ALMa release** — no separate version or
+tag. When a `v<version>` tag is pushed, the **Release browser connector**
+workflow (`.github/workflows/release-connector.yml`):
+
+1. reads the version from `pyproject.toml` (so the connector version always
+   equals the ALMa version) and stamps it into the manifest,
+2. signs the add-on as **unlisted** via AMO (automated, no review),
+3. attaches **`alma-connector-<version>.xpi`** to that GitHub Release,
+4. refreshes `extension/updates.json` on `main` so installed copies
+   **auto-update** (via the manifest `update_url`).
+
+One-time setup: add repo secrets **`AMO_JWT_ISSUER`** / **`AMO_JWT_SECRET`**
+(free, from addons.mozilla.org → Developer Hub → Manage API Keys). The
+auto-update step pushes a `[skip ci]` commit to `main`, so `main` must
+allow the Actions token to push.
+
+To sign locally instead of via CI:
+`npx web-ext sign --source-dir extension --ignore-files "test/**" "updates.json" "README.md" --channel=unlisted --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET`.
 
 ## Choosing a server
 
