@@ -309,6 +309,31 @@ def _last_run(conn: sqlite3.Connection, operation_key: str) -> Optional[dict[str
     }
 
 
+def _last_success_at(conn: sqlite3.Connection, operation_key: str) -> Optional[str]:
+    """Finished-at of the most recent *successful* run for ``operation_key``.
+
+    Distinct from ``last_run`` (any status): this is "when did this function
+    last complete successfully", so the UI can show staleness even when the
+    latest attempt failed or is still running.
+    """
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(finished_at, updated_at) AS at
+            FROM operation_status
+            WHERE operation_key = ? AND status = 'completed'
+            ORDER BY COALESCE(finished_at, updated_at) DESC
+            LIMIT 1
+            """,
+            (operation_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    return str(row["at"] or "") or None
+
+
 def describe_task(
     conn: sqlite3.Connection, task: MaintenanceTask, health_payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -325,6 +350,7 @@ def describe_task(
         "default_enabled": task.default_enabled,
         "daily_cap": get_task_daily_cap(conn, task),
         "last_run": _last_run(conn, task.operation_key),
+        "last_success_at": _last_success_at(conn, task.operation_key),
     }
 
 

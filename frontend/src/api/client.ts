@@ -241,6 +241,8 @@ export interface MaintenanceOperation {
   default_enabled: boolean
   daily_cap: number
   last_run: MaintenanceLastRun | null
+  /** Finished-at of the most recent *successful* run (any trigger), or null. */
+  last_success_at: string | null
 }
 
 export interface HealthOperationsResponse {

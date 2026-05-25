@@ -4,12 +4,12 @@
  * alma-50 ramp because it's a "potential to fix" (lessons.md surface
  * contrast); the severity StatusBadge is the only saturated element.
  */
-import { Wrench } from 'lucide-react'
+import { History, Wrench } from 'lucide-react'
 
 import { MetricTile } from '@/components/shared/MetricTile'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { AsyncButton } from '@/components/settings/primitives'
-import { cn } from '@/lib/utils'
+import { cn, formatRelativeShort } from '@/lib/utils'
 import type { HealthDimension } from '@/api/client'
 import { dimensionBadgeTone, severityLabel, severityMetricTone } from './healthFormat'
 
@@ -19,9 +19,24 @@ interface HealthDimensionCardProps {
   onRun: (operationKey: string) => void
   /** The operation key currently running (shows the spinner), if any. */
   runningKey: string | null
+  /** task key → ISO timestamp of its last successful run, for the "last fixed" line. */
+  lastSuccessByTask: Record<string, string | null>
 }
 
-export function HealthDimensionCard({ dim, onRun, runningKey }: HealthDimensionCardProps) {
+export function HealthDimensionCard({
+  dim,
+  onRun,
+  runningKey,
+  lastSuccessByTask,
+}: HealthDimensionCardProps) {
+  // The repair tasks this dimension can trigger, and when any of them last
+  // completed successfully (ISO timestamps sort lexically → max = most recent).
+  const runActions = dim.actions.filter((a) => a.kind === 'run_now')
+  const lastFixed = runActions
+    .map((a) => lastSuccessByTask[a.operation_key])
+    .filter((v): v is string => !!v)
+    .sort()
+    .at(-1)
   // Coverage dimensions read as a percentage; gap dimensions read as count/total.
   const isCoverage = dim.coverage_pct != null
   const metricValue = isCoverage ? `${Math.round(dim.coverage_pct ?? 0)}%` : dim.count
@@ -67,11 +82,14 @@ export function HealthDimensionCard({ dim, onRun, runningKey }: HealthDimensionC
         </div>
       ) : null}
 
-      {dim.actions.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {dim.actions.map((action) => {
-            if (action.kind !== 'run_now') return null
-            return (
+      {runActions.length > 0 ? (
+        <div className="space-y-2">
+          <p className="flex items-center gap-1.5 text-[11px] text-slate-400">
+            <History className="h-3.5 w-3.5" aria-hidden />
+            {lastFixed ? `Last fixed ${formatRelativeShort(lastFixed)}` : 'Not fixed yet'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {runActions.map((action) => (
               <AsyncButton
                 key={action.operation_key}
                 size="sm"
@@ -84,8 +102,8 @@ export function HealthDimensionCard({ dim, onRun, runningKey }: HealthDimensionC
               >
                 {action.label}
               </AsyncButton>
-            )
-          })}
+            ))}
+          </div>
         </div>
       ) : null}
     </div>

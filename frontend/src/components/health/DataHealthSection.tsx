@@ -17,6 +17,7 @@ interface DataHealthSectionProps {
   dimensions: HealthDimension[]
   onRun: (operationKey: string) => void
   runningKey: string | null
+  lastSuccessByTask: Record<string, string | null>
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -25,7 +26,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function DataHealthSection({ dimensions, onRun, runningKey }: DataHealthSectionProps) {
+export function DataHealthSection({
+  dimensions,
+  onRun,
+  runningKey,
+  lastSuccessByTask,
+}: DataHealthSectionProps) {
   const attention = sortBySeverity(dimensions.filter(isAttention))
   const healthy = dimensions.filter((d) => !isAttention(d))
 
@@ -42,6 +48,7 @@ export function DataHealthSection({ dimensions, onRun, runningKey }: DataHealthS
                 dim={dim}
                 onRun={onRun}
                 runningKey={runningKey}
+                lastSuccessByTask={lastSuccessByTask}
               />
             ))}
           </div>

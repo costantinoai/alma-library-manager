@@ -74,6 +74,11 @@ export function HealthPage() {
   const runningKey = runMutation.isPending ? (runMutation.variables ?? null) : null
   const snapshot = snapshotQuery.data
   const operations = operationsQuery.data?.operations ?? []
+  // task key → last successful run, so each dimension card can show how long
+  // since its repair function last completed (the action operation_key == task key).
+  const lastSuccessByTask: Record<string, string | null> = Object.fromEntries(
+    operations.map((op) => [op.key, op.last_success_at]),
+  )
 
   return (
     <div className="space-y-6">
@@ -157,6 +162,7 @@ export function HealthPage() {
           dimensions={snapshot.dimensions}
           onRun={(key) => runMutation.mutate(key)}
           runningKey={runningKey}
+          lastSuccessByTask={lastSuccessByTask}
         />
       ) : null}
       {operations.length > 0 ? (
