@@ -1,0 +1,8 @@
+{
+  "_comment": "Firefox self-hosted auto-update manifest. Auto-maintained by .github/workflows/release-connector.yml on each ALMa v* release — do not hand-edit.",
+  "addons": {
+    "alma-connector@costantinoai.github.io": {
+      "updates": []
+    }
+  }
+}

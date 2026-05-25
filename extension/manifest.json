@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "ALMa Connector",
-  "version": "0.1.0",
+  "version": "0.14.0",
   "description": "Save the paper open in your browser straight into ALMa — like the Zotero connector, for your personal ALMa library.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "alma-connector@alma.local",
-      "strict_min_version": "115.0"
+      "id": "alma-connector@costantinoai.github.io",
+      "strict_min_version": "115.0",
+      "update_url": "https://raw.githubusercontent.com/costantinoai/alma-library-manager/main/extension/updates.json"
     }
   },
   "icons": {

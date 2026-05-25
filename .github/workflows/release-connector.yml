@@ -1,0 +1,85 @@
+# Sign + attach the ALMa Firefox browser connector to each ALMa release.
+#
+# Rides the same `v<version>` tags as the Docker release: when one is pushed,
+# this signs the connector as an UNLISTED add-on via AMO (automated signing,
+# no review), attaches the signed `.xpi` to that GitHub Release, and refreshes
+# the self-hosted auto-update manifest (extension/updates.json on `main`) so
+# installed copies update themselves.
+#
+# The connector version is taken from pyproject.toml, so it ALWAYS matches the
+# ALMa release version — no separate bump.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   AMO_JWT_ISSUER   AMO_JWT_SECRET   (free, addons.mozilla.org -> API keys)
+name: Release browser connector
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  sign-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need main too, to refresh updates.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Connector version == ALMa version (pyproject). Stamp it into the
+      # manifest before signing so the released add-on matches the release.
+      - name: Sync version from pyproject
+        run: |
+          VERSION=$(grep -m1 -E '^version *= *"' pyproject.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          node -e 'const fs=require("fs");const p="extension/manifest.json";const m=JSON.parse(fs.readFileSync(p,"utf8"));m.version=process.argv[1];fs.writeFileSync(p,JSON.stringify(m,null,2)+"\n")' "$VERSION"
+          echo "Connector version: $VERSION"
+
+      - name: Sign (AMO, unlisted)
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          npx --yes web-ext sign \
+            --source-dir extension \
+            --ignore-files "test/**" "updates.json" "README.md" \
+            --channel=unlisted \
+            --api-key="$AMO_JWT_ISSUER" --api-secret="$AMO_JWT_SECRET" \
+            --artifacts-dir dist
+          cp "$(ls -t dist/*.xpi | head -1)" "dist/alma-connector-${VERSION}.xpi"
+
+      - name: Attach signed .xpi to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/alma-connector-${{ env.VERSION }}.xpi
+          fail_on_unmatched_files: true
+
+      # Refresh the auto-update manifest on main so installed copies update.
+      # [skip ci] keeps this commit from re-triggering the Docker/docs builds.
+      - name: Refresh auto-update manifest on main
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/alma-connector-${VERSION}.xpi"
+          git checkout -f -B main origin/main
+          node -e '
+            const fs = require("fs");
+            const p = "extension/updates.json";
+            const id = "alma-connector@costantinoai.github.io";
+            const [version, url] = process.argv.slice(1);
+            const j = JSON.parse(fs.readFileSync(p, "utf8"));
+            const updates = (j.addons[id].updates || []).filter((e) => e.version !== version);
+            updates.push({ version, update_link: url });
+            j.addons[id].updates = updates;
+            fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n");
+          ' "$VERSION" "$URL"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add extension/updates.json
+          git commit -m "chore(connector): updates.json -> ${VERSION} [skip ci]" || { echo "no change"; exit 0; }
+          git push origin main
