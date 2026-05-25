@@ -24,6 +24,8 @@ Pure orchestration + reads — no new tables. Per-task config lives in
 
 from __future__ import annotations
 
+import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -31,6 +33,13 @@ from typing import Any, Callable, Optional
 
 from alma.services import health as health_service
 from alma.application import materialized_views as mv
+
+logger = logging.getLogger(__name__)
+
+# The idle healer processes at most this many items per task per tick. Small +
+# frequent keeps each run gentle on the upstream APIs and the writer lock; the
+# per-task daily_cap bounds the total across a UTC day.
+HEALER_PER_TICK_LIMIT = 50
 
 # Cost classes — surfaced so the UI / healer can reason about how heavy a task
 # is before running it unattended.
@@ -368,25 +377,165 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
-def run_task_now(conn: sqlite3.Connection, task: MaintenanceTask) -> Optional[str]:
-    """Schedule one bounded run of ``task`` under trigger_source='user'.
+def _schedule_task(
+    conn: sqlite3.Connection,
+    task: MaintenanceTask,
+    *,
+    limit: int,
+    trigger_source: str,
+    queued_message: str,
+    log_message: str,
+) -> Optional[str]:
+    """Schedule one bounded run of ``task`` (shared by run-now + the healer).
 
     Idempotent: ``schedule_with_envelope`` returns the in-flight job_id if a job
-    with the same operation_key is already running (manual or otherwise).
+    with the same operation_key is already running (manual, healer, or chain).
     """
     from alma.core.job_envelope import schedule_with_envelope
 
-    cap = get_task_daily_cap(conn, task)
     runner = task.runner
 
     def _factory(job_id: str) -> Callable[[], None]:
-        return lambda: runner(job_id, cap)
+        return lambda: runner(job_id, limit)
 
     return schedule_with_envelope(
         operation_key=task.operation_key,
         job_id_prefix=task.job_id_prefix,
+        trigger_source=trigger_source,
+        queued_message=queued_message,
+        runner_factory=_factory,
+        log_message=log_message,
+    )
+
+
+def run_task_now(conn: sqlite3.Connection, task: MaintenanceTask) -> Optional[str]:
+    """Schedule one bounded run of ``task`` under trigger_source='user'."""
+    cap = get_task_daily_cap(conn, task)
+    return _schedule_task(
+        conn,
+        task,
+        limit=cap,
         trigger_source="user",
         queued_message=f"{task.label} queued from Health (limit {cap})",
-        runner_factory=_factory,
         log_message=f"{task.label} queued from Health page",
     )
+
+
+# --------------------------------------------------------------------------
+# The idle healer (Phase 4) — periodic, default OFF, daily-capped.
+# --------------------------------------------------------------------------
+
+ENV_DISABLE = "ALMA_DISABLE_IDLE_MAINTENANCE"
+
+_SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2, "ok": 3}
+
+
+def _utc_midnight_iso() -> str:
+    """Today's UTC midnight as a naive ISO string (matches stored timestamps)."""
+    return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+
+def _healer_used_today(conn: sqlite3.Connection, operation_key: str) -> int:
+    """Items the healer has already processed for ``operation_key`` since UTC
+    midnight (only scheduler-triggered runs count toward the daily cap)."""
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(COALESCE(processed, 0)), 0) AS used
+            FROM operation_status
+            WHERE operation_key = ?
+              AND trigger_source = 'scheduler'
+              AND COALESCE(finished_at, started_at, updated_at) >= ?
+            """,
+            (operation_key, _utc_midnight_iso()),
+        ).fetchone()
+        return int((row["used"] if row else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
+def _worst_severity_rank(payload: dict[str, Any], dim_keys: tuple[str, ...]) -> int:
+    """Lowest (worst) severity rank among the task's health dimensions."""
+    sev_by_key = {d.get("key"): d.get("severity") for d in (payload.get("dimensions") or [])}
+    ranks = [_SEVERITY_RANK.get(sev_by_key.get(k) or "", 9) for k in dim_keys]
+    return min(ranks) if ranks else 9
+
+
+def maintenance_repair_periodic() -> None:
+    """One healer tick: repair the single highest-severity enabled task that has
+    pending work and remaining daily budget, with a small bounded batch.
+
+    Default OFF — a task only runs if it was opted in on the Health page. The
+    ``ALMA_DISABLE_IDLE_MAINTENANCE`` env var is a global hard kill. Reads the
+    canonical health snapshot (never recomputes), respects in-flight jobs via
+    ``find_active_job``, and schedules under ``trigger_source='scheduler'`` so
+    chain-suppression is automatic and the run shows up on the Health page.
+    """
+    if str(os.getenv(ENV_DISABLE, "")).strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("idle maintenance: disabled via %s", ENV_DISABLE)
+        return
+
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import find_active_job
+
+    conn = open_db_connection()
+    try:
+        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+
+        # Build the candidate set: enabled tasks with pending work, remaining
+        # daily budget, and no run already in flight.
+        candidates: list[tuple[int, int, MaintenanceTask]] = []
+        any_active = False
+        for task in REGISTRY.values():
+            if find_active_job(task.operation_key):
+                any_active = True
+                continue
+            if not get_task_enabled(conn, task):
+                continue
+            pending = _candidate_count(payload, task.candidate_path)
+            if pending <= 0:
+                continue
+            remaining = get_task_daily_cap(conn, task) - _healer_used_today(conn, task.operation_key)
+            if remaining <= 0:
+                logger.info("idle maintenance: %s hit its daily cap", task.key)
+                continue
+            rank = _worst_severity_rank(payload, task.health_dimensions)
+            candidates.append((rank, remaining, task))
+
+        # One maintenance task per tick — never run two repairs concurrently
+        # (writer-lock courtesy). If another maintenance run is already in
+        # flight, defer entirely.
+        if any_active:
+            logger.info("idle maintenance: a maintenance run is already active; deferring tick")
+            return
+        if not candidates:
+            logger.info("idle maintenance: nothing enabled with pending work")
+            return
+
+        # Worst severity first, then the larger remaining budget.
+        candidates.sort(key=lambda c: (c[0], -c[1]))
+        rank, remaining, task = candidates[0]
+        batch = min(remaining, HEALER_PER_TICK_LIMIT)
+
+        job_id = _schedule_task(
+            conn,
+            task,
+            limit=batch,
+            trigger_source="scheduler",
+            queued_message=f"Idle maintenance: {task.label} (limit {batch})",
+            log_message=f"Idle healer queued {task.label} (batch {batch})",
+        )
+        logger.info(
+            "idle maintenance: queued %s (batch=%d, remaining_cap=%d, job=%s)",
+            task.key,
+            batch,
+            remaining,
+            job_id,
+        )
+    except Exception:
+        logger.exception("Fatal error in maintenance_repair_periodic")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

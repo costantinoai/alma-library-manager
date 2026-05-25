@@ -777,6 +777,35 @@ def setup_scheduler() -> None:
         }
     logger.info("Registered db_maintenance job (cron 04:30 UTC)")
 
+    # -- Idle maintenance healer (interval) -------------------------------
+    # Repairs opted-in health dimensions in the background (task 24, Pillar 2).
+    # Default OFF per task (toggle on the Health page); ALMA_DISABLE_IDLE_
+    # MAINTENANCE is a global hard kill. Low cadence; each tick repairs at most
+    # one task with a small batch, bounded by that task's daily cap.
+    from alma.services.maintenance import maintenance_repair_periodic
+
+    try:
+        idle_interval_hours = max(1, int(os.getenv("ALMA_IDLE_MAINTENANCE_INTERVAL_HOURS", "1")))
+    except (TypeError, ValueError):
+        idle_interval_hours = 1
+    sched.add_job(
+        maintenance_repair_periodic,
+        trigger=IntervalTrigger(hours=idle_interval_hours),
+        id="maintenance_repair",
+        name="Idle maintenance healer",
+        replace_existing=True,
+    )
+    with _job_lock:
+        _job_meta["maintenance_repair"] = {
+            "action": "maintenance_repair",
+            "name": "Idle maintenance healer",
+            "description": (
+                f"Repairs opted-in health tasks every {idle_interval_hours}h, "
+                "within per-task daily caps (default OFF)"
+            ),
+        }
+    logger.info("Registered maintenance_repair job (interval=%dh)", idle_interval_hours)
+
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""
@@ -1793,6 +1822,17 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             _unregister_running_thread(job_id)
 
     if os.getenv("PYTEST_CURRENT_TEST"):
+        # Tests normally run immediate jobs inline so a single call can exercise
+        # the whole chain. Save/insert-contract tests opt OUT with
+        # ALMA_TEST_DEFER_JOBS=1: the job is left queued (exactly as a
+        # backgrounded production run would be at this instant) instead of
+        # running synchronously in the request thread — which otherwise fans out
+        # the hydration chain inline (slow + SQLite write contention). This is
+        # test-execution config, not a mock: nothing about the job is faked, it
+        # simply isn't run yet, matching prod's async scheduler.
+        if os.getenv("ALMA_TEST_DEFER_JOBS") == "1":
+            logger.info("Deferring immediate job %s (ALMA_TEST_DEFER_JOBS)", job_id)
+            return True
         logger.info("Running immediate job %s inline under pytest", job_id)
         _wrapped()
         return True
