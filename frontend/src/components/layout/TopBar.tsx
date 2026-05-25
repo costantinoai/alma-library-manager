@@ -10,6 +10,7 @@ const pageTitles: Record<Page, string> = {
   authors: 'Authors',
   library: 'Library',
   insights: 'Insights',
+  health: 'Health',
   alerts: 'Alerts',
   settings: 'Settings',
 }

@@ -35,11 +35,11 @@ export function HealthDimensionCard({
   // The repair tasks this dimension can trigger, and when any of them last
   // completed successfully (ISO timestamps sort lexically → max = most recent).
   const runActions = dim.actions.filter((a) => a.kind === 'run_now')
-  const lastFixed = runActions
+  const successTimes = runActions
     .map((a) => lastSuccessByTask[a.operation_key])
     .filter((v): v is string => !!v)
     .sort()
-    .at(-1)
+  const lastFixed = successTimes.length ? successTimes[successTimes.length - 1] : undefined
   // Coverage dimensions read as a percentage; gap dimensions read as count/total.
   const isCoverage = dim.coverage_pct != null
   const metricValue = isCoverage ? `${Math.round(dim.coverage_pct ?? 0)}%` : dim.count
