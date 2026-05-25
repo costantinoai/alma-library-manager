@@ -186,15 +186,14 @@ order:
 
 ## How releases work (maintainer)
 
-The connector ships **with each ALMa release** — no separate version or tag.
-When a `v<version>` tag is pushed, the **Release browser connector** workflow
-(`.github/workflows/release-connector.yml`) reads the version from
-`pyproject.toml` (so the connector version always equals the ALMa version),
-signs the add-on as an *unlisted* add-on via Mozilla (automated, no review),
-attaches **`alma-connector-<version>.xpi`** to that GitHub Release, and
-refreshes `extension/updates.json` on `main` so installed copies
-**auto-update**. One-time setup (AMO API secrets) and the local-signing
-command are documented in `extension/README.md`.
+The connector ships **with each ALMa release** at the same version, signed
+**locally** and published to GitHub Releases. After bumping the ALMa
+version and tagging `v<version>`, running `extension/release.sh` stamps the
+connector version = ALMa version, signs it as an *unlisted* add-on via
+Mozilla (automated, no review), uploads **`alma-connector-<version>.xpi`**
+to that GitHub Release, and records it in `extension/updates.json` so
+installed copies **auto-update**. Setup (a free AMO API key + `gh`) is
+documented in `extension/README.md`.
 
 ## Troubleshooting
 

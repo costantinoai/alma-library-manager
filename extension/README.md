@@ -60,24 +60,32 @@ It's removed on restart; use the signed release for a permanent install.
 
 ## How releases work (maintainer)
 
-The connector ships **with each ALMa release** — no separate version or
-tag. When a `v<version>` tag is pushed, the **Release browser connector**
-workflow (`.github/workflows/release-connector.yml`):
+The connector ships **with each ALMa release** at the **same version** —
+signed **locally** and published to GitHub Releases (auto-updating).
 
-1. reads the version from `pyproject.toml` (so the connector version always
-   equals the ALMa version) and stamps it into the manifest,
-2. signs the add-on as **unlisted** via AMO (automated, no review),
-3. attaches **`alma-connector-<version>.xpi`** to that GitHub Release,
-4. refreshes `extension/updates.json` on `main` so installed copies
-   **auto-update** (via the manifest `update_url`).
+One-time setup (kept out of the repo):
 
-One-time setup: add repo secrets **`AMO_JWT_ISSUER`** / **`AMO_JWT_SECRET`**
-(free, from addons.mozilla.org → Developer Hub → Manage API Keys). The
-auto-update step pushes a `[skip ci]` commit to `main`, so `main` must
-allow the Actions token to push.
+- A free **AMO API key** (addons.mozilla.org → Developer Hub → Manage API
+  Keys), exported in your shell:
+  ```bash
+  export AMO_JWT_ISSUER=...   AMO_JWT_SECRET=...
+  ```
+- **`gh`** (GitHub CLI), authenticated once: `gh auth login`.
 
-To sign locally instead of via CI:
-`npx web-ext sign --source-dir extension --ignore-files "test/**" "updates.json" "README.md" "package.json" "package-lock.json" "node_modules/**" --channel=unlisted --api-key=$AMO_JWT_ISSUER --api-secret=$AMO_JWT_SECRET`.
+Per release — from a `main` checkout, after bumping the ALMa version in
+`pyproject.toml` and tagging `v<version>`:
+
+```bash
+extension/release.sh
+```
+
+It stamps the connector version = ALMa version, **signs** the add-on
+(unlisted AMO — automated, no review), **uploads**
+`alma-connector-<version>.xpi` to the `v<version>` GitHub Release, and
+records it in `extension/updates.json`. Then commit + push
+`extension/manifest.json` + `extension/updates.json` on `main` (the script
+prints the commands) so installed copies **auto-update** via the manifest
+`update_url`.
 
 ## Choosing a server
 
