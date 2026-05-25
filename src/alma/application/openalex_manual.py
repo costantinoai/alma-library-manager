@@ -872,6 +872,36 @@ def _resolve_work_from_inputs(
     return None, "not_found"
 
 
+def resolve_work_metadata(
+    *,
+    openalex_id: Optional[str] = None,
+    doi: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Optional[dict]:
+    """Resolve display metadata for a work — READ ONLY (no DB, no writes).
+
+    Used by the browser connector's ``/lookup`` to show a paper's real
+    title in the popup *before* the user saves (e.g. on a PDF, where the
+    page has no metadata but the URL carries a DOI). Returns a compact
+    ``{title, authors, year, journal, doi, openalex_id}`` dict, or ``None``
+    when the work can't be resolved upstream.
+    """
+    raw_work, _src = _resolve_work_from_inputs(
+        openalex_id=openalex_id, doi=doi, link=None, title=title, query=None
+    )
+    if not raw_work:
+        return None
+    n = _normalize_work(raw_work)
+    return {
+        "title": n.get("title") or "",
+        "authors": n.get("authors") or "",
+        "year": n.get("year"),
+        "journal": n.get("journal") or "",
+        "doi": n.get("doi") or "",
+        "openalex_id": n.get("openalex_id") or "",
+    }
+
+
 def save_online_search_result(
     db: sqlite3.Connection,
     *,

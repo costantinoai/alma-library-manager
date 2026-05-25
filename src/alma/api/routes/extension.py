@@ -32,12 +32,14 @@ reads, ``/save`` is the single mutation.
 
 import logging
 import sqlite3
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.utils import resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,29 @@ def save_from_extension(
         "source_api": "browser_extension",
     }
 
+    # Capture the paper's prior state for Undo — best-effort, no writes.
+    # If the paper doesn't exist yet, prior stays None and Undo reverts the
+    # newly-created row to a bare tracked row (out of the Library).
+    prior = None
+    try:
+        existing_id = resolve_existing_paper_id(
+            db,
+            openalex_id=req.openalex_id,
+            doi=req.doi,
+            title=req.title,
+            year=req.year,
+        )
+        if existing_id:
+            prow = db.execute(
+                "SELECT status, rating, reading_status, added_from, added_at "
+                "FROM papers WHERE id = ?",
+                (existing_id,),
+            ).fetchone()
+            if prow:
+                prior = dict(prow)
+    except Exception:
+        prior = None
+
     try:
         row = save_online_search_result(
             db,
@@ -211,4 +236,198 @@ def save_from_extension(
         "match_source": row.get("match_source"),
         "added_from": row.get("added_from"),
         "title": row.get("title"),
+        # Token the connector echoes back to /undo to reverse this save.
+        "undo": {"paper_id": row.get("id"), "prior": prior},
     }
+
+
+class ExtensionLookupRequest(BaseModel):
+    """Identify a paper to check membership + (optionally) resolve metadata."""
+
+    doi: Optional[str] = None
+    openalex_id: Optional[str] = None
+    title: Optional[str] = None
+    year: Optional[int] = None
+    # When True and the paper isn't in the local corpus (or has no title),
+    # resolve display metadata from OpenAlex so the popup can show the real
+    # title before the user saves. Off by default to keep the call local
+    # and fast when the page already gave us a title.
+    resolve: bool = False
+
+
+def _resolve_preview(req: "ExtensionLookupRequest") -> Optional[dict]:
+    """Best-effort upstream metadata resolve for the popup preview."""
+    from alma.application.openalex_manual import resolve_work_metadata
+
+    try:
+        return resolve_work_metadata(
+            openalex_id=req.openalex_id, doi=req.doi, title=req.title
+        )
+    except Exception as exc:  # network / upstream hiccup — preview only
+        logger.info("Extension lookup preview resolve failed: %s", exc)
+        return None
+
+
+@router.post(
+    "/lookup",
+    summary="Check membership + resolve a paper's metadata (read-only)",
+    description=(
+        "Resolves the scraped identifiers against the local corpus and "
+        "reports membership ('already in Library / Reading list'). Returns "
+        "the title/authors/year/journal from the local row when present; "
+        "with `resolve=true` it also fetches them from OpenAlex when the "
+        "paper isn't local yet (so a PDF's title can be shown before "
+        "saving). Pure read — never writes."
+    ),
+)
+def lookup_from_extension(
+    req: ExtensionLookupRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    if not any(str(v or "").strip() for v in (req.doi, req.openalex_id, req.title)):
+        return {"found": False}
+
+    paper_id = resolve_existing_paper_id(
+        db,
+        openalex_id=req.openalex_id,
+        doi=req.doi,
+        title=req.title,
+        year=req.year,
+    )
+
+    if paper_id:
+        row = db.execute(
+            "SELECT status, rating, reading_status, title, authors, year, journal "
+            "FROM papers WHERE id = ?",
+            (paper_id,),
+        ).fetchone()
+        if row:
+            status = str((row["status"] or "")).strip().lower()
+            out = {
+                "found": True,
+                "paper_id": paper_id,
+                "status": status,
+                "in_library": status == "library",
+                "reading_status": row["reading_status"],
+                "rating": row["rating"],
+                "title": row["title"] or "",
+                "authors": row["authors"] or "",
+                "year": row["year"],
+                "journal": row["journal"] or "",
+            }
+            # Local row exists but has no title yet — try upstream if asked.
+            if req.resolve and not str(out["title"]).strip():
+                meta = _resolve_preview(req)
+                if meta:
+                    for k in ("title", "authors", "year", "journal"):
+                        if meta.get(k):
+                            out[k] = meta[k]
+            return out
+
+    # Not in the local corpus. Resolve a preview from OpenAlex if asked.
+    if req.resolve:
+        meta = _resolve_preview(req)
+        if meta:
+            return {
+                "found": False,
+                "in_library": False,
+                "title": meta.get("title") or "",
+                "authors": meta.get("authors") or "",
+                "year": meta.get("year"),
+                "journal": meta.get("journal") or "",
+                "doi": meta.get("doi") or "",
+                "openalex_id": meta.get("openalex_id") or "",
+            }
+
+    return {"found": False}
+
+
+class ExtensionUndoRequest(BaseModel):
+    """Reverse a connector save using the token returned by /save."""
+
+    paper_id: str
+    # The paper's column values before the save, or null if the save created
+    # the row (then Undo reverts it to a bare tracked row, out of Library).
+    prior: Optional[dict] = None
+
+
+@router.post(
+    "/undo",
+    summary="Reverse a connector save",
+    description=(
+        "Restores the paper to the state captured before the save (or, for "
+        "a row the save created, reverts it to a tracked, non-Library row) "
+        "and removes the positive feedback signal the save recorded. Never "
+        "hard-deletes (D3)."
+    ),
+)
+def undo_from_extension(
+    req: ExtensionUndoRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    paper_id = (req.paper_id or "").strip()
+    if not paper_id:
+        raise HTTPException(status_code=400, detail="paper_id is required")
+    if not db.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    now = datetime.utcnow().isoformat()
+
+    # Drop the positive feedback signal this save wrote (the most recent
+    # browser_extension paper_action for this paper) so an undone save
+    # doesn't keep teaching the recommender. The surface lives in
+    # context_json, so match on it.
+    try:
+        db.execute(
+            """
+            DELETE FROM feedback_events
+            WHERE id = (
+                SELECT id FROM feedback_events
+                WHERE entity_type = 'publication' AND entity_id = ?
+                  AND event_type = 'paper_action'
+                  AND context_json LIKE '%browser_extension%'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+            )
+            """,
+            (paper_id,),
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Undo: could not remove feedback event for %s: %s", paper_id, exc)
+
+    prior = req.prior or None
+    if prior:
+        db.execute(
+            """
+            UPDATE papers
+            SET status = ?, rating = ?, reading_status = ?,
+                added_from = ?, added_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                prior.get("status"),
+                prior.get("rating"),
+                prior.get("reading_status"),
+                prior.get("added_from"),
+                prior.get("added_at"),
+                now,
+                paper_id,
+            ),
+        )
+        result = "restored"
+    else:
+        db.execute(
+            """
+            UPDATE papers
+            SET status = 'tracked', rating = 0, reading_status = NULL,
+                added_from = NULL, added_at = NULL, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, paper_id),
+        )
+        result = "removed_from_library"
+
+    db.commit()
+    return {"ok": True, "paper_id": paper_id, "result": result}
