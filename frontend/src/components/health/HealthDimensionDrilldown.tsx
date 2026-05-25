@@ -1,54 +1,54 @@
 /**
- * HealthDimensionDrilldown — a right-side Sheet that answers "which papers?"
- * for a Data Health dimension and offers per-issue fixes.
+ * HealthDimensionDrilldown — a CENTERED modal that answers "which papers?" for a
+ * Data-health dimension and lets you act on them.
  *
- * Per the task-24 drilldown spec: the auto-fix runs as a bulk header action
- * (reuses the maintenance run endpoint), while per-row operations are the
- * manual, one-at-a-time ones the user asked for — Add abstract / Edit authors
- * (inline, via PUT /library/saved), Remove from library (soft remove), and an
- * Open link to the source. Edit/Remove apply only to Library papers.
+ * Actionable: select rows → batch **Fix selected** (targeted maintenance run for
+ * exactly those papers) or **Remove selected** (soft-remove from Library); plus
+ * per-row inline edit (add abstract / edit authors where the issue allows),
+ * remove, and an open-at-source link. The header carries the bulk "fix the whole
+ * dimension" action. Edit/remove apply to Library papers only.
  */
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Loader2, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
 
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { AsyncButton } from '@/components/settings/primitives'
 import {
+  bulkRemoveFromLibrary,
   getHealthDimensionItems,
   removeFromLibrary,
+  runMaintenanceOperation,
   updateSavedPaper,
   type HealthDimension,
   type HealthDimensionItem,
 } from '@/api/client'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
-import { cn } from '@/lib/utils'
 import { dimensionBadgeTone, severityLabel } from './healthFormat'
 
 const PAGE = 20
 
 interface HealthDimensionDrilldownProps {
-  /** The dimension to drill into; null closes the sheet. */
   dim: HealthDimension | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Bulk fix (reuses the page's run mutation). */
+  /** Bulk fix the whole dimension (reuses the page's run mutation). */
   onRun: (operationKey: string) => void
   runningKey: string | null
 }
 
-/** Which single field this dimension lets the user fix inline. */
 function inlineEditField(key?: string): 'abstract' | 'authors' | null {
   if (key === 'papers.missing_abstract') return 'abstract'
   if (key === 'papers.missing_authorships') return 'authors'
@@ -57,13 +57,9 @@ function inlineEditField(key?: string): 'abstract' | 'authors' | null {
 
 function sourceUrl(item: HealthDimensionItem): string | null {
   if (item.doi) return `https://doi.org/${item.doi.replace(/^https?:\/\/(dx\.)?doi\.org\//, '')}`
-  if (item.openalex_id) return `https://openalex.org/${item.openalex_id.replace(/^https?:\/\/openalex\.org\//, '')}`
+  if (item.openalex_id)
+    return `https://openalex.org/${item.openalex_id.replace(/^https?:\/\/openalex\.org\//, '')}`
   return null
-}
-
-function yearOf(date?: string | null): string {
-  if (!date) return ''
-  return date.slice(0, 4)
 }
 
 export function HealthDimensionDrilldown({
@@ -78,6 +74,14 @@ export function HealthDimensionDrilldown({
   const editField = inlineEditField(dim?.key)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  // Reset transient UI state whenever we open a different dimension.
+  useEffect(() => {
+    setSelected(new Set())
+    setEditingId(null)
+    setDraft('')
+  }, [dim?.key])
 
   const itemsQuery = useInfiniteQuery({
     queryKey: ['health-dim-items', dim?.key],
@@ -90,7 +94,14 @@ export function HealthDimensionDrilldown({
     getNextPageParam: (last) => last.nextOffset,
     enabled: open && !!dim,
   })
-  const items = itemsQuery.data?.pages.flatMap((p) => p.items) ?? []
+  const items = useMemo(
+    () => itemsQuery.data?.pages.flatMap((p) => p.items) ?? [],
+    [itemsQuery.data],
+  )
+
+  // The maintenance task a "Fix" should run for this dimension (first run_now action).
+  const fixActionKey = dim?.actions.find((a) => a.kind === 'run_now')?.operation_key ?? null
+  const runActions = dim?.actions.filter((a) => a.kind === 'run_now') ?? []
 
   const refreshHealth = () =>
     invalidateQueries(
@@ -121,24 +132,57 @@ export function HealthDimensionDrilldown({
     onError: (err) => errorToast('Could not remove', String(err)),
   })
 
-  const runActions = dim?.actions.filter((a) => a.kind === 'run_now') ?? []
+  const fixSelectedMutation = useMutation({
+    mutationFn: (ids: string[]) => runMaintenanceOperation(fixActionKey!, ids),
+    onSuccess: async (res) => {
+      setSelected(new Set())
+      await refreshHealth()
+      toast({
+        title: res.job_id ? 'Fix queued' : 'Nothing to run',
+        description: res.job_id ? `${res.key} on the selected papers (${res.job_id}).` : undefined,
+      })
+    },
+    onError: (err) => errorToast('Could not queue fix', String(err)),
+  })
+
+  const removeSelectedMutation = useMutation({
+    mutationFn: (ids: string[]) => bulkRemoveFromLibrary(ids),
+    onSuccess: async (res) => {
+      setSelected(new Set())
+      await refreshHealth()
+      toast({ title: 'Removed from Library', description: `${res.affected} papers soft-removed.` })
+    },
+    onError: (err) => errorToast('Could not remove selected', String(err)),
+  })
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  const allShownSelected = items.length > 0 && items.every((i) => selected.has(i.paper_id))
+  const toggleAll = () =>
+    setSelected(allShownSelected ? new Set() : new Set(items.map((i) => i.paper_id)))
+
+  const selectedIds = [...selected]
+  const selectedLibraryIds = items
+    .filter((i) => selected.has(i.paper_id) && i.status === 'library')
+    .map((i) => i.paper_id)
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="flex w-full flex-col gap-0 overflow-hidden bg-alma-chrome p-0 sm:max-w-2xl"
-      >
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden bg-alma-chrome p-0">
         {dim ? (
           <>
-            <SheetHeader className="space-y-2 border-b border-[var(--color-border)] bg-alma-content px-5 py-4">
+            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] bg-alma-content px-5 py-4 text-left">
               <div className="flex items-center gap-2">
                 <StatusBadge tone={dimensionBadgeTone(dim.severity)} className="capitalize">
                   {severityLabel(dim.severity)}
                 </StatusBadge>
-                <SheetTitle className="text-alma-900">{dim.label}</SheetTitle>
+                <DialogTitle className="text-alma-900">{dim.label}</DialogTitle>
               </div>
-              <SheetDescription className="text-slate-600">{dim.explanation}</SheetDescription>
+              <DialogDescription className="text-slate-600">{dim.explanation}</DialogDescription>
               {dim.impact ? <p className="text-xs text-slate-500">{dim.impact}</p> : null}
               {runActions.length > 0 ? (
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -158,7 +202,48 @@ export function HealthDimensionDrilldown({
                   ))}
                 </div>
               ) : null}
-            </SheetHeader>
+            </DialogHeader>
+
+            {/* Selection toolbar */}
+            {items.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-alma-chrome-elev px-5 py-2 text-sm">
+                <label className="flex items-center gap-2 text-slate-600">
+                  <Checkbox
+                    checked={allShownSelected}
+                    onCheckedChange={() => toggleAll()}
+                  />
+                  {selected.size > 0 ? `${selected.size} selected` : 'Select all shown'}
+                </label>
+                {selected.size > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {fixActionKey ? (
+                      <AsyncButton
+                        size="sm"
+                        variant="outline"
+                        icon={<Wrench className="h-4 w-4" />}
+                        pending={fixSelectedMutation.isPending}
+                        className="border-alma-200 text-alma-700 hover:bg-alma-50"
+                        onClick={() => fixSelectedMutation.mutate(selectedIds)}
+                      >
+                        Fix {selected.size}
+                      </AsyncButton>
+                    ) : null}
+                    {selectedLibraryIds.length > 0 ? (
+                      <AsyncButton
+                        size="sm"
+                        variant="ghost"
+                        icon={<Trash2 className="h-4 w-4" />}
+                        pending={removeSelectedMutation.isPending}
+                        className="text-slate-500 hover:text-rose-700"
+                        onClick={() => removeSelectedMutation.mutate(selectedLibraryIds)}
+                      >
+                        Remove {selectedLibraryIds.length}
+                      </AsyncButton>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-4">
               {itemsQuery.isLoading ? (
@@ -171,15 +256,20 @@ export function HealthDimensionDrilldown({
                 items.map((item) => {
                   const isLibrary = item.status === 'library'
                   const url = sourceUrl(item)
-                  const year = yearOf(item.publication_date)
+                  const year = (item.publication_date || '').slice(0, 4)
                   const editing = editingId === item.paper_id
                   return (
                     <div
                       key={item.paper_id}
                       className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3 shadow-paper-sm"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+                      <div className="flex items-start gap-3">
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={selected.has(item.paper_id)}
+                          onCheckedChange={() => toggle(item.paper_id)}
+                        />
+                        <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-medium text-alma-800" title={item.title}>
                             {url ? (
                               <a
@@ -205,9 +295,8 @@ export function HealthDimensionDrilldown({
                         </StatusBadge>
                       </div>
 
-                      {/* Inline editor */}
                       {editing && editField ? (
-                        <div className="mt-2 space-y-2">
+                        <div className="mt-2 space-y-2 pl-7">
                           {editField === 'abstract' ? (
                             <Textarea
                               autoFocus
@@ -252,7 +341,7 @@ export function HealthDimensionDrilldown({
                           </div>
                         </div>
                       ) : (
-                        <div className="mt-2 flex flex-wrap gap-2">
+                        <div className="mt-2 flex flex-wrap gap-2 pl-7">
                           {isLibrary && editField ? (
                             <Button
                               size="sm"
@@ -260,7 +349,7 @@ export function HealthDimensionDrilldown({
                               className="border-alma-200 text-alma-700 hover:bg-alma-50"
                               onClick={() => {
                                 setEditingId(item.paper_id)
-                                setDraft(editField === 'authors' ? item.authors ?? '' : '')
+                                setDraft(editField === 'authors' ? (item.authors ?? '') : '')
                               }}
                             >
                               {editField === 'abstract' ? (
@@ -302,7 +391,7 @@ export function HealthDimensionDrilldown({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className={cn('w-full', itemsQuery.isFetchingNextPage && 'opacity-70')}
+                    className="w-full"
                     disabled={itemsQuery.isFetchingNextPage}
                     onClick={() => void itemsQuery.fetchNextPage()}
                   >
@@ -313,7 +402,7 @@ export function HealthDimensionDrilldown({
             </div>
           </>
         ) : null}
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }

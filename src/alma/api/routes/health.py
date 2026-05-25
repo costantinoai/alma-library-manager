@@ -65,23 +65,33 @@ def get_operations(
     return maintenance.list_operations(db)
 
 
+class RunMaintenanceRequest(BaseModel):
+    """Optional body — restrict the run to a specific set of papers (a drilldown
+    'fix selected'). Omit to run the task at its normal daily-cap scope."""
+
+    target_paper_ids: Optional[list[str]] = Field(default=None)
+
+
 @router.post(
     "/operations/{key}/run",
     summary="Run a maintenance task now",
     description=(
         "Schedule one bounded run (trigger_source='user'). Idempotent — returns "
-        "the in-flight job if the same operation is already running."
+        "the in-flight job if the same operation is already running. An optional "
+        "body restricts the run to specific paper ids."
     ),
 )
 def run_operation(
     key: str,
+    body: Optional[RunMaintenanceRequest] = None,
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
     task = maintenance.REGISTRY.get(key)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
-    job_id = maintenance.run_task_now(db, task)
+    targets = body.target_paper_ids if body else None
+    job_id = maintenance.run_task_now(db, task, target_paper_ids=targets)
     if not job_id:
         # scheduler not importable (e.g. tests/CLI) — surface a clear noop.
         return {"key": key, "status": "noop", "job_id": None}

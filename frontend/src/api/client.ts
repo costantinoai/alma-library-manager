@@ -293,8 +293,14 @@ export function getHealthDimensionItems(
   )
 }
 
-export function runMaintenanceOperation(key: string): Promise<RunMaintenanceResponse> {
-  return api.post<RunMaintenanceResponse>(`/health/operations/${encodeURIComponent(key)}/run`)
+export function runMaintenanceOperation(
+  key: string,
+  targetPaperIds?: string[],
+): Promise<RunMaintenanceResponse> {
+  return api.post<RunMaintenanceResponse>(
+    `/health/operations/${encodeURIComponent(key)}/run`,
+    targetPaperIds && targetPaperIds.length ? { target_paper_ids: targetPaperIds } : undefined,
+  )
 }
 
 export function setMaintenanceConfig(

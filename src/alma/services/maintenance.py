@@ -56,33 +56,38 @@ COST_COMPUTE = "compute"  # local CPU/GPU (SPECTER2)
 # --------------------------------------------------------------------------
 
 
-def _run_corpus_metadata(job_id: str, cap: int) -> None:
+Targets = "list[str] | tuple[str, ...] | None"
+
+
+def _run_corpus_metadata(job_id: str, cap: int, target_paper_ids=None) -> None:
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.corpus_rehydrate import run_corpus_metadata_rehydration
 
     run_corpus_metadata_rehydration(
         job_id,
         limit=cap,
+        target_paper_ids=target_paper_ids,
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,
     )
 
 
-def _run_s2_vector(job_id: str, cap: int) -> None:
+def _run_s2_vector(job_id: str, cap: int, target_paper_ids=None) -> None:
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.s2_vectors import run_s2_vector_backfill
 
     run_s2_vector_backfill(
         job_id,
         limit=cap,
+        target_paper_ids=target_paper_ids,
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,
     )
 
 
-def _run_embedding(job_id: str, cap: int) -> None:
+def _run_embedding(job_id: str, cap: int, target_paper_ids=None) -> None:
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.embeddings import run_embedding_computation
 
@@ -92,13 +97,16 @@ def _run_embedding(job_id: str, cap: int) -> None:
         job_id,
         scope="missing_stale",
         limit=cap,
+        target_paper_ids=target_paper_ids,
         set_job_status=set_job_status,
         add_job_log=add_job_log,
         is_cancellation_requested=is_cancellation_requested,
     )
 
 
-def _run_title_resolution(job_id: str, cap: int) -> None:
+def _run_title_resolution(job_id: str, cap: int, target_paper_ids=None) -> None:
+    # The title-resolution sweep scans title-only papers globally; it has no
+    # target_paper_ids parameter, so per-paper targeting is a no-op (bulk run).
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.services.title_resolution import run_title_resolution_sweep
 
@@ -128,7 +136,7 @@ class MaintenanceTask:
     operation_key: str  # the runner's operation_status key (history / idempotency)
     job_id_prefix: str
     cost: str
-    runner: Callable[[str, int], None]
+    runner: Callable[..., None]  # (job_id, cap, target_paper_ids=None) -> None
     default_enabled: bool = False
     default_daily_cap: int = 200
 
@@ -385,6 +393,7 @@ def _schedule_task(
     trigger_source: str,
     queued_message: str,
     log_message: str,
+    target_paper_ids: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Schedule one bounded run of ``task`` (shared by run-now + the healer).
 
@@ -396,7 +405,7 @@ def _schedule_task(
     runner = task.runner
 
     def _factory(job_id: str) -> Callable[[], None]:
-        return lambda: runner(job_id, limit)
+        return lambda: runner(job_id, limit, target_paper_ids)
 
     return schedule_with_envelope(
         operation_key=task.operation_key,
@@ -408,16 +417,28 @@ def _schedule_task(
     )
 
 
-def run_task_now(conn: sqlite3.Connection, task: MaintenanceTask) -> Optional[str]:
-    """Schedule one bounded run of ``task`` under trigger_source='user'."""
-    cap = get_task_daily_cap(conn, task)
+def run_task_now(
+    conn: sqlite3.Connection,
+    task: MaintenanceTask,
+    *,
+    target_paper_ids: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Schedule one bounded run of ``task`` under trigger_source='user'.
+
+    ``target_paper_ids`` restricts the run to a specific set (a drilldown
+    "fix selected") — bounded to exactly that set; otherwise the daily cap.
+    """
+    targets = [str(p) for p in (target_paper_ids or []) if str(p).strip()] or None
+    limit = len(targets) if targets else get_task_daily_cap(conn, task)
+    scope = f"{len(targets)} selected" if targets else f"limit {limit}"
     return _schedule_task(
         conn,
         task,
-        limit=cap,
+        limit=limit,
         trigger_source="user",
-        queued_message=f"{task.label} queued from Health (limit {cap})",
-        log_message=f"{task.label} queued from Health page",
+        queued_message=f"{task.label} queued from Health ({scope})",
+        log_message=f"{task.label} queued from Health page ({scope})",
+        target_paper_ids=targets,
     )
 
 
