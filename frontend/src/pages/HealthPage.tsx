@@ -29,7 +29,7 @@ import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { DataHealthSection } from '@/components/health/DataHealthSection'
 import { MaintenanceOperations } from '@/components/health/MaintenanceOperations'
-import { OperationalStatusCard } from '@/components/settings/OperationalStatusCard'
+import { SystemStatusTab } from '@/components/health/SystemStatusTab'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { formatRelativeShort } from '@/lib/utils'
@@ -215,10 +215,10 @@ export function HealthPage() {
           </div>
         </TabsContent>
 
-        {/* Status — operational health: what's degraded / failing / needs a fix.
-            (Subsystem trends + analytics live under Insights → Activity.) */}
+        {/* Status — operational health: what's degraded / failing / needs a fix,
+            fully bisected here (subsystem trends + analytics → Insights → Activity). */}
         <TabsContent value="status" className="mt-4">
-          <OperationalStatusCard />
+          <SystemStatusTab />
         </TabsContent>
       </Tabs>
     </div>
