@@ -43,6 +43,63 @@ Severity = str  # "ok" | "info" | "warning" | "critical"
 
 
 # --------------------------------------------------------------------------
+# Papers needs-attention predicates — the single source of truth for the
+# "this Library paper has a concrete gap" thresholds. The Library landing
+# card (``library.py`` ``get_library_workflow_summary``) builds its per-row
+# flag columns, its ``issue_count``, AND its ``WHERE``/count clauses from
+# these, so the surfaced rows and the headline count can never drift apart
+# (they used to repeat the same predicate three times by hand).
+#
+# Column references are unqualified so a fragment drops straight into any
+# ``... FROM papers`` query; the caller adds the membership scope (e.g.
+# ``status = 'library'``). Each key is the ``attention_reasons`` ``code``
+# the frontend switches on — do not rename without updating the UI.
+# Insertion order defines flag-column / issue_count order.
+# --------------------------------------------------------------------------
+
+PAPER_ATTENTION_PREDICATES: dict[str, str] = {
+    "no_identifier": (
+        "(openalex_id IS NULL OR TRIM(openalex_id) = '') "
+        "AND (doi IS NULL OR TRIM(doi) = '')"
+    ),
+    "no_abstract": "abstract IS NULL OR LENGTH(TRIM(abstract)) < 40",
+    "no_authors": "authors IS NULL OR LENGTH(TRIM(authors)) < 3",
+    "enrichment_stuck": (
+        "openalex_resolution_status IN "
+        "('pending_enrichment', 'not_openalex_resolved', 'failed')"
+    ),
+}
+
+
+def paper_attention_flag_columns_sql() -> str:
+    """``CASE WHEN <pred> THEN 1 ELSE 0 END AS flag_<code>`` for every predicate.
+
+    Drop into a SELECT list; the resulting ``flag_<code>`` columns are what
+    the Library summary's ``_attention_reasons`` reads by name.
+    """
+    return ",\n".join(
+        f"CASE WHEN {pred} THEN 1 ELSE 0 END AS flag_{code}"
+        for code, pred in PAPER_ATTENTION_PREDICATES.items()
+    )
+
+
+def paper_attention_issue_count_sql(alias: str = "issue_count") -> str:
+    """Sum of the predicate flags, aliased (drives the needs-attention ordering)."""
+    terms = "\n    + ".join(
+        f"CASE WHEN {pred} THEN 1 ELSE 0 END"
+        for pred in PAPER_ATTENTION_PREDICATES.values()
+    )
+    return f"({terms}) AS {alias}"
+
+
+def paper_attention_where_sql() -> str:
+    """OR of every predicate — a row qualifies if *any* single gap is present."""
+    return "\n     OR ".join(
+        f"({pred})" for pred in PAPER_ATTENTION_PREDICATES.values()
+    )
+
+
+# --------------------------------------------------------------------------
 # Severity helpers
 # --------------------------------------------------------------------------
 

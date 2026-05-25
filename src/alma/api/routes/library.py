@@ -34,6 +34,7 @@ from alma.application.followed_authors import (
 )
 from alma.application import library as library_app
 from alma.core.sql_helpers import paper_date_sort_expr
+from alma.services import health as health_service
 
 
 logger = logging.getLogger(__name__)
@@ -1801,67 +1802,24 @@ def get_library_workflow_summary(
         #   - missing authors (short or empty)
         #   - OpenAlex enrichment stuck in non-terminal / failed states
         # Papers that are healthy by those measures are never shown here.
+        # Flag columns, issue_count, and the WHERE predicate all come from
+        # the single canonical source (alma.services.health) so the surfaced
+        # rows and the headline count below can never use divergent thresholds.
+        # The fragments are hardcoded SQL constants (no user input) — safe to
+        # interpolate. `flag_<code>` columns are read by name in
+        # `_attention_reasons`; the `code` values are the frontend contract.
+        _attn_flags = health_service.paper_attention_flag_columns_sql()
+        _attn_issue = health_service.paper_attention_issue_count_sql()
+        _attn_where = health_service.paper_attention_where_sql()
         needs_attention_rows = db.execute(
-            """
+            f"""
             SELECT *,
-                   CASE
-                     WHEN (openalex_id IS NULL OR TRIM(openalex_id) = '')
-                          AND (doi IS NULL OR TRIM(doi) = '') THEN 1
-                     ELSE 0
-                   END AS flag_no_identifier,
-                   CASE
-                     WHEN abstract IS NULL OR LENGTH(TRIM(abstract)) < 40 THEN 1
-                     ELSE 0
-                   END AS flag_no_abstract,
-                   CASE
-                     WHEN authors IS NULL OR LENGTH(TRIM(authors)) < 3 THEN 1
-                     ELSE 0
-                   END AS flag_no_authors,
-                   CASE
-                     WHEN openalex_resolution_status IN (
-                         'pending_enrichment',
-                         'not_openalex_resolved',
-                         'failed'
-                     ) THEN 1
-                     ELSE 0
-                   END AS flag_enrichment_stuck,
-                   (
-                     CASE
-                       WHEN (openalex_id IS NULL OR TRIM(openalex_id) = '')
-                            AND (doi IS NULL OR TRIM(doi) = '') THEN 1
-                       ELSE 0
-                     END
-                     + CASE
-                         WHEN abstract IS NULL OR LENGTH(TRIM(abstract)) < 40 THEN 1
-                         ELSE 0
-                       END
-                     + CASE
-                         WHEN authors IS NULL OR LENGTH(TRIM(authors)) < 3 THEN 1
-                         ELSE 0
-                       END
-                     + CASE
-                         WHEN openalex_resolution_status IN (
-                             'pending_enrichment',
-                             'not_openalex_resolved',
-                             'failed'
-                         ) THEN 1
-                         ELSE 0
-                       END
-                   ) AS issue_count
+                   {_attn_flags},
+                   {_attn_issue}
             FROM papers
             WHERE status = 'library'
               AND (
-                    (
-                      (openalex_id IS NULL OR TRIM(openalex_id) = '')
-                      AND (doi IS NULL OR TRIM(doi) = '')
-                    )
-                 OR (abstract IS NULL OR LENGTH(TRIM(abstract)) < 40)
-                 OR (authors IS NULL OR LENGTH(TRIM(authors)) < 3)
-                 OR openalex_resolution_status IN (
-                        'pending_enrichment',
-                        'not_openalex_resolved',
-                        'failed'
-                    )
+                    {_attn_where}
               )
             ORDER BY issue_count DESC,
                      COALESCE(rating, 0) DESC,
@@ -1944,22 +1902,12 @@ def get_library_workflow_summary(
         needs_attention_count = int(
             (
                 db.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS c
                     FROM papers
                     WHERE status = 'library'
                       AND (
-                            (
-                              (openalex_id IS NULL OR TRIM(openalex_id) = '')
-                              AND (doi IS NULL OR TRIM(doi) = '')
-                            )
-                         OR (abstract IS NULL OR LENGTH(TRIM(abstract)) < 40)
-                         OR (authors IS NULL OR LENGTH(TRIM(authors)) < 3)
-                         OR openalex_resolution_status IN (
-                                'pending_enrichment',
-                                'not_openalex_resolved',
-                                'failed'
-                            )
+                            {_attn_where}
                       )
                     """
                 ).fetchone()["c"]
