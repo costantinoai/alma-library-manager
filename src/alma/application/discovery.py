@@ -1316,35 +1316,66 @@ def refresh_lens_recommendations(
         timings_ms[f"lane_{lane_name}_ms"] = duration_ms
         return result
 
-    lexical = _run_lane_subtask(
-        "lexical",
-        lambda: _retrieve_lexical_channel(db, lens, seeds, limit=limit),
-        label="Lexical (OpenAlex topic search)",
+    # F3: run the 4 retrieval lanes CONCURRENTLY instead of sequentially.
+    # Each lane gets its OWN SQLite connection (open_db_connection →
+    # check_same_thread=False, WAL): the graph lane writes (reference
+    # backfill) while the others read, so sharing one connection across
+    # threads would be unsafe. Results merge after. Per-source HTTP clients
+    # already gate their own concurrency (S2 is serialized at max_concurrency
+    # =1 process-wide), so this does not stampede a rate-limited upstream.
+    from alma.api.deps import open_db_connection as _open_lane_conn
+
+    lane_specs = (
+        ("lexical", "Lexical (OpenAlex topic search)",
+         lambda c: _retrieve_lexical_channel(c, lens, seeds, limit=limit)),
+        ("vector", "Vector (local SPECTER2 cosine)",
+         lambda c: _retrieve_vector_channel(c, lens, seeds, limit=limit)),
+        ("graph", "Graph (citation references)",
+         lambda c: _retrieve_graph_channel(c, lens, seeds, limit=limit)),
+        ("external", "External (taste-author / -topic / -venue / S2)",
+         lambda c: _retrieve_external_channel(
+             c, lens, seeds, limit=limit,
+             preference_profile=profile, positive_pubs=positive_pubs)),
     )
-    vector = _run_lane_subtask(
-        "vector",
-        lambda: _retrieve_vector_channel(db, lens, seeds, limit=limit),
-        label="Vector (local SPECTER2 cosine)",
-    )
-    graph_pair = _run_lane_subtask(
-        "graph",
-        lambda: _retrieve_graph_channel(db, lens, seeds, limit=limit),
-        label="Graph (citation references)",
-    )
-    graph, graph_summary = graph_pair
-    external_pair = _run_lane_subtask(
-        "external",
-        lambda: _retrieve_external_channel(
-            db,
-            lens,
-            seeds,
-            limit=limit,
-            preference_profile=profile,
-            positive_pubs=positive_pubs,
-        ),
-        label="External (taste-author / -topic / -venue / S2)",
-    )
-    external, external_summary = external_pair
+
+    def _run_lane_with_conn(lane_name: str, label: str, fn):
+        conn = _open_lane_conn()
+        try:
+            return _run_lane_subtask(lane_name, lambda: fn(conn), label=label)
+        finally:
+            try:
+                conn.commit()  # persist graph-lane reference-backfill writes
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    lane_results: dict[str, Any] = {}
+    lane_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lens-lane-top")
+    try:
+        fut_to_name = {
+            lane_pool.submit(_run_lane_with_conn, name, label, fn): name
+            for name, label, fn in lane_specs
+        }
+        for fut, name in fut_to_name.items():
+            try:
+                lane_results[name] = fut.result(timeout=_LANE_HARD_CAP_S)
+            except Exception as exc:
+                logger.warning("lens lane %s did not complete (%s); using empty result", name, exc)
+                if not fut.done():
+                    fut.cancel()
+                lane_results[name] = ([], {}) if name in ("graph", "external") else []
+    finally:
+        lane_pool.shutdown(wait=False)
+
+    lexical = lane_results.get("lexical") or []
+    vector = lane_results.get("vector") or []
+    _graph_pair = lane_results.get("graph") or ([], {})
+    graph, graph_summary = _graph_pair if isinstance(_graph_pair, tuple) else (_graph_pair, {})
+    _external_pair = lane_results.get("external") or ([], {})
+    external, external_summary = _external_pair if isinstance(_external_pair, tuple) else (_external_pair, {})
     timings_ms["channel_retrieval"] = int(round((perf_counter() - phase_started) * 1000))
     _log(
         "retrieval_channels",
@@ -1376,6 +1407,7 @@ def refresh_lens_recommendations(
         data={"lexical": len(lexical), "vector": len(vector), "graph": len(graph), "external": len(external)},
     )
 
+    phase_started = perf_counter()  # reset so `merge` times only the merge step, not retrieval (was double-counted)
     merged = _merge_channel_candidates(
         channel_weights=channel_weights,
         channels={
@@ -1668,21 +1700,26 @@ def refresh_lens_recommendations(
     phase_started = perf_counter()
     user_topic_embeddings: Optional[dict[str, Any]] = None
     user_topic_weights = profile.get("topic_weights") or {}
-    if user_topic_weights:
-        try:
-            from alma.ai.providers import get_active_provider
-            _topic_provider = get_active_provider(db)
-        except Exception:
-            _topic_provider = None
-        if _topic_provider is not None:
-            user_topic_embeddings = {}
-            for ut in user_topic_weights:
-                try:
-                    user_topic_embeddings[ut] = sim_module._get_topic_embedding(
-                        _topic_provider, ut,
-                    )
-                except Exception:
-                    user_topic_embeddings[ut] = None
+    # Resolve the embedding provider ONCE per refresh and reuse it for the
+    # whole scoring loop. `get_active_provider()` probes the configured
+    # dependency env via a SUBPROCESS; the scoring loop otherwise called it
+    # per candidate (inside `compute_topic_overlap` + the topic_match_mode
+    # check), which cProfile showed costing ~22 s/refresh in 385 subprocess
+    # probes (task 19 follow-up, uncovered once F1 cut the embedding cost).
+    try:
+        from alma.ai.providers import get_active_provider
+        _topic_provider = get_active_provider(db)
+    except Exception:
+        _topic_provider = None
+    if user_topic_weights and _topic_provider is not None:
+        user_topic_embeddings = {}
+        for ut in user_topic_weights:
+            try:
+                user_topic_embeddings[ut] = sim_module._get_topic_embedding(
+                    _topic_provider, ut,
+                )
+            except Exception:
+                user_topic_embeddings[ut] = None
     timings_ms["user_topic_embeddings"] = int(round((perf_counter() - phase_started) * 1000))
 
     # D-AUDIT-10 follow-up (2026-04-24): batch-embed every candidate
@@ -1854,6 +1891,7 @@ def refresh_lens_recommendations(
             precomputed_lexical_details=precomputed_lexical_map.get(key),
             user_topic_embeddings=user_topic_embeddings,
             preloaded_preference_profile=preloaded_preference_profile,
+            topic_provider=_topic_provider,
         )
         candidate["score"] = final_score
         # Fold retrieval provenance ("why this paper surfaced") into the
@@ -3514,6 +3552,50 @@ def _retrieve_vector_channel(
     return [item for _, item in scored[: max(1, limit)]]
 
 
+# Wall-clock cap on the graph lane's external citation fallbacks (OpenAlex
+# related/citing/referenced + S2 related). The graph lane previously had NO
+# overall deadline — when Semantic Scholar rate-limited (429 → up to ~2 min
+# of retry+cooldown PER call, see core/http_sources S2 policy), the
+# `with ThreadPoolExecutor` (shutdown=wait) fallbacks waited out the full
+# budget × calls, ballooning a normally-4 s lane to minutes (task 19 F2
+# live-reproduced a 7.3 min hang). Mirrors source_search.DEFAULT_LANE_DEADLINE_S.
+_GRAPH_FALLBACK_DEADLINE_S: float = 8.0
+
+# Backstop wall-clock cap per retrieval lane when the 4 lanes run
+# concurrently (F3). Lanes are bounded internally (external: 8 s source-lane
+# deadline; graph fallbacks: _GRAPH_FALLBACK_DEADLINE_S), so this only catches
+# a pathological hang in a section not otherwise bounded (e.g. an OpenAlex
+# batch-fetch helper). The lane pool is shut down wait=False so an abandoned
+# lane can't block the refresh.
+_LANE_HARD_CAP_S: float = 60.0
+
+
+def _drain_futures_within_deadline(
+    executor: ThreadPoolExecutor,
+    future_map: dict,
+    deadline_s: float,
+) -> dict:
+    """Return the subset of ``future_map`` that completed within ``deadline_s``.
+
+    Cancels any futures still pending at the deadline and shuts the executor
+    down with ``wait=False`` so a worker stuck in a slow/rate-limited HTTP
+    call (e.g. S2 429 retry/cooldown) does not block the caller — it exits on
+    its own per-request HTTP timeout. Same bounded-fan-out contract as
+    ``discovery/source_search.search_across_sources``.
+    """
+    done_map: dict = {}
+    try:
+        for fut in as_completed(list(future_map.keys()), timeout=max(0.1, deadline_s)):
+            done_map[fut] = future_map[fut]
+    except TimeoutError:
+        for fut in future_map:
+            if not fut.done():
+                fut.cancel()
+    finally:
+        executor.shutdown(wait=False)
+    return done_map
+
+
 def _retrieve_graph_channel(
     db: sqlite3.Connection,
     lens: dict,
@@ -3721,64 +3803,74 @@ def _retrieve_graph_channel(
             for relation, _fn, weight in relation_calls
         ]
         fn_map = {relation: fn for relation, fn, _ in relation_calls}
-        with ThreadPoolExecutor(max_workers=min(6, max(1, len(call_keys))), thread_name_prefix="graph-oa") as gpool:
-            future_map = {
-                gpool.submit(fn_map[rel], identifier, 6): (identifier, rel, weight)
-                for identifier, rel, weight in call_keys
-            }
-            for fut in as_completed(future_map):
-                identifier, rel, weight = future_map[fut]
+        # Bounded fan-out: drain up to the deadline, abandon (shutdown
+        # wait=False) any OpenAlex call still pending so a slow/429 source
+        # can't stall the lane (F2).
+        gpool = ThreadPoolExecutor(max_workers=min(6, max(1, len(call_keys))), thread_name_prefix="graph-oa")
+        future_map = {
+            gpool.submit(fn_map[rel], identifier, 6): (identifier, rel, weight)
+            for identifier, rel, weight in call_keys
+        }
+        done_map = _drain_futures_within_deadline(gpool, future_map, _GRAPH_FALLBACK_DEADLINE_S)
+        if len(done_map) < len(future_map):
+            graph_summary["oa_fallback_timed_out"] = True
+        for fut, (identifier, rel, weight) in done_map.items():
+            if len(merged) >= fallback_budget:
+                continue
+            try:
+                items = fut.result() or []
+            except Exception as exc:
+                logger.debug("graph OA fallback (%s) failed for %s: %s", rel, identifier, exc)
+                items = []
+            for idx, item in enumerate(items):
+                candidate = dict(item)
+                candidate["source_type"] = rel
+                candidate["source_api"] = str(candidate.get("source_api") or "openalex")
+                candidate["source_key"] = identifier
+                base = float(candidate.get("score", 0.25) or 0.25)
+                rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.6)), 0.12, 1.0)
+                candidate["score"] = round(_clamp((base * weight) + (rank_factor * (1.0 - weight)), 0.05, 1.0), 4)
+                key = _candidate_key(candidate)
+                existing = merged.get(key)
+                if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
+                    merged[key] = candidate
                 if len(merged) >= fallback_budget:
-                    continue
-                try:
-                    items = fut.result() or []
-                except Exception as exc:
-                    logger.debug("graph OA fallback (%s) failed for %s: %s", rel, identifier, exc)
-                    items = []
-                for idx, item in enumerate(items):
-                    candidate = dict(item)
-                    candidate["source_type"] = rel
-                    candidate["source_api"] = str(candidate.get("source_api") or "openalex")
-                    candidate["source_key"] = identifier
-                    base = float(candidate.get("score", 0.25) or 0.25)
-                    rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.6)), 0.12, 1.0)
-                    candidate["score"] = round(_clamp((base * weight) + (rank_factor * (1.0 - weight)), 0.05, 1.0), 4)
-                    key = _candidate_key(candidate)
-                    existing = merged.get(key)
-                    if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
-                        merged[key] = candidate
-                    if len(merged) >= fallback_budget:
-                        break
+                    break
 
     if len(merged) < fallback_budget and seed_dois:
         from alma.discovery import semantic_scholar
 
         graph_summary["fallback_used"] = True
         graph_summary["fallback_sources"] = sorted(set([*graph_summary.get("fallback_sources", []), "semantic_scholar"]))
-        with ThreadPoolExecutor(max_workers=min(4, max(1, len(seed_dois))), thread_name_prefix="graph-s2") as s2pool:
-            future_map = {s2pool.submit(semantic_scholar.fetch_related_papers, doi, 6): doi for doi in seed_dois}
-            for fut in as_completed(future_map):
-                doi = future_map[fut]
-                if len(merged) >= fallback_budget:
-                    continue
-                try:
-                    items = fut.result() or []
-                except Exception as exc:
-                    logger.debug("graph S2 related fetch failed for %s: %s", doi, exc)
-                    items = []
-                graph_summary["semantic_related_candidates"] = int(graph_summary.get("semantic_related_candidates") or 0) + len(items)
-                for idx, item in enumerate(items):
-                    candidate = dict(item)
-                    candidate["source_type"] = "graph_semantic_related"
-                    candidate["source_api"] = "semantic_scholar"
-                    candidate["source_key"] = doi
-                    base = float(candidate.get("score", 0.25) or 0.25)
-                    rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.5)), 0.12, 1.0)
-                    candidate["score"] = round(_clamp((base * 0.52) + (rank_factor * 0.48), 0.05, 1.0), 4)
-                    key = _candidate_key(candidate)
-                    existing = merged.get(key)
-                    if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
-                        merged[key] = candidate
+        # Bounded fan-out (F2): S2 is the rate-limit-prone source — abandon
+        # any call still in 429 retry/cooldown at the deadline (this is the
+        # exact site of the live-reproduced 7.3 min hang).
+        s2pool = ThreadPoolExecutor(max_workers=min(4, max(1, len(seed_dois))), thread_name_prefix="graph-s2")
+        future_map = {s2pool.submit(semantic_scholar.fetch_related_papers, doi, 6): doi for doi in seed_dois}
+        done_map = _drain_futures_within_deadline(s2pool, future_map, _GRAPH_FALLBACK_DEADLINE_S)
+        if len(done_map) < len(future_map):
+            graph_summary["s2_fallback_timed_out"] = True
+        for fut, doi in done_map.items():
+            if len(merged) >= fallback_budget:
+                continue
+            try:
+                items = fut.result() or []
+            except Exception as exc:
+                logger.debug("graph S2 related fetch failed for %s: %s", doi, exc)
+                items = []
+            graph_summary["semantic_related_candidates"] = int(graph_summary.get("semantic_related_candidates") or 0) + len(items)
+            for idx, item in enumerate(items):
+                candidate = dict(item)
+                candidate["source_type"] = "graph_semantic_related"
+                candidate["source_api"] = "semantic_scholar"
+                candidate["source_key"] = doi
+                base = float(candidate.get("score", 0.25) or 0.25)
+                rank_factor = _clamp(1.0 - (idx / max(1, len(items) * 1.5)), 0.12, 1.0)
+                candidate["score"] = round(_clamp((base * 0.52) + (rank_factor * 0.48), 0.05, 1.0), 4)
+                key = _candidate_key(candidate)
+                existing = merged.get(key)
+                if existing is None or float(candidate.get("score") or 0.0) > float(existing.get("score") or 0.0):
+                    merged[key] = candidate
 
     ranked = sorted(merged.values(), key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
     graph_summary["fallback_candidates"] = max(0, len(ranked) - len(local_candidates))
@@ -4466,7 +4558,10 @@ def _retrieve_external_channel(
     # --- Consume pass: followed-author fetches.
     for openalex_id, future, holder in followed_author_futures:
         try:
-            recs = future.result() or []
+            # F4: bound the wait (was unbounded → only the ~20-30 s HTTP
+            # timeout). TimeoutError is an Exception subclass in 3.11, so the
+            # handler below degrades a slow fetch to empty without stalling.
+            recs = future.result(timeout=source_search.DEFAULT_LANE_DEADLINE_S) or []
         except Exception as exc:
             logger.warning("followed-author works fetch failed for %s: %s", openalex_id, exc)
             recs = []
@@ -4503,7 +4598,8 @@ def _retrieve_external_channel(
         recommended: list[dict] = []
         if s2_recommend_future is not None:
             try:
-                recommended = s2_recommend_future.result() or []
+                # F4: bound the wait — S2 is the rate-limit-prone source.
+                recommended = s2_recommend_future.result(timeout=source_search.DEFAULT_LANE_DEADLINE_S) or []
             except Exception as exc:
                 s2_holder.setdefault("error", str(exc))
                 recommended = []
