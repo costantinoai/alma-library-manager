@@ -552,8 +552,14 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # latest-mutation timestamps over papers and the two paper ledgers, plus the
 # active embedding-model setting. All subqueries are NULL-safe (a missing
 # settings row yields '' rather than an error that would defeat caching).
+#
+# The leading logic-version literal forces a one-time rebuild whenever the
+# *assessment logic* changes (the data fingerprint can't see code changes — e.g.
+# adding actions to a dimension). Bump it when assess_corpus' output shape /
+# dimensions / actions change.
 _HEALTH_CORPUS_FINGERPRINT_SQL = """
     SELECT
+      'health-logic-v2',
       (SELECT COUNT(*) FROM papers WHERE COALESCE(canonical_paper_id,'')=''),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
