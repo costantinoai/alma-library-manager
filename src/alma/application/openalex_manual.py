@@ -883,6 +883,8 @@ def save_online_search_result(
     candidate: Optional[dict] = None,
     action: str = "add",
     added_from: str = "online_search",
+    default_reading_status: Optional[str] = None,
+    override_added_from: bool = False,
 ) -> dict:
     """Resolve a work + apply the shared add/like/love/dislike contract.
 
@@ -902,6 +904,18 @@ def save_online_search_result(
          candidate metadata via the shared feed upsert helper. The
          background enrichment job will top up OpenAlex-specific fields
          when available.
+
+    ``default_reading_status`` is forwarded to ``add_to_library`` for the
+    add/like/love path so a caller can land the paper directly on the
+    reading list (``'reading'``) instead of the untriaged library
+    (``None``). It is only applied when the paper has no reading status
+    yet (``add_to_library`` never overwrites an existing one).
+
+    ``override_added_from`` is forwarded to ``add_to_library``: when True
+    the supplied ``added_from`` wins even over an existing non-empty
+    provenance. Used by deliberate, explicit save surfaces (e.g. the
+    browser connector) so their provenance isn't masked by the ``'feed'``
+    stamp the candidate-fallback upsert applies to brand-new rows.
     """
     action = (action or "add").strip().lower()
     if action not in _ONLINE_SEARCH_ACTION_RATINGS:
@@ -965,6 +979,8 @@ def save_online_search_result(
             paper_id,
             rating=effective_rating,
             added_from=added_from,
+            default_reading_status=default_reading_status,
+            override_added_from=override_added_from,
         )
     else:  # dislike
         if current_status == library_app.LIBRARY_STATUS:

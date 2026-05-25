@@ -41,6 +41,7 @@ from alma.api.routes.search import router as search_router
 from alma.api.routes.backup import router as backup_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.bootstrap import router as bootstrap_router
+from alma.api.routes.extension import router as extension_router
 from alma.api.deps import get_db, get_plugin_registry, open_db_connection
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 
@@ -191,6 +192,13 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:8000",
     ],
+    # Browser-connector origins (see extension/). Firefox sends
+    # `moz-extension://<uuid>` and Chromium `chrome-extension://<id>`;
+    # the per-install UUID can't be hard-listed, so match the scheme.
+    # (The connector fetches from a context with host_permissions for
+    # the API, which already bypasses CORS — this is a belt-and-braces
+    # allowance so a direct popup fetch works too.)
+    allow_origin_regex=r"^(moz-extension|chrome-extension)://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -431,6 +439,7 @@ app.include_router(search_router, prefix="/api/v1", tags=["search"])
 app.include_router(backup_router, prefix="/api/v1", tags=["backup"])
 app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
 app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
+app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
 
 # ============================================================================
 # React Frontend (Production Build)
