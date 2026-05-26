@@ -1,6 +1,6 @@
 # ALMa — **A**nother **L**ibrary **Ma**nager
 
-> **Early preview (`v0.10.3`).** The three core jobs — Library, Discovery,
+> **Early preview (`v0.15.0`).** The three core jobs — Library, Discovery,
 > and Feed — work end-to-end. The first-run experience is bare; a polished
 > onboarding ships with `v1.0.0`. Public testing welcome.
 
@@ -38,6 +38,9 @@ The app has five views:
 <p align="center">
   <img src="docs/screenshots/desktop-authors.png" alt="Authors" width="49%">
   <img src="docs/screenshots/desktop-settings.png" alt="Settings" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/desktop-health.png" alt="Health — diagnose-and-repair corpus health" width="70%">
 </p>
 
 ---
