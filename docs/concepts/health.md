@@ -19,9 +19,12 @@ From top to bottom:
 
 A thin **vitals ribbon** — a stacked bar across every data dimension, colored by
 severity (critical / warning / info / healthy) — gives the whole corpus's data
-health at a glance. A legend shows the per-severity counts, and a slim caption
-carries the two corpus facts worth a glance: total papers assessed and
-**embedding coverage** (with a readiness chip that flips on at ≥80%).
+health at a glance. It spans **one unified set of dimensions**: corpus/paper
+gaps *and* author-identity gaps (the snapshot folds `assess_corpus` and
+`assess_authors` together), so author health is counted right alongside paper
+health. A legend shows the per-severity counts, and a slim caption carries the
+two corpus facts worth a glance: total papers assessed and **embedding
+coverage** (with a readiness chip that flips on at ≥80%).
 
 The ribbon is the one place semantic color spans the width — the deliberate
 exception to the calm off-white surfaces, because it *is* the triage.
@@ -88,14 +91,19 @@ source API's rate limit. The estimate is computed from one rate model
 
 Local SPECTER2 compute shows no ETA — it is fast and not rate-limited.
 
-### Drilldown — which papers, and act on them
+### Drilldown — act on the affected items
 
-Click any data status row to open a **centered modal** listing the affected
-papers. Select rows to **Fix N** (a targeted run for exactly those papers) or
-**Remove N** (soft-remove from Library); per row you can **add an abstract** /
-**edit authors** inline, remove, or open the paper at its source. The header
-carries the bulk "fix the whole dimension" action. (Edit / remove apply to
-Library papers; tracked-but-unsaved papers are read-only.)
+Every status row is clickable, drilling into the items it affects:
+
+- **Paper** dimensions open a **centered modal** listing the affected papers.
+  Select rows to **Fix N** (a targeted run for exactly those papers) or
+  **Remove N** (soft-remove from Library); per row you can **add an abstract** /
+  **edit authors** inline, remove, or open the paper at its source. The header
+  carries the bulk "fix the whole dimension" action. (Edit / remove apply to
+  Library papers; tracked-but-unsaved papers are read-only.)
+- **Author** dimensions jump to the **[Authors](authors.md)** page's
+  needs-attention section — the canonical place to repair / merge those authors —
+  rather than duplicating author management in a health modal.
 
 ## Observed — no automatic repair
 
