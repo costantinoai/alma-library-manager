@@ -184,7 +184,7 @@ function ScoreBar({ score }: { score: number }) {
   else barColor = 'bg-critical-500'
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200">
         <div
           className={`h-1.5 rounded-full transition-all ${barColor}`}
           style={{ width: `${pct}%` }}

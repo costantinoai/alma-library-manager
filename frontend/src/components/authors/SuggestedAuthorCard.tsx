@@ -2,6 +2,7 @@ import { Loader2, UserMinus, UserPlus } from 'lucide-react'
 
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { truncate } from '@/lib/utils'
 
@@ -80,9 +81,10 @@ export function SuggestedAuthorCard({
       : ''
 
   return (
-    <article
+    <Card
+      interactive
       onClick={onClick}
-      className="group flex h-full flex-col gap-3 rounded-sm border border-alma-100 bg-surface-2 p-4 shadow-paper-sm text-left shadow-sm transition hover:border-alma-300 hover:shadow-md cursor-pointer"
+      className="group flex h-full flex-col gap-3 p-4 text-left"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -173,7 +175,7 @@ export function SuggestedAuthorCard({
 
       <div className="space-y-1">
         <div className="flex items-center gap-2">
-          <div className="relative h-1 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className="relative h-1 w-full overflow-hidden rounded-full bg-parchment-200">
             <div
               className="absolute inset-y-0 left-0 rounded-full bg-alma-500 transition-all"
               style={{ width: `${pct}%` }}
@@ -220,8 +222,8 @@ export function SuggestedAuthorCard({
       >
         <Button
           size="sm"
-          variant="outline"
-          className="flex-1 border-alma-200 bg-surface-1 text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800"
+          variant="accent"
+          className="flex-1"
           onClick={(e) => {
             e.stopPropagation()
             onFollow()
@@ -234,7 +236,7 @@ export function SuggestedAuthorCard({
         <Button
           size="sm"
           variant="ghost"
-          className="text-slate-500 hover:bg-alma-100 hover:text-slate-700"
+          className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
           onClick={(e) => {
             e.stopPropagation()
             onReject()
@@ -245,6 +247,6 @@ export function SuggestedAuthorCard({
           Dismiss
         </Button>
       </footer>
-    </article>
+    </Card>
   )
 }

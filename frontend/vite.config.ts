@@ -11,6 +11,13 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    // Pre-bundle the graph renderer at dev-server start. It is reached ONLY via
+    // lazy import() (the author neighbourhood dialog + the Insights graph), so
+    // without this Vite discovers it at runtime on first open, re-optimizes,
+    // and forces a full-page reload — which reads as the view "failing".
+    include: ['react-force-graph-2d'],
+  },
   test: {
     // jsdom so React Testing Library can mount components; globals so tests
     // read like the backend pytest suite (describe/it/expect without imports).

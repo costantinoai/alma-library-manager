@@ -1,6 +1,7 @@
 import { BookOpenCheck, BookPlus, BookmarkCheck, Heart, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 type Tone = 'neutral' | 'queue' | 'add' | 'like' | 'love' | 'dismiss' | 'dislike'
@@ -114,20 +115,22 @@ function ActionButton({
 }: ActionButtonProps) {
   const { icon: iconColor, hover, active: activeClass } = toneClasses[tone]
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
       onClick={onClick}
       disabled={disabled}
       title={title}
       aria-label={title}
       aria-pressed={active}
       className={cn(
-        // Drop the rounded-full pill — modest 6px corner reads bookish/
-        // index-card per the v2 brand language. Soft hairline border
-        // throughout.
-        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors duration-150',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-1',
-        'disabled:pointer-events-none disabled:opacity-40',
+        // Route through the Button primitive but keep the per-tone soft-chip
+        // language: a modest 6px corner (bookish/index-card per the v2 brand)
+        // and a soft hairline border throughout. The variant + tone classes
+        // below override the ghost defaults so the toggle states stay intact.
+        'gap-1.5 whitespace-nowrap rounded-md border font-medium',
+        'focus-visible:ring-offset-1',
+        'disabled:opacity-40',
         compact ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-3 text-xs',
         active
           ? activeClass
@@ -145,7 +148,7 @@ function ActionButton({
         )}
       />
       {showLabel && <span className="leading-none">{label}</span>}
-    </button>
+    </Button>
   )
 }
 

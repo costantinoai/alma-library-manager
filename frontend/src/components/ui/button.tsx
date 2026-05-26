@@ -110,8 +110,18 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-busy={loading || undefined}
         {...props}
       >
-        {loading && !asChild && <Loader2 className="size-4 animate-spin" />}
-        {children}
+        {/* asChild → Slot requires exactly ONE child; passing the spinner
+            expression alongside (even when it's `false`) makes the children an
+            array and trips `React.Children.only`. So hand Slot the single child
+            untouched, and only compose the spinner on the real <button>. */}
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {loading && <Loader2 className="size-4 animate-spin" />}
+            {children}
+          </>
+        )}
       </Comp>
     )
   },

@@ -1,14 +1,16 @@
 import { useMemo, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { Plus, Users } from 'lucide-react'
 
 import {
   api,
+  getFollowedAuthorSignals,
   listAuthorsNeedsAttention,
   listFollowedAuthors,
   type Author,
   type AuthorNeedsAttentionRow,
+  type AuthorSignal,
   type AuthorSuggestion,
 } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -95,6 +97,27 @@ export function AuthorsPage() {
     () => new Set((followedAuthorsQuery.data ?? []).map((item) => item.author_id)),
     [followedAuthorsQuery.data],
   )
+
+  // Canonical author signals come from a SEPARATE, non-blocking query so the
+  // (slow) signal context build never gates the (fast) followed list that
+  // drives the grid — dismissing an author updates the grid instantly while
+  // signals refetch in the background. Keyed by the followed-id set so it
+  // auto-syncs when membership changes; keepPreviousData keeps the bars filled
+  // (no "no signal yet" flash) during that refetch.
+  const followedSignalsQuery = useQuery({
+    queryKey: ['followed-author-signals', [...followedIds].sort().join(',')],
+    queryFn: getFollowedAuthorSignals,
+    enabled: followedIds.size > 0,
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  })
+  const signalByAuthorId = useMemo(() => {
+    const map = new Map<string, AuthorSignal | null>()
+    for (const [id, signal] of Object.entries(followedSignalsQuery.data ?? {})) {
+      map.set(id, signal)
+    }
+    return map
+  }, [followedSignalsQuery.data])
   const followedAuthors = useMemo(
     () =>
       authors
@@ -219,7 +242,7 @@ export function AuthorsPage() {
               >
                 <FollowedAuthorCard
                   author={author}
-                  signal={null}
+                  signal={signalByAuthorId.get(author.id) ?? null}
                   onClick={() => openDetail(author)}
                   attentionRow={attentionByAuthor.get(author.id) ?? null}
                   onAttentionClick={() => {

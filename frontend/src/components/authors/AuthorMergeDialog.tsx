@@ -10,6 +10,7 @@ import {
 } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -293,7 +294,7 @@ export function AuthorMergeDialog({
               {authorsQuery.isLoading ? (
                 <LoadingState message="Loading authors..." />
               ) : mergeCandidates.length === 0 ? (
-                <div className="rounded-sm border border-dashed border-[var(--color-border)] bg-surface-2 p-4 text-sm text-slate-500">
+                <div className="rounded-sm border border-dashed border-edge-2 bg-surface-2 p-4 text-sm text-slate-500">
                   {emptyCandidateMessage}
                 </div>
               ) : (
@@ -312,8 +313,8 @@ export function AuthorMergeDialog({
                       }}
                       className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
                         isSelected
-                          ? 'border-alma-folio bg-alma-folio-soft'
-                          : 'border-[var(--color-border)] bg-surface-2 hover:bg-surface-2'
+                          ? 'border-accent bg-accent-soft'
+                          : 'border-edge-2 bg-surface-2 hover:border-accent'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -356,10 +357,7 @@ export function AuthorMergeDialog({
                   {mergeDiffs.map((diff) => {
                     const choice = mergeChoices[diff.key] ?? diff.defaultChoice
                     return (
-                      <div
-                        key={diff.key}
-                        className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
-                      >
+                      <Card key={diff.key} className="p-3">
                         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                           {diff.label}
                         </p>
@@ -385,8 +383,8 @@ export function AuthorMergeDialog({
                                 htmlFor={itemId}
                                 className={`flex cursor-pointer items-start gap-2 rounded-sm border p-2 text-sm transition ${
                                   isSelected
-                                    ? 'border-alma-folio bg-alma-folio-soft'
-                                    : 'border-[var(--color-border)] bg-surface-2 hover:border-alma-200'
+                                    ? 'border-accent bg-accent-soft'
+                                    : 'border-edge-2 bg-surface-2 hover:border-accent'
                                 }`}
                               >
                                 <RadioGroupItem
@@ -398,7 +396,7 @@ export function AuthorMergeDialog({
                                 <span className="min-w-0">
                                   <span
                                     className={`block text-[11px] font-medium uppercase tracking-wide ${
-                                      isSelected ? 'text-alma-folio' : 'text-slate-500'
+                                      isSelected ? 'text-accent' : 'text-slate-500'
                                     }`}
                                   >
                                     {verb} · {sideName}
@@ -411,13 +409,13 @@ export function AuthorMergeDialog({
                             )
                           })}
                         </RadioGroup>
-                      </div>
+                      </Card>
                     )
                   })}
                 </div>
               )
             ) : (
-              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-[var(--color-border)] bg-surface-2 p-6 text-center text-sm text-slate-500">
+              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-edge-2 bg-surface-2 p-6 text-center text-sm text-slate-500">
                 {absorbMode
                   ? 'Select the surviving author to compare metadata before merging.'
                   : 'Select an author from the corpus to compare metadata before merging.'}

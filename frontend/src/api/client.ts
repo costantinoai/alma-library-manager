@@ -826,6 +826,13 @@ export function listFollowedAuthors(): Promise<FollowedAuthor[]> {
   return api.get<FollowedAuthor[]>('/library/followed-authors')
 }
 
+/** Canonical author signals for every followed author, keyed by author_id.
+ *  Split from the list endpoint so the (slow) signal compute never blocks the
+ *  (fast) followed-author list that drives the grid. */
+export function getFollowedAuthorSignals(): Promise<Record<string, AuthorSignal | null>> {
+  return api.get<Record<string, AuthorSignal | null>>('/library/followed-authors/signals')
+}
+
 export function followAuthor(authorId: string, notifyNewPapers = true): Promise<FollowedAuthor> {
   return api.post<FollowedAuthor>('/library/followed-authors', {
     author_id: authorId,
@@ -921,11 +928,29 @@ export function backfillAuthorWorks(opts: {
   })
 }
 
+/** One named contributor to an author's signal. `score` is the display
+ *  magnitude (0..100); `tone` carries the sign so the bar renders length +
+ *  colour without re-deriving either. Mirrors
+ *  `alma.application.author_signal.AuthorSignalComponent`. */
+export interface AuthorSignalComponent {
+  key: string
+  label: string
+  score: number
+  tone: 'positive' | 'negative' | 'neutral'
+  detail?: string | null
+}
+
+/** The canonical author signal — one definition shared by the Authors page,
+ *  the detail popup, suggestions, rankings, and the discovery ranker. See
+ *  `alma.application.author_signal`. `affinity` is the signed (-1..1)
+ *  discovery scalar; `score` is its 0..100 display projection. */
 export interface AuthorSignal {
   score: number
+  affinity: number
   library_papers: number
   total_papers: number
   avg_rating: number | null
+  components: AuthorSignalComponent[]
 }
 
 export interface AuthorTopTopic {
@@ -950,6 +975,41 @@ export interface AuthorDetail {
 
 export function getAuthorDetail(authorId: string): Promise<AuthorDetail> {
   return api.get<AuthorDetail>(`/authors/${encodeURIComponent(authorId)}/detail`)
+}
+
+// ── Author neighbourhood (3D ego-network explorer) ──
+export type AuthorNeighbourRelation = 'center' | 'coauthor' | 'citation' | 'similar'
+
+export interface AuthorNeighbourNode {
+  id: string
+  oid?: string
+  name: string
+  relation: AuthorNeighbourRelation
+  weight: number
+  affiliation?: string | null
+  citedby?: number | null
+  is_center?: boolean
+}
+
+export interface AuthorNeighbourLink {
+  source: string
+  target: string
+  relation: Exclude<AuthorNeighbourRelation, 'center'>
+  weight: number
+}
+
+export interface AuthorNeighbourhood {
+  center: AuthorNeighbourNode
+  nodes: AuthorNeighbourNode[]
+  links: AuthorNeighbourLink[]
+  counts: { coauthor: number; citation: number; similar: number }
+  empty: boolean
+}
+
+/** Lazily fetch one author's ego-network. The backend computes it on demand
+ *  (bounded per relation), so only call this when the explorer opens. */
+export function getAuthorNeighbourhood(authorId: string): Promise<AuthorNeighbourhood> {
+  return api.get<AuthorNeighbourhood>(`/authors/${encodeURIComponent(authorId)}/neighbourhood`)
 }
 
 export interface OpenAlexWork {

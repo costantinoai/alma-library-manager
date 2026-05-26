@@ -1,6 +1,8 @@
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 
 import type { Author, AuthorNeedsAttentionRow, AuthorSignal } from '@/api/client'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorResolvedBadge } from '@/components/authors/AuthorResolvedBadge'
@@ -42,9 +44,10 @@ export function FollowedAuthorCard({
   ].filter(Boolean)
 
   return (
-    <article
+    <Card
+      interactive
       onClick={onClick}
-      className="group flex h-full cursor-pointer flex-col gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm shadow-sm transition hover:border-alma-300 hover:shadow-md"
+      className="group flex h-full flex-col gap-3 p-4"
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -67,8 +70,10 @@ export function FollowedAuthorCard({
               the section's amber `tone="warning"` chip because here
               it's the only attention signal on the card. */}
           {attentionRow && onAttentionClick ? (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={(event) => {
                 event.stopPropagation()
                 onAttentionClick()
@@ -79,10 +84,10 @@ export function FollowedAuthorCard({
                   .join(' — ') || attentionRow.suggested_action.hint
               }
               aria-label={`Resolve ${attentionRow.reason} for ${author.name}`}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-critical-100 bg-critical-50 text-critical-600 transition hover:border-critical-500 hover:bg-critical-100 hover:text-critical-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-critical-500"
+              className="rounded-full text-critical-600 hover:bg-critical-100 hover:text-critical-700"
             >
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-            </button>
+            </Button>
           ) : null}
           <StatusBadge tone={monitorHealthTone(author.monitor_health)} size="sm">
             {monitorLabel(author.monitor_health)}
@@ -99,15 +104,15 @@ export function FollowedAuthorCard({
         ) : null}
       </div>
 
-      <AuthorSignalBar signal={signal ?? null} />
+      <AuthorSignalBar signal={signal ?? null} breakdown="hover" />
 
-      <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
+      <div className="mt-auto flex items-center justify-between gap-3 border-t border-edge-2 pt-2 text-[11px] text-slate-500">
         <span>
           {lastYieldParts.length > 0 ? lastYieldParts.join(' · ') : 'No refresh yet'}
           {lastCheck ? ` · ${formatTimestamp(lastCheck)}` : null}
         </span>
-        <ChevronRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:text-alma-600" />
+        <ChevronRight className="h-3.5 w-3.5 text-slate-400 transition group-hover:text-accent" />
       </div>
-    </article>
+    </Card>
   )
 }

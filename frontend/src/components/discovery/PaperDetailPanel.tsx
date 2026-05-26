@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -433,12 +434,10 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 {loading && <Loader2 className="h-3 w-3 animate-spin text-slate-400" />}
               </EyebrowLabel>
               {p.abstract ? (
-                // Abstract block uses the warm cream "content" tone
-                // (alma-content #FDFBF3) so it reads as paper-with-
-                // ink-on-it against the cooler chrome-elev dialog
-                // body. Distinct surface signals "this is the work
-                // itself" vs the chrome around it.
-                <div className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-surface-1 p-4 leading-relaxed text-alma-900">
+                // Abstract sits on a lifted Card (one rung above the dialog
+                // body on the neutral ladder) so it reads as "the work itself"
+                // — paper-with-ink-on-it — distinct from the chrome around it.
+                <Card className="max-h-96 overflow-auto whitespace-pre-wrap p-4 leading-relaxed text-alma-900">
                   {p.abstract.length > 200 && (
                     <span
                       className="float-left mr-2 mt-1 font-brand text-[44px] font-semibold leading-none text-alma-800"
@@ -448,9 +447,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     </span>
                   )}
                   {p.abstract.length > 200 ? p.abstract.slice(1) : p.abstract}
-                </div>
+                </Card>
               ) : (
-                <div className="rounded-md border border-dashed border-[var(--color-border)] p-3 text-xs italic text-slate-400">
+                <div className="rounded-md border border-dashed border-edge-2 p-3 text-xs italic text-slate-400">
                   No abstract available for this paper.
                 </div>
               )}
@@ -569,9 +568,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </div>
-                  <div className="rounded-md border border-[var(--color-border)] bg-surface-2 p-3 text-slate-700 whitespace-pre-wrap">
+                  <Card className="p-3 text-slate-700 whitespace-pre-wrap">
                     {p.notes}
-                  </div>
+                  </Card>
                 </section>
               )
             )}
@@ -772,9 +771,10 @@ function RelatedWorksSection({
   return (
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger asChild>
-        <button
+        <Button
           type="button"
-          className="group/rel flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition hover:bg-surface-2/70"
+          variant="outline"
+          className="group/rel flex h-auto w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left font-normal shadow-none hover:border-[var(--color-border)] hover:bg-surface-2/70"
         >
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -797,7 +797,7 @@ function RelatedWorksSection({
               open && 'rotate-180',
             )}
           />
-        </button>
+        </Button>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2 space-y-2">
         {isLoading ? (
@@ -805,7 +805,7 @@ function RelatedWorksSection({
             <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Loading…
           </div>
         ) : works.length === 0 ? (
-          <div className="rounded-md border border-dashed border-slate-200 px-3 py-3 text-xs italic text-slate-400">
+          <div className="rounded-md border border-dashed border-edge-2 px-3 py-3 text-xs italic text-slate-400">
             {emptyCopy}
           </div>
         ) : (

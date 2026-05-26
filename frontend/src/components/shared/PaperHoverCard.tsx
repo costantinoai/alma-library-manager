@@ -27,7 +27,7 @@ function ScoreBar({ score }: { score: number }) {
     pct >= 70 ? 'bg-success-500' : pct >= 40 ? 'bg-warning-500' : 'bg-critical-500'
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
+      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200">
         <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-xs font-semibold tabular-nums text-slate-600">{pct}</span>

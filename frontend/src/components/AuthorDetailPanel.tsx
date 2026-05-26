@@ -8,6 +8,7 @@ import {
   ExternalLink,
   GitMerge,
   Loader2,
+  Network,
   Newspaper,
   RefreshCw,
   Trash2,
@@ -44,6 +45,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/LoadingState'
 import {
   Dialog,
@@ -55,6 +57,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { NeighbourhoodDialog } from '@/components/authors/NeighbourhoodDialog'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -93,13 +96,13 @@ function MetricCard({
   icon: ComponentType<{ className?: string }>
 }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
+    <Card className="p-3">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
         <Icon className="h-3.5 w-3.5" />
         {label}
       </div>
       <p className="mt-2 text-xl font-semibold text-alma-800">{value}</p>
-    </div>
+    </Card>
   )
 }
 
@@ -303,6 +306,8 @@ export function AuthorDetailPanel({
   const hasAuthorRow = !suggestion || !!suggestion.existing_author_id
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
   const [mergeOpen, setMergeOpen] = useState(false)
+  const [neighbourhoodOpen, setNeighbourhoodOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('overview')
 
   const detailQuery = useQuery({
     queryKey: ['author-detail', author?.id],
@@ -384,6 +389,7 @@ export function AuthorDetailPanel({
         ['authors'],
         ['author-detail', resolved.id],
         ['author-publications', resolved.id],
+        ['author-neighbourhood', resolved.id],
         ['activity-operations'],
       )
       toast({
@@ -501,8 +507,12 @@ export function AuthorDetailPanel({
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
+      {/* Flex column capped at the viewport: header + footer stay put while the
+          active tab is the one scrolling region. `w-[calc(100vw-2rem)]` keeps
+          the dialog inside narrow windows (the primitive centres it), and
+          `overflow-hidden` clips the rounded corners around the scroll area. */}
+      <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-2rem)] max-w-3xl flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           {/* `pr-12` on the inner row leaves clearance for the Dialog
               primitive's auto-injected close (X) button at right-4 top-4
               — without it the Follow / Unfollow chip overlaps the X. */}
@@ -515,12 +525,14 @@ export function AuthorDetailPanel({
             </div>
             <div className="shrink-0">
               {isFollowed ? (
+                // Unfollow is a reversible toggle (stops monitoring), NOT
+                // destructive — neutral outline. Critical is reserved for the
+                // one dangerous action (Delete) so its colour stays meaningful.
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => unfollowMutation.mutate()}
                   disabled={unfollowMutation.isPending}
-                  className="border-critical-100 text-critical-700 hover:bg-critical-50 hover:text-critical-700"
                 >
                   {unfollowMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -530,11 +542,13 @@ export function AuthorDetailPanel({
                   Unfollow
                 </Button>
               ) : (
+                // Follow is the affirmative CTA → accent (folio), per the
+                // Button contract.
                 <Button
                   size="sm"
+                  variant="accent"
                   onClick={() => followMutation.mutate()}
                   disabled={followMutation.isPending}
-                  className="bg-alma-folio text-white hover:bg-alma-folio/90"
                 >
                   {followMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -548,14 +562,14 @@ export function AuthorDetailPanel({
           </div>
         </DialogHeader>
 
-        <Tabs defaultValue="overview" className="max-h-[70vh] flex-col">
-          <TabsList className={isSuggestionOnly ? 'grid w-full grid-cols-2' : 'grid w-full grid-cols-3'}>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
+          <TabsList className={isSuggestionOnly ? 'grid w-full shrink-0 grid-cols-2' : 'grid w-full shrink-0 grid-cols-3'}>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="publications">Publications</TabsTrigger>
             {!isSuggestionOnly ? <TabsTrigger value="identifiers">Identifiers</TabsTrigger> : null}
           </TabsList>
 
-          <TabsContent value="overview" className="mt-4 space-y-4 overflow-y-auto pr-1">
+          <TabsContent value="overview" className="mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
             {detailQuery.isLoading ? (
               <LoadingState message="Loading detail..." />
             ) : (
@@ -567,7 +581,7 @@ export function AuthorDetailPanel({
                     </AlertDescription>
                   </Alert>
                 ) : null}
-                <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
+                <Card className="p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Author signal
@@ -578,8 +592,19 @@ export function AuthorDetailPanel({
                       </StatusBadge>
                     ) : null}
                   </div>
-                  <AuthorSignalBar signal={detail?.signal ?? null} className="mt-3" />
-                </div>
+                  <AuthorSignalBar signal={detail?.signal ?? null} className="mt-3" breakdown="inline" />
+                  {!isSuggestionOnly && author?.id ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setNeighbourhoodOpen(true)}
+                      className="mt-3 w-full justify-center gap-2 text-accent hover:bg-accent-soft hover:text-accent"
+                    >
+                      <Network className="h-4 w-4" aria-hidden />
+                      Explore neighbourhood
+                    </Button>
+                  ) : null}
+                </Card>
 
                 <div className="grid gap-3 md:grid-cols-4">
                   <MetricCard label="h-index" value={resolved.h_index ?? '—'} icon={Database} />
@@ -600,7 +625,7 @@ export function AuthorDetailPanel({
                   />
                 </div>
 
-                <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
+                <Card className="p-4">
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                     {isSuggestionOnly ? 'Shared topics' : 'Top topics'}
                   </p>
@@ -621,10 +646,10 @@ export function AuthorDetailPanel({
                       <span className="text-sm text-slate-400">No topic profile yet.</span>
                     )}
                   </div>
-                </div>
+                </Card>
 
                 {isSuggestionOnly && suggestion && suggestion.sample_titles.length > 0 ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
+                  <Card className="p-4">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Sample titles
                     </p>
@@ -635,11 +660,11 @@ export function AuthorDetailPanel({
                         </li>
                       ))}
                     </ul>
-                  </div>
+                  </Card>
                 ) : null}
 
                 {backfill ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
+                  <Card className="p-4">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                         Background corpus
@@ -670,36 +695,38 @@ export function AuthorDetailPanel({
                         <span>Coverage: {formatPercent(backfill.coverage_ratio, 0)}</span>
                       ) : null}
                     </div>
-                  </div>
+                  </Card>
                 ) : null}
 
                 <div className="flex flex-wrap gap-2">
                   {resolved.scholar_id ? (
-                    <a
-                      href={`https://scholar.google.com/citations?user=${resolved.scholar_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-surface-2"
-                    >
-                      Google Scholar <ExternalLink className="h-3 w-3" />
-                    </a>
+                    <Button asChild variant="outline" size="xs">
+                      <a
+                        href={`https://scholar.google.com/citations?user=${resolved.scholar_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Google Scholar <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </Button>
                   ) : null}
                   {resolved.openalex_id ? (
-                    <a
-                      href={`https://openalex.org/${resolved.openalex_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-surface-2"
-                    >
-                      OpenAlex <ExternalLink className="h-3 w-3" />
-                    </a>
+                    <Button asChild variant="outline" size="xs">
+                      <a
+                        href={`https://openalex.org/${resolved.openalex_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        OpenAlex <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </Button>
                   ) : null}
                 </div>
               </>
             )}
           </TabsContent>
 
-          <TabsContent value="publications" className="mt-4 overflow-y-auto pr-1">
+          <TabsContent value="publications" className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="mb-3 space-y-2">
               <p className="text-xs text-slate-500">{scopeDescription(scope)}</p>
               <div className="flex flex-wrap gap-2">
@@ -712,7 +739,9 @@ export function AuthorDetailPanel({
                     <Button
                       key={value}
                       size="sm"
-                      variant={scope === value ? 'default' : 'outline'}
+                      // Selected filter = accent (the contract's one "active /
+                      // selected / on" colour); the rest are neutral outlines.
+                      variant={scope === value ? 'accent' : 'outline'}
                       onClick={() => setScope(value)}
                       disabled={disabled}
                       title={disabled ? 'Not in your DB yet — follow first, or use OpenAlex' : undefined}
@@ -797,15 +826,19 @@ export function AuthorDetailPanel({
             )}
           </TabsContent>
 
-          <TabsContent value="identifiers" className="mt-4 overflow-y-auto pr-1">
+          <TabsContent value="identifiers" className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <AuthorIdentifierResolution author={resolved} />
           </TabsContent>
         </Tabs>
 
-        <DialogFooter className="mt-2 flex flex-wrap items-center gap-2">
+        {/* Footer reads left→right by emphasis: Refresh is the primary
+            maintenance action (navy fill); Discovery is navigation (ghost);
+            Merge is a structural secondary (outline); Delete is the lone
+            destructive, pushed right and kept low-weight to avoid mis-clicks. */}
+        <DialogFooter className="mt-2 flex shrink-0 flex-wrap items-center gap-2">
           <Button
             size="sm"
-            variant="outline"
+            variant="default"
             onClick={() => refreshMutation.mutate()}
             disabled={refreshMutation.isPending}
             title="Re-fetch profile + publications from OpenAlex; backfills missing SPECTER2 vectors and recomputes the author centroid."
@@ -819,7 +852,7 @@ export function AuthorDetailPanel({
           </Button>
           <Button
             size="sm"
-            variant="outline"
+            variant="ghost"
             onClick={() => navigateTo('discovery', { query: `author:${resolved.name}` })}
           >
             <Compass className="h-4 w-4" />
@@ -844,7 +877,7 @@ export function AuthorDetailPanel({
           <div className="ml-auto">
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
               className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
@@ -871,6 +904,19 @@ export function AuthorDetailPanel({
         // The suggestion is resolved by the merge — close the panel and let the
         // dialog's own ['author-suggestions'] invalidation refresh the rail.
         onOpenChange(false)
+      }}
+    />
+    <NeighbourhoodDialog
+      authorId={author?.id ?? null}
+      authorName={resolved?.name ?? author?.name ?? 'Author'}
+      hasOpenAlexId={!!(resolved?.openalex_id || author?.openalex_id)}
+      open={neighbourhoodOpen}
+      onOpenChange={setNeighbourhoodOpen}
+      onBuildData={() => refreshMutation.mutate()}
+      isBuilding={refreshMutation.isPending}
+      onResolveIdentity={() => {
+        setNeighbourhoodOpen(false)
+        setActiveTab('identifiers')
       }}
     />
     </>

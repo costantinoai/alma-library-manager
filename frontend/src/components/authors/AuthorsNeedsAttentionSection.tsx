@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Input } from '@/components/ui/input'
@@ -252,7 +253,7 @@ function NeedsAttentionRow({
     )
 
   return (
-    <li className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 shadow-paper-sm shadow-sm hover:border-[var(--color-border)]">
+    <li className="rounded-sm border border-edge-1 bg-surface-1 p-3 shadow-paper-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -477,12 +478,12 @@ function ProfileChip({
 }) {
   const palette =
     tone === 'primary'
-      ? 'border-alma-folio bg-alma-folio-soft text-alma-800'
+      ? 'border-accent bg-accent-soft text-alma-800'
       : tone === 'orcid'
         ? 'border-warning-100 bg-warning-50/70 text-alma-800'
-        : 'border-[var(--color-border)] bg-surface-2 text-alma-800'
+        : 'border-edge-2 bg-surface-2 text-alma-800'
   const dotTone =
-    tone === 'primary' ? 'bg-alma-folio' : tone === 'orcid' ? 'bg-warning-500' : 'bg-slate-400'
+    tone === 'primary' ? 'bg-accent' : tone === 'orcid' ? 'bg-warning-500' : 'bg-slate-400'
   return (
     <a
       href={`https://openalex.org/${openalexId}`}
@@ -513,7 +514,7 @@ function ProfileRow({
   tone?: 'primary' | 'alt'
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5">
+    <Card className="flex items-center justify-between gap-3 p-2.5">
       <div className="min-w-0">
         <StatusBadge tone={tone === 'primary' ? 'info' : 'neutral'} size="sm">
           {label}
@@ -525,12 +526,12 @@ function ProfileRow({
         href={`https://openalex.org/${openalexId}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 rounded-sm border border-[var(--color-border)] bg-surface-1 px-2 py-1 text-[11px] text-alma-700 hover:border-alma-300 hover:text-alma-800"
+        className="inline-flex items-center gap-1 rounded-sm border border-edge-1 bg-surface-1 px-2 py-1 text-[11px] text-alma-700 hover:border-alma-300 hover:text-alma-800"
       >
         Open
         <ExternalLink className="h-3 w-3" />
       </a>
-    </div>
+    </Card>
   )
 }
 
