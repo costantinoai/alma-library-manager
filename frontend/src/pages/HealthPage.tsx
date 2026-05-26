@@ -34,7 +34,7 @@ import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
 import { RepairGroup } from '@/components/health/RepairGroup'
 import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
-import { SystemStatusTab } from '@/components/health/SystemStatusTab'
+import { SystemStatusCards } from '@/components/health/SystemStatusCards'
 import { SectionLabel } from '@/components/health/SectionLabel'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -204,10 +204,11 @@ export function HealthPage() {
       ) : null}
 
       {/* Operational health on top — an active incident (rate-limited source,
-          failed job) should be the first thing seen, before the repair backlog. */}
+          failed job) should be the first thing seen, before the repair backlog.
+          One card per system component; status + count + one-click fix in each. */}
       <section className="space-y-3">
         <SectionLabel>System status</SectionLabel>
-        <SystemStatusTab />
+        <SystemStatusCards />
       </section>
 
       {/* The affected-papers drilldown, opened by any status row on the page. */}

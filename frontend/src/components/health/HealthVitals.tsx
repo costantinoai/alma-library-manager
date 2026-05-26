@@ -1,17 +1,18 @@
 /**
- * HealthVitals — the page's signature element: a thin "vitals ribbon"
- * (stacked severity bar across all dimensions) over a centered MetricTile
- * scoreboard. Sits on the brightest surface (alma-content) because it's the
+ * HealthVitals — the page's signature element: a thin "vitals ribbon" (a
+ * stacked severity bar across every data dimension) with a legend and a slim
+ * KPI caption. Sits on the brightest surface (alma-content) because it's the
  * most-forefront band on the page ("more forefront = lighter").
  *
  * The ribbon is the one place semantic color spans width — the controlled
  * exception to the "calm off-white" rule, justified because it IS the triage.
- * On load the segments grow from zero and the scoreboard tiles rise in a short
- * stagger — the "vital signs coming online" beat — honoring prefers-reduced-motion.
+ * The per-dimension counts (critical / warnings) live IN the ribbon + legend;
+ * the redundant scoreboard tiles were folded away (the operational glance now
+ * lives in the System status cards below). On load the segments grow from zero
+ * — the "vital signs coming online" beat — honoring prefers-reduced-motion.
  */
 import { motion, useReducedMotion } from 'framer-motion'
 
-import { MetricTile } from '@/components/shared/MetricTile'
 import { JargonHint } from '@/components/shared/JargonHint'
 import type { HealthSnapshot } from '@/api/client'
 
@@ -29,26 +30,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
   const totals = snapshot.totals
   const bySeverity = totals.dimensions_by_severity ?? {}
   const totalDims = RIBBON_SEGMENTS.reduce((sum, s) => sum + (bySeverity[s.key] ?? 0), 0)
-
   const coverage = Math.round(totals.embedding_coverage_pct ?? 0)
-
-  const tiles = [
-    { label: 'Critical', value: bySeverity.critical ?? 0, tone: 'critical' as const, hint: undefined, suffix: undefined },
-    { label: 'Warnings', value: bySeverity.warning ?? 0, tone: 'warning' as const, hint: undefined, suffix: undefined },
-    {
-      label: 'Embedding coverage',
-      value: `${coverage}%`,
-      tone: (totals.embeddings_ready ? 'success' : 'warning') as 'success' | 'warning',
-      hint: totals.embeddings_ready ? 'ready' : 'ready at ≥80%',
-      suffix: (
-        <JargonHint
-          title="Embedding coverage"
-          description="Share of papers that have a vector for the active embedding model. Discovery similarity and the paper map need high coverage; readiness flips on at 80%."
-        />
-      ),
-    },
-    { label: 'Papers', value: totals.papers_total, tone: 'neutral' as const, hint: undefined, suffix: undefined },
-  ]
 
   return (
     <section className="rounded-sm border border-[var(--color-border)] bg-alma-content p-4 shadow-paper-sm sm:p-5">
@@ -75,35 +57,39 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
             )
           })}
       </div>
-      {/* Ribbon legend */}
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+
+      {/* Ribbon legend — the per-severity dimension counts. */}
+      <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
         {RIBBON_SEGMENTS.map((seg) => (
           <span key={seg.key} className="inline-flex items-center gap-1.5">
             <span className={`h-2 w-2 rounded-full ${seg.className}`} />
-            {seg.label} {bySeverity[seg.key] ?? 0}
+            {seg.label} <span className="font-medium tabular-nums text-alma-700">{bySeverity[seg.key] ?? 0}</span>
           </span>
         ))}
       </div>
 
-      {/* Scoreboard — short staggered rise on load. */}
-      <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {tiles.map((tile, i) => (
-          <motion.div
-            key={tile.label}
-            initial={reducedMotion ? false : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, ease: 'easeOut', delay: 0.25 + 0.06 * i }}
-          >
-            <MetricTile
-              label={tile.label}
-              value={tile.value}
-              tone={tile.tone}
-              align="center"
-              hint={tile.hint}
-              labelSuffix={tile.suffix}
-            />
-          </motion.div>
-        ))}
+      {/* Slim KPI caption — the two corpus facts worth a glance, no tile grid. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[var(--color-border)] pt-3 text-xs text-slate-500">
+        <span className="tabular-nums text-alma-700">{totals.papers_total.toLocaleString()}</span>
+        <span>papers assessed</span>
+        <span className="text-alma-200">·</span>
+        <span className="tabular-nums text-alma-700">{coverage}%</span>
+        <span className="inline-flex items-center gap-1">
+          embedding coverage
+          <JargonHint
+            title="Embedding coverage"
+            description="Share of papers that have a vector for the active embedding model. Discovery similarity and the paper map need high coverage; readiness flips on at 80%."
+          />
+        </span>
+        <span
+          className={
+            totals.embeddings_ready
+              ? 'rounded-full bg-emerald-700/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700'
+              : 'rounded-full bg-amber-700/10 px-2 py-0.5 text-[10px] font-medium text-amber-700'
+          }
+        >
+          {totals.embeddings_ready ? 'ready' : 'ready at ≥80%'}
+        </span>
       </div>
     </section>
   )
