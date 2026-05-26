@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -9,6 +10,15 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    // jsdom so React Testing Library can mount components; globals so tests
+    // read like the backend pytest suite (describe/it/expect without imports).
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/test/setup.ts',
+    css: false,
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
   build: {
     rollupOptions: {
