@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SubPanel } from '@/components/ui/sub-panel'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { isBackgroundTriggerSource } from '@/lib/activity'
 import { parseAlmaTimestamp } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { api } from '@/api/client'
@@ -260,6 +261,7 @@ function OperationsView({
   onCancel: (jobId: string) => void
 }) {
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({})
+  const [showBackground, setShowBackground] = useState(false)
 
   const byId = useMemo(() => {
     const map = new Map<string, JobStatus>()
@@ -310,6 +312,21 @@ function OperationsView({
     })
     return out.slice(0, 100)
   }, [ops, byId, chainLeadByJobId])
+
+  // Split top-level operations into the user-meaningful ones (shown normally)
+  // and background plumbing (cache materialization, hydration, scheduled
+  // sweeps — see isBackgroundTriggerSource). The latter is collapsed and
+  // dimmed into a single "Background activity" group so one user action reads
+  // as one entry instead of being buried under dozens of auto jobs.
+  const { primaryParents, backgroundParents } = useMemo(() => {
+    const primary: JobStatus[] = []
+    const background: JobStatus[] = []
+    for (const op of parents) {
+      if (isBackgroundTriggerSource(op.trigger_source)) background.push(op)
+      else primary.push(op)
+    }
+    return { primaryParents: primary, backgroundParents: background }
+  }, [parents])
 
   const childrenByParent = useMemo(() => {
     const grouped = new Map<string, JobStatus[]>()
@@ -536,7 +553,22 @@ function OperationsView({
     )
   }
 
-  if (parents.length === 0) {
+  const renderParentBlock = (parent: JobStatus) => {
+    const children = childrenByParent.get(parent.job_id) ?? []
+    const isExpanded = expandedParents[parent.job_id] !== false
+    return (
+      <div key={parent.job_id}>
+        {renderRow(parent, { childCount: children.length })}
+        {children.length > 0 && isExpanded && (
+          <div className="border-t border-slate-100">
+            {children.map((child) => renderRow(child, { isChild: true, parentId: parent.job_id }))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (primaryParents.length === 0 && backgroundParents.length === 0) {
     return (
       <div className="flex items-center justify-center py-12 text-sm text-slate-400">
         No recent operations
@@ -546,20 +578,33 @@ function OperationsView({
 
   return (
     <div className="divide-y divide-slate-100">
-      {parents.map((parent) => {
-        const children = childrenByParent.get(parent.job_id) ?? []
-        const isExpanded = expandedParents[parent.job_id] !== false
-        return (
-          <div key={parent.job_id}>
-            {renderRow(parent, { childCount: children.length })}
-            {children.length > 0 && isExpanded && (
-              <div className="border-t border-slate-100">
-                {children.map((child) => renderRow(child, { isChild: true, parentId: parent.job_id }))}
-              </div>
-            )}
-          </div>
-        )
-      })}
+      {primaryParents.map(renderParentBlock)}
+
+      {/* Background activity — cache materialization, hydration, scheduled
+          sweeps. Collapsed and dimmed so it never competes with the
+          operations the user actually started. */}
+      {backgroundParents.length > 0 && (
+        <div className="bg-surface-cool-1">
+          <button
+            type="button"
+            onClick={() => setShowBackground((v) => !v)}
+            className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-surface-cool-2 hover:text-slate-600"
+            title={showBackground ? 'Hide background activity' : 'Show background activity'}
+          >
+            {showBackground ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            <span>Background activity</span>
+            <span className="rounded-full bg-surface-cool-3 px-1.5 py-0.5 tabular-nums text-slate-500">
+              {backgroundParents.length}
+            </span>
+            <span className="ml-1 truncate font-normal text-slate-400">cache &amp; maintenance — runs on its own</span>
+          </button>
+          {showBackground && (
+            <div className="divide-y divide-slate-100 opacity-60">
+              {backgroundParents.map(renderParentBlock)}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

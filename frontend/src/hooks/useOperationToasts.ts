@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/api/client'
 import { invalidateQueryRoots } from '@/lib/queryHelpers'
+import { isBackgroundTriggerSource } from '@/lib/activity'
 import { toast } from './useToast'
 import { errorToast } from '@/hooks/useToast'
 
@@ -9,13 +10,34 @@ interface JobStatus {
   job_id: string
   status: string // 'running' | 'completed' | 'failed' | 'cancelled' | 'cancelling' | 'queued'
   operation_key?: string
+  trigger_source?: string
   message?: string
   finished_at?: string
   parent_job_id?: string
 }
 
-const STORAGE_KEY = 'alma-last-seen-ops'
 const POLL_INTERVAL = 12000 // 12 seconds
+
+/**
+ * Friendly toast title for a completed/failed operation, derived from its
+ * operation_key domain. The job's own `message` carries the detail (e.g.
+ * "Lens 'Library': 50 recommendations generated"), shown as the description.
+ */
+function operationToastTitle(operationKey: string | undefined, failed: boolean): string {
+  const key = (operationKey ?? '').trim()
+  const domain =
+    key.startsWith('discovery.') ? 'Discovery refresh' :
+    key.startsWith('feed.') ? 'Feed refresh' :
+    key.startsWith('authors.') ? 'Authors' :
+    (key.startsWith('library') ? 'Library' :
+    key.startsWith('imports.') ? 'Import' :
+    key.startsWith('graphs.') ? 'Graph' :
+    key.startsWith('tags.') ? 'Tags' :
+    key.startsWith('alerts.') ? 'Alerts' :
+    key.startsWith('ai.') ? 'AI' :
+    'Operation')
+  return failed ? `${domain} failed` : `${domain} complete`
+}
 
 function rootsForOperation(operationKey?: string): string[] {
   const key = (operationKey ?? '').trim()
@@ -136,31 +158,28 @@ function rootsForOperation(operationKey?: string): string[] {
 }
 
 /**
- * Hook that monitors completed operations and shows toast notifications
- * for newly completed or failed operations.
+ * Watches the operation feed and, for each operation that finishes, (a) always
+ * refetches the pages it affects and (b) raises at most one outcome toast.
  *
- * Tracks seen operations in localStorage to avoid showing duplicate toasts
- * across page reloads.
+ * Two deliberate rules keep this quiet (it used to flood ~76 toasts per
+ * Discovery refresh):
+ *
+ *  - **Background plumbing never toasts** (cache materialization, hydration,
+ *    scheduled sweeps, lane subtasks — see `isBackgroundTriggerSource`). Its
+ *    query invalidation still runs so pages swap stale payloads.
+ *  - **Dedup is a per-session high-water-mark, in memory only.** On the first
+ *    poll we mark everything already-terminal as seen, so a fresh tab starts
+ *    from "now" and can never replay a backlog. (The old localStorage set was
+ *    capped at 100 IDs; the cap dropped still-relevant IDs and they
+ *    re-toasted — that was the bug.)
+ *
+ * One toast per user-meaningful operation, with the job's own `message` as the
+ * feedback line.
  */
 export function useOperationToasts() {
   const queryClient = useQueryClient()
-  const lastSeenRef = useRef<Set<string>>(new Set())
+  const seenRef = useRef<Set<string>>(new Set())
   const hasInitializedRef = useRef(false)
-
-  // Initialize from localStorage on mount
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (Array.isArray(parsed)) {
-          lastSeenRef.current = new Set(parsed)
-        }
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }, [])
 
   // Poll operations. Shares the ['activity-operations'] cache with
   // ActivityPanel and AIConfigCard so all three subscribers ride a
@@ -178,69 +197,57 @@ export function useOperationToasts() {
       return
     }
 
-    // On first load, mark all current completed/failed ops as seen
-    // to avoid showing toasts for operations that completed before this session
+    const isTerminal = (op: JobStatus) =>
+      op.status === 'completed' || op.status === 'failed' || op.status === 'cancelled'
+
+    // First poll of this tab: everything already terminal is "old news" —
+    // mark it seen so we never replay a backlog. In memory only; a reload
+    // simply starts fresh from now.
     if (!hasInitializedRef.current) {
       hasInitializedRef.current = true
-      const completedJobIds = operations
-        .filter((op) => op.status === 'completed' || op.status === 'failed')
-        .map((op) => op.job_id)
-
-      for (const jobId of completedJobIds) {
-        lastSeenRef.current.add(jobId)
-      }
-
-      // Persist to localStorage
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify([...lastSeenRef.current]))
-      } catch {
-        // Ignore storage errors
+      for (const op of operations) {
+        if (isTerminal(op)) seenRef.current.add(op.job_id)
       }
       return
     }
 
-    // Filter to top-level operations only (no parent_job_id)
-    const topLevelOps = operations.filter((op) => !op.parent_job_id)
-
-    // Find newly completed or failed operations
-    const newCompletedOps = topLevelOps.filter(
-      (op) =>
-        (op.status === 'completed' || op.status === 'failed') &&
-        !lastSeenRef.current.has(op.job_id)
+    // Operations that became terminal since the last poll.
+    const newlyTerminal = operations.filter(
+      (op) => isTerminal(op) && !seenRef.current.has(op.job_id),
     )
+    if (newlyTerminal.length === 0) {
+      return
+    }
 
-    // Limit to 3 toasts to avoid spam (matches TOAST_LIMIT)
-    const toShow = newCompletedOps.slice(0, 3)
-
-    for (const op of toShow) {
-      // Mark as seen immediately
-      lastSeenRef.current.add(op.job_id)
-
+    for (const op of newlyTerminal) {
+      seenRef.current.add(op.job_id)
+      // Always refetch affected pages — background plumbing (cache
+      // materialization, hydration) is precisely what pages need to pick up,
+      // even though it never toasts.
       const roots = rootsForOperation(op.operation_key)
       if (roots.length > 0) {
         void invalidateQueryRoots(queryClient, ...roots)
       }
-
-      // Show toast
-      if (op.status === 'completed') {
-        toast({
-          title: 'Operation complete',
-          description: op.message || op.job_id,
-        })
-      } else if (op.status === 'failed') {
-        errorToast('Operation failed')
-      }
     }
 
-    // Persist updated seen set to localStorage
-    if (toShow.length > 0) {
-      try {
-        // Keep only the most recent 100 job IDs to avoid unbounded growth
-        const recentJobIds = [...lastSeenRef.current].slice(-100)
-        lastSeenRef.current = new Set(recentJobIds)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(recentJobIds))
-      } catch {
-        // Ignore storage errors
+    // Toast only user-meaningful, top-level outcomes — never background
+    // plumbing, never a subtask (it rides under its parent), never a plain
+    // cancellation. Capped per cycle as a final spam guard.
+    const toToast = newlyTerminal.filter(
+      (op) =>
+        (op.status === 'completed' || op.status === 'failed') &&
+        !op.parent_job_id &&
+        !isBackgroundTriggerSource(op.trigger_source),
+    )
+
+    for (const op of toToast.slice(0, 3)) {
+      if (op.status === 'completed') {
+        toast({
+          title: operationToastTitle(op.operation_key, false),
+          description: op.message || op.job_id,
+        })
+      } else {
+        errorToast(operationToastTitle(op.operation_key, true), op.message || undefined)
       }
     }
   }, [operations, queryClient])

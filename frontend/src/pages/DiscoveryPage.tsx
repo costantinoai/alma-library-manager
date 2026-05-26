@@ -216,14 +216,19 @@ export function DiscoveryPage() {
   const refreshLensMutation = useMutation({
     mutationFn: ({ lensId, limit }: { lensId: string; limit: number }) => refreshLens(lensId, limit),
     onSuccess: (envelope) => {
-      // Refresh runs in the APS pool — useOperationToasts auto-invalidates
-      // `lens-recommendations` etc. on `discovery.*` completion. Clear the
-      // actioned-id overlay now so the new rec set isn't masked by stale state.
+      // The refresh runs in the APS pool. useOperationToasts owns the single
+      // outcome toast ("Discovery refresh complete/failed" with the result
+      // counts) and auto-invalidates `lens-recommendations` etc. on
+      // completion — so we deliberately don't toast a redundant "queued" here.
+      // Clear the actioned-id overlay now so the incoming rec set isn't masked
+      // by stale state.
       setActionedIds(new Set())
-      const queued = envelope.status === 'already_running'
-        ? 'Refresh already running. Track progress in Activity.'
-        : 'Refresh queued. Recommendations will appear when complete.'
-      toast({ title: 'Lens refresh queued', description: queued })
+      if (envelope.status === 'already_running') {
+        toast({
+          title: 'Refresh already running',
+          description: 'Track progress in Activity — you’ll get a notification when it finishes.',
+        })
+      }
     },
     onError: () => errorToast('Refresh failed', 'Could not queue lens refresh.'),
   })
