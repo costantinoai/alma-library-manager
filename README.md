@@ -414,11 +414,25 @@ fill in what you have. The full reference is in
 
 ## Browser connector (Firefox)
 
-Save the paper open in your browser straight into ALMa, like the Zotero
-connector. Download **`alma-connector-<version>.xpi`** from the
-[release](https://github.com/costantinoai/alma-library-manager/releases)
-matching your ALMa version and open it in Firefox (`about:addons` → ⚙ →
-**Install Add-on From File**). Full guide:
+Save the paper open in your browser straight into ALMa — like the Zotero
+connector: it detects the paper, you pick **Library** and/or **Reading list**,
+and it saves to your running ALMa.
+
+<p align="center">
+  <img src="docs/screenshots/extension-connector.png" alt="ALMa Firefox connector saving a paper" width="40%">
+</p>
+
+**Install on Firefox:**
+
+1. Download **`alma-connector-<version>.xpi`** from the
+   [latest release](https://github.com/costantinoai/alma-library-manager/releases/latest)
+   (under **Assets**) — pick the version matching your ALMa.
+2. Open `about:addons` → the gear ⚙ → **Install Add-on From File…**, and
+   choose the downloaded `.xpi`.
+3. On any paper page, click the ALMa toolbar icon, choose **Library** and/or
+   **Reading list**, and hit **Save to ALMa**.
+
+Full guide:
 [docs/user-guide/browser-connector.md](docs/user-guide/browser-connector.md).
 
 **Releasing it (maintainer):** signing is **local**. Keep an AMO API key in
