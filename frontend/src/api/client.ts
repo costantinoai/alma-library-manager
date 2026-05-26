@@ -858,6 +858,15 @@ export function rejectAuthorSuggestion(
   })
 }
 
+/** Soft-remove an author (status='removed', D3) — reversible; the row +
+ *  provenance stay for the Corpus explorer / Discovery negative signal. Used by
+ *  the author-detail Delete instead of the hard DELETE (which is purge-only). */
+export function softRemoveAuthor(
+  authorId: string,
+): Promise<{ author_id: string; status: string }> {
+  return api.post(`/authors/${encodeURIComponent(authorId)}/remove`)
+}
+
 /** Fire-and-forget log for outcome calibration: records that the user
  *  followed an author surfaced by the rail. The actual follow write
  *  goes through `followAuthor` / `POST /authors`; this is the

@@ -3130,6 +3130,32 @@ def delete_author(
         raise_internal(f"Failed to delete author {author_id}", e)
 
 
+@router.post(
+    "/{author_id}/remove",
+    summary="Soft-remove an author",
+    description=(
+        "Soft-remove an author (status='removed', D3): the row + provenance stay "
+        "for the Corpus explorer and Discovery's negative signal, and it drops out "
+        "of active author views. Reversible. This is the normal-flow removal (e.g. "
+        "the suggestion-detail Delete, alongside the suggestion dismiss); the hard "
+        "DELETE is reserved for explicit purges."
+    ),
+)
+def remove_author(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_lifecycle import soft_remove_author
+
+    try:
+        changed = soft_remove_author(db, author_id, reason="manual remove (author detail)")
+        db.commit()
+        return {"author_id": author_id, "status": "removed" if changed else "noop"}
+    except Exception as e:
+        raise_internal(f"Failed to remove author {author_id}", e)
+
+
 class ResolveOpenAlexRequest(BaseModel):
     scholar_id: str
 

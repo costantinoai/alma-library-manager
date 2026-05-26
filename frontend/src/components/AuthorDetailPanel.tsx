@@ -21,7 +21,9 @@ import {
   followAuthor,
   getAuthorDetail,
   listAuthorOpenAlexWorks,
+  rejectAuthorSuggestion,
   saveOpenAlexWork,
+  softRemoveAuthor,
   unfollowAuthor,
   updateReadingStatus,
   type Author,
@@ -295,6 +297,10 @@ export function AuthorDetailPanel({
   // keep the OpenAlex bibliography scope accessible so the user can
   // browse their work before following.
   const isSuggestionOnly = !!suggestion && !author?.added_at
+  // Whether `resolved` is a real `authors` row (vs. a pure OpenAlex candidate
+  // synthesized from a suggestion). Soft-remove + merge need a row; a candidate
+  // with no row can only be dismissed. Non-suggestion opens always have a row.
+  const hasAuthorRow = !suggestion || !!suggestion.existing_author_id
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
   const [mergeOpen, setMergeOpen] = useState(false)
 
@@ -390,15 +396,35 @@ export function AuthorDetailPanel({
     onError: () => errorToast('Error', 'Failed to start author refresh.'),
   })
 
+  // Delete = dismiss the suggestion (so it stops resurfacing) + soft-remove the
+  // author row (D3 — reversible, provenance kept). A suggestion-only candidate
+  // has no row, so the dismiss is the whole action.
   const deleteMutation = useMutation({
-    mutationFn: () => api.delete(`/authors/${encodeURIComponent(resolved.id)}`),
+    mutationFn: async () => {
+      if (suggestion?.openalex_id) {
+        await rejectAuthorSuggestion(suggestion.openalex_id, suggestion.suggestion_type)
+      }
+      if (hasAuthorRow) {
+        await softRemoveAuthor(resolved.id)
+      }
+    },
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['authors'], ['library-followed-authors'])
-      toast({ title: 'Deleted', description: `Author ${resolved.name} has been deleted.` })
+      void invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['library-followed-authors'],
+        ['author-suggestions'],
+      )
+      toast({
+        title: hasAuthorRow ? 'Author removed' : 'Suggestion dismissed',
+        description: hasAuthorRow
+          ? `${resolved.name} was removed${suggestion ? ' and the suggestion dismissed' : ''}.`
+          : `Dismissed ${resolved.name} — it won't resurface.`,
+      })
       onDeleted?.(resolved)
       onOpenChange(false)
     },
-    onError: () => errorToast('Error', 'Failed to delete author.'),
+    onError: () => errorToast('Error', 'Failed to remove author.'),
   })
 
   const rateMutation = useMutation({
@@ -799,17 +825,20 @@ export function AuthorDetailPanel({
             <Compass className="h-4 w-4" />
             Open in Discovery
           </Button>
-          {!isSuggestionOnly ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setMergeOpen(true)}
-              title="Merge this author with another existing author row in the corpus."
-            >
-              <GitMerge className="h-4 w-4" />
-              Merge with author
-            </Button>
-          ) : null}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setMergeOpen(true)}
+            disabled={!hasAuthorRow}
+            title={
+              hasAuthorRow
+                ? 'Merge this author with another in your corpus / library — pick the target and which fields win.'
+                : 'Follow this author first (it has no local record yet) to merge it with an existing one.'
+            }
+          >
+            <GitMerge className="h-4 w-4" />
+            Merge with author
+          </Button>
           <div className="ml-auto">
             <Button
               size="sm"
@@ -833,6 +862,11 @@ export function AuthorDetailPanel({
       open={mergeOpen}
       onOpenChange={setMergeOpen}
       primaryAuthor={resolved}
+      onMerged={() => {
+        // The suggestion is resolved by the merge — close the panel and let the
+        // dialog's own ['author-suggestions'] invalidation refresh the rail.
+        onOpenChange(false)
+      }}
     />
     </>
   )
