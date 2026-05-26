@@ -9,7 +9,9 @@
  */
 import type { MetricTileTone } from '@/components/shared/MetricTile'
 import type { StatusBadgeTone } from '@/components/ui/status-badge'
-import type { HealthDimension } from '@/api/client'
+import type { HealthDimension, MaintenanceOperation } from '@/api/client'
+
+type Severity = HealthDimension['severity']
 
 const SEVERITY_RANK: Record<string, number> = {
   critical: 0,
@@ -45,11 +47,46 @@ export function severityLabel(severity?: string | null): string {
   return severity ?? 'unknown'
 }
 
+/** StatusBadge tone for a maintenance job's last-run status. */
+export function runStatusTone(status?: string | null): StatusBadgeTone {
+  if (status === 'completed') return 'positive'
+  if (status === 'failed') return 'negative'
+  if (status === 'running' || status === 'queued' || status === 'scheduled') return 'info'
+  return 'neutral'
+}
+
 /** Cost-class label for a maintenance task. */
 export const COST_LABEL: Record<string, string> = {
   cheap: 'local',
   network: 'network',
   compute: 'compute',
+}
+
+/**
+ * Dimension keys whose affected-papers drilldown is backed by the API.
+ * Mirrors `DIMENSION_ITEM_KEYS` in `src/alma/services/health.py` — keep in
+ * sync. Author dimensions are deliberately absent: they're repaired by running
+ * the op, not by drilling into individual paper rows, so their status rows
+ * render read-only (no "view →").
+ */
+export const DRILLDOWN_DIM_KEYS: ReadonlySet<string> = new Set([
+  'identity.unresolved',
+  'papers.missing_abstract',
+  'papers.missing_doi',
+  'papers.missing_url',
+  'papers.missing_publication_date',
+  'papers.missing_authorships',
+  'papers.missing_topics',
+  'papers.missing_references',
+  'embeddings.local_computable',
+  'embeddings.s2_vector_missing',
+  'embeddings.coverage',
+  'ledger.retry_waiting',
+])
+
+/** Whether a dimension exposes the affected-papers drilldown. */
+export function canDrilldown(key: string): boolean {
+  return DRILLDOWN_DIM_KEYS.has(key)
 }
 
 /** Worst-first ordering (critical → warning → info → ok), then larger count first. */
@@ -62,4 +99,40 @@ export function sortBySeverity(dims: HealthDimension[]): HealthDimension[] {
 /** A dimension is "needs attention" when it is anything but healthy. */
 export function isAttention(dim: HealthDimension): boolean {
   return dim.severity !== 'ok'
+}
+
+/**
+ * Worst severity across the dimensions one operation repairs (lower rank =
+ * worse). Returns `null` for a dimension-less cleanup op (gc / preprint dedup),
+ * which carries no severity — only a pending count.
+ */
+export function opSeverity(dims: HealthDimension[]): Severity | null {
+  if (dims.length === 0) return null
+  return dims.reduce<Severity>(
+    (worst, d) => (severityRank(d.severity) < severityRank(worst) ? d.severity : worst),
+    'ok',
+  )
+}
+
+/**
+ * An op "needs attention" when any dimension it repairs is non-healthy, or —
+ * for a dimension-less cleanup op — when it has items pending. Healthy + idle
+ * ops collapse into the group's "All clear" strip.
+ */
+export function isOpAttention(op: MaintenanceOperation, dims: HealthDimension[]): boolean {
+  const sev = opSeverity(dims)
+  if (sev != null) return sev !== 'ok'
+  return op.candidates_pending > 0
+}
+
+/** Worst-first ordering for op cards: severity, then larger pending first. */
+export function sortOpsByAttention(
+  ops: MaintenanceOperation[],
+  dimsOf: (op: MaintenanceOperation) => HealthDimension[],
+): MaintenanceOperation[] {
+  return [...ops].sort((a, b) => {
+    const ra = severityRank(opSeverity(dimsOf(a)) ?? 'ok')
+    const rb = severityRank(opSeverity(dimsOf(b)) ?? 'ok')
+    return ra - rb || b.candidates_pending - a.candidates_pending
+  })
 }

@@ -312,6 +312,7 @@ def run_s2_vector_backfill(
     *,
     limit: int = 200,
     target_paper_ids: list[str] | tuple[str, ...] | None = None,
+    chunk_size: int = 250,
     set_job_status: Callable[..., None],
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
@@ -431,15 +432,14 @@ def run_s2_vector_backfill(
         errors = 0
         lookup_failures = 0
         bad_local_doi = 0
-        # Bumped from 50 → 250 (2026-05-08). The S2 `/paper/batch`
-        # endpoint accepts up to 500 IDs per call (see
-        # `semantic_scholar.fetch_papers_batch` cap). At 2 lookup IDs
-        # per paper (s2_id + DOI), 250 papers fits comfortably under
-        # that. Drops a 4 909-paper queue from ~99 batches to ~20 and
-        # cuts wall-clock from ~5–8 min to ~2–3 min, which makes the
-        # in-process worker far less likely to be killed mid-flight by
-        # uvicorn `--reload` or a container restart.
-        chunk_size = 250
+        # Default 250 (2026-05-08). The S2 `/paper/batch` endpoint accepts up to
+        # 500 IDs per call (see `semantic_scholar.fetch_papers_batch` cap); at 2
+        # lookup IDs per paper (s2_id + DOI), 250 papers fits comfortably under
+        # that. Drops a 4 909-paper queue from ~99 batches to ~20 and cuts
+        # wall-clock from ~5–8 min to ~2–3 min. The caller (Health maintenance)
+        # may override via ``chunk_size`` — clamp to [1, 500] so the value the ETA
+        # was computed from is exactly what runs.
+        chunk_size = max(1, min(int(chunk_size or 250), 500))
 
         for start in range(0, total, chunk_size):
             if is_cancellation_requested(job_id):

@@ -246,8 +246,14 @@ def _dimension(
     coverage_pct: float | None = None,
     scope: str = "corpus",
     extra_actions: list[dict[str, str]] | None = None,
+    exhausted: int | None = None,
 ) -> dict[str, Any]:
-    """Build one uniform dimension record (the shape every surface reads)."""
+    """Build one uniform dimension record (the shape every surface reads).
+
+    ``exhausted`` (when given) is the subset of this gap that no repair op can
+    fix — tried and terminal (e.g. Semantic Scholar has no vector for them). The
+    UI splits it out so the user isn't surprised that Run-now skips them.
+    """
     actions = list(_REPAIR_ACTIONS.get(repair_task or "", []))
     if extra_actions:
         actions = actions + extra_actions
@@ -264,6 +270,7 @@ def _dimension(
         "repair_task": repair_task,
         "actions": actions,
         "scope": scope,
+        "exhausted": int(exhausted) if exhausted is not None else None,
     }
 
 
@@ -323,12 +330,25 @@ _MISSING_FIELD_META: dict[str, tuple[str, str, str, str]] = {
 # --------------------------------------------------------------------------
 
 
-def _embedding_coverage(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Active-model embedding coverage — mirrors ``graphs.py`` exactly."""
-    try:
-        from alma.discovery.similarity import get_active_embedding_model
+def embedding_coverage(
+    conn: sqlite3.Connection, model: str | None = None
+) -> dict[str, Any]:
+    """Canonical embedding-coverage definition: active-model vectors / all papers.
 
-        model = get_active_embedding_model(conn)
+    This is the single source of truth for the headline coverage % — both the
+    Health snapshot (``assess_corpus``) and Settings' ``/ai/status`` call it so
+    the two surfaces can never report a different number. ``model`` defaults to
+    ``get_active_embedding_model(conn)`` (the ``discovery_settings.embedding_model``
+    setting); callers that track a provider-specific model (``/ai/status``) pass
+    it explicitly so their headline matches their own per-model breakdown.
+    (``graphs.py`` still keeps an equivalent inline copy — folding it in is a
+    separate DRY follow-up.)
+    """
+    try:
+        if model is None:
+            from alma.discovery.similarity import get_active_embedding_model
+
+            model = get_active_embedding_model(conn)
         emb = conn.execute(
             "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
             (model,),
@@ -385,13 +405,15 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     from alma.services.embedding_chain import (
         _count_local_specter2_candidates,
         _count_s2_fetch_candidates,
+        _count_s2_fetch_terminal,
     )
 
     enr = build_enrichment_status(conn)
     papers_total = int(enr.get("papers_total") or 0)
     missing = enr.get("missing") or {}
-    coverage = _embedding_coverage(conn)
+    coverage = embedding_coverage(conn)
     s2_missing = _count_s2_fetch_candidates(conn)
+    s2_terminal = _count_s2_fetch_terminal(conn)  # tried, no vector at S2 — only local fill helps
     local_computable = _count_local_specter2_candidates(conn)
     orphans = _count_canonical_orphans(conn)
     without_oa = int(enr.get("without_openalex_id") or 0)
@@ -410,7 +432,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             severity=_severity_from_fraction(without_oa, papers_total),
             explanation=(
                 f"{without_oa} papers aren't resolved to an OpenAlex id, so they "
-                "lack rich metadata, citations, and topics."
+                "lack rich metadata, citations, and topics. Resolve missing identity "
+                "(Semantic Scholar title search) is the fix — including papers a previous "
+                "search left stuck as 'unmatched'; until they resolve they can't be "
+                "enriched or embedded."
             ),
             impact="OpenAlex resolution unlocks abstracts, references, topics, and vectors.",
             repair_task="title_resolution",
@@ -483,10 +508,14 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             severity=_severity_from_fraction(s2_missing, papers_total),
             explanation=(
                 f"{s2_missing} papers have a DOI/S2 id and could fetch a precomputed "
-                "SPECTER2 vector from Semantic Scholar."
+                "SPECTER2 vector from Semantic Scholar. Papers that Semantic Scholar "
+                "has no vector for fall through to local compute below."
             ),
             impact="Fetched vectors are higher quality than local fallbacks and need no GPU.",
             repair_task="s2_vector",
+            # Tried + terminal at S2 (no vector / unmatched): not re-fetched — only
+            # local compute can help. Split out so they don't read as actionable here.
+            exhausted=s2_terminal,
         )
     )
     dims.append(
@@ -499,7 +528,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             severity=_severity_from_fraction(local_computable, papers_total),
             explanation=(
                 f"{local_computable} papers have a title + abstract and can be embedded "
-                "locally with SPECTER2."
+                "locally with SPECTER2 — this is the only fix for papers Semantic Scholar "
+                "has no vector for. Papers missing a title or abstract can't be embedded "
+                "at all; fix those via metadata rehydration first (see the missing-abstract "
+                "/ missing-title gaps above)."
             ),
             impact="Covers papers Semantic Scholar can't supply a vector for.",
             repair_task="embedding",
@@ -559,7 +591,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # dimensions / actions change.
 _HEALTH_CORPUS_FINGERPRINT_SQL = """
     SELECT
-      'health-logic-v2',
+      'health-logic-v4',
       (SELECT COUNT(*) FROM papers WHERE COALESCE(canonical_paper_id,'')=''),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),

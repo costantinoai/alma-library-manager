@@ -423,6 +423,15 @@ def resolve_canonical_paper_id(
     return canonical or paper_id
 
 
+def count_preprint_twins(conn: sqlite3.Connection, scope: str = "library") -> int:
+    """How many preprint↔journal twin pairs the dedup would collapse for ``scope``.
+    Drives the Health card's pending count (local DB scan — no ETA)."""
+    try:
+        return len(find_preprint_twin_candidates(conn, scope=scope))
+    except Exception:
+        return 0
+
+
 # -- batch runner -------------------------------------------------------------
 
 

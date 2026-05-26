@@ -65,11 +65,44 @@ def get_operations(
     return maintenance.list_operations(db)
 
 
+@router.get(
+    "/operations/{key}/estimate",
+    summary="Recompute a maintenance op's pending count + ETA for chosen params",
+    description=(
+        "Cheap recompute of just ``candidates_pending`` + ``eta`` for a given "
+        "``scope`` / ``dry_run`` — lets the UI refresh the ETA when the user "
+        "changes a control without re-listing every operation."
+    ),
+)
+def estimate_operation(
+    key: str,
+    scope: Optional[str] = Query(None),
+    dry_run: Optional[bool] = Query(None),
+    batch_size: Optional[int] = Query(None, ge=1),
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    task = maintenance.REGISTRY.get(key)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
+    params: dict = {}
+    if scope is not None:
+        params["scope"] = scope
+    if dry_run is not None:
+        params["dry_run"] = dry_run
+    return maintenance.estimate_task(
+        db, task, _health_payload(db), params=params or None, batch_size=batch_size
+    )
+
+
 class RunMaintenanceRequest(BaseModel):
-    """Optional body — restrict the run to a specific set of papers (a drilldown
-    'fix selected'). Omit to run the task at its normal daily-cap scope."""
+    """Optional body. ``target_paper_ids`` restricts the run to a specific set (a
+    drilldown 'fix selected'). ``params`` carries run-time controls a task declares
+    in its ``params_spec`` (e.g. ``{"scope": "library"}`` or ``{"dry_run": true}``).
+    Omit both to run the task at its default scope + daily cap."""
 
     target_paper_ids: Optional[list[str]] = Field(default=None)
+    params: Optional[dict] = Field(default=None)
 
 
 @router.post(
@@ -91,7 +124,8 @@ def run_operation(
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
     targets = body.target_paper_ids if body else None
-    job_id = maintenance.run_task_now(db, task, target_paper_ids=targets)
+    params = body.params if body else None
+    job_id = maintenance.run_task_now(db, task, target_paper_ids=targets, params=params)
     if not job_id:
         # scheduler not importable (e.g. tests/CLI) — surface a clear noop.
         return {"key": key, "status": "noop", "job_id": None}
@@ -103,6 +137,7 @@ class MaintenanceConfigRequest(BaseModel):
 
     enabled: Optional[bool] = Field(default=None, description="Allow the idle healer to run this task")
     daily_cap: Optional[int] = Field(default=None, ge=1, description="Max items the healer processes per UTC day")
+    batch_size: Optional[int] = Field(default=None, ge=1, description="API items per request (overridable ops only)")
 
 
 @router.post(
@@ -119,7 +154,9 @@ def set_operation_config(
     task = maintenance.REGISTRY.get(key)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
-    maintenance.set_task_config(db, task, enabled=body.enabled, daily_cap=body.daily_cap)
+    maintenance.set_task_config(
+        db, task, enabled=body.enabled, daily_cap=body.daily_cap, batch_size=body.batch_size
+    )
     return maintenance.describe_task(db, task, _health_payload(db))
 
 

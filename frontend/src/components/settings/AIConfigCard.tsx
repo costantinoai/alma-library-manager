@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -14,11 +14,11 @@ import {
   Cpu,
   Folder,
   Globe,
+  HeartPulse,
   Info,
   Loader2,
   Package,
   RefreshCw,
-  Search,
   Save,
   Server,
   Terminal,
@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 
 import { api, type AIConfig, type AIDependencyEnvironment, type AIStatus } from '@/api/client'
+import { navigateTo } from '@/lib/hashRoute'
 import {
   AsyncButton,
   KeyValueRow,
@@ -72,14 +73,6 @@ import {
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
-
-type ComputeScope = 'missing' | 'stale' | 'missing_stale' | 'all'
-
-type ComputeEmbeddingsResponse = {
-  job_id: string
-  status?: string
-  message?: string
-}
 
 // ---------------------------------------------------------------------------
 // Form schema — only fields the user can edit live here. Display-only state
@@ -337,31 +330,15 @@ function ResolutionStep({
 export function AIConfigCard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const [embeddingJobId, setEmbeddingJobId] = useState<string | null>(null)
-  const [s2FetchJobId, setS2FetchJobId] = useState<string | null>(null)
-  const [titleResolutionJobId, setTitleResolutionJobId] = useState<string | null>(null)
-  const activeEmbeddingJobId = embeddingJobId || s2FetchJobId || titleResolutionJobId
 
+  // Coverage repairs (fetch S2 vectors / resolve identity / compute embeddings)
+  // moved to the Health → Maintenance tab, where they run with ETAs + caps. This
+  // card now only *configures* the provider and shows read-only coverage; the
+  // only embedding write left here is the model-cleanup "Delete Inactive".
   const aiStatusQuery = useQuery({
     queryKey: ['ai-status'],
     queryFn: () => api.get<AIStatus>('/ai/status'),
     staleTime: 0,
-    refetchInterval: activeEmbeddingJobId ? 4000 : false,
-  })
-
-  // Shares the ['activity-operations'] cache with useOperationToasts
-  // and ActivityPanel — see useOperationToasts.ts. The 3s refetch only
-  // applies while an embedding job is active; otherwise this observer
-  // is disabled and the cache is fed by the slower pollers.
-  const embeddingOpsQuery = useQuery({
-    queryKey: ['activity-operations'],
-    queryFn: () =>
-      api.get<Array<{ job_id: string; status: string; operation_key?: string; message?: string }>>(
-        '/activity',
-      ),
-    enabled: Boolean(activeEmbeddingJobId),
-    staleTime: 0,
-    refetchInterval: activeEmbeddingJobId ? 3000 : false,
   })
 
   const form = useForm<AIConfigForm>({
@@ -421,20 +398,6 @@ export function AIConfigCard() {
     onError: () => errorToast('Failed to recheck AI environment'),
   })
 
-  const computeEmbeddingsMutation = useMutation({
-    mutationFn: (scope: ComputeScope = 'missing_stale') =>
-      api.post<ComputeEmbeddingsResponse>(`/ai/compute-embeddings?scope=${scope}`),
-    onSuccess: async (data) => {
-      if (data.job_id) setEmbeddingJobId(data.job_id)
-      await invalidateQueries(queryClient, ['ai-status'], ['activity-operations'])
-      toast({
-        title: data.status === 'noop' ? 'Embedding run not started' : 'Embedding run submitted',
-        description: data.message || `Job: ${data.job_id.slice(0, 8)}...`,
-      })
-    },
-    onError: () => errorToast('Failed to start embedding computation'),
-  })
-
   const deleteInactiveEmbeddingsMutation = useMutation({
     mutationFn: () =>
       api.delete<{ status: string; active_model: string; deleted: number; message: string }>(
@@ -446,76 +409,6 @@ export function AIConfigCard() {
     },
     onError: () => errorToast('Failed to delete inactive vectors'),
   })
-
-  const backfillS2VectorsMutation = useMutation({
-    mutationFn: () => api.post<ComputeEmbeddingsResponse>('/ai/backfill-s2-vectors'),
-    onSuccess: async (data) => {
-      if (data.job_id) setS2FetchJobId(data.job_id)
-      await invalidateQueries(queryClient, ['ai-status'], ['activity-operations'])
-      toast({
-        title: 'S2 vector fetch submitted',
-        description: data.message || `Job: ${data.job_id.slice(0, 8)}...`,
-      })
-    },
-    onError: () => errorToast('Failed to start S2 vector fetch'),
-  })
-
-  const titleResolutionMutation = useMutation({
-    mutationFn: () => api.post<ComputeEmbeddingsResponse>('/ai/title-resolution-sweep'),
-    onSuccess: async (data) => {
-      if (data.job_id) setTitleResolutionJobId(data.job_id)
-      await invalidateQueries(queryClient, ['ai-status'], ['activity-operations'])
-      toast({
-        title: 'Title resolution submitted',
-        description: data.message || `Job: ${data.job_id.slice(0, 8)}...`,
-      })
-    },
-    onError: () => errorToast('Failed to start title resolution sweep'),
-  })
-
-  // Close out job tracking when the background operation finishes.
-  useEffect(() => {
-    if (!embeddingJobId || !embeddingOpsQuery.data) return
-    const op = embeddingOpsQuery.data.find((item) => item.job_id === embeddingJobId)
-    if (!op) return
-    if (['queued', 'running', 'cancelling'].includes(op.status)) return
-    setEmbeddingJobId(null)
-    void invalidateQueries(queryClient, ['ai-status'], ['insights-diagnostics'])
-    toast({
-      title: op.status === 'completed' ? 'Embedding run completed' : 'Embedding run finished',
-      description: op.message || 'Embedding coverage has been refreshed.',
-      variant: op.status === 'failed' ? 'destructive' : 'default',
-    })
-  }, [embeddingJobId, embeddingOpsQuery.data, queryClient, toast])
-
-  useEffect(() => {
-    if (!s2FetchJobId || !embeddingOpsQuery.data) return
-    const op = embeddingOpsQuery.data.find((item) => item.job_id === s2FetchJobId)
-    if (!op) return
-    if (['queued', 'running', 'cancelling'].includes(op.status)) return
-    setS2FetchJobId(null)
-    void invalidateQueries(queryClient, ['ai-status'], ['insights-diagnostics'])
-    toast({
-      title: op.status === 'completed' ? 'S2 vector fetch completed' : 'S2 vector fetch finished',
-      description: op.message || 'Downloaded vector coverage has been refreshed.',
-      variant: op.status === 'failed' ? 'destructive' : 'default',
-    })
-  }, [s2FetchJobId, embeddingOpsQuery.data, queryClient, toast])
-
-  useEffect(() => {
-    if (!titleResolutionJobId || !embeddingOpsQuery.data) return
-    const op = embeddingOpsQuery.data.find((item) => item.job_id === titleResolutionJobId)
-    if (!op) return
-    if (['queued', 'running', 'cancelling'].includes(op.status)) return
-    setTitleResolutionJobId(null)
-    void invalidateQueries(queryClient, ['ai-status'], ['insights-diagnostics'])
-    toast({
-      title:
-        op.status === 'completed' ? 'Title resolution completed' : 'Title resolution finished',
-      description: op.message || 'Identity resolution sweep is done.',
-      variant: op.status === 'failed' ? 'destructive' : 'default',
-    })
-  }, [titleResolutionJobId, embeddingOpsQuery.data, queryClient, toast])
 
   const missingDependencies = useMemo(() => {
     if (!aiStatusQuery.data) return []
@@ -844,140 +737,21 @@ export function AIConfigCard() {
                   </AlertDescription>
                 </Alert>
 
-                {status.embeddings.s2_backfill ? (() => {
-                  const sb = status.embeddings.s2_backfill
-                  const fetchReady = sb.eligible_missing ?? 0
-                  const noIdentity = sb.ineligible_missing ?? 0
-                  const stuckUnmatched = sb.terminal_unmatched ?? 0
-                  const identityNeeded = noIdentity + stuckUnmatched
-                  const localFillReady =
-                    sb.local_compute_candidates ?? status.embeddings.missing ?? 0
-                  const noVectorAtS2 = sb.terminal_missing_vector ?? 0
-                  const blockedNoText = sb.local_compute_blocked_missing_text ?? 0
-
-                  type Lane = {
-                    Icon: LucideIcon
-                    label: string
-                    count: number
-                    detail: string
-                  }
-                  const lanes: Lane[] = [
-                    {
-                      Icon: Package,
-                      label: 'Fetch Missing S2 Vectors',
-                      count: fetchReady,
-                      detail:
-                        fetchReady === 0
-                          ? 'Idle — every paper with a usable DOI or S2 ID has been tried.'
-                          : 'Papers ready for /paper/batch.',
-                    },
-                    {
-                      Icon: Search,
-                      label: 'Resolve Missing Identity',
-                      count: identityNeeded,
-                      detail:
-                        identityNeeded === 0
-                          ? 'Idle — no papers need identity resolution.'
-                          : `${noIdentity.toLocaleString()} have no DOI or S2 ID · ${stuckUnmatched.toLocaleString()} stuck "unmatched". Drained ~50/click via /paper/search.`,
-                    },
-                    {
-                      Icon: Cpu,
-                      label: 'AI Compute Missing',
-                      count: localFillReady,
-                      detail:
-                        localFillReady === 0
-                          ? 'Idle — no papers waiting on local fill.'
-                          : noVectorAtS2 > 0
-                            ? `Papers with title + abstract. ${noVectorAtS2.toLocaleString()} are stuck because S2 has no SPECTER2 vector — only local fill helps.`
-                            : 'Papers with title + abstract.',
-                    },
-                  ]
-                  const blocked: Lane | null =
-                    blockedNoText > 0
-                      ? {
-                          Icon: AlertCircle,
-                          label: 'Blocked — no button can help',
-                          count: blockedNoText,
-                          detail:
-                            'Missing title or abstract — fix via metadata rehydration first.',
-                        }
-                      : null
-
-                  return (
-                    <div className="rounded-md border border-alma-100 bg-alma-50 p-4 shadow-paper-inset-cool">
-                      <p className="mb-3 text-[10px] font-medium uppercase tracking-[0.18em] text-alma-700">
-                        What's actionable now
-                      </p>
-                      <div className="space-y-3">
-                        {lanes.map(({ Icon, label, count, detail }) => {
-                          const idle = count === 0
-                          return (
-                            <div
-                              key={label}
-                              className="grid grid-cols-[auto_1fr_auto] items-start gap-3"
-                            >
-                              <div
-                                className={cn(
-                                  'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm transition-colors',
-                                  idle
-                                    ? 'bg-alma-100/60 text-alma-400'
-                                    : 'bg-alma-100 text-alma-700',
-                                )}
-                              >
-                                <Icon className="h-4 w-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <p
-                                  className={cn(
-                                    'text-sm font-medium leading-tight',
-                                    idle ? 'text-alma-500' : 'text-alma-800',
-                                  )}
-                                >
-                                  {label}
-                                </p>
-                                <p className="mt-0.5 text-xs leading-snug text-slate-500">
-                                  {detail}
-                                </p>
-                              </div>
-                              <p
-                                className={cn(
-                                  'font-brand text-2xl font-semibold leading-none tabular-nums',
-                                  idle ? 'text-alma-300' : 'text-alma-800',
-                                )}
-                              >
-                                {count.toLocaleString()}
-                              </p>
-                            </div>
-                          )
-                        })}
-                        {blocked ? (
-                          <div className="grid grid-cols-[auto_1fr_auto] items-start gap-3 border-t border-alma-100/70 pt-3">
-                            <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-alma-100/60 text-alma-400">
-                              <blocked.Icon className="h-4 w-4" />
-                            </div>
-                            <div className="min-w-0">
-                              <p className="text-sm font-medium leading-tight text-alma-500">
-                                {blocked.label}
-                              </p>
-                              <p className="mt-0.5 text-xs leading-snug text-slate-500">
-                                {blocked.detail}
-                              </p>
-                            </div>
-                            <p className="font-brand text-2xl font-semibold leading-none tabular-nums text-alma-400">
-                              {blocked.count.toLocaleString()}
-                            </p>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  )
-                })() : null}
-                <Alert variant="warning" className="px-3 py-2">
-                  <Cpu className="h-4 w-4" />
-                  <AlertTitle className="text-xs">Manual AI compute</AlertTitle>
+                <Alert variant="info" className="px-3 py-2">
+                  <HeartPulse className="h-4 w-4" />
+                  <AlertTitle className="text-xs">Fixing coverage gaps</AlertTitle>
                   <AlertDescription className="text-xs">
-                    Local embedding compute can use heavy CPU/GPU. It runs only when you press
-                    an AI compute button and is tracked in Activity.
+                    Missing S2 vectors, unresolved identity, and uncomputed embeddings are repaired
+                    from{' '}
+                    <button
+                      type="button"
+                      onClick={() => navigateTo('health', { tab: 'maintenance' })}
+                      className="font-medium text-alma-700 underline-offset-2 hover:underline"
+                    >
+                      Health → Maintenance
+                    </button>
+                    , where each repair shows an ETA and a daily cap. This card only configures the
+                    provider and shows read-only coverage.
                   </AlertDescription>
                 </Alert>
 
@@ -1032,60 +806,12 @@ export function AIConfigCard() {
                 ) : null}
 
                 <div className="flex flex-wrap items-center gap-3">
-                  <AsyncButton
-                    variant="outline"
-                    size="sm"
-                    icon={<Package className="h-4 w-4" />}
-                    pending={backfillS2VectorsMutation.isPending || !!s2FetchJobId}
-                    disabled={
-                      !!activeEmbeddingJobId ||
-                      (status.embeddings.s2_backfill?.eligible_missing ?? 1) === 0
-                    }
-                    onClick={() => backfillS2VectorsMutation.mutate()}
-                  >
-                    {s2FetchJobId ? 'S2 Fetch In Progress' : 'Fetch Missing S2 Vectors'}
-                  </AsyncButton>
-                  <AsyncButton
-                    variant="outline"
-                    size="sm"
-                    icon={<Search className="h-4 w-4" />}
-                    pending={titleResolutionMutation.isPending || !!titleResolutionJobId}
-                    disabled={
-                      !!activeEmbeddingJobId ||
-                      ((status.embeddings.s2_backfill?.terminal_unmatched ?? 0) +
-                        (status.embeddings.s2_backfill?.ineligible_missing ?? 0)) ===
-                        0
-                    }
-                    onClick={() => titleResolutionMutation.mutate()}
-                  >
-                    {titleResolutionJobId
-                      ? 'Title Resolution In Progress'
-                      : 'Resolve Missing Identity'}
-                  </AsyncButton>
-                  <AsyncButton
-                    variant="outline"
-                    size="sm"
-                    icon={<Cpu className="h-4 w-4" />}
-                    pending={computeEmbeddingsMutation.isPending || !!embeddingJobId}
-                    disabled={
-                      values.provider === 'none' ||
-                      !!activeEmbeddingJobId ||
-                      (values.provider === 'local' &&
-                        values.local_model === 'specter2-base' &&
-                        (status.embeddings.s2_backfill?.local_compute_candidates ?? 1) === 0)
-                    }
-                    onClick={() => computeEmbeddingsMutation.mutate('missing')}
-                  >
-                    {embeddingJobId ? 'AI Compute In Progress' : 'AI Compute Missing'}
-                  </AsyncButton>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={
-                          deleteInactiveEmbeddingsMutation.isPending || !!embeddingJobId
-                        }
+                        disabled={deleteInactiveEmbeddingsMutation.isPending}
                       >
                         {deleteInactiveEmbeddingsMutation.isPending ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1100,7 +826,7 @@ export function AIConfigCard() {
                         <AlertDialogTitle>Delete vectors for inactive models?</AlertDialogTitle>
                         <AlertDialogDescription>
                           Removes stored embeddings for every model except the currently active
-                          provider. You can recompute them later with "AI Compute Missing".
+                          provider. You can recompute them later from Health → Maintenance.
                         </AlertDialogDescription>
                       </AlertDialogHeader>
                       <AlertDialogFooter>
@@ -1114,12 +840,6 @@ export function AIConfigCard() {
                       </AlertDialogFooter>
                     </AlertDialogContent>
                   </AlertDialog>
-                  {embeddingJobId ? (
-                    <span className="text-xs text-slate-500">
-                      Refreshing coverage while job{' '}
-                      <span className="font-mono">{embeddingJobId.slice(0, 12)}</span> runs.
-                    </span>
-                  ) : null}
                 </div>
               </div>
             </SettingsSection>

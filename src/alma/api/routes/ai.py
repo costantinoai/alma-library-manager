@@ -26,6 +26,7 @@ from alma.core.secrets import (
     delete_secret,
     set_secret,
 )
+from alma.services.health import embedding_coverage
 
 router = APIRouter(
     dependencies=[Depends(get_current_user)],
@@ -168,10 +169,10 @@ def _build_dependency_setup_suggestions(
     if env_type in {"conda", "miniconda", "miniforge"}:
         suggestions.extend(
             [
-                "Create a clean env: conda create -n scholarbot-ai python=3.11 -y",
-                "Activate it: conda activate scholarbot-ai",
+                "Create a clean env: conda create -n alma-ai python=3.11 -y",
+                "Activate it: conda activate alma-ai",
                 f"Install packages: {provider_install_line}",
-                "Set this env folder in Settings (e.g., <conda_base>/envs/scholarbot-ai).",
+                "Set this env folder in Settings (e.g., <conda_base>/envs/alma-ai).",
                 "Restart backend after install so Python reloads compiled dependencies from this env.",
             ]
         )
@@ -682,13 +683,12 @@ def ai_status(
     if active_provider is not None:
         expected_embedding_model = active_provider.model_name
 
-    try:
-        embedding_count = db.execute(
-            "SELECT COUNT(*) FROM publication_embeddings WHERE model = ?",
-            (expected_embedding_model,),
-        ).fetchone()[0]
-    except sqlite3.OperationalError:
-        embedding_count = 0
+    # Headline coverage comes from the canonical definition shared with the
+    # Health snapshot (assess_corpus), so the two surfaces can never report a
+    # different number. We pass our provider-aware model so the headline matches
+    # the per-model breakdown computed just below.
+    cov = embedding_coverage(db, model=expected_embedding_model)
+    embedding_count = cov["embeddings_count"]
 
     try:
         lifecycle_row = db.execute(
@@ -721,7 +721,7 @@ def ai_status(
     stale_embeddings = int((lifecycle_row["stale_embeddings"] if lifecycle_row else 0) or 0)
     up_to_date_embeddings = int((lifecycle_row["up_to_date_embeddings"] if lifecycle_row else 0) or 0)
 
-    coverage_pct = round(embedding_count / total_papers * 100, 1) if total_papers > 0 else 0.0
+    coverage_pct = cov["coverage_pct"]
     up_to_date_pct = round(up_to_date_embeddings / total_papers * 100, 1) if total_papers > 0 else 0.0
 
     canonical_source_counts = _embedding_source_counts(db, S2_SPECTER2_MODEL)

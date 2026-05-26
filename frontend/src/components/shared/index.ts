@@ -1,4 +1,5 @@
 export { ActionCardHeader, type ActionCardHeaderProps } from './ActionCardHeader'
+export { EtaHint } from './EtaHint'
 export { JargonHint } from './JargonHint'
 export { MetricTile, type MetricTileTone, type MetricTileProps } from './MetricTile'
 export { PaperCard, type PaperCardPaper, type ScoreSignal } from './PaperCard'

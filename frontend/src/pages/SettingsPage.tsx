@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, CheckCircle, Cable, Database, Save, Sparkles } from 'lucide-react'
+import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, Save, Sparkles } from 'lucide-react'
 
 import { api, type Settings } from '@/api/client'
-import { AsyncButton } from '@/components/settings/primitives'
+import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
+import { Button } from '@/components/ui/button'
+import { navigateTo } from '@/lib/hashRoute'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -17,10 +19,8 @@ import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
 import { DataManagementCard } from '@/components/settings/DataManagementCard'
 import { LibraryManagementCard } from '@/components/settings/LibraryManagementCard'
-import { CorpusMaintenanceCard } from '@/components/settings/CorpusMaintenanceCard'
 import { CorpusExplorerCard } from '@/components/settings/CorpusExplorerCard'
 import { AboutCard } from '@/components/settings/AboutCard'
-import { OperationalStatusCard } from '@/components/settings/OperationalStatusCard'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 
@@ -52,10 +52,8 @@ type AnchorId =
   | 'discovery-weights'
   | 'feed-monitors'
   | 'ai-config'
-  | 'operational-status'
   | 'data-management'
   | 'library-management'
-  | 'corpus-maintenance'
   | 'corpus-explorer'
   | 'about'
 
@@ -68,7 +66,7 @@ interface TocEntry {
 const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Cable }[] = [
   { id: 'connections', label: 'Connections', caption: 'Upstream sources and delivery channels', icon: Cable },
   { id: 'intelligence', label: 'Intelligence', caption: 'Discovery weights, monitor terms, AI provider', icon: Sparkles },
-  { id: 'system', label: 'Data & system', caption: 'Ops, import/export, about', icon: Database },
+  { id: 'system', label: 'Data & system', caption: 'Import/export, maintenance, about', icon: Database },
 ]
 
 const TOC: TocEntry[] = [
@@ -80,10 +78,8 @@ const TOC: TocEntry[] = [
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
-  { id: 'operational-status', label: 'Operational status', section: 'system' },
   { id: 'data-management', label: 'Data management', section: 'system' },
   { id: 'library-management', label: 'Library maintenance', section: 'system' },
-  { id: 'corpus-maintenance', label: 'Corpus maintenance', section: 'system' },
   { id: 'corpus-explorer', label: 'Corpus explorer', section: 'system' },
   { id: 'about', label: 'About', section: 'system' },
 ]
@@ -122,7 +118,7 @@ export function SettingsPage() {
   const saveMutation = useMutation({
     mutationFn: (data: Settings) => api.put<Settings>('/settings', data),
     onSuccess: async () => {
-      await invalidateQueries(queryClient, ['settings'], ['openalex-usage'], ['semantic-scholar-status'])
+      await invalidateQueries(queryClient, ['settings'], ['openalex-usage'], ['openalex-status'], ['semantic-scholar-status'])
       setSaveSuccess(true)
       setTimeout(() => setSaveSuccess(false), 3000)
     },
@@ -299,11 +295,32 @@ export function SettingsPage() {
           </SettingsSection>
 
           {/* -- Data & system -- */}
-          <SettingsSection id="system" title="Data & system" caption="Operational status, data import/export, library maintenance.">
-            <Anchor id="operational-status"><OperationalStatusCard /></Anchor>
+          <SettingsSection id="system" title="Data & system" caption="Data import/export, maintenance, about.">
+            {/* Status + all diagnose-and-repair now live on the Health page (one
+                home for "what's wrong and how do I fix it"). This is just a pointer —
+                the old Operational status + Corpus maintenance cards moved there. */}
+            <SettingsCard
+              icon={HeartPulse}
+              title="Health: status, data quality & maintenance"
+              description="Degraded monitors / sources / jobs, data-health gaps, and the corpus & author maintenance jobs (rehydrate, refresh authors, dedup, garbage-collect) all live on the Health page now — each repair showing an ETA."
+              action={
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'status' })}>
+                    Open Status
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => navigateTo('health', { tab: 'maintenance' })}>
+                    Open Maintenance
+                  </Button>
+                </div>
+              }
+            >
+              <p className="text-sm text-slate-500">
+                Health is the single place to see what's degraded and act on it. Settings is now just
+                configuration.
+              </p>
+            </SettingsCard>
             <Anchor id="data-management"><DataManagementCard /></Anchor>
             <Anchor id="library-management"><LibraryManagementCard /></Anchor>
-            <Anchor id="corpus-maintenance"><CorpusMaintenanceCard /></Anchor>
             <Anchor id="corpus-explorer"><CorpusExplorerCard /></Anchor>
             <Anchor id="about"><AboutCard /></Anchor>
           </SettingsSection>

@@ -1,5 +1,18 @@
+/**
+ * OperationalStatusCard — the "degraded right now" list for the Health page's
+ * System status band: each active degraded state (stale author, unhealthy
+ * monitor, disabled source, failing alert, embedding gap…) with a one-click
+ * remediation and a jump to its owner page.
+ *
+ * Styled to match the rest of the Health page (content-elev card, chrome-elev
+ * rows) — NOT a settings card. The old summary stat tiles, remediation-tile
+ * grid, and global maintenance button-wall were dropped: the vitals scoreboard
+ * already shows the counts, and those bulk actions now live in the repair cards
+ * (Compute embeddings, …) or on their owner pages (Refresh feed, Rebuild graphs).
+ */
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient, type UseMutationResult } from '@tanstack/react-query'
-import { Activity, AlertTriangle, CheckCircle2, Cpu, Settings2 } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, Cpu } from 'lucide-react'
 
 import {
   api,
@@ -8,17 +21,22 @@ import {
   getDiscoverySettings,
   getInsightsDiagnostics,
   queueAuthorHistoryBackfill,
-  refreshFeedInbox,
   refreshFeedMonitor,
   repairAuthor,
-  runGraphReferenceBackfill,
   testPluginConnection,
   updateDiscoverySettings,
 } from '@/api/client'
-import { AsyncButton, SettingsCard, StatTile } from '@/components/settings/primitives'
+import { AsyncButton } from '@/components/settings/primitives'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { StatusRow } from '@/components/health/StatusRow'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { StatusBadge, severityTone, type StatusBadgeTone } from '@/components/ui/status-badge'
+import { StatusBadge, severityTone } from '@/components/ui/status-badge'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -37,7 +55,7 @@ type RemediationTarget = {
 
 // Each remediation action knows how to extract its argument from the target,
 // which mutation to fire, and how to label the resulting button. Keeping
-// this declarative collapses the previous 10-branch switch into one map.
+// this declarative collapses what was a 10-branch switch into one map.
 type RemediationEntry = {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mutation: UseMutationResult<any, unknown, any, unknown>
@@ -47,11 +65,36 @@ type RemediationEntry = {
   icon?: React.ReactNode
 }
 
+const CARD =
+  'space-y-3 rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper'
+
+type OperationalState = {
+  id: string
+  label: string
+  severity: string
+  detail: string
+  page: string
+  params?: Record<string, string>
+  targets?: Array<{
+    id: string
+    label: string
+    kind: string
+    action: string
+    author_id?: string | null
+    monitor_id?: string | null
+    source?: string | null
+    alert_id?: string | null
+    plugin_name?: string | null
+  }>
+}
+
 export function OperationalStatusCard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+  // The selected degraded issue, shown in a detail popup with its remediation.
+  const [openState, setOpenState] = useState<OperationalState | null>(null)
   const diagnosticsQuery = useQuery({
-    queryKey: ['insights-diagnostics', 'settings-operational'],
+    queryKey: ['insights-diagnostics', 'health-operational'],
     queryFn: getInsightsDiagnostics,
     staleTime: 60_000,
     retry: 1,
@@ -66,70 +109,6 @@ export function OperationalStatusCard() {
       ...extraKeys,
     )
   }
-
-  const refreshFeedMutation = useMutation({
-    mutationFn: refreshFeedInbox,
-    onSuccess: (result) => {
-      const status = String(result?.status ?? result?.operation?.status ?? '')
-      invalidateOperationalQueries(['feed-monitors'], ['feed-inbox'])
-      toast({
-        title:
-          status === 'already_running'
-            ? 'Feed refresh already running'
-            : status === 'completed' || status === 'noop'
-              ? 'Feed refreshed'
-              : 'Feed refresh queued',
-        description:
-          result?.message ||
-          (status === 'completed' || status === 'noop'
-            ? 'Active monitors were refreshed.'
-            : 'Active monitors are being refreshed now.'),
-      })
-    },
-    onError: () => errorToast('Feed refresh failed'),
-  })
-
-  const refreshDiscoveryMutation = useMutation({
-    mutationFn: () =>
-      api.post<{ status?: string; job_id?: string; message?: string }>(
-        '/discovery/refresh?background=true',
-      ),
-    onSuccess: (result) => {
-      invalidateOperationalQueries()
-      toast({
-        title: 'Discovery refresh queued',
-        description: result?.message || 'Recommendations are being refreshed now.',
-      })
-    },
-    onError: () => errorToast('Discovery refresh failed'),
-  })
-
-  const rebuildGraphsMutation = useMutation({
-    mutationFn: () =>
-      api.post<{ status?: string; job_id?: string; message?: string }>(
-        '/graphs/rebuild?background=true',
-      ),
-    onSuccess: (result) => {
-      invalidateOperationalQueries()
-      toast({
-        title: 'Graph rebuild queued',
-        description: result?.message || 'Graph caches are rebuilding in the background.',
-      })
-    },
-    onError: () => errorToast('Graph rebuild failed'),
-  })
-
-  const referenceBackfillMutation = useMutation({
-    mutationFn: runGraphReferenceBackfill,
-    onSuccess: () => {
-      invalidateOperationalQueries()
-      toast({
-        title: 'Graph backfill queued',
-        description: 'Missing reference edges are being backfilled now.',
-      })
-    },
-    onError: () => errorToast('Graph backfill failed'),
-  })
 
   const computeEmbeddingsMutation = useMutation({
     mutationFn: () =>
@@ -336,12 +315,12 @@ export function OperationalStatusCard() {
 
   if (diagnosticsQuery.isLoading) {
     return (
-      <SettingsCard icon={Settings2} title="Operational Status">
+      <div className={CARD}>
         <div className="flex items-center gap-2 text-sm text-slate-500">
           <div className="h-2 w-2 animate-pulse rounded-full bg-slate-300" />
-          Loading current product health...
+          Loading operational issues…
         </div>
-      </SettingsCard>
+      </div>
     )
   }
 
@@ -349,7 +328,7 @@ export function OperationalStatusCard() {
     const errorMessage =
       diagnosticsQuery.error instanceof Error ? diagnosticsQuery.error.message : null
     return (
-      <SettingsCard icon={Settings2} title="Operational Status">
+      <div className={CARD}>
         <Alert variant="warning">
           <AlertTriangle className="h-4 w-4" />
           <AlertDescription>
@@ -357,279 +336,114 @@ export function OperationalStatusCard() {
             {errorMessage ? <span className="mt-1 block text-xs">{errorMessage}</span> : null}
           </AlertDescription>
         </Alert>
-      </SettingsCard>
+      </div>
     )
   }
 
-  const operational = diagnosticsQuery.data.operational
-  const summary = operational.summary
-  const states = operational.states ?? []
+  const states = diagnosticsQuery.data.operational.states ?? []
 
-  return (
-    <SettingsCard
-      icon={Settings2}
-      title="Operational Status"
-      description="Current degraded states across retrieval, alerts, AI, and background operations."
-    >
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile label="Active issues" value={summary.issues_total} />
-        <StatTile label="Critical" value={summary.critical_count} tone="negative" />
-        <StatTile label="Warnings" value={summary.warning_count} tone="warning" />
-        <StatTile label="Healthy checks" value={summary.healthy_checks} tone="positive" />
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <StatusBadge tone={summary.embeddings_ready ? 'positive' : 'negative'}>
-          Embeddings {summary.embeddings_ready ? 'ready' : 'degraded'}
-        </StatusBadge>
-        <StatusBadge tone={summary.slack_configured ? 'positive' : 'warning'}>
-          Slack {summary.slack_configured ? 'configured' : 'missing'}
-        </StatusBadge>
-        {operational.disabled_sources.length > 0 && (
-          <Badge variant="outline">
-            Disabled sources: {operational.disabled_sources.join(', ')}
-          </Badge>
-        )}
-        {summary.recent_failed_operations_24h > 0 && (
-          <Badge variant="outline">Failed ops 24h: {summary.recent_failed_operations_24h}</Badge>
-        )}
-      </div>
-
-      <div className="grid gap-3 xl:grid-cols-4">
-        <RemediationTile
-          title="AI remediation"
-          body={
-            !summary.embeddings_ready
-              ? 'Compute embeddings to restore semantic retrieval and ranking.'
-              : summary.warning_count > 0
-                ? 'Refresh stale vectors or clear cached similarity results when diagnostics report compressed similarity.'
-                : 'Embedding layer is healthy.'
-          }
-        >
-          <AsyncButton
-            size="sm"
-            variant="outline"
-            pending={computeStaleEmbeddingsMutation.isPending}
-            onClick={() => computeStaleEmbeddingsMutation.mutate()}
-          >
-            Refresh stale
-          </AsyncButton>
-          <AsyncButton
-            size="sm"
-            variant="outline"
-            pending={clearSimilarityCacheMutation.isPending}
-            onClick={() => clearSimilarityCacheMutation.mutate()}
-          >
-            Clear cache
-          </AsyncButton>
-          <AsyncButton size="sm" variant="outline" onClick={() => navigateTo('settings')}>
-            Settings
-          </AsyncButton>
-        </RemediationTile>
-
-        <RemediationTile
-          title="Graph remediation"
-          body={
-            summary.recent_failed_operations_24h > 0
-              ? 'Rebuild or backfill citation edges when graph-dependent discovery is thin.'
-              : 'Graph maintenance is currently stable.'
-          }
-        >
-          <AsyncButton
-            size="sm"
-            variant="outline"
-            pending={referenceBackfillMutation.isPending}
-            onClick={() => referenceBackfillMutation.mutate()}
-          >
-            Backfill
-          </AsyncButton>
-        </RemediationTile>
-
-        <RemediationTile
-          title="Source remediation"
-          body={
-            operational.disabled_sources.length > 0
-              ? `Re-enable disabled sources: ${operational.disabled_sources.join(', ')}.`
-              : 'All configured discovery sources are enabled.'
-          }
-        >
-          <AsyncButton size="sm" variant="outline" onClick={() => navigateTo('settings')}>
-            Sources
-          </AsyncButton>
-        </RemediationTile>
-
-        <RemediationTile
-          title="Alert remediation"
-          body={
-            summary.slack_configured
-              ? 'Alert delivery channel is configured.'
-              : 'Configure Slack to turn alert rules into real delivery.'
-          }
-        >
-          <AsyncButton size="sm" variant="outline" onClick={() => navigateTo('alerts')}>
-            Alerts
-          </AsyncButton>
-        </RemediationTile>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          pending={refreshFeedMutation.isPending}
-          onClick={() => refreshFeedMutation.mutate()}
-        >
-          Refresh Feed
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          pending={refreshDiscoveryMutation.isPending}
-          onClick={() => refreshDiscoveryMutation.mutate()}
-        >
-          Refresh Discovery
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          pending={rebuildGraphsMutation.isPending}
-          onClick={() => rebuildGraphsMutation.mutate()}
-        >
-          Rebuild Graphs
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          pending={referenceBackfillMutation.isPending}
-          onClick={() => referenceBackfillMutation.mutate()}
-        >
-          Backfill References
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          icon={<Cpu className="h-4 w-4" />}
-          pending={computeEmbeddingsMutation.isPending}
-          disabled={summary.embeddings_ready}
-          onClick={() => computeEmbeddingsMutation.mutate()}
-        >
-          AI Compute Embeddings
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          icon={<Cpu className="h-4 w-4" />}
-          pending={computeStaleEmbeddingsMutation.isPending}
-          onClick={() => computeStaleEmbeddingsMutation.mutate()}
-        >
-          AI Refresh Stale Embeddings
-        </AsyncButton>
-        <AsyncButton
-          size="sm"
-          variant="outline"
-          pending={clearSimilarityCacheMutation.isPending}
-          onClick={() => clearSimilarityCacheMutation.mutate()}
-        >
-          Clear Similarity Cache
-        </AsyncButton>
-      </div>
-
-      {states.length === 0 ? (
+  if (states.length === 0) {
+    return (
+      <div className={CARD}>
         <Alert variant="success">
           <CheckCircle2 className="h-4 w-4" />
           <AlertDescription>No active degraded states right now.</AlertDescription>
         </Alert>
-      ) : (
-        <div className="space-y-3">
-          {states.slice(0, 6).map((state) => {
-            const tone: StatusBadgeTone = severityTone(state.severity)
-            return (
-              <div key={state.id} className="rounded-sm border border-[var(--color-border)] p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="font-medium text-alma-800">{state.label}</p>
-                    <p className="mt-1 text-sm text-slate-500">{state.detail}</p>
-                  </div>
-                  <StatusBadge tone={tone}>{state.severity}</StatusBadge>
-                </div>
-                <div className="mt-3 flex justify-end">
-                  <AsyncButton
-                    size="sm"
-                    variant="outline"
-                    icon={<Activity className="h-4 w-4" />}
-                    onClick={() => {
-                      navigateTo(
-                        state.page as Parameters<typeof buildHashRoute>[0],
-                        state.params ?? {},
-                      )
-                    }}
-                  >
-                    Open Owner
-                  </AsyncButton>
-                </div>
-                {(state.targets ?? []).length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {state.targets?.map((target) => {
-                      const action = target.action as string | undefined
-                      if (!action) return null
-                      const handler = remediationActions[action]
-                      if (!handler) return null
-                      const arg = handler.getArg(target as RemediationTarget)
-                      if (!arg) return null
-                      const pending =
-                        handler.mutation.isPending &&
-                        (handler.argless || handler.mutation.variables === arg)
-                      return (
-                        <AsyncButton
-                          key={`${state.id}-${target.id ?? arg}`}
-                          size="sm"
-                          variant="secondary"
-                          icon={handler.icon}
-                          pending={pending}
-                          onClick={() => {
-                            if (handler.argless) handler.mutation.mutate(undefined)
-                            else handler.mutation.mutate(arg)
-                          }}
-                        >
-                          {handler.label(target as RemediationTarget)}
-                        </AsyncButton>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <div className="flex justify-end">
-        <AsyncButton
-          variant="outline"
-          size="sm"
-          onClick={() => navigateTo('insights', { tab: 'diagnostics' })}
-        >
-          Open Diagnostics
-        </AsyncButton>
       </div>
-    </SettingsCard>
-  )
-}
+    )
+  }
 
-function RemediationTile({
-  title,
-  body,
-  children,
-}: {
-  title: string
-  body: React.ReactNode
-  children: React.ReactNode
-}) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] p-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{title}</p>
-      <p className="mt-2 text-sm text-slate-700">{body}</p>
-      <div className="mt-3 flex flex-wrap gap-2">{children}</div>
+    <div className={CARD}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium text-alma-800">Degraded right now</h3>
+        <StatusBadge tone="warning" size="sm">
+          {states.length}
+        </StatusBadge>
+      </div>
+
+      {/* Same StatusRow language as the subsystem + repair cards above; the
+          per-issue remediation moves into a detail popup. */}
+      <div className="space-y-1.5">
+        {states.map((state) => {
+          const fixable = (state.targets ?? []).some((t) => t.action && remediationActions[t.action])
+          return (
+            <StatusRow
+              key={state.id}
+              severity={state.severity}
+              label={state.label}
+              metric={
+                <span className="shrink-0 text-xs text-slate-500">
+                  {fixable ? 'fix available' : 'review'}
+                </span>
+              }
+              onOpen={() => setOpenState(state)}
+            />
+          )
+        })}
+      </div>
+
+      {/* Detail + one-click remediation for the selected issue. */}
+      <Dialog open={openState != null} onOpenChange={(o) => !o && setOpenState(null)}>
+        <DialogContent className="max-w-lg bg-alma-chrome">
+          {openState ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex flex-wrap items-center gap-2 text-alma-900">
+                  {openState.label}
+                  <StatusBadge tone={severityTone(openState.severity)} size="sm" className="capitalize">
+                    {openState.severity}
+                  </StatusBadge>
+                </DialogTitle>
+                <DialogDescription className="text-slate-600">{openState.detail}</DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {(openState.targets ?? []).map((target) => {
+                  const action = target.action as string | undefined
+                  if (!action) return null
+                  const handler = remediationActions[action]
+                  if (!handler) return null
+                  const arg = handler.getArg(target as RemediationTarget)
+                  if (!arg) return null
+                  const pending =
+                    handler.mutation.isPending &&
+                    (handler.argless || handler.mutation.variables === arg)
+                  return (
+                    <AsyncButton
+                      key={`${openState.id}-${target.id ?? arg}`}
+                      size="sm"
+                      variant="outline"
+                      className="border-alma-200 text-alma-700 hover:bg-alma-50"
+                      icon={handler.icon}
+                      pending={pending}
+                      onClick={() => {
+                        if (handler.argless) handler.mutation.mutate(undefined)
+                        else handler.mutation.mutate(arg)
+                      }}
+                    >
+                      {handler.label(target as RemediationTarget)}
+                    </AsyncButton>
+                  )
+                })}
+                <AsyncButton
+                  size="sm"
+                  variant="ghost"
+                  icon={<Activity className="h-4 w-4" />}
+                  className="text-alma-700 hover:bg-alma-50"
+                  onClick={() => {
+                    navigateTo(
+                      openState.page as Parameters<typeof buildHashRoute>[0],
+                      openState.params ?? {},
+                    )
+                  }}
+                >
+                  Open owner
+                </AsyncButton>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -1,18 +1,22 @@
 /**
- * HealthPage — the front door for "is my data healthy, and what do I do about
- * it?" Consolidates the canonical health layer (task 24) into one surface.
+ * HealthPage — the single front door for "is my data healthy, and what do I do
+ * about it?" One scrollable surface, no tabs: status and the operation that
+ * repairs it live in the SAME card (a `RepairCard`), so nothing is scattered.
  *
- * A persistent header carries the vitals ribbon + scoreboard (at-a-glance
- * triage) and the "What is Health?" explainer; the detail splits into three
- * tabs so the page stays scannable:
- *   - Data health   — the canonical dimension cards (problems + fixes)
- *   - Maintenance    — the bounded repair operations (run / auto / cap)
- *   - Diagnostics    — the 8 subsystem scorecards (moved here from Insights)
+ * Top → bottom:
+ *   - persistent vitals ribbon + scoreboard (at-a-glance triage)
+ *   - "Corpus & embeddings" repair group  — op cards, worst-first
+ *   - "Authors" repair group               — op cards, worst-first
+ *   - "Observed — no automatic repair"      — dimensions with no repair op
+ *   - "System status"                       — operational subsystems
  *
- * Every number reads the canonical endpoints (/insights/health +
- * /health/operations) — one source of truth.
+ * The card unit is the maintenance OPERATION (not the dimension) because the
+ * mapping is many-to-many — `corpus_metadata` alone repairs seven dimensions.
+ * Each op lists the gaps it heals as status rows (drilldown to the papers) and
+ * carries its run / auto-repair / cap / scope / batch controls once. Every
+ * number reads the canonical endpoints (/insights/health + /health/operations).
  */
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -21,35 +25,34 @@ import {
   getHealthSnapshot,
   runMaintenanceOperation,
   setMaintenanceConfig,
+  type HealthDimension,
+  type MaintenanceOperation,
 } from '@/api/client'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { JargonHint } from '@/components/shared/JargonHint'
 import { HealthVitals } from '@/components/health/HealthVitals'
-import { DataHealthSection } from '@/components/health/DataHealthSection'
-import { MaintenanceOperations } from '@/components/health/MaintenanceOperations'
+import { RepairGroup } from '@/components/health/RepairGroup'
+import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
 import { SystemStatusTab } from '@/components/health/SystemStatusTab'
+import { SectionLabel } from '@/components/health/SectionLabel'
+import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
-const TABS = ['data', 'status'] as const
+
+// Op grouping by domain. Anything the registry adds later that isn't listed
+// here falls into "Other maintenance" rather than vanishing.
+const CORPUS_OPS = ['corpus_metadata', 'title_resolution', 's2_vector', 'embedding', 'dedup_preprint_twins']
+const AUTHOR_OPS = ['author_metadata', 'refresh_authors', 'dedup_orcid', 'gc_orphan_authors']
 
 export function HealthPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const route = useHashRoute()
-  const routeTab = route.params.get('tab')?.trim() ?? 'data'
-  const [activeTab, setActiveTab] = useState<string>(
-    (TABS as readonly string[]).includes(routeTab) ? routeTab : 'data',
-  )
-  useEffect(() => {
-    setActiveTab((TABS as readonly string[]).includes(routeTab) ? routeTab : 'data')
-  }, [routeTab])
+  const [openDim, setOpenDim] = useState<HealthDimension | null>(null)
 
   const snapshotQuery = useQuery({
     queryKey: SNAPSHOT_KEY,
@@ -65,7 +68,8 @@ export function HealthPage() {
   })
 
   const runMutation = useMutation({
-    mutationFn: (key: string) => runMaintenanceOperation(key),
+    mutationFn: ({ key, params }: { key: string; params?: Record<string, unknown> }) =>
+      runMaintenanceOperation(key, undefined, params),
     onSuccess: async (result) => {
       await invalidateQueries(queryClient, OPERATIONS_KEY, SNAPSHOT_KEY)
       if (result.status === 'noop' || !result.job_id) {
@@ -81,8 +85,13 @@ export function HealthPage() {
   })
 
   const configMutation = useMutation({
-    mutationFn: ({ key, body }: { key: string; body: { enabled?: boolean; daily_cap?: number } }) =>
-      setMaintenanceConfig(key, body),
+    mutationFn: ({
+      key,
+      body,
+    }: {
+      key: string
+      body: { enabled?: boolean; daily_cap?: number; batch_size?: number }
+    }) => setMaintenanceConfig(key, body),
     onSuccess: async () => {
       await invalidateQueries(queryClient, OPERATIONS_KEY)
     },
@@ -90,15 +99,36 @@ export function HealthPage() {
   })
 
   const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY)
+  const runningKey = runMutation.isPending ? (runMutation.variables?.key ?? null) : null
 
-  const runningKey = runMutation.isPending ? (runMutation.variables ?? null) : null
   const snapshot = snapshotQuery.data
   const operations = operationsQuery.data?.operations ?? []
-  // task key → last successful run, so each dimension card can show how long
-  // since its repair function last completed (the action operation_key == task key).
-  const lastSuccessByTask: Record<string, string | null> = Object.fromEntries(
-    operations.map((op) => [op.key, op.last_success_at]),
+
+  // Resolve the dimensions one op repairs (op.repairs ∩ snapshot.dimensions).
+  const dimByKey = new Map(
+    (snapshot?.dimensions ?? []).map((d): [string, HealthDimension] => [d.key, d]),
   )
+  const dimsOf = (op: MaintenanceOperation): HealthDimension[] =>
+    op.repairs.map((k) => dimByKey.get(k)).filter((d): d is HealthDimension => !!d)
+
+  // Dimensions with no repair op at all → the "Observed" diagnostics section.
+  const repairedKeys = new Set(operations.flatMap((op) => op.repairs))
+  const orphanDims = (snapshot?.dimensions ?? []).filter((d) => !repairedKeys.has(d.key))
+
+  const corpusOps = operations.filter((op) => CORPUS_OPS.includes(op.key))
+  const authorOps = operations.filter((op) => AUTHOR_OPS.includes(op.key))
+  const otherOps = operations.filter(
+    (op) => !CORPUS_OPS.includes(op.key) && !AUTHOR_OPS.includes(op.key),
+  )
+
+  const onRun = (key: string, params?: Record<string, unknown>) =>
+    runMutation.mutate({ key, params })
+  const onConfig = (
+    key: string,
+    body: { enabled?: boolean; daily_cap?: number; batch_size?: number },
+  ) => configMutation.mutate({ key, body })
+
+  const groupProps = { dimsOf, onRun, onConfig, onOpenDim: setOpenDim, runningKey }
 
   return (
     <div className="space-y-6">
@@ -131,29 +161,32 @@ export function HealthPage() {
 
       <ConceptCallout
         eyebrow="What is Health?"
-        summary="ALMa watches your corpus for fixable gaps and offers one-click or automatic repairs."
+        summary="ALMa watches your corpus for fixable gaps and repairs them — one-click or automatically."
       >
         <p>
-          <strong>Data</strong> is about <em>your corpus's data</em>: each{' '}
-          <strong>dimension</strong> is one measurable gap — missing abstracts, embedding{' '}
+          Each card is one <strong>repair operation</strong>. It shows the gaps it fixes — missing
+          abstracts, embedding{' '}
           <JargonHint
             title="Coverage"
             description="The share of papers that have an embedding vector for the active model. Discovery's semantic ranking depends on it."
             className="inline-flex"
           />{' '}
-          coverage, unresolved identities — with a severity, a plain-language explanation, the
-          affected papers, and the maintenance operations that fix them (on demand, or opt-in
-          automatically within a daily cap).
+          coverage, unresolved identities — each with a severity and the affected papers, and the
+          controls to act: <strong>Run now</strong> processes a batch, <strong>Auto-repair</strong>{' '}
+          is opt-in within a daily cap. Network tasks show an <strong>ETA</strong> for how long they
+          take at the source API's rate limit. Cost tags: <em>local</em> (your database),{' '}
+          <em>network</em> (OpenAlex / Crossref / Semantic Scholar), or <em>compute</em> (local
+          SPECTER2).
         </p>
         <p>
-          <strong>Status</strong> is the <em>operational health</em> of the running system — what's
-          degraded, failing, or needs a fix right now (monitors, sources, plugins, background jobs).
-          The subsystem <em>trends and analytics</em> (how feed / discovery / alerts perform over
-          time) live under <strong>Insights → Activity</strong>.
+          <strong>Observed — no automatic repair</strong> lists gaps that have no one-click fix.{' '}
+          <strong>System status</strong> is the operational health of the running system — what's
+          degraded or failing right now (monitors, sources, plugins, background jobs). Subsystem{' '}
+          <em>trends and analytics</em> live under <strong>Insights → Activity</strong>.
         </p>
       </ConceptCallout>
 
-      {/* Persistent vitals triage (above the tabs). */}
+      {/* Persistent vitals triage. */}
       {snapshotQuery.isError ? (
         <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-200 bg-rose-50 p-4">
           <div className="flex items-center gap-3">
@@ -170,57 +203,37 @@ export function HealthPage() {
         <HealthVitals snapshot={snapshot} />
       ) : null}
 
-      {/* Detail tabs */}
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => {
-          setActiveTab(value)
-          window.location.hash = buildHashRoute('health', { tab: value })
+      {/* Operational health on top — an active incident (rate-limited source,
+          failed job) should be the first thing seen, before the repair backlog. */}
+      <section className="space-y-3">
+        <SectionLabel>System status</SectionLabel>
+        <SystemStatusTab />
+      </section>
+
+      {/* The affected-papers drilldown, opened by any status row on the page. */}
+      <HealthDimensionDrilldown
+        dim={openDim}
+        open={openDim != null}
+        onOpenChange={(o) => {
+          if (!o) setOpenDim(null)
         }}
-        className="w-full"
-      >
-        <TabsList>
-          <TabsTrigger value="data">Data</TabsTrigger>
-          <TabsTrigger value="status">Status</TabsTrigger>
-        </TabsList>
+        onRun={(key) => runMutation.mutate({ key })}
+        runningKey={runningKey}
+      />
 
-        {/* Data — your corpus's data: the dimensions + drilldowns, then the
-            maintenance operations that fix them (detect → fix, one place). */}
-        <TabsContent value="data" className="mt-4 space-y-8">
-          {snapshot ? (
-            <DataHealthSection
-              dimensions={snapshot.dimensions}
-              onRun={(key) => runMutation.mutate(key)}
-              runningKey={runningKey}
-              lastSuccessByTask={lastSuccessByTask}
-            />
-          ) : (
-            <p className="text-sm text-slate-500">Loading health dimensions…</p>
-          )}
+      {/* Repair groups — status + action in one card. */}
+      {operations.length > 0 ? (
+        <>
+          <RepairGroup title="Corpus & embeddings" ops={corpusOps} {...groupProps} />
+          <RepairGroup title="Authors" ops={authorOps} {...groupProps} />
+          <RepairGroup title="Other maintenance" ops={otherOps} {...groupProps} />
+        </>
+      ) : (
+        <p className="text-sm text-slate-500">Loading repair operations…</p>
+      )}
 
-          <div className="space-y-3 border-t border-[var(--color-border)] pt-6">
-            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-              Maintenance operations
-            </h2>
-            {operations.length > 0 ? (
-              <MaintenanceOperations
-                operations={operations}
-                onRun={(key) => runMutation.mutate(key)}
-                onConfig={(key, body) => configMutation.mutate({ key, body })}
-                runningKey={runningKey}
-              />
-            ) : (
-              <p className="text-sm text-slate-500">Loading maintenance operations…</p>
-            )}
-          </div>
-        </TabsContent>
-
-        {/* Status — operational health: what's degraded / failing / needs a fix,
-            fully bisected here (subsystem trends + analytics → Insights → Activity). */}
-        <TabsContent value="status" className="mt-4">
-          <SystemStatusTab />
-        </TabsContent>
-      </Tabs>
+      {/* Observed dimensions with no repair op. */}
+      <DiagnosticsSection dims={orphanDims} onOpenDim={setOpenDim} />
     </div>
   )
 }

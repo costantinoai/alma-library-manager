@@ -194,6 +194,8 @@ export interface HealthDimension {
   repair_task: string | null
   actions: HealthAction[]
   scope: 'corpus' | 'library' | string
+  /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
+  exhausted: number | null
 }
 
 /** GET /insights/health — flattened MV envelope (payload fields + SWR flags). */
@@ -228,6 +230,30 @@ export interface MaintenanceLastRun {
   duration_seconds?: number | null
 }
 
+/** Estimated time to drain a network-bound op's backlog at the endpoint's rate. */
+export interface MaintenanceEta {
+  items: number
+  requests: number
+  batch_size: number
+  seconds: number
+  /** Short friendly label, e.g. "~3 min" / "~1.9 hr". */
+  label: string
+  /** Human source label, e.g. "OpenAlex" / "Semantic Scholar". */
+  source: string
+  authenticated: boolean
+  /** Whether having an API key changes the *rate* (vs only reliability). */
+  auth_affects_rate: boolean
+  /** One-line explanation of the math (request count, rate, key effect). */
+  basis: string
+}
+
+/** A run-time control a maintenance op exposes (e.g. scope select / dry-run). */
+export interface MaintenanceParamSpec {
+  options?: string[]
+  default?: string | boolean
+}
+export type MaintenanceParamsSpec = Record<string, MaintenanceParamSpec>
+
 /** One maintenance task in GET /health/operations. */
 export interface MaintenanceOperation {
   key: string
@@ -237,12 +263,29 @@ export interface MaintenanceOperation {
   repairs: string[]
   operation_key: string
   candidates_pending: number
+  /** ETA to drain the backlog at the API's rate (null for local / nothing pending). */
+  eta: MaintenanceEta | null
+  /** Run-time controls the card should render (scope select / dry-run preview). */
+  params_spec: MaintenanceParamsSpec | null
+  /** Effective API batch size (items/request), or null when the batch is fixed. */
+  batch_size: number | null
+  /** Default + max batch when overridable (else null) — bounds the batch control. */
+  batch_size_default: number | null
+  batch_size_max: number | null
   enabled: boolean
   default_enabled: boolean
   daily_cap: number
   last_run: MaintenanceLastRun | null
   /** Finished-at of the most recent *successful* run (any trigger), or null. */
   last_success_at: string | null
+}
+
+/** Response of GET /health/operations/{key}/estimate — count + ETA for chosen params. */
+export interface MaintenanceEstimate {
+  key: string
+  params: Record<string, string | boolean>
+  candidates_pending: number
+  eta: MaintenanceEta | null
 }
 
 export interface HealthOperationsResponse {
@@ -296,16 +339,35 @@ export function getHealthDimensionItems(
 export function runMaintenanceOperation(
   key: string,
   targetPaperIds?: string[],
+  params?: Record<string, unknown>,
 ): Promise<RunMaintenanceResponse> {
+  const body: Record<string, unknown> = {}
+  if (targetPaperIds && targetPaperIds.length) body.target_paper_ids = targetPaperIds
+  if (params && Object.keys(params).length) body.params = params
   return api.post<RunMaintenanceResponse>(
     `/health/operations/${encodeURIComponent(key)}/run`,
-    targetPaperIds && targetPaperIds.length ? { target_paper_ids: targetPaperIds } : undefined,
+    Object.keys(body).length ? body : undefined,
+  )
+}
+
+/** Recompute just the pending count + ETA for chosen params (e.g. a new scope). */
+export function estimateMaintenanceOperation(
+  key: string,
+  params?: { scope?: string; dry_run?: boolean; batch_size?: number },
+): Promise<MaintenanceEstimate> {
+  const qs = new URLSearchParams()
+  if (params?.scope != null) qs.set('scope', params.scope)
+  if (params?.dry_run != null) qs.set('dry_run', String(params.dry_run))
+  if (params?.batch_size != null) qs.set('batch_size', String(params.batch_size))
+  const query = qs.toString()
+  return api.get<MaintenanceEstimate>(
+    `/health/operations/${encodeURIComponent(key)}/estimate${query ? `?${query}` : ''}`,
   )
 }
 
 export function setMaintenanceConfig(
   key: string,
-  body: { enabled?: boolean; daily_cap?: number },
+  body: { enabled?: boolean; daily_cap?: number; batch_size?: number },
 ): Promise<MaintenanceOperation> {
   return api.post<MaintenanceOperation>(
     `/health/operations/${encodeURIComponent(key)}/config`,

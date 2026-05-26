@@ -82,6 +82,41 @@ def _has_local_specter2_provider(conn: sqlite3.Connection) -> bool:
         return False
 
 
+def _count_s2_fetch_terminal(conn: sqlite3.Connection) -> int:
+    """Papers with a DOI/s2_id and no active-model vector that are TERMINAL in the
+    S2 fetch ledger — Semantic Scholar was tried and has no vector for them
+    (``missing_vector`` / ``unmatched`` / ``lookup_error`` / ``bad_local_doi``).
+    The complement of ``_count_s2_fetch_candidates``: these will NOT be re-fetched,
+    so the Health page surfaces them as 'no fix via S2 — only local fill helps'."""
+    try:
+        from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+
+        model = S2_SPECTER2_MODEL
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM papers p
+            JOIN publication_embedding_fetch_status fs
+              ON fs.paper_id = p.id
+             AND fs.model = ?
+             AND fs.source = 'semantic_scholar'
+            WHERE COALESCE(fs.status, '') IN (
+                'unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM publication_embeddings pe
+                WHERE pe.paper_id = p.id
+                  AND pe.model = ?
+                  AND pe.source = 'semantic_scholar'
+            )
+            """,
+            (model, model),
+        ).fetchone()
+        return int((row["c"] if row else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
 def _count_s2_fetch_candidates(
     conn: sqlite3.Connection,
     *,
