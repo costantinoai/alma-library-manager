@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as SelectPrimitive from '@radix-ui/react-select'
 import { Check, ChevronDown, ChevronUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { SurfaceProvider } from '@/components/ui/surface'
 
 const Select = SelectPrimitive.Root
 const SelectGroup = SelectPrimitive.Group
@@ -17,7 +18,7 @@ const SelectTrigger = React.forwardRef<
       // Trigger reads as a recessed well (paper + cool inset shadow),
       // matching the Input + Textarea + Checkbox primitives so all
       // form controls sit consistently INSIDE cream cards.
-      'flex h-10 w-full items-center justify-between rounded-sm border border-[var(--color-border)] bg-alma-paper px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
+      'flex h-10 w-full items-center justify-between rounded-sm border border-[var(--color-border)] bg-surface-0 px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
       className,
     )}
     {...props}
@@ -63,11 +64,12 @@ const SelectContent = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
 >(({ className, children, position = 'popper', ...props }, ref) => (
   <SelectPrimitive.Portal>
+    <SurfaceProvider level={3}>
     <SelectPrimitive.Content
       ref={ref}
       position={position}
       className={cn(
-        'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-sm border border-[var(--color-border)] bg-alma-chrome text-alma-900 shadow-paper-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+        'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-sm border border-edge-3 bg-surface-3 text-alma-900 shadow-paper-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         position === 'popper' &&
           'data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1',
         className,
@@ -86,6 +88,7 @@ const SelectContent = React.forwardRef<
       </SelectPrimitive.Viewport>
       <SelectScrollDownButton />
     </SelectPrimitive.Content>
+    </SurfaceProvider>
   </SelectPrimitive.Portal>
 ))
 SelectContent.displayName = SelectPrimitive.Content.displayName
@@ -109,14 +112,14 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm text-alma-900 outline-none focus:bg-parchment-100 focus:text-alma-900 data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm text-alma-900 outline-none focus:bg-accent-soft focus:text-alma-900 data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
     )}
     {...props}
   >
     <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
       <SelectPrimitive.ItemIndicator>
-        <Check className="h-4 w-4 text-alma-600" />
+        <Check className="h-4 w-4 text-alma-folio" />
       </SelectPrimitive.ItemIndicator>
     </span>
     <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>

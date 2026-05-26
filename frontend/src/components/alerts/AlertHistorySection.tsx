@@ -83,7 +83,7 @@ export function AlertHistorySection() {
                       <p className="mt-2 text-sm text-slate-600">{item.message_preview}</p>
                     )}
                     {item.error_message && (
-                      <p className="mt-1 text-xs text-red-500">{item.error_message}</p>
+                      <p className="mt-1 text-xs text-critical-500">{item.error_message}</p>
                     )}
                     <p className="mt-1.5 text-xs text-slate-400">
                       {formatDate(item.sent_at)}

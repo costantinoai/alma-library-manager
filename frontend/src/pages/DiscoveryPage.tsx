@@ -524,7 +524,7 @@ export function DiscoveryPage() {
           carries the description, a live lens-status pulse, and the
           primary Refresh action.
       ──────────────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
         <div className="relative flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:gap-8">
           <div className="min-w-0 flex-1 space-y-2">
             <p className="max-w-xl text-sm leading-relaxed text-slate-600">
@@ -534,8 +534,8 @@ export function DiscoveryPage() {
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
               <span className="inline-flex items-center gap-2">
                 <span className="relative flex h-2 w-2" aria-hidden>
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success-500 opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-success-500" />
                 </span>
                 <span>
                   <span className="font-semibold tabular-nums text-slate-800">
@@ -683,7 +683,7 @@ export function DiscoveryPage() {
             results) so the affordance to tune branches is visible
             in the same vertical scan as "which lens am I on".
             Summary line carries the at-a-glance counts. */}
-        <details className="group rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+        <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
             <div className="flex flex-col gap-0.5">
               <span className="font-brand text-sm font-semibold text-alma-800">Branch Studio</span>
@@ -704,7 +704,7 @@ export function DiscoveryPage() {
             Collapsed by default. Sits above the recommendations list so
             the lens-context surfaces (Branch Studio + this) cluster
             together right after the lens picker. */}
-        <details className="group rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+        <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
             <div className="flex flex-col gap-0.5">
               <span className="font-brand text-sm font-semibold text-alma-800">Lens diagnostics</span>
@@ -857,7 +857,7 @@ export function DiscoveryPage() {
           {/* Lens scoring weights — power-user control. Hidden behind
               a disclosure so the everyday Discovery view stays quiet;
               expand only when you need to tune how signals combine. */}
-          <details className="group rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+          <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
             <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
               <div className="flex flex-col gap-0.5">
                 <span className="font-brand text-sm font-semibold text-alma-800">Advanced — scoring weights</span>
@@ -885,7 +885,7 @@ export function DiscoveryPage() {
             select-all] · [view mode]. Nothing here mutates data — all
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-alma-chrome px-3 py-2 shadow-sm">
+        <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
           {/* Sort toggle — pill button, binary state. */}
           <button
             type="button"
@@ -896,7 +896,7 @@ export function DiscoveryPage() {
                 : 'Currently sorted by recent — switch to lens ranking'
             }
             aria-label={`Sort by ${sort === 'relevance' ? 'recent' : 'relevance'}`}
-            className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-alma-chrome px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-parchment-50"
+            className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-surface-2"
           >
             <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
             {sort === 'relevance' ? 'Ranking' : 'Recent'}
@@ -932,7 +932,7 @@ export function DiscoveryPage() {
                 if (value) setViewMode(value as DiscoveryViewMode)
               }}
               aria-label="Discovery view mode"
-              className="gap-0 rounded-sm bg-parchment-100/80 p-0.5"
+              className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
             >
               {[
                 { value: 'compact' as DiscoveryViewMode, label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
@@ -943,7 +943,7 @@ export function DiscoveryPage() {
                   key={value}
                   value={value}
                   title={title}
-                  className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-alma-chrome data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+                  className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
                 >
                   <Icon className="h-3.5 w-3.5" />
                   <span className="hidden md:inline">{label}</span>

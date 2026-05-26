@@ -524,7 +524,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={UserRound}
-            accent="text-emerald-600"
+            accent="text-success-600"
             title="Authors Monitoring"
             description="Coverage and health of tracked researchers versus provenance-only authors."
           />
@@ -586,7 +586,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Radio}
-            accent="text-amber-600"
+            accent="text-warning-600"
             title="Alert Quality"
             description="Delivery reliability and usefulness of recent alert runs."
           />
@@ -612,7 +612,7 @@ export function InsightsDiagnosticsTab({
                     />
                   </div>
                   {data.long_horizon?.summary ? (
-                    <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+                    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="font-medium text-alma-800">90-day usefulness baseline</p>
@@ -767,7 +767,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={ChartLine}
-            accent="text-emerald-600"
+            accent="text-success-600"
             title="Feed Trend"
             description={`Daily monitor intake over the last ${windowDays} days.`}
           />
@@ -917,7 +917,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Radio}
-            accent="text-amber-600"
+            accent="text-warning-600"
             title="Alert Delivery Trend"
             description={`Delivery history across sent, empty, skipped, and failed alert runs.${
               (alerts.data?.alert_history_weekly_90d?.length ?? 0) > 0
@@ -977,7 +977,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={UserRound}
-            accent="text-emerald-500"
+            accent="text-success-500"
             title="Followed Author Growth"
             description="Daily expansion of the monitored-author corpus."
           />
@@ -1129,7 +1129,7 @@ export function InsightsDiagnosticsTab({
               {(data) => (
                 <>
                   {data.cold_start_topic_validation && data.cold_start_topic_validation.total_runs > 0 ? (
-                    <div className="mb-4 rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+                    <div className="mb-4 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="font-medium text-alma-800">Topic cold-start validation</p>
@@ -1205,7 +1205,7 @@ export function InsightsDiagnosticsTab({
                               ))}
                             </div>
                           )}
-                          <div className="mt-3 rounded-md border border-[var(--color-border)] bg-parchment-50 px-2.5 py-2 text-xs text-slate-600">
+                          <div className="mt-3 rounded-md border border-[var(--color-border)] bg-surface-2 px-2.5 py-2 text-xs text-slate-600">
                             {branch.tuning_hint}
                           </div>
                           <div className="mt-3 flex flex-wrap justify-end gap-2">

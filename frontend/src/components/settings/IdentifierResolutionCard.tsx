@@ -140,7 +140,7 @@ export function IdentifierResolutionCard({
             />
           ))}
 
-          <p className="rounded-md bg-parchment-50 px-3 py-2 text-xs text-slate-600">
+          <p className="rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">
             Default recommended strategy: OpenAlex + Semantic Scholar + ORCID automatically,
             Google Scholar scraping only on manual action.
           </p>

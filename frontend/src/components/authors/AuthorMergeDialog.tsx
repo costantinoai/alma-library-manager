@@ -259,7 +259,7 @@ export function AuthorMergeDialog({
               {authorsQuery.isLoading ? (
                 <LoadingState message="Loading authors..." />
               ) : mergeCandidates.length === 0 ? (
-                <div className="rounded-sm border border-dashed border-[var(--color-border)] bg-alma-content-elev p-4 text-sm text-slate-500">
+                <div className="rounded-sm border border-dashed border-[var(--color-border)] bg-surface-2 p-4 text-sm text-slate-500">
                   {emptyCandidateMessage}
                 </div>
               ) : (
@@ -278,7 +278,7 @@ export function AuthorMergeDialog({
                       className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
                         selected
                           ? 'border-alma-folio bg-alma-folio-soft'
-                          : 'border-[var(--color-border)] bg-alma-content-elev hover:bg-parchment-50'
+                          : 'border-[var(--color-border)] bg-surface-2 hover:bg-surface-2'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -325,7 +325,7 @@ export function AuthorMergeDialog({
                     return (
                       <div
                         key={diff.key}
-                        className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
+                        className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
                       >
                         <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                           {diff.label}
@@ -354,7 +354,7 @@ export function AuthorMergeDialog({
                                 className={`flex cursor-pointer items-start gap-2 rounded-sm border p-2 text-sm transition ${
                                   isSelected
                                     ? 'border-alma-folio bg-alma-folio-soft'
-                                    : 'border-[var(--color-border)] bg-parchment-50 hover:border-alma-200'
+                                    : 'border-[var(--color-border)] bg-surface-2 hover:border-alma-200'
                                 }`}
                               >
                                 <RadioGroupItem
@@ -385,7 +385,7 @@ export function AuthorMergeDialog({
                 </div>
               )
             ) : (
-              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-[var(--color-border)] bg-alma-content-elev p-6 text-center text-sm text-slate-500">
+              <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-[var(--color-border)] bg-surface-2 p-6 text-center text-sm text-slate-500">
                 Select an author from the corpus to compare metadata before merging.
               </div>
             )}

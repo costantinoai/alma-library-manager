@@ -98,13 +98,13 @@ function StatusIcon({ status }: { status: string }) {
     case 'running':
       return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-slate-500" />
     case 'completed':
-      return <CheckCircle className="h-4 w-4 shrink-0 text-green-500" />
+      return <CheckCircle className="h-4 w-4 shrink-0 text-success-500" />
     case 'failed':
-      return <XCircle className="h-4 w-4 shrink-0 text-red-500" />
+      return <XCircle className="h-4 w-4 shrink-0 text-critical-500" />
     case 'cancelling':
-      return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
+      return <Loader2 className="h-4 w-4 shrink-0 animate-spin text-warning-500" />
     case 'cancelled':
-      return <XCircle className="h-4 w-4 shrink-0 text-amber-500" />
+      return <XCircle className="h-4 w-4 shrink-0 text-warning-500" />
     default:
       return <Clock className="h-4 w-4 shrink-0 text-slate-400" />
   }
@@ -114,7 +114,7 @@ function ProgressBar({ processed, total }: { processed: number; total: number })
   const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0
   return (
     <div className="flex items-center gap-2">
-      <Progress value={pct} className="h-1.5 flex-1 bg-slate-100 [&>div]:bg-slate-600" />
+      <Progress value={pct} className="h-1.5 flex-1 bg-surface-cool-2 [&>div]:bg-slate-600" />
       <span className="text-xs tabular-nums text-slate-500">
         {processed}/{total}
       </span>
@@ -178,9 +178,9 @@ function statusAccent(status: string): string {
     case 'scheduled':
       return 'border-l-slate-300'
     case 'cancelling':
-      return 'border-l-amber-400'
+      return 'border-l-warning-500'
     case 'failed':
-      return 'border-l-rose-400'
+      return 'border-l-critical-500'
     default:
       return 'border-l-transparent'
   }
@@ -378,10 +378,10 @@ function OperationsView({
         type="button"
         onClick={() => onSelect(op.job_id)}
         className={cn(
-          'flex w-full items-start gap-3 border-l-2 px-4 py-3 text-left transition-colors hover:bg-slate-50',
+          'flex w-full items-start gap-3 border-l-2 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
           statusAccent(op.status),
-          isChild && 'bg-slate-50/60 pl-8',
-          selectedJobId === op.job_id && 'bg-slate-100',
+          isChild && 'bg-surface-cool-2/60 pl-8',
+          selectedJobId === op.job_id && 'bg-accent-soft',
         )}
       >
         {isExpandableParent ? (
@@ -410,7 +410,7 @@ function OperationsView({
               className={cn(
                 'min-w-0 flex-1 truncate text-sm leading-tight',
                 op.status === 'failed'
-                  ? 'font-semibold text-rose-700'
+                  ? 'font-semibold text-critical-700'
                   : terminal
                     ? 'font-medium text-slate-500'
                     : 'font-semibold text-slate-800',
@@ -444,7 +444,7 @@ function OperationsView({
               ) : (
                 <button
                   type="button"
-                  className="rounded p-0.5 text-rose-500 hover:bg-rose-100 hover:text-rose-700"
+                  className="rounded p-0.5 text-critical-500 hover:bg-critical-100 hover:text-critical-700"
                   title="Stop operation now (kills worker thread)"
                   aria-label="Stop operation"
                   onClick={(e) => {
@@ -497,8 +497,8 @@ function OperationsView({
           {op.error && (
             <p
               className={cn(
-                'text-xs text-rose-700',
-                op.status === 'failed' && 'rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1',
+                'text-xs text-critical-700',
+                op.status === 'failed' && 'rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1',
               )}
             >
               {op.error}
@@ -582,7 +582,7 @@ function renderMetricChips(record: Record<string, unknown> | null) {
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
       {entries.map(([key, value]) => (
-        <span key={key} className="rounded-sm bg-white px-2 py-1 text-[10px] text-slate-600 ring-1 ring-slate-200">
+        <span key={key} className="rounded-sm bg-surface-cool-3 px-2 py-1 text-[10px] text-slate-600 ring-1 ring-slate-200">
           {key.replace(/_/g, ' ')}: {formatMetric(value)}
         </span>
       ))}
@@ -633,12 +633,12 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
               const record = asRecord(lane)
               if (!record) return null
               return (
-                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-sm border border-slate-200 bg-white px-2 py-1">
+                <div key={`${record.query ?? 'lane'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
                   <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-slate-700">
                     <span className="font-medium">{String(record.lane_type ?? 'lane')}</span>
                     {'query' in record && <span>{String(record.query)}</span>}
                     {'branch_label' in record && <span className="text-slate-500">({String(record.branch_label)})</span>}
-                    {'result_count' in record && <span className="rounded-sm bg-slate-100 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
+                    {'result_count' in record && <span className="rounded-sm bg-surface-cool-3 px-1.5 py-0.5">{String(record.result_count)} hits</span>}
                   </div>
                 </div>
               )
@@ -702,7 +702,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
           const record = asRecord(item)
           if (!record) return null
           return (
-            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-sm border border-slate-200 bg-white px-2 py-1">
+            <div key={`${record.title ?? 'candidate'}-${idx}`} className="rounded-sm border border-slate-200 bg-surface-cool-2 px-2 py-1">
               <div className="text-[11px] font-medium text-slate-700">{String(record.title ?? '')}</div>
               <div className="mt-0.5 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
                 {'score' in record && <span>score {String(record.score)}</span>}
@@ -760,7 +760,7 @@ function LogsView({ logs }: { logs: LogEntry[] }) {
         {logs.map((entry, i) => (
           <div
             key={`${entry.timestamp}-${i}`}
-            className="flex items-start gap-2 px-4 py-1 font-mono text-xs hover:bg-slate-50"
+            className="flex items-start gap-2 px-4 py-1 font-mono text-xs hover:bg-surface-cool-2"
           >
             <span className="shrink-0 tabular-nums text-slate-400">
               {formatTime(entry.timestamp)}
@@ -850,7 +850,7 @@ function OperationDetailView({
       <div
         className={cn(
           'space-y-2 border-b border-slate-200 px-4 py-3',
-          job.status === 'failed' && 'bg-rose-50/30',
+          job.status === 'failed' && 'bg-critical-50/30',
         )}
       >
         <div className="flex items-start gap-2">
@@ -859,7 +859,7 @@ function OperationDetailView({
             <h3
               className={cn(
                 'text-sm font-semibold leading-tight',
-                job.status === 'failed' ? 'text-rose-700' : 'text-slate-800',
+                job.status === 'failed' ? 'text-critical-700' : 'text-slate-800',
               )}
               title={title}
             >
@@ -915,7 +915,7 @@ function OperationDetailView({
         )}
 
         {job.error && (
-          <p className="rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1 text-xs text-rose-700">
+          <p className="rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1 text-xs text-critical-700">
             {job.error}
           </p>
         )}
@@ -952,7 +952,7 @@ function OperationDetailView({
               <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
               Raw JSON
             </summary>
-            <pre className="mt-2 max-h-96 overflow-auto rounded-sm border border-slate-200 bg-slate-50 p-3 text-[11px] leading-relaxed text-slate-700 shadow-paper-inset-cool">
+            <pre className="mt-2 max-h-96 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-3 text-[11px] leading-relaxed text-slate-700 shadow-paper-inset-cool">
               {JSON.stringify(job.result, null, 2)}
             </pre>
           </details>
@@ -960,7 +960,7 @@ function OperationDetailView({
       )}
 
       {/* ── LOG STREAM TOOLBAR ── */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white/95 px-4 py-2 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-1/95 px-4 py-2 backdrop-blur">
         <EyebrowLabel tone="muted">Log stream</EyebrowLabel>
         <span className="text-[11px] tabular-nums text-slate-400">
           {filteredLogs.length}/{logs.length}
@@ -1007,8 +1007,8 @@ function OperationDetailView({
                 key={`${entry.timestamp}-${idx}`}
                 className={cn(
                   'border-b border-l-2 border-slate-100 px-4 py-2 text-xs',
-                  isError && 'border-l-rose-400 bg-rose-50/30',
-                  isWarning && 'border-l-amber-400 bg-amber-50/30',
+                  isError && 'border-l-critical-500 bg-critical-50/30',
+                  isWarning && 'border-l-warning-500 bg-warning-50/30',
                   !isError && !isWarning && 'border-l-transparent',
                 )}
               >
@@ -1043,7 +1043,7 @@ function OperationDetailView({
                       <summary className="cursor-pointer select-none text-[10px] font-medium uppercase tracking-wide text-slate-500 hover:text-slate-700">
                         Raw data
                       </summary>
-                      <pre className="mt-2 max-h-48 overflow-auto rounded-sm border border-slate-200 bg-slate-50 p-2 font-mono text-[10px] leading-4 text-slate-600 shadow-paper-inset-cool">
+                      <pre className="mt-2 max-h-48 overflow-auto rounded-sm border border-slate-200 bg-surface-cool-2 p-2 font-mono text-[10px] leading-4 text-slate-600 shadow-paper-inset-cool">
                         {JSON.stringify(entry.data, null, 2)}
                       </pre>
                     </details>
@@ -1060,7 +1060,7 @@ function OperationDetailView({
 
 function QueryErrorView({ title, message }: { title: string; message: string }) {
   return (
-    <div className="m-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+    <div className="m-3 rounded border border-critical-100 bg-critical-50 px-3 py-2 text-xs text-critical-700">
       <p className="font-medium">{title}</p>
       <p className="mt-1 break-all">{message}</p>
     </div>
@@ -1229,7 +1229,7 @@ export function ActivityPanel() {
             inside the same shell. */}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full items-center justify-between border-t border-slate-200 bg-white px-4 py-2 shadow-sm hover:bg-slate-50"
+          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-1 px-4 py-2 shadow-sm hover:bg-surface-cool-2"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />
@@ -1252,13 +1252,13 @@ export function ActivityPanel() {
             top area; on desktop we respect the user-resizable panelHeight. */}
         {isOpen && (
           <div
-            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-white shadow-2xl lg:max-h-none"
+            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-1 shadow-2xl lg:max-h-none"
             style={{ height: `${panelHeight}px` }}
           >
           {/* Resize handle */}
           <div
             onMouseDown={handleResizeStart}
-            className="h-2 cursor-ns-resize border-b border-slate-200 bg-slate-50 hover:bg-slate-100"
+            className="h-2 cursor-ns-resize border-b border-slate-200 bg-surface-cool-2 hover:bg-surface-cool-2"
             title="Drag to resize activity panel"
           />
 

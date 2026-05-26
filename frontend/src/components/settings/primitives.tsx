@@ -167,7 +167,7 @@ export function ToggleRow({
     <label
       className={cn(
         'flex items-center justify-between gap-3 rounded-lg border px-3 py-2',
-        isWarning ? 'border-amber-200 bg-amber-50' : 'border-slate-200',
+        isWarning ? 'border-warning-500/40 bg-warning-50' : 'border-[var(--color-border)]',
         disabled && 'opacity-70',
         className,
       )}
@@ -176,13 +176,13 @@ export function ToggleRow({
         <p
           className={cn(
             'text-sm font-medium',
-            isWarning ? 'text-amber-800' : 'text-slate-700',
+            isWarning ? 'text-warning-700' : 'text-slate-700',
           )}
         >
           {title}
         </p>
         {description ? (
-          <p className={cn('text-xs', isWarning ? 'text-amber-700' : 'text-slate-500')}>
+          <p className={cn('text-xs', isWarning ? 'text-warning-700' : 'text-slate-500')}>
             {description}
           </p>
         ) : null}
@@ -243,10 +243,10 @@ export function OptionCard({
       className={cn(
         'flex items-start gap-3 rounded-lg border p-3 transition-colors',
         disabled
-          ? 'cursor-not-allowed border-slate-100 bg-parchment-50 opacity-70'
+          ? 'cursor-not-allowed border-[var(--color-border)] bg-surface-2 opacity-70'
           : selected
-            ? 'cursor-pointer border-alma-300 bg-alma-50'
-            : 'cursor-pointer border-slate-200 hover:bg-parchment-50',
+            ? 'cursor-pointer border-alma-folio bg-accent-soft'
+            : 'cursor-pointer border-[var(--color-border)] hover:bg-surface-2',
         className,
       )}
     >
@@ -487,19 +487,18 @@ export function SettingsSection({
   return (
     <Collapsible
       defaultOpen={defaultOpen}
-      // Tier 3 (parchment-50) — sections are RECESSED inside the cream
-      // SettingsCard so the nesting reads as visible depth instead of
-      // a flat cream-on-cream sandwich. Inset shadow reinforces the
-      // "stamped into the page" feel.
+      // Recessed group inside the SettingsCard — panel level (surface-2)
+      // with an inset shadow so the nesting reads as visible depth, not a
+      // flat cream-on-cream sandwich.
       className={cn(
-        'rounded-sm border border-[var(--color-border)] bg-parchment-50/85 shadow-paper-inset',
+        'rounded-sm border border-edge-2 bg-surface-2 shadow-paper-inset',
         className,
       )}
     >
       <CollapsibleTrigger
         className={cn(
           'group flex w-full items-center justify-between gap-3 rounded-t-sm px-4 py-3 text-left',
-          'hover:bg-parchment-100/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500',
+          'hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
           'data-[state=closed]:rounded-b-sm',
         )}
       >
@@ -517,6 +516,30 @@ export function SettingsSection({
       </CollapsibleContent>
     </Collapsible>
   )
+}
+
+// ---------------------------------------------------------------------------
+// ConnectionPill — green/red health pill for a connection's section header.
+// ---------------------------------------------------------------------------
+
+/**
+ * Binary connection-health pill shown next to a service name in a
+ * `SettingsSection` header (OpenAlex / Semantic Scholar): green "Connected"
+ * when the live probe validated the key, red "Not connected" otherwise, and
+ * a neutral "Checking…" while the first probe is still in flight. The
+ * specific reason (key rejected / not set / couldn't verify) lives in the
+ * section body so the header stays a glanceable green-or-red signal.
+ */
+export function ConnectionPill({
+  valid,
+  loading,
+}: {
+  valid: boolean | null | undefined
+  loading?: boolean
+}) {
+  if (loading) return <StatusBadge tone="neutral" size="sm">Checking…</StatusBadge>
+  if (valid === true) return <StatusBadge tone="positive" size="sm">Connected</StatusBadge>
+  return <StatusBadge tone="negative" size="sm">Not connected</StatusBadge>
 }
 
 // ---------------------------------------------------------------------------

@@ -101,7 +101,7 @@ function RangeControl({
     <label className="space-y-1 text-xs text-slate-600">
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{label}</span>
-        <span className="rounded bg-parchment-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{value}</span>
+        <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{value}</span>
       </div>
       <input
         type="range"
@@ -167,7 +167,7 @@ export function GraphControls({
   return (
     <div className="space-y-3">
       <div className="grid gap-3 lg:grid-cols-[1.5fr_1fr]">
-        <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome/90 p-3 shadow-sm">
+        <div className="rounded-sm border border-[var(--color-border)] bg-surface-1/90 p-3 shadow-sm">
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative min-w-[220px] flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -327,7 +327,7 @@ export function GraphControls({
         </div>
 
         {physics && onPhysicsChange && (
-          <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50/90 p-3 shadow-sm">
+          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2/90 p-3 shadow-sm">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-slate-500" />
@@ -356,7 +356,7 @@ export function GraphControls({
       </div>
 
       {clusters && clusters.length > 0 && (
-        <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome/90 p-3 shadow-sm">
+        <div className="rounded-sm border border-[var(--color-border)] bg-surface-1/90 p-3 shadow-sm">
           <div className="mb-2 flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-slate-500" />
             <div>

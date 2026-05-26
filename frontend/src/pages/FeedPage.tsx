@@ -33,6 +33,7 @@ import {
 import { PaperDetailPanel } from '@/components/discovery'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { PaperCard } from '@/components/shared'
+import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
 import { Badge } from '@/components/ui/badge'
@@ -351,7 +352,7 @@ export function FeedPage() {
           carries the description, a live monitor pulse, a one-tap link to
           Settings, and the primary Refresh action.
       ──────────────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
         {/* Flat chrome paper. The gradient was a v2 holdover that read as
             SaaS-y on the bookish bg — paper is honest, no decoration. */}
         <div className="relative flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:gap-8">
@@ -364,12 +365,12 @@ export function FeedPage() {
                 <span className="relative flex h-2 w-2" aria-hidden>
                   <span
                     className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${
-                      pulseTone === 'amber' ? 'bg-amber-400' : 'bg-emerald-400'
+                      pulseTone === 'amber' ? 'bg-warning-500' : 'bg-success-500'
                     }`}
                   />
                   <span
                     className={`relative inline-flex h-2 w-2 rounded-full ${
-                      pulseTone === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'
+                      pulseTone === 'amber' ? 'bg-warning-500' : 'bg-success-500'
                     }`}
                   />
                 </span>
@@ -379,11 +380,11 @@ export function FeedPage() {
                 </span>
               </span>
               <span className="text-slate-300" aria-hidden>·</span>
-              <span className="tabular-nums text-emerald-700">{readyMonitors} ready</span>
+              <span className="tabular-nums text-success-700">{readyMonitors} ready</span>
               {degradedMonitors > 0 && (
                 <>
                   <span className="text-slate-300" aria-hidden>·</span>
-                  <span className="tabular-nums text-amber-700">{degradedMonitors} degraded</span>
+                  <span className="tabular-nums text-warning-700">{degradedMonitors} degraded</span>
                 </>
               )}
               <button
@@ -441,7 +442,7 @@ export function FeedPage() {
           button for sort. Nothing here mutates data — all controls are
           local view state.
       ──────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-alma-chrome px-3 py-2 shadow-sm">
+      <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
         {/* Filter segmented control — only "All" / "New". */}
         <ToggleGroup
           type="single"
@@ -451,13 +452,13 @@ export function FeedPage() {
             if (value) setFilter(value as FeedFilter)
           }}
           aria-label="Feed filter"
-          className="gap-0 rounded-sm bg-parchment-100/80 p-0.5"
+          className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
         >
           {FEED_FILTERS.map((value) => (
             <ToggleGroupItem
               key={value}
               value={value}
-              className="h-7 min-w-0 rounded-sm px-3 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-alma-chrome data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+              className="h-7 min-w-0 rounded-sm px-3 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
             >
               {FEED_FILTER_LABELS[value]}
             </ToggleGroupItem>
@@ -472,7 +473,7 @@ export function FeedPage() {
           onClick={() => setSort(sort === 'chronological' ? 'relevance' : 'chronological')}
           title={sort === 'chronological' ? 'Currently sorted chronologically — switch to relevance' : 'Currently sorted by relevance — switch to chronological'}
           aria-label={`Sort by ${sort === 'chronological' ? 'relevance' : 'recent'}`}
-          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-alma-chrome px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-parchment-50"
+          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-surface-2"
         >
           <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
           {sort === 'relevance' ? 'Relevance' : 'Recent'}
@@ -504,7 +505,7 @@ export function FeedPage() {
               if (value) setViewMode(value as FeedViewMode)
             }}
             aria-label="Feed view mode"
-            className="gap-0 rounded-sm bg-parchment-100/80 p-0.5"
+            className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
           >
             {[
               { value: 'compact' as FeedViewMode, label: 'Compact', icon: Rows3, title: 'Compact table view' },
@@ -515,7 +516,7 @@ export function FeedPage() {
                 key={value}
                 value={value}
                 title={title}
-                className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-alma-chrome data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+                className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
               >
                 <Icon className="h-3.5 w-3.5" />
                 <span className="hidden md:inline">{label}</span>
@@ -590,8 +591,8 @@ export function FeedPage() {
           }}
         />
       ) : (
-        <div className="space-y-3">
-          {items.map((item) => {
+        <RevealList className="space-y-3">
+          {items.map((item, i) => {
             const paper = toPublication(item)
             const matchedAuthors = item.matched_authors ?? []
             const matchedMonitors = item.matched_monitors ?? []
@@ -623,8 +624,8 @@ export function FeedPage() {
             const isQueued = paper?.reading_status === 'reading'
             const isNew = Boolean(item.is_new)
             return (
+              <RevealItem key={item.id} index={i} layoutId={`feed-${item.id}`}>
               <div
-                key={item.id}
                 className="relative rounded-sm"
               >
                 <PaperCard
@@ -705,7 +706,7 @@ export function FeedPage() {
                                 <Badge
                                   key={`${item.id}-${monitor.monitor_id ?? label}-${monitor.monitor_type ?? 'monitor'}`}
                                   variant="outline"
-                                  className="border-slate-200 bg-parchment-50 text-slate-700"
+                                  className="border-slate-200 bg-surface-2 text-slate-700"
                                 >
                                   {label}{suffix}
                                 </Badge>
@@ -714,7 +715,7 @@ export function FeedPage() {
                           </div>
                         )}
                         {matchedMonitors.length === 0 && item.monitor_type && item.monitor_type !== 'author' && item.monitor_label && (
-                          <Badge variant="outline" className="border-slate-200 bg-parchment-50 text-slate-700">
+                          <Badge variant="outline" className="border-slate-200 bg-surface-2 text-slate-700">
                             {item.monitor_label} ({formatMonitorTypeLabel(item.monitor_type)})
                           </Badge>
                         )}
@@ -740,9 +741,10 @@ export function FeedPage() {
                   )}
                 </PaperCard>
               </div>
+              </RevealItem>
             )
           })}
-        </div>
+        </RevealList>
       )}
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />

@@ -11,10 +11,10 @@ export type MetricTileTone =
 
 const VALUE_TONE_CLASS: Record<MetricTileTone, string> = {
   neutral: 'text-alma-800',
-  success: 'text-emerald-700',
-  warning: 'text-amber-700',
-  critical: 'text-rose-700',
-  info: 'text-sky-600',
+  success: 'text-success-700',
+  warning: 'text-warning-700',
+  critical: 'text-critical-700',
+  info: 'text-info-600',
   accent: 'text-alma-folio',
 }
 
@@ -107,7 +107,7 @@ export function MetricTile({
         // brighter than its host. min-w-0 + truncate guards against the
         // narrow-column overflow that the v2 tiles suffered from on
         // sub-400px grids.
-        'min-w-0 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-3 shadow-paper-sm',
+        'min-w-0 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm',
         className,
       )}
     >

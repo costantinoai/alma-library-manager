@@ -13,7 +13,7 @@ const alertVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-alma-chrome text-alma-900",
+        default: "bg-surface-1 text-alma-900",
         destructive:
           "border-red-500/50 text-red-500 dark:border-red-500 [&>svg]:text-red-500 dark:border-red-900/50 dark:text-red-900 dark:dark:border-red-900 dark:[&>svg]:text-red-900",
         // Soft "negative" tone matching the StatusBadge `negative` palette —

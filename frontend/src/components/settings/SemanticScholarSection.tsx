@@ -3,10 +3,10 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
-import { Network, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 
 import { api, type Settings, type SemanticScholarStatus } from '@/api/client'
-import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
+import { AsyncButton, ConnectionPill, SettingsSection } from '@/components/settings/primitives'
 import {
   Form,
   FormControl,
@@ -17,7 +17,6 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
 
 const s2Schema = z.object({
   semantic_scholar_api_key: z.string(),
@@ -25,45 +24,30 @@ const s2Schema = z.object({
 
 type S2Form = z.infer<typeof s2Schema>
 
-interface SemanticScholarCardProps {
+interface SemanticScholarSectionProps {
   formData: Settings
   onFormDataChange: (updater: (prev: Settings) => Settings) => void
 }
 
 /**
- * Resolve the connection-dot appearance from the live key-validity probe.
- * Green = the key works; red = S2 rejected it; amber = set but unverified;
- * grey = not configured / still checking.
- */
-function dotState(status: SemanticScholarStatus | undefined, loading: boolean) {
-  if (loading) return { dot: 'bg-alma-300', label: 'Checking…', text: 'text-slate-500' }
-  if (!status || !status.configured)
-    return { dot: 'bg-alma-300', label: 'Not set', text: 'text-slate-500' }
-  if (status.valid === true)
-    return { dot: 'bg-emerald-500', label: 'Connected', text: 'text-emerald-700' }
-  if (status.valid === false)
-    return { dot: 'bg-rose-500', label: 'Key rejected', text: 'text-rose-700' }
-  return { dot: 'bg-amber-500', label: "Couldn't verify", text: 'text-amber-700' }
-}
-
-/**
- * Semantic Scholar credential card. S2 supplies SPECTER2 vectors and
- * paper/author recommendations as a secondary source (always on, not
+ * Semantic Scholar credentials, rendered as a collapsible sub-section of the
+ * External APIs panel (see `ExternalApisCard`). S2 supplies SPECTER2 vectors
+ * and paper/author recommendations as a secondary source (always on, not
  * gated on the active backend like OpenAlex). The key is strongly
  * recommended: without it S2 falls back to the shared anonymous pool and
  * 429s frequently, which stalls the Discovery graph lane.
  *
  * The key field writes into the shared `formData`; persistence happens via
- * the section's "Save connection settings" footer. After a save the
- * SettingsPage invalidates `semantic-scholar-status`, so the connection dot
- * re-probes and reflects the new key. The backend masks the stored value
+ * the Connections section's "Save connection settings" footer. After a save
+ * the SettingsPage invalidates `semantic-scholar-status`, so the connection
+ * dot re-probes and reflects the new key. The backend masks the stored value
  * (`****<suffix>`) on GET and skips re-rotation when the masked echo is
  * submitted unchanged.
  */
-export function SemanticScholarCard({
+export function SemanticScholarSection({
   formData,
   onFormDataChange,
-}: SemanticScholarCardProps) {
+}: SemanticScholarSectionProps) {
   const form = useForm<S2Form>({
     resolver: zodResolver(s2Schema),
     defaultValues: {
@@ -98,23 +82,25 @@ export function SemanticScholarCard({
     staleTime: 60_000,
   })
 
-  const state = dotState(statusQuery.data, statusQuery.isLoading || statusQuery.isFetching)
-
   return (
-    <SettingsCard
-      icon={Network}
-      title="Semantic Scholar"
+    <SettingsSection
+      title={
+        <span className="inline-flex items-center gap-2">
+          Semantic Scholar
+          <ConnectionPill valid={statusQuery.data?.valid} loading={statusQuery.isLoading} />
+        </span>
+      }
       description="Secondary source for SPECTER2 vectors and paper/author recommendations."
+      defaultOpen={false}
     >
       <Form {...form}>
         <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>
-          <div className="flex items-center justify-between gap-2 rounded-md bg-parchment-50 px-3 py-2">
-            <span className="inline-flex items-center gap-2 text-sm">
-              <span className={cn('h-2 w-2 rounded-full', state.dot)} aria-hidden />
-              <span className={cn('font-medium', state.text)}>{state.label}</span>
-              {statusQuery.data?.detail && (
-                <span className="text-xs text-slate-500">— {statusQuery.data.detail}</span>
-              )}
+          {/* The green/red pill lives in the section header (visible collapsed);
+              this box reveals the specific probe reason + the Re-check action,
+              which can't sit in the header (it's a button inside the trigger). */}
+          <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2">
+            <span className="text-xs text-slate-500">
+              {statusQuery.data?.detail ?? 'Checking connection…'}
             </span>
             <AsyncButton
               type="button"
@@ -158,6 +144,6 @@ export function SemanticScholarCard({
           />
         </form>
       </Form>
-    </SettingsCard>
+    </SettingsSection>
   )
 }

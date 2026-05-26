@@ -39,6 +39,7 @@ import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PaperCard } from '@/components/shared'
+import { RevealList, RevealItem } from '@/components/ui/reveal'
 import {
   Dialog,
   DialogContent,
@@ -148,12 +149,12 @@ function readStoredValueVersioned<T extends string>(
 
 const SOURCE_COLORS: Record<string, string> = {
   import: 'bg-indigo-100 text-indigo-700',
-  feed: 'bg-sky-100 text-sky-700',
+  feed: 'bg-info-100 text-info-700',
   discovery: 'bg-violet-100 text-violet-700',
   discovery_save: 'bg-violet-100 text-violet-700',
   discovery_like: 'bg-violet-100 text-violet-700',
   discovery_manual: 'bg-violet-100 text-violet-700',
-  manual: 'bg-parchment-100 text-slate-600',
+  manual: 'bg-surface-2 text-slate-600',
   library_similarity: 'bg-teal-100 text-teal-700',
   online_search: 'bg-cyan-100 text-cyan-700',
 }
@@ -523,12 +524,12 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
         />
       ) : (
         /* ── Card view ── */
-        <div className="space-y-3">
-          {visibleLikes.map((like) => {
+        <RevealList className="space-y-3">
+          {visibleLikes.map((like, i) => {
             const isSelected = selectedKeys.has(like.id)
             return (
+            <RevealItem key={like.id} index={i} layoutId={`saved-${like.id}`}>
             <div
-              key={like.id}
               className="relative rounded-sm"
             >
               <PaperCard
@@ -558,9 +559,9 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 </div>
                 {/* Notes */}
                 {like.notes && (
-                  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-amber-50 px-3 py-2">
-                    <StickyNote className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
-                    <p className="text-xs text-amber-800">{like.notes}</p>
+                  <div className="mt-2 flex items-start gap-1.5 rounded-md bg-warning-50 px-3 py-2">
+                    <StickyNote className="mt-0.5 h-3 w-3 shrink-0 text-warning-500" />
+                    <p className="text-xs text-warning-700">{like.notes}</p>
                   </div>
                 )}
                 {/* Quick actions */}
@@ -587,14 +588,15 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     <FolderOpen className="h-4 w-4 text-slate-500" />
                   </Button>
                   <Button variant="ghost" size="icon" onClick={() => setDeleteKey(like.id)} title="Remove from library">
-                    <Trash2 className="h-4 w-4 text-red-400" />
+                    <Trash2 className="h-4 w-4 text-critical-500" />
                   </Button>
                 </div>
               </PaperCard>
             </div>
+            </RevealItem>
             )
           })}
-        </div>
+        </RevealList>
       )}
 
       {hasMore && !likesQuery.isLoading && !likesQuery.isError && (
@@ -617,7 +619,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
       {/* Floating action bar — always-on selection, so the bar appears
           whenever at least one paper is selected. Matches Feed + AllPapers. */}
       {selectedKeys.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome px-4 py-3 shadow-lg">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 px-4 py-3 shadow-lg">
           <span className="text-sm font-medium text-slate-700">
             {selectedKeys.size} selected
           </span>
@@ -648,7 +650,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           <Button
             size="sm"
             variant="outline"
-            className="text-red-600 hover:bg-red-50 hover:text-red-700"
+            className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
             onClick={() => setBulkDeleteOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -698,7 +700,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 onChange={(e) => setEditNotes(e.target.value)}
                 placeholder="Add personal notes about this paper..."
                 rows={3}
-                className="flex w-full rounded-sm border border-[var(--color-border)] bg-alma-paper px-3 py-2 text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
+                className="flex w-full rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
               />
             </div>
           </div>
@@ -1008,7 +1010,7 @@ function SavedCompactTable({
         return (
           <Badge
             variant="secondary"
-            className={`text-[10px] ${SOURCE_COLORS[src] ?? 'bg-parchment-100 text-slate-600'}`}
+            className={`text-[10px] ${SOURCE_COLORS[src] ?? 'bg-surface-2 text-slate-600'}`}
           >
             {SOURCE_LABELS[src] ?? src}
           </Badge>

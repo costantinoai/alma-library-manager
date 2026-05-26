@@ -172,7 +172,7 @@ export function AuthorsNeedsAttentionSection({
     return (
       <section className="space-y-2">
         <SectionHeader total={null} />
-        <p className="text-xs text-rose-600">
+        <p className="text-xs text-critical-600">
           Could not load needs-attention rows. Try reloading.
         </p>
       </section>
@@ -207,7 +207,7 @@ export function AuthorsNeedsAttentionSection({
 function SectionHeader({ total }: { total: number | null }) {
   return (
     <header className="flex items-center gap-2">
-      <AlertTriangle className="h-4 w-4 text-amber-600" />
+      <AlertTriangle className="h-4 w-4 text-warning-600" />
       <h2 className="text-sm font-semibold text-alma-800">Needs attention</h2>
       <span className="text-xs text-slate-500">
         {total == null ? 'Checking…' : total === 0 ? 'All clear' : `${total} author${total === 1 ? '' : 's'}`}
@@ -252,7 +252,7 @@ function NeedsAttentionRow({
     )
 
   return (
-    <li className="rounded-sm border border-[var(--color-border)] bg-white p-3 shadow-paper-sm shadow-sm hover:border-[var(--color-border)]">
+    <li className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 shadow-paper-sm shadow-sm hover:border-[var(--color-border)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -479,10 +479,10 @@ function ProfileChip({
     tone === 'primary'
       ? 'border-alma-folio bg-alma-folio-soft text-alma-800'
       : tone === 'orcid'
-        ? 'border-amber-200 bg-amber-50/70 text-alma-800'
-        : 'border-[var(--color-border)] bg-alma-content-elev text-alma-800'
+        ? 'border-warning-100 bg-warning-50/70 text-alma-800'
+        : 'border-[var(--color-border)] bg-surface-2 text-alma-800'
   const dotTone =
-    tone === 'primary' ? 'bg-alma-folio' : tone === 'orcid' ? 'bg-amber-500' : 'bg-slate-400'
+    tone === 'primary' ? 'bg-alma-folio' : tone === 'orcid' ? 'bg-warning-500' : 'bg-slate-400'
   return (
     <a
       href={`https://openalex.org/${openalexId}`}
@@ -513,7 +513,7 @@ function ProfileRow({
   tone?: 'primary' | 'alt'
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-2.5">
+    <div className="flex items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5">
       <div className="min-w-0">
         <StatusBadge tone={tone === 'primary' ? 'info' : 'neutral'} size="sm">
           {label}
@@ -525,7 +525,7 @@ function ProfileRow({
         href={`https://openalex.org/${openalexId}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 rounded-sm border border-[var(--color-border)] bg-white px-2 py-1 text-[11px] text-alma-700 hover:border-alma-300 hover:text-alma-800"
+        className="inline-flex items-center gap-1 rounded-sm border border-[var(--color-border)] bg-surface-1 px-2 py-1 text-[11px] text-alma-700 hover:border-alma-300 hover:text-alma-800"
       >
         Open
         <ExternalLink className="h-3 w-3" />

@@ -10,13 +10,13 @@ import type { PaperCardPaper, ScoreSignal } from './PaperCard'
 // consistent.
 const SIGNAL_META: Record<string, { label: string; color: string }> = {
   source_relevance: { label: 'Source Relevance', color: 'bg-alma-500' },
-  topic_score: { label: 'Topic Match', color: 'bg-emerald-500' },
-  text_similarity: { label: 'Text Similarity', color: 'bg-sky-500' },
+  topic_score: { label: 'Topic Match', color: 'bg-success-500' },
+  text_similarity: { label: 'Text Similarity', color: 'bg-info-500' },
   author_affinity: { label: 'Author Affinity', color: 'bg-violet-500' },
   journal_affinity: { label: 'Journal Affinity', color: 'bg-indigo-400' },
-  recency_boost: { label: 'Recency', color: 'bg-amber-500' },
+  recency_boost: { label: 'Recency', color: 'bg-warning-500' },
   citation_quality: { label: 'Citation Quality', color: 'bg-orange-400' },
-  feedback_adj: { label: 'Your Feedback', color: 'bg-rose-400' },
+  feedback_adj: { label: 'Your Feedback', color: 'bg-critical-500' },
   preference_affinity: { label: 'Preference Match', color: 'bg-fuchsia-400' },
   usefulness_boost: { label: 'Usefulness', color: 'bg-teal-500' },
 }
@@ -24,7 +24,7 @@ const SIGNAL_META: Record<string, { label: string; color: string }> = {
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.round(score)
   const barColor =
-    pct >= 70 ? 'bg-emerald-500' : pct >= 40 ? 'bg-amber-500' : 'bg-red-400'
+    pct >= 70 ? 'bg-success-500' : pct >= 40 ? 'bg-warning-500' : 'bg-critical-500'
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
@@ -55,7 +55,7 @@ function TopSignals({
   if (signals.length === 0 && !explanation) return null
 
   return (
-    <div className="rounded-md border border-slate-100 bg-parchment-50/70 p-2 space-y-1.5">
+    <div className="rounded-md border border-slate-100 bg-surface-2/70 p-2 space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
         Why this paper
       </p>

@@ -12,9 +12,9 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 function templateIcon(category: string) {
   if (category === 'author') return <UserRound className="h-4 w-4 text-indigo-600" />
   if (category === 'collection') return <FolderOpen className="h-4 w-4 text-violet-600" />
-  if (category === 'feed_monitor') return <Rss className="h-4 w-4 text-emerald-600" />
-  if (category === 'branch') return <GitBranch className="h-4 w-4 text-sky-600" />
-  return <Workflow className="h-4 w-4 text-amber-600" />
+  if (category === 'feed_monitor') return <Rss className="h-4 w-4 text-success-600" />
+  if (category === 'branch') return <GitBranch className="h-4 w-4 text-info-600" />
+  return <Workflow className="h-4 w-4 text-warning-600" />
 }
 
 export function AlertTemplatesSection() {
@@ -55,7 +55,7 @@ export function AlertTemplatesSection() {
     <Card>
       <CardHeader>
         <div className="flex items-center gap-2">
-          <BellRing className="h-5 w-5 text-amber-600" />
+          <BellRing className="h-5 w-5 text-warning-600" />
           <div>
             <CardTitle>Suggested Automations</CardTitle>
             <p className="text-sm text-slate-500">
@@ -70,7 +70,7 @@ export function AlertTemplatesSection() {
             <Loader2 className="h-4 w-4 animate-spin" /> Loading alert suggestions...
           </div>
         ) : templatesQuery.isError ? (
-          <div className="flex items-center gap-2 text-sm text-amber-700">
+          <div className="flex items-center gap-2 text-sm text-warning-700">
             <AlertTriangle className="h-4 w-4" /> Could not load alert suggestions.
           </div>
         ) : templates.length === 0 ? (
@@ -94,7 +94,7 @@ export function AlertTemplatesSection() {
                   <Badge variant="secondary">{template.category.replace(/_/g, ' ')}</Badge>
                 </div>
                 {template.rationale && (
-                  <p className="mt-3 rounded-md bg-parchment-50 px-3 py-2 text-xs text-slate-600">{template.rationale}</p>
+                  <p className="mt-3 rounded-md bg-surface-2 px-3 py-2 text-xs text-slate-600">{template.rationale}</p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.entries(template.metrics).map(([key, value]) => (

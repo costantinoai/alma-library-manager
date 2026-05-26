@@ -43,7 +43,7 @@ export function AuthorSuggestionCard({ suggestion }: AuthorSuggestionCardProps) 
         </div>
 
         {expanded && (
-          <div className="mt-3 rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3 text-xs text-slate-600">
+          <div className="mt-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 text-xs text-slate-600">
             <p>
               Suggested because this author appears across{' '}
               <span className="font-semibold text-slate-800">{suggestion.paper_count}</span> high-scoring recommendations.

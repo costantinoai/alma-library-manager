@@ -260,6 +260,10 @@ export interface MaintenanceOperation {
   label: string
   description: string
   cost: 'cheap' | 'network' | 'compute' | string
+  sources: string[]
+  local_compute: boolean
+  destructive: boolean
+  hard_cap: number | null
   repairs: string[]
   operation_key: string
   candidates_pending: number
@@ -2761,6 +2765,37 @@ export interface ImportResult {
   items: Record<string, unknown>[]
 }
 
+export interface ImportPreflight {
+  source: string
+  total_entries: number
+  valid_entries: number
+  parse_errors: number
+  errors: string[]
+  identifiers: {
+    doi: number
+    url_only: number
+    title_search_needed: number
+  }
+  metadata: {
+    with_abstract: number
+    rich_enough_to_skip_most_hydration: number
+  }
+  dedup: {
+    existing_matches: number
+    likely_new_rows: number
+  }
+  likely_source_calls: {
+    openalex: number
+    semantic_scholar_title_search: number
+    semantic_scholar_vector_batch_candidates: number
+  }
+  eta: {
+    openalex: MaintenanceEta | null
+    title_resolution: MaintenanceEta | null
+    s2_vector: MaintenanceEta | null
+  }
+}
+
 /**
  * Activity envelope returned when an import is queued as a background job.
  * Matches the Feed/Authors background-job contract in `docs/BACKGROUND_JOBS.md`.
@@ -3441,6 +3476,56 @@ export function feedBulkAction(
 }
 
 // ── Import API helpers ──
+
+/** Preview a .bib file without writing rows, returning enrichment cost signals. */
+export async function preflightBibtexFile(file: File): Promise<ImportPreflight> {
+  const form = new FormData()
+  form.append('file', file)
+
+  const response = await fetch(`${BASE_URL}/library/import/preflight/bibtex`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new ApiError(response.status, error.detail || response.statusText)
+  }
+  return response.json()
+}
+
+/** Preview pasted BibTeX without writing rows. */
+export function preflightBibtexText(content: string): Promise<ImportPreflight> {
+  return api.post<ImportPreflight>('/library/import/preflight/bibtex/text', {
+    content,
+  })
+}
+
+/** Preview a Zotero RDF export without writing rows. */
+export async function preflightZoteroRdfFile(file: File): Promise<ImportPreflight> {
+  const form = new FormData()
+  form.append('file', file)
+
+  const response = await fetch(`${BASE_URL}/library/import/preflight/zotero/rdf`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }))
+    throw new ApiError(response.status, error.detail || response.statusText)
+  }
+  return response.json()
+}
+
+/** Preview a Zotero Web API import without writing rows. */
+export function preflightZotero(params: {
+  library_id: string
+  api_key?: string
+  library_type?: string
+  collection_key?: string | null
+  collection_name?: string
+}): Promise<ImportPreflight> {
+  return api.post<ImportPreflight>('/library/import/preflight/zotero', params)
+}
 
 /**
  * Upload a .bib file for import.

@@ -179,7 +179,7 @@ export function ReadingListTab() {
       </div>
 
       {totalVisible === 0 ? (
-        <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 px-6 py-12 text-center">
+        <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-6 py-12 text-center">
           <BookOpen className="mx-auto h-10 w-10 text-slate-300" />
           <p className="mt-4 text-sm font-medium text-slate-600">No reading-list papers match this view.</p>
           <p className="mt-1 text-xs text-slate-500">

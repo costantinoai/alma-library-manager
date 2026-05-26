@@ -190,19 +190,19 @@ export function HealthPage() {
           colored data-health ribbon up top, then a one-line strip of clickable
           system-component chips. They share a panel because together they ARE
           the at-a-glance "is everything OK?" — clicking a chip opens its detail. */}
-      <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-alma-content p-4 shadow-paper-sm sm:p-5">
+      <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm sm:p-5">
         {snapshotQuery.isError ? (
-          <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-200 bg-rose-50 p-3">
+          <div className="flex items-center justify-between gap-3 rounded-sm border border-critical-100 bg-critical-50 p-3">
             <div className="flex items-center gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-rose-600" />
-              <p className="text-sm text-rose-800">Couldn't load the health snapshot.</p>
+              <AlertTriangle className="h-5 w-5 shrink-0 text-critical-600" />
+              <p className="text-sm text-critical-700">Couldn't load the health snapshot.</p>
             </div>
             <Button size="sm" variant="outline" onClick={() => snapshotQuery.refetch()}>
               Retry
             </Button>
           </div>
         ) : snapshotQuery.isLoading ? (
-          <div className="h-24 animate-pulse rounded-sm bg-alma-chrome-elev" />
+          <div className="h-24 animate-pulse rounded-sm bg-surface-2" />
         ) : snapshot ? (
           <HealthVitals snapshot={snapshot} />
         ) : null}

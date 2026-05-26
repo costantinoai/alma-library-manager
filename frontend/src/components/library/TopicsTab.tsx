@@ -384,7 +384,7 @@ export function TopicsTab() {
                             <span>{alias}</span>
                             <button
                               type="button"
-                              className="ml-1 rounded-sm text-slate-500 hover:text-red-600"
+                              className="ml-1 rounded-sm text-slate-500 hover:text-critical-600"
                               onClick={() => setDeleteAlias(alias)}
                               title="Delete alias"
                             >
@@ -440,7 +440,7 @@ export function TopicsTab() {
                       }}
                       title="Delete canonical topic"
                     >
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                      <Trash2 className="h-4 w-4 text-critical-500" />
                     </Button>
                   </div>
                 </div>

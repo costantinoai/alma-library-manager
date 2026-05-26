@@ -34,7 +34,7 @@ export function DiscoveryFilters({
   onSemanticToggle,
 }: DiscoveryFiltersProps) {
   return (
-    <div className="space-y-3 rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm shadow-sm">
+    <div className="space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm shadow-sm">
       <div className="flex flex-wrap items-center gap-3">
         {/* Status filter */}
         <div className="flex items-center gap-2">
@@ -47,7 +47,7 @@ export function DiscoveryFilters({
               className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                 statusFilter === f.value
                   ? 'bg-slate-800 text-white'
-                  : 'bg-parchment-100 text-slate-600 hover:bg-slate-200'
+                  : 'bg-surface-2 text-slate-600 hover:bg-slate-200'
               }`}
             >
               {f.label}

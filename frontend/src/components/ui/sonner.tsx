@@ -30,7 +30,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           // (the v2 trim accent). Sits on shadow-paper-lg so it floats
           // clearly above the page without going hard-shadow.
           toast:
-            "group toast group-[.toaster]:bg-alma-chrome group-[.toaster]:text-alma-900 group-[.toaster]:border group-[.toaster]:border-[var(--color-border)] group-[.toaster]:border-l-4 group-[.toaster]:border-l-gold-400 group-[.toaster]:shadow-paper-lg group-[.toaster]:rounded",
+            "group toast group-[.toaster]:bg-surface-1 group-[.toaster]:text-alma-900 group-[.toaster]:border group-[.toaster]:border-[var(--color-border)] group-[.toaster]:border-l-4 group-[.toaster]:border-l-gold-400 group-[.toaster]:shadow-paper-lg group-[.toaster]:rounded",
           description: "group-[.toast]:text-slate-500",
           actionButton:
             "group-[.toast]:bg-alma-800 group-[.toast]:text-alma-cream group-[.toast]:rounded-sm",

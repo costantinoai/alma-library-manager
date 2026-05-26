@@ -80,7 +80,7 @@ export function AuthorHoverCard({
 
           {author && (
             <>
-              <div className="grid grid-cols-3 gap-2 rounded-md border border-slate-100 bg-parchment-50/70 px-2 py-1.5 text-center">
+              <div className="grid grid-cols-3 gap-2 rounded-md border border-slate-100 bg-surface-2/70 px-2 py-1.5 text-center">
                 <div>
                   <p className="text-[10px] uppercase tracking-wide text-slate-500">h-index</p>
                   <p className="text-sm font-semibold tabular-nums text-alma-800">
@@ -114,7 +114,7 @@ export function AuthorHoverCard({
           )}
 
           {notInCorpus && (
-            <p className="rounded-md border border-dashed border-slate-200 bg-parchment-50/60 px-2 py-1.5 text-[11px] text-slate-500">
+            <p className="rounded-md border border-dashed border-slate-200 bg-surface-2/60 px-2 py-1.5 text-[11px] text-slate-500">
               Not in your authors corpus yet. Follow to start tracking their new papers.
             </p>
           )}

@@ -167,7 +167,7 @@ export function InsightsReportsTab({
       header: 'Liked Avg',
       size: 110,
       meta: { cellOverflow: 'none' },
-      cell: ({ row }) => <span className="block text-right tabular-nums text-emerald-700">{row.original.liked_avg.toFixed(3)}</span>,
+      cell: ({ row }) => <span className="block text-right tabular-nums text-success-700">{row.original.liked_avg.toFixed(3)}</span>,
     },
     {
       id: 'dismissed_avg',
@@ -175,7 +175,7 @@ export function InsightsReportsTab({
       header: 'Dismissed Avg',
       size: 130,
       meta: { cellOverflow: 'none' },
-      cell: ({ row }) => <span className="block text-right tabular-nums text-rose-700">{row.original.dismissed_avg.toFixed(3)}</span>,
+      cell: ({ row }) => <span className="block text-right tabular-nums text-critical-700">{row.original.dismissed_avg.toFixed(3)}</span>,
     },
     {
       id: 'delta',
@@ -283,10 +283,10 @@ export function InsightsReportsTab({
                   Total: <span className="font-medium text-alma-800">{weeklyBrief.recommendations.total}</span>
                 </span>
                 <span className="text-slate-500">
-                  Liked: <span className="font-medium text-emerald-700 tabular-nums">{weeklyBrief.recommendations.liked}</span>
+                  Liked: <span className="font-medium text-success-700 tabular-nums">{weeklyBrief.recommendations.liked}</span>
                 </span>
                 <span className="text-slate-500">
-                  Dismissed: <span className="font-medium text-rose-700 tabular-nums">{weeklyBrief.recommendations.dismissed}</span>
+                  Dismissed: <span className="font-medium text-critical-700 tabular-nums">{weeklyBrief.recommendations.dismissed}</span>
                 </span>
               </div>
             </div>
@@ -370,7 +370,7 @@ export function InsightsReportsTab({
             <div className="flex flex-wrap gap-4">
               {topicDriftData.emerging_topics.length > 0 && (
                 <div>
-                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-emerald-700">Emerging</h4>
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
                   <div className="flex flex-wrap gap-1.5">
                     {topicDriftData.emerging_topics.map((t) => (
                       <StatusBadge key={t} tone="positive">
@@ -382,7 +382,7 @@ export function InsightsReportsTab({
               )}
               {topicDriftData.fading_topics.length > 0 && (
                 <div>
-                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-rose-700">Fading</h4>
+                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
                   <div className="flex flex-wrap gap-1.5">
                     {topicDriftData.fading_topics.map((t) => (
                       <StatusBadge key={t} tone="negative">
@@ -401,7 +401,7 @@ export function InsightsReportsTab({
       <Card>
         <ActionCardHeader
           icon={ArrowUpDown}
-          accent="text-amber-500"
+          accent="text-warning-500"
           title="Signal Impact"
           description="Which scoring signals differentiate liked from dismissed papers"
           action={
@@ -419,10 +419,10 @@ export function InsightsReportsTab({
           <CardContent className="space-y-4">
             <div className="mb-3 flex gap-4 text-sm">
               <span className="text-slate-500">
-                Liked: <span className="font-medium text-emerald-700 tabular-nums">{signalImpactData.liked_count}</span>
+                Liked: <span className="font-medium text-success-700 tabular-nums">{signalImpactData.liked_count}</span>
               </span>
               <span className="text-slate-500">
-                Dismissed: <span className="font-medium text-rose-700 tabular-nums">{signalImpactData.dismissed_count}</span>
+                Dismissed: <span className="font-medium text-critical-700 tabular-nums">{signalImpactData.dismissed_count}</span>
               </span>
             </div>
             {signalImpactData.signals.length === 0 ? (

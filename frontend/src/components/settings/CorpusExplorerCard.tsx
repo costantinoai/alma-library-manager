@@ -237,7 +237,7 @@ export function CorpusExplorerCard() {
       <CardHeader className="gap-2">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-parchment-100 text-slate-600">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-2 text-slate-600">
               <Database className="size-4" />
             </div>
             <div className="space-y-1">
@@ -468,7 +468,7 @@ function CorpusExplorerBody() {
         header: 'Resolution',
         size: 160,
         cell: ({ row }) => (
-          <span className="rounded bg-parchment-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
+          <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-slate-600">
             {row.original.openalex_resolution_status || '—'}
           </span>
         ),
@@ -489,7 +489,7 @@ function CorpusExplorerBody() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex rounded-md p-1 text-slate-400 transition-colors hover:bg-parchment-100 hover:text-alma-700"
+                  className="inline-flex rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-2 hover:text-alma-700"
                   aria-label="Open paper URL"
                   title="Open paper URL"
                 >
@@ -502,7 +502,7 @@ function CorpusExplorerBody() {
                   e.stopPropagation()
                   setRemoveTarget(p)
                 }}
-                className="inline-flex rounded-md p-1 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-700"
+                className="inline-flex rounded-md p-1 text-slate-400 transition-colors hover:bg-critical-50 hover:text-critical-700"
                 aria-label="Remove paper (soft delete)"
                 title="Remove paper (status → removed, row stays in DB)"
               >
@@ -667,7 +667,7 @@ function CorpusExplorerBody() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove this paper?</AlertDialogTitle>
             <AlertDialogDescription>
-              Sets <code className="rounded bg-parchment-100 px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
+              Sets <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-xs">status='removed'</code>{' '}
               on{' '}
               <span className="font-medium text-alma-800">
                 {removeTarget?.title || 'this paper'}

@@ -455,11 +455,11 @@ export function OnlineSearchTab({
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs leading-relaxed text-slate-500">
             Prefix with{' '}
-            <code className="rounded bg-parchment-100 px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
               author:
             </code>{' '}
             or{' '}
-            <code className="rounded bg-parchment-100 px-1 py-0.5 text-[11px] text-slate-600">
+            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
               title:
             </code>{' '}
             to scope the search. DOIs and OpenAlex URLs are detected automatically.
@@ -481,7 +481,7 @@ export function OnlineSearchTab({
         {showFilters && (
           <div
             id="online-search-filters"
-            className="flex flex-wrap items-end gap-3 rounded-md border border-[var(--color-border)] bg-parchment-50/60 p-3"
+            className="flex flex-wrap items-end gap-3 rounded-md border border-[var(--color-border)] bg-surface-2/60 p-3"
           >
             <div className="space-y-1">
               <Label htmlFor="online-year-min" className="text-[11px] font-medium text-slate-600">
@@ -541,9 +541,9 @@ export function OnlineSearchTab({
               : progress.status === 'timeout' ? Clock
               : AlertCircle
             const tone = progress.status === 'pending' ? 'text-slate-400'
-              : progress.status === 'partial' ? 'text-emerald-600'
-              : progress.status === 'timeout' ? 'text-amber-600'
-              : 'text-red-600'
+              : progress.status === 'partial' ? 'text-success-600'
+              : progress.status === 'timeout' ? 'text-warning-600'
+              : 'text-critical-600'
             return (
               <span key={source} className="inline-flex items-center gap-1">
                 <Icon className={`size-3 ${tone} ${progress.status === 'pending' ? 'animate-spin' : ''}`} />
@@ -551,8 +551,8 @@ export function OnlineSearchTab({
                 {progress.status === 'partial' && (
                   <span className="text-slate-400">· {progress.count}{progress.ms != null ? ` · ${(progress.ms / 1000).toFixed(1)}s` : ''}</span>
                 )}
-                {progress.status === 'timeout' && <span className="text-amber-500">· timeout</span>}
-                {progress.status === 'error' && <span className="text-red-500">· error</span>}
+                {progress.status === 'timeout' && <span className="text-warning-500">· timeout</span>}
+                {progress.status === 'error' && <span className="text-critical-500">· error</span>}
               </span>
             )
           })}
@@ -766,7 +766,7 @@ interface AuthorSearchCardProps {
 
 function AuthorSearchCard({ author, pending, onFollow }: AuthorSearchCardProps) {
   return (
-    <article className="flex flex-col gap-2 rounded-sm border border-alma-100 bg-alma-content-elev p-3 shadow-paper-sm">
+    <article className="flex flex-col gap-2 rounded-sm border border-alma-100 bg-surface-2 p-3 shadow-paper-sm">
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-alma-800">{author.name}</h3>
@@ -782,7 +782,7 @@ function AuthorSearchCard({ author, pending, onFollow }: AuthorSearchCardProps) 
           className={
             author.already_followed
               ? 'text-alma-700'
-              : 'border-alma-200 bg-white text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800'
+              : 'border-alma-200 bg-surface-4 text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800'
           }
         >
           {author.already_followed ? (

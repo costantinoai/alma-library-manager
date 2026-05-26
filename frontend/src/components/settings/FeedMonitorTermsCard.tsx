@@ -168,7 +168,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
                 onChange={(event) => setQuery(event.target.value)}
                 rows={monitor.monitor_type === 'query' ? 3 : 2}
                 disabled={busy}
-                className="min-h-[72px] rounded-sm border border-[var(--color-border)] bg-alma-paper px-3 py-2 text-sm text-slate-700 shadow-paper-inset-cool outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                className="min-h-[72px] rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-slate-700 shadow-paper-inset-cool outline-none transition focus:border-info-500 focus:ring-2 focus:ring-info-100"
                 placeholder={
                   monitor.monitor_type === 'query'
                     ? 'Examples: manifold AND representations\n(protein OR antibody) AND design NOT vaccine'
@@ -177,7 +177,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
               />
             </div>
           ) : (
-            <div className="rounded-md border border-[var(--color-border)] bg-parchment-50 px-3 py-2 text-sm text-slate-700">
+            <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-sm text-slate-700">
               <div className="flex flex-wrap items-center gap-2 font-medium text-alma-800">
                 <UserRound className="h-4 w-4 text-slate-500" />
                 <span>{monitor.author_name || monitor.label}</span>
@@ -255,7 +255,7 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
       </div>
 
       {(monitor.last_error || monitor.health_reason) && (
-        <p className="mt-2 text-xs text-amber-800">{monitor.last_error || monitor.health_reason}</p>
+        <p className="mt-2 text-xs text-warning-700">{monitor.last_error || monitor.health_reason}</p>
       )}
     </div>
   )
@@ -349,7 +349,7 @@ export function FeedMonitorTermsCard() {
       action={headerStats}
       roomy
     >
-      <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50/70 p-4">
+      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2/70 p-4">
         <div className="grid gap-3 lg:grid-cols-[170px_minmax(0,1fr)_minmax(0,0.9fr)_auto]">
           <Select
             value={newType}

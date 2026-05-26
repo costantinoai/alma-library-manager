@@ -55,7 +55,7 @@ function FieldGroup({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 const fieldVariants = cva(
-  "group/field data-[invalid=true]:text-red-500 flex w-full gap-3 dark:data-[invalid=true]:text-red-900",
+  "group/field data-[invalid=true]:text-critical-600 flex w-full gap-3",
   {
     variants: {
       orientation: {
@@ -117,7 +117,7 @@ function FieldLabel({
       className={cn(
         "group/field-label peer/field-label flex w-fit gap-2 leading-snug group-data-[disabled=true]/field:opacity-50",
         "has-[>[data-slot=field]]:w-full has-[>[data-slot=field]]:flex-col has-[>[data-slot=field]]:rounded-md has-[>[data-slot=field]]:border [&>[data-slot=field]]:p-4",
-        "has-data-[state=checked]:bg-slate-900/5 has-data-[state=checked]:border-slate-900 dark:has-data-[state=checked]:bg-slate-900/10 dark:has-data-[state=checked]:bg-parchment-50/5 dark:has-data-[state=checked]:border-slate-50 dark:dark:has-data-[state=checked]:bg-parchment-50/10",
+        "has-data-[state=checked]:bg-accent-soft has-data-[state=checked]:border-alma-folio",
         className
       )}
       {...props}
@@ -143,9 +143,9 @@ function FieldDescription({ className, ...props }: React.ComponentProps<"p">) {
     <p
       data-slot="field-description"
       className={cn(
-        "text-slate-500 text-sm font-normal leading-normal group-has-[[data-orientation=horizontal]]/field:text-balance dark:text-slate-400",
+        "text-slate-500 text-sm font-normal leading-normal group-has-[[data-orientation=horizontal]]/field:text-balance",
         "nth-last-2:-mt-1 last:mt-0 [[data-variant=legend]+&]:-mt-1.5",
-        "[&>a:hover]:text-alma-800 [&>a]:underline [&>a]:underline-offset-4 dark:[&>a:hover]:text-slate-50",
+        "[&>a:hover]:text-alma-800 [&>a]:underline [&>a]:underline-offset-4",
         className
       )}
       {...props}
@@ -173,7 +173,7 @@ function FieldSeparator({
       <Separator className="absolute inset-0 top-1/2" />
       {children && (
         <span
-          className="bg-alma-chrome text-slate-500 relative mx-auto block w-fit px-2 dark:bg-slate-950 dark:text-slate-400"
+          className="bg-surface-1 text-slate-500 relative mx-auto block w-fit px-2"
           data-slot="field-separator-content"
         >
           {children}
@@ -222,7 +222,7 @@ function FieldError({
     <div
       role="alert"
       data-slot="field-error"
-      className={cn("text-red-500 text-sm font-normal dark:text-red-900", className)}
+      className={cn("text-critical-600 text-sm font-normal", className)}
       {...props}
     >
       {content}

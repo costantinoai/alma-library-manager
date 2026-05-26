@@ -3,10 +3,15 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle, Globe, RefreshCw, Save } from 'lucide-react'
+import { CheckCircle, RefreshCw, Save } from 'lucide-react'
 
 import { api, type Settings, type OpenAlexUsage, type OpenAlexStatus } from '@/api/client'
-import { AsyncButton, SettingsCard, StatTile } from '@/components/settings/primitives'
+import {
+  AsyncButton,
+  ConnectionPill,
+  SettingsSection,
+  StatTile,
+} from '@/components/settings/primitives'
 import {
   Form,
   FormControl,
@@ -17,24 +22,6 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
-
-/**
- * Resolve the connection-dot appearance from the live key-validity probe.
- * Green = the key works; red = OpenAlex rejected it; amber = set but
- * unverified; grey = not configured / still checking. Mirrors the Semantic
- * Scholar card so both connections read the same way.
- */
-function dotState(status: OpenAlexStatus | undefined, loading: boolean) {
-  if (loading) return { dot: 'bg-alma-300', label: 'Checking…', text: 'text-slate-500' }
-  if (!status || !status.configured)
-    return { dot: 'bg-alma-300', label: 'Not set', text: 'text-slate-500' }
-  if (status.valid === true)
-    return { dot: 'bg-emerald-500', label: 'Connected', text: 'text-emerald-700' }
-  if (status.valid === false)
-    return { dot: 'bg-rose-500', label: 'Key rejected', text: 'text-rose-700' }
-  return { dot: 'bg-amber-500', label: "Couldn't verify", text: 'text-amber-700' }
-}
 
 const openalexSchema = z.object({
   openalex_email: z
@@ -47,7 +34,7 @@ const openalexSchema = z.object({
 
 type OpenAlexForm = z.infer<typeof openalexSchema>
 
-interface OpenAlexCardProps {
+interface OpenAlexSectionProps {
   formData: Settings
   onFormDataChange: (updater: (prev: Settings) => Settings) => void
   onSave: () => void
@@ -55,13 +42,19 @@ interface OpenAlexCardProps {
   saveSuccess: boolean
 }
 
-export function OpenAlexCard({
+/**
+ * OpenAlex credentials + live usage, rendered as a collapsible sub-section of
+ * the External APIs panel (see `ExternalApisCard`). OpenAlex is the active
+ * backend's primary metadata source, so the whole section is hidden when the
+ * backend isn't OpenAlex.
+ */
+export function OpenAlexSection({
   formData,
   onFormDataChange,
   onSave,
   isSaving,
   saveSuccess,
-}: OpenAlexCardProps) {
+}: OpenAlexSectionProps) {
   const form = useForm<OpenAlexForm>({
     resolver: zodResolver(openalexSchema),
     defaultValues: {
@@ -110,8 +103,6 @@ export function OpenAlexCard({
     enabled: formData.backend === 'openalex',
   })
 
-  const state = dotState(statusQuery.data, statusQuery.isLoading || statusQuery.isFetching)
-
   if (formData.backend !== 'openalex') return null
 
   const handleSave = async () => {
@@ -123,10 +114,15 @@ export function OpenAlexCard({
   const usage = openalexUsageQuery.data
 
   return (
-    <SettingsCard
-      icon={Globe}
-      title="OpenAlex Configuration"
-      description="API credentials for OpenAlex data access."
+    <SettingsSection
+      title={
+        <span className="inline-flex items-center gap-2">
+          OpenAlex
+          <ConnectionPill valid={statusQuery.data?.valid} loading={statusQuery.isLoading} />
+        </span>
+      }
+      description="API credentials and live usage for OpenAlex — the active backend's primary metadata source."
+      defaultOpen={false}
     >
       <Form {...form}>
         <form
@@ -136,13 +132,12 @@ export function OpenAlexCard({
             void handleSave()
           }}
         >
-          <div className="flex items-center justify-between gap-2 rounded-md bg-parchment-50 px-3 py-2">
-            <span className="inline-flex items-center gap-2 text-sm">
-              <span className={cn('h-2 w-2 rounded-full', state.dot)} aria-hidden />
-              <span className={cn('font-medium', state.text)}>{state.label}</span>
-              {statusQuery.data?.detail && (
-                <span className="text-xs text-slate-500">— {statusQuery.data.detail}</span>
-              )}
+          {/* The green/red pill lives in the section header (visible collapsed);
+              this box reveals the specific probe reason + the Re-check action,
+              which can't sit in the header (it's a button inside the trigger). */}
+          <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2">
+            <span className="text-xs text-slate-500">
+              {statusQuery.data?.detail ?? 'Checking connection…'}
             </span>
             <AsyncButton
               type="button"
@@ -197,7 +192,7 @@ export function OpenAlexCard({
             )}
           />
 
-          <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
             <div className="mb-3 flex items-center justify-between gap-2">
               <p className="text-sm font-medium text-slate-700">OpenAlex Usage</p>
               <AsyncButton
@@ -215,7 +210,7 @@ export function OpenAlexCard({
             {openalexUsageQuery.isLoading ? (
               <p className="text-xs text-slate-500">Loading usage...</p>
             ) : openalexUsageQuery.isError ? (
-              <p className="text-xs text-red-600">Could not load usage stats.</p>
+              <p className="text-xs text-critical-600">Could not load usage stats.</p>
             ) : (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:grid-cols-7">
                 <StatTile label="Requests" value={usage?.request_count ?? 0} />
@@ -261,7 +256,7 @@ export function OpenAlexCard({
 
           <div className="flex items-center justify-end gap-3 pt-2">
             {saveSuccess && (
-              <div className="flex items-center gap-1.5 text-sm text-green-600">
+              <div className="flex items-center gap-1.5 text-sm text-success-600">
                 <CheckCircle className="h-4 w-4" />
                 Saved
               </div>
@@ -276,6 +271,6 @@ export function OpenAlexCard({
           </div>
         </form>
       </Form>
-    </SettingsCard>
+    </SettingsSection>
   )
 }

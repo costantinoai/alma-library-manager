@@ -44,8 +44,8 @@ interface PaperActionBarProps {
 const toneClasses: Record<Tone, { icon: string; hover: string; active: string }> = {
   neutral: {
     icon: 'text-slate-500',
-    hover: 'hover:bg-parchment-100 hover:text-alma-900',
-    active: 'border-[var(--color-border)] bg-parchment-100 text-slate-800',
+    hover: 'hover:bg-surface-2 hover:text-alma-900',
+    active: 'border-[var(--color-border)] bg-surface-2 text-slate-800',
   },
   // Queue — violet. Reading list is pre-commit limbo: neither a
   // library save nor a negative signal. Violet keeps it visually
@@ -57,33 +57,33 @@ const toneClasses: Record<Tone, { icon: string; hover: string; active: string }>
   },
   // Save — amber. Warm counterpoint to alma teal; reads as "bookmarked".
   add: {
-    icon: 'text-amber-600',
-    hover: 'hover:bg-amber-50 hover:text-amber-800',
-    active: 'border-amber-200 bg-amber-50 text-amber-800',
+    icon: 'text-warning-600',
+    hover: 'hover:bg-warning-50 hover:text-warning-700',
+    active: 'border-warning-100 bg-warning-50 text-warning-700',
   },
   like: {
-    icon: 'text-emerald-600',
-    hover: 'hover:bg-emerald-50 hover:text-emerald-800',
-    active: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+    icon: 'text-success-600',
+    hover: 'hover:bg-success-50 hover:text-success-700',
+    active: 'border-success-100 bg-success-50 text-success-700',
   },
   love: {
-    icon: 'text-rose-500',
-    hover: 'hover:bg-rose-50 hover:text-rose-700',
-    active: 'border-rose-200 bg-rose-50 text-rose-700',
+    icon: 'text-critical-500',
+    hover: 'hover:bg-critical-50 hover:text-critical-700',
+    active: 'border-critical-100 bg-critical-50 text-critical-700',
   },
   // Dismiss / Remove — rose. Destructive intent but the active chip
   // stays soft to match the rest of the bar.
   dismiss: {
     icon: 'text-slate-500',
-    hover: 'hover:bg-rose-50 hover:text-rose-700',
-    active: 'border-rose-200 bg-rose-50 text-rose-700',
+    hover: 'hover:bg-critical-50 hover:text-critical-700',
+    active: 'border-critical-100 bg-critical-50 text-critical-700',
   },
   // Dislike — blue. Distinct from emerald like so the two thumbs
   // read clearly at a glance.
   dislike: {
-    icon: 'text-blue-600',
-    hover: 'hover:bg-blue-50 hover:text-blue-800',
-    active: 'border-blue-200 bg-blue-50 text-blue-800',
+    icon: 'text-info-600',
+    hover: 'hover:bg-info-50 hover:text-info-700',
+    active: 'border-info-100 bg-info-50 text-info-700',
   },
 }
 
@@ -131,7 +131,7 @@ function ActionButton({
         compact ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-3 text-xs',
         active
           ? activeClass
-          : cn('border-[var(--color-border)] bg-alma-chrome text-alma-900', hover),
+          : cn('border-[var(--color-border)] bg-surface-1 text-alma-900', hover),
       )}
     >
       <Icon

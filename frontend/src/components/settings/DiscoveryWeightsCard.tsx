@@ -333,7 +333,7 @@ export function DiscoveryWeightsCard() {
   if (discoveryQuery.isError) {
     return (
       <SettingsCard icon={Sparkles} title="Discovery Settings">
-        <p className="flex items-center gap-2 text-sm text-red-600">
+        <p className="flex items-center gap-2 text-sm text-critical-600">
           <AlertCircle className="h-4 w-4" /> Failed to load discovery settings.
         </p>
       </SettingsCard>

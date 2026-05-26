@@ -78,7 +78,7 @@ export function RepairGroup({
 
       {allClear.length > 0 ? (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-3 shadow-paper-sm">
+          <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
             <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
               All clear
             </span>
@@ -94,10 +94,10 @@ export function RepairGroup({
                     'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio ' +
                     (open
                       ? 'border-alma-300 bg-alma-50 text-alma-800'
-                      : 'border-[var(--color-border)] bg-alma-content-elev text-alma-700 hover:border-alma-300')
+                      : 'border-[var(--color-border)] bg-surface-2 text-alma-700 hover:border-alma-300')
                   }
                 >
-                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                  <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
                   {op.label}
                   <span className="text-slate-400">{open ? '−' : '+'}</span>
                 </button>

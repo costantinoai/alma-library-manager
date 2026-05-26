@@ -24,10 +24,10 @@ import type { HealthSnapshot } from '@/api/client'
 // Severity → ribbon segment color. Muted weights keep it a calm vitals strip,
 // not an alarm board.
 const RIBBON_SEGMENTS: { key: string; className: string; label: string }[] = [
-  { key: 'critical', className: 'bg-rose-600', label: 'Critical' },
-  { key: 'warning', className: 'bg-amber-500', label: 'Warning' },
+  { key: 'critical', className: 'bg-critical-600', label: 'Critical' },
+  { key: 'warning', className: 'bg-warning-500', label: 'Warning' },
   { key: 'info', className: 'bg-alma-folio', label: 'Info' },
-  { key: 'ok', className: 'bg-emerald-600', label: 'Healthy' },
+  { key: 'ok', className: 'bg-success-600', label: 'Healthy' },
 ]
 
 export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
@@ -89,8 +89,8 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
         <span
           className={
             totals.embeddings_ready
-              ? 'rounded-full bg-emerald-700/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700'
-              : 'rounded-full bg-amber-700/10 px-2 py-0.5 text-[10px] font-medium text-amber-700'
+              ? 'rounded-full bg-success-700/10 px-2 py-0.5 text-[10px] font-medium text-success-700'
+              : 'rounded-full bg-warning-700/10 px-2 py-0.5 text-[10px] font-medium text-warning-700'
           }
         >
           {totals.embeddings_ready ? 'ready' : 'ready at ≥80%'}

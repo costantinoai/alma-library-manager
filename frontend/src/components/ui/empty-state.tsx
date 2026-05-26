@@ -23,7 +23,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
       className={cn(
         // Override shadcn Empty defaults to keep ALMa's existing compact look.
         // Callers that want the airier default can pass their own padding/gap classes.
-        'gap-3 rounded-sm border border-dashed border-[var(--color-border)] bg-alma-chrome px-6 py-10 md:p-10',
+        'gap-3 rounded-sm border border-dashed border-[var(--color-border)] bg-surface-1 px-6 py-10 md:p-10',
         className,
       )}
     >

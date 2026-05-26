@@ -430,9 +430,9 @@ export function AlertsDeliverySection() {
                         title="Evaluate Now"
                       >
                         {evaluateMutation.isPending && evaluateMutation.variables === alert.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-green-500" />
+                          <Loader2 className="h-4 w-4 animate-spin text-success-500" />
                         ) : (
-                          <Play className="h-4 w-4 text-green-500" />
+                          <Play className="h-4 w-4 text-success-500" />
                         )}
                       </Button>
                       <Button
@@ -462,7 +462,7 @@ export function AlertsDeliverySection() {
                         onClick={() => setDeleteId(alert.id)}
                         title="Delete"
                       >
-                        <Trash2 className="h-4 w-4 text-red-400" />
+                        <Trash2 className="h-4 w-4 text-critical-500" />
                       </Button>
                     </div>
                   </div>
@@ -484,9 +484,9 @@ export function AlertsDeliverySection() {
           </DialogHeader>
           {alertFormContent}
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-red-700">Failed to create alert.</span>
+            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertCircle className="h-4 w-4 text-critical-500" />
+              <span className="text-sm text-critical-700">Failed to create alert.</span>
             </div>
           )}
           <DialogFooter>
@@ -513,9 +513,9 @@ export function AlertsDeliverySection() {
           </DialogHeader>
           {alertFormContent}
           {updateMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-red-700">Failed to update alert.</span>
+            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertCircle className="h-4 w-4 text-critical-500" />
+              <span className="text-sm text-critical-700">Failed to update alert.</span>
             </div>
           )}
           <DialogFooter>
@@ -566,33 +566,33 @@ export function AlertsDeliverySection() {
           {evalResult && (
             <div className="space-y-3 py-2">
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">Papers Found</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_found}</p>
                 </div>
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">New Papers</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_new}</p>
                 </div>
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">Papers Sent</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_sent}</p>
                 </div>
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">Failed Sends</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.papers_failed ?? 0}</p>
                 </div>
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">Matched Rules</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.matched_rules ?? 0}</p>
                 </div>
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="text-xs text-slate-500">Channels</p>
                   <p className="text-lg font-bold text-alma-800">{evalResult.channels.join(', ') || 'None'}</p>
                 </div>
               </div>
               {evalResult.channel_results && (
-                <div className="rounded-lg bg-parchment-50 p-3">
+                <div className="rounded-lg bg-surface-2 p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Channel Results</p>
                   <div className="space-y-1">
                     {Object.entries(evalResult.channel_results).map(([channel, result]) => (
@@ -605,7 +605,7 @@ export function AlertsDeliverySection() {
                 </div>
               )}
               {evalResult.papers && evalResult.papers.length > 0 && (
-                <div className="max-h-48 overflow-y-auto rounded-lg bg-parchment-50 p-3">
+                <div className="max-h-48 overflow-y-auto rounded-lg bg-surface-2 p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Papers:</p>
                   <pre className="whitespace-pre-wrap text-xs text-slate-700">
                     {JSON.stringify(evalResult.papers, null, 2)}

@@ -15,7 +15,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
         // Recessed paper well — matches the Input/Select/Textarea
         // primitives so command-bar style search inputs sit consistently
         // INSIDE cream cards instead of disappearing into them.
-        "group/input-group bg-alma-paper border-[var(--color-border)] shadow-paper-inset-cool relative flex w-full items-center rounded-sm border outline-none transition-[color,box-shadow]",
+        "group/input-group bg-surface-0 border-[var(--color-border)] shadow-paper-inset-cool relative flex w-full items-center rounded-sm border outline-none transition-[color,box-shadow]",
         "h-9 has-[>textarea]:h-auto",
 
         // Variants based on alignment.
@@ -24,11 +24,11 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
         "has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col has-[>[data-align=block-start]]:[&>input]:pb-3",
         "has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-3",
 
-        // Focus state.
-        "has-[[data-slot=input-group-control]:focus-visible]:ring-slate-950 has-[[data-slot=input-group-control]:focus-visible]:ring-1 dark:has-[[data-slot=input-group-control]:focus-visible]:ring-slate-300",
+        // Focus state — folio accent ring, the shared focus signal.
+        "has-[[data-slot=input-group-control]:focus-visible]:ring-alma-folio has-[[data-slot=input-group-control]:focus-visible]:ring-2",
 
-        // Error state.
-        "has-[[data-slot][aria-invalid=true]]:ring-red-500/20 has-[[data-slot][aria-invalid=true]]:border-red-500 dark:has-[[data-slot][aria-invalid=true]]:ring-red-500/40 dark:has-[[data-slot][aria-invalid=true]]:ring-red-900/20 dark:has-[[data-slot][aria-invalid=true]]:border-red-900 dark:dark:has-[[data-slot][aria-invalid=true]]:ring-red-900/40",
+        // Error state — critical token.
+        "has-[[data-slot][aria-invalid=true]]:ring-critical-500/30 has-[[data-slot][aria-invalid=true]]:border-critical-500",
 
         className
       )}

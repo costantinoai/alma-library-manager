@@ -8,10 +8,10 @@ interface AuthorSignalBarProps {
 }
 
 function signalFillClass(score: number): string {
-  if (score >= 70) return 'bg-emerald-500'
-  if (score >= 40) return 'bg-emerald-400'
-  if (score >= 20) return 'bg-amber-400'
-  if (score > 0) return 'bg-amber-300'
+  if (score >= 70) return 'bg-success-500'
+  if (score >= 40) return 'bg-success-500'
+  if (score >= 20) return 'bg-warning-500'
+  if (score > 0) return 'bg-warning-500'
   return 'bg-slate-300'
 }
 

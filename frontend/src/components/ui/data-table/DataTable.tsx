@@ -305,7 +305,7 @@ export function DataTable<T>({
   const hasRows = table.getRowModel().rows.length > 0
 
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome">
+    <div className="rounded-sm border border-edge-1 bg-surface-1">
       {/* ── Toolbar: column visibility menu only (other tools live on the
           table headers themselves for locality). ──────────────────────── */}
       <div className="flex items-center justify-end gap-2 border-b border-[var(--color-border)] px-2 py-1.5">
@@ -351,7 +351,7 @@ export function DataTable<T>({
             )}
             style={hasUserSizedColumns ? { width: table.getTotalSize() } : undefined}
           >
-            <thead className="border-b border-[var(--color-border)] bg-parchment-50">
+            <thead className="border-b border-edge-2 bg-surface-2">
               {table.getHeaderGroups().map((headerGroup) => (
                 <SortableContext
                   key={headerGroup.id}
@@ -420,9 +420,9 @@ export function DataTable<T>({
                               >
                                 <span
                                   className={cn(
-                                    'absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-slate-200 transition-colors',
-                                    'group-hover/resize:bg-alma-500 group-hover/resize:w-1',
-                                    header.column.getIsResizing() && 'bg-alma-600 w-1',
+                                    'absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-[var(--color-border)] transition-colors',
+                                    'group-hover/resize:bg-alma-folio group-hover/resize:w-1',
+                                    header.column.getIsResizing() && 'bg-alma-folio-600 w-1',
                                   )}
                                 />
                               </div>
@@ -435,7 +435,7 @@ export function DataTable<T>({
                 </SortableContext>
               ))}
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-[var(--color-border)]">
               {hasRows ? (
                 table.getRowModel().rows.map((row) => {
                   const extraClass = rowClassName ? rowClassName(row.original) : ''
@@ -446,9 +446,9 @@ export function DataTable<T>({
                       key={row.id}
                       onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                       className={cn(
-                        'transition-colors hover:bg-parchment-50',
+                        'transition-colors hover:bg-surface-2',
                         onRowClick && 'cursor-pointer',
-                        isSelected && 'bg-alma-50/40',
+                        isSelected && 'bg-accent-soft',
                         extraClass,
                       )}
                     >
@@ -496,7 +496,7 @@ export function DataTable<T>({
       </div>
 
       {(footerCaption || hasRows) && (
-        <div className="flex items-center justify-between border-t border-slate-100 bg-parchment-50 px-3 py-2 text-xs text-slate-500">
+        <div className="flex items-center justify-between border-t border-edge-2 bg-surface-2 px-3 py-2 text-xs text-slate-500">
           <span className="tabular-nums">
             {table.getRowModel().rows.length} row{table.getRowModel().rows.length !== 1 ? 's' : ''}
           </span>
@@ -508,8 +508,8 @@ export function DataTable<T>({
 }
 
 function SortIndicator({ dir }: { dir: false | 'asc' | 'desc' }) {
-  if (dir === 'asc') return <ArrowUp className="h-3 w-3 text-alma-600" />
-  if (dir === 'desc') return <ArrowDown className="h-3 w-3 text-alma-600" />
+  if (dir === 'asc') return <ArrowUp className="h-3 w-3 text-alma-folio" />
+  if (dir === 'desc') return <ArrowDown className="h-3 w-3 text-alma-folio" />
   return <ArrowUpDown className="h-3 w-3 text-slate-300 opacity-0 transition-opacity group-hover:opacity-100" />
 }
 

@@ -10,8 +10,7 @@ import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BackendCard } from '@/components/settings/BackendCard'
-import { OpenAlexCard } from '@/components/settings/OpenAlexCard'
-import { SemanticScholarCard } from '@/components/settings/SemanticScholarCard'
+import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { ChannelsCard } from '@/components/settings/ChannelsCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
@@ -28,10 +27,12 @@ import { cn } from '@/lib/utils'
  * Settings page — two-column layout (sticky TOC + scroll-spy on the left,
  * grouped cards on the right).
  *
- * The 11 cards split into three intents:
+ * The cards split into three intents:
  *   - **Connections**        — upstream data sources and destinations. The
- *                              global "Save connection settings" button
- *                              lives at the bottom of this group and only
+ *                              External APIs panel (OpenAlex + Semantic
+ *                              Scholar as collapsible sub-sections) lives
+ *                              here. The global "Save connection settings"
+ *                              button at the bottom of this group only
  *                              persists the settings those cards bind to.
  *   - **Intelligence tuning** — discovery weights / monitor terms / AI
  *                              provider. These cards self-save.
@@ -45,8 +46,7 @@ import { cn } from '@/lib/utils'
 type SectionId = 'connections' | 'intelligence' | 'system'
 type AnchorId =
   | 'backend'
-  | 'openalex'
-  | 'semantic-scholar'
+  | 'external-apis'
   | 'id-resolution'
   | 'channels'
   | 'discovery-weights'
@@ -71,8 +71,7 @@ const SECTIONS: { id: SectionId; label: string; caption: string; icon: typeof Ca
 
 const TOC: TocEntry[] = [
   { id: 'backend', label: 'Backend', section: 'connections' },
-  { id: 'openalex', label: 'OpenAlex', section: 'connections' },
-  { id: 'semantic-scholar', label: 'Semantic Scholar', section: 'connections' },
+  { id: 'external-apis', label: 'External APIs', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
   { id: 'channels', label: 'Delivery channels', section: 'connections' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
@@ -170,7 +169,7 @@ export function SettingsPage() {
     return (
       <div className="mx-auto max-w-6xl space-y-4">
         {Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm">
+          <div key={i} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
             <Skeleton className="h-4 w-1/3" />
             <Skeleton className="mt-3 h-3 w-2/3" />
             <Skeleton className="mt-4 h-10 w-full" />
@@ -181,9 +180,9 @@ export function SettingsPage() {
   }
   if (settingsQuery.isError) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-8">
-        <AlertCircle className="h-5 w-5 text-red-500" />
-        <span className="text-sm text-red-700">Failed to load settings. Is the backend running?</span>
+      <div className="flex items-center justify-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-8">
+        <AlertCircle className="h-5 w-5 text-critical-500" />
+        <span className="text-sm text-critical-700">Failed to load settings. Is the backend running?</span>
       </div>
     )
   }
@@ -239,17 +238,14 @@ export function SettingsPage() {
                 onBackendChange={(backend) => setFormData((prev) => ({ ...prev, backend }))}
               />
             </Anchor>
-            <Anchor id="openalex">
-              <OpenAlexCard
+            <Anchor id="external-apis">
+              <ExternalApisCard
                 formData={formData}
                 onFormDataChange={setFormData}
                 onSave={handleSave}
                 isSaving={saveMutation.isPending}
                 saveSuccess={saveSuccess}
               />
-            </Anchor>
-            <Anchor id="semantic-scholar">
-              <SemanticScholarCard formData={formData} onFormDataChange={setFormData} />
             </Anchor>
             <Anchor id="id-resolution">
               <IdentifierResolutionCard formData={formData} onFormDataChange={setFormData} />
@@ -266,13 +262,13 @@ export function SettingsPage() {
                 this section's footer makes the behaviour honest. */}
             <div className="flex flex-wrap items-center justify-end gap-3 pt-1">
               {saveSuccess && (
-                <span className="inline-flex items-center gap-1.5 text-sm text-green-600">
+                <span className="inline-flex items-center gap-1.5 text-sm text-success-600">
                   <CheckCircle className="h-4 w-4" />
                   Connection settings saved
                 </span>
               )}
               {saveMutation.isError && (
-                <span className="inline-flex items-center gap-1.5 text-sm text-red-600">
+                <span className="inline-flex items-center gap-1.5 text-sm text-critical-600">
                   <AlertCircle className="h-4 w-4" />
                   Failed to save
                 </span>

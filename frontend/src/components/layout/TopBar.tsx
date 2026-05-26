@@ -40,11 +40,11 @@ export function TopBar({
   const shortcutKey = isMacPlatform() ? '⌘K' : 'Ctrl K'
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-alma-chrome px-4 lg:px-6 shadow-paper-sm">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-[var(--color-border)] bg-surface-1 px-4 lg:px-6 shadow-paper-sm">
       <div className="flex items-center gap-4">
         <button
           onClick={onMenuClick}
-          className="rounded-md p-2 text-alma-700 hover:bg-parchment-100 hover:text-alma-900 lg:hidden"
+          className="rounded-md p-2 text-alma-700 hover:bg-surface-2 hover:text-alma-900 lg:hidden"
           aria-label="Open navigation"
         >
           <Menu className="h-5 w-5" />
@@ -66,13 +66,13 @@ export function TopBar({
           <button
             type="button"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-md border border-[var(--color-border)] bg-alma-chrome px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-parchment-400 hover:text-alma-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio sm:flex"
+            className="hidden items-center gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-parchment-400 hover:text-alma-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio sm:flex"
             aria-label="Open command palette"
             title="Open command palette"
           >
             <Search className="h-3.5 w-3.5" />
             <span>Search</span>
-            <kbd className="ml-1 rounded border border-[var(--color-border)] bg-parchment-100 px-1.5 font-sans text-[10px] font-medium text-alma-700">
+            <kbd className="ml-1 rounded border border-[var(--color-border)] bg-surface-2 px-1.5 font-sans text-[10px] font-medium text-alma-700">
               {shortcutKey}
             </kbd>
           </button>

@@ -193,10 +193,10 @@ function componentOfState(s: OperationalState): string {
 // Severity → status-dot color. The dot is the at-a-glance status on each chip —
 // the controlled bit of semantic color (like the ribbon), not decoration.
 const DOT: Record<Severity, string> = {
-  critical: 'bg-rose-500',
-  warning: 'bg-amber-500',
+  critical: 'bg-critical-500',
+  warning: 'bg-warning-500',
   info: 'bg-alma-folio',
-  ok: 'bg-emerald-500',
+  ok: 'bg-success-500',
 }
 
 // Per-component plain-English "what healthy means / how it's configured", shown
@@ -518,7 +518,7 @@ export function SystemStatusCards() {
     return (
       <div className="flex flex-wrap gap-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-9 w-36 animate-pulse rounded-sm bg-alma-chrome-elev" />
+          <div key={i} className="h-9 w-36 animate-pulse rounded-sm bg-surface-2" />
         ))}
       </div>
     )
@@ -551,7 +551,7 @@ export function SystemStatusCards() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
               aria-label={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
-              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev px-3 py-2 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
               <Icon className="mt-0.5 h-4 w-4 shrink-0 text-alma-500" />
               <span className="min-w-0 flex-1">
@@ -571,7 +571,7 @@ export function SystemStatusCards() {
       {/* Centered per-component detail — what's healthy / how it's configured,
           or the degraded issues + one-click remediation. One Dialog, no route. */}
       <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenComp(null)}>
-        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto bg-alma-chrome">
+        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto bg-surface-1">
           {openComp ? (
             <>
               <DialogHeader>
@@ -593,7 +593,7 @@ export function SystemStatusCards() {
                   {openComp.states.map((state) => (
                     <div
                       key={state.id}
-                      className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
+                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
                     >
                       <p className="text-sm font-medium text-alma-800">{state.label}</p>
                       {state.detail ? <p className="mt-1 text-xs text-slate-500">{state.detail}</p> : null}
@@ -627,7 +627,7 @@ export function SystemStatusCards() {
                   {openComp.reviewItems.map((item) => (
                     <div
                       key={`review-${item.id}`}
-                      className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
+                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
                     >
                       <p className="text-sm font-medium text-alma-800">{item.primary}</p>
                       {item.secondary ? <p className="mt-1 text-xs text-slate-500">{item.secondary}</p> : null}

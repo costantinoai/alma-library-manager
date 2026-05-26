@@ -203,7 +203,7 @@ export function CollectionsTab() {
           onChange={(e) => setFormDescription(e.target.value)}
           placeholder="A short description of this collection..."
           rows={2}
-          className="flex w-full rounded-lg border border-[var(--color-border)] bg-alma-chrome px-3 py-2 text-sm text-alma-800 placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
+          className="flex w-full rounded-lg border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-alma-800 placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
         />
       </div>
       <div className="space-y-2">
@@ -262,16 +262,16 @@ export function CollectionsTab() {
                         <h3 className="font-medium text-alma-800">{coll.name}</h3>
                         <Badge variant="secondary">{coll.item_count} papers</Badge>
                         {coll.activity_status === 'fresh' && (
-                          <Badge className="bg-green-100 text-green-700 hover:bg-green-100">Fresh</Badge>
+                          <Badge className="bg-success-100 text-success-700 hover:bg-success-100">Fresh</Badge>
                         )}
                         {coll.activity_status === 'active' && (
-                          <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100">Active</Badge>
+                          <Badge className="bg-info-100 text-info-700 hover:bg-info-100">Active</Badge>
                         )}
                         {coll.activity_status === 'stale' && (
-                          <Badge className="bg-yellow-100 text-yellow-700 hover:bg-yellow-100">Stale</Badge>
+                          <Badge className="bg-warning-100 text-warning-700 hover:bg-warning-100">Stale</Badge>
                         )}
                         {coll.activity_status === 'dormant' && (
-                          <Badge className="bg-parchment-100 text-slate-600 hover:bg-parchment-100">Dormant</Badge>
+                          <Badge className="bg-surface-2 text-slate-600 hover:bg-surface-2">Dormant</Badge>
                         )}
                         {coll.avg_citations != null && coll.avg_citations > 10 && (
                           <Badge variant="outline" className="text-slate-600">
@@ -331,14 +331,14 @@ export function CollectionsTab() {
                         onClick={() => setDeleteId(coll.id)}
                         title="Delete collection"
                       >
-                        <Trash2 className="h-4 w-4 text-red-400" />
+                        <Trash2 className="h-4 w-4 text-critical-500" />
                       </Button>
                     </div>
                   </div>
 
                   {/* Expanded items */}
                   {isExpanded && (
-                    <div className="border-t border-slate-100 bg-parchment-50 px-5 py-4">
+                    <div className="border-t border-slate-100 bg-surface-2 px-5 py-4">
                       {collectionItemsQuery.isLoading ? (
                         <div className="flex items-center justify-center py-4">
                           <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
@@ -371,7 +371,7 @@ export function CollectionsTab() {
                                 title="Remove from collection"
                                 aria-label="Remove from collection"
                               >
-                                <X className="h-3.5 w-3.5 text-red-400" />
+                                <X className="h-3.5 w-3.5 text-critical-500" />
                               </Button>
                             )
                             return (
@@ -409,9 +409,9 @@ export function CollectionsTab() {
           </DialogHeader>
           {formContent}
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-red-700">Failed to create collection. The name may already exist.</span>
+            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertCircle className="h-4 w-4 text-critical-500" />
+              <span className="text-sm text-critical-700">Failed to create collection. The name may already exist.</span>
             </div>
           )}
           <DialogFooter>
@@ -448,9 +448,9 @@ export function CollectionsTab() {
           </DialogHeader>
           {formContent}
           {updateMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-red-700">Failed to update collection.</span>
+            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertCircle className="h-4 w-4 text-critical-500" />
+              <span className="text-sm text-critical-700">Failed to update collection.</span>
             </div>
           )}
           <DialogFooter>

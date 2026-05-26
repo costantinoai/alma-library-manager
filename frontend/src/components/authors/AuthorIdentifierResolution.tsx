@@ -161,11 +161,11 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
           ))}
           {manualScholarCandidates.length > 0 ? (
             <>
-              <p className="pt-1 text-xs font-medium text-amber-700">Manual scrape results</p>
+              <p className="pt-1 text-xs font-medium text-warning-700">Manual scrape results</p>
               {manualScholarCandidates.slice(0, 3).map((c) => (
                 <div
                   key={`manual-${c.scholar_id}`}
-                  className="flex items-center justify-between gap-3 rounded border border-amber-200 bg-amber-50 px-2 py-1.5"
+                  className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-2 py-1.5"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium text-slate-700">

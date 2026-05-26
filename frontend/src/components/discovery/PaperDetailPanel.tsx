@@ -304,7 +304,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <DropdownMenuItem
                     onClick={() => setRemoveConfirmOpen(true)}
                     disabled={!isLibraryPaper}
-                    className="text-rose-700 focus:bg-rose-50 focus:text-rose-800"
+                    className="text-critical-700 focus:bg-critical-50 focus:text-critical-700"
                   >
                     <Trash2 className="mr-2 h-4 w-4" />
                     Remove from Library
@@ -438,7 +438,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 // ink-on-it against the cooler chrome-elev dialog
                 // body. Distinct surface signals "this is the work
                 // itself" vs the chrome around it.
-                <div className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-alma-content p-4 leading-relaxed text-alma-900">
+                <div className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-[var(--color-border)] bg-surface-1 p-4 leading-relaxed text-alma-900">
                   {p.abstract.length > 200 && (
                     <span
                       className="float-left mr-2 mt-1 font-brand text-[44px] font-semibold leading-none text-alma-800"
@@ -531,7 +531,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               <section>
                 <div className="mb-1 flex items-center justify-between">
                   <EyebrowLabel tone="muted">Notes</EyebrowLabel>
-                  {hasUnsavedNotes && <span className="text-[10px] font-normal italic text-amber-600">Unsaved changes</span>}
+                  {hasUnsavedNotes && <span className="text-[10px] font-normal italic text-warning-600">Unsaved changes</span>}
                 </div>
                 <Textarea
                   value={notesDraft}
@@ -542,7 +542,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   // grayish off-white so the notes box reads as a
                   // neutral input field, distinct from the warm paper
                   // surfaces around it.
-                  className="bg-slate-50 text-sm text-slate-700"
+                  className="bg-surface-2 text-sm text-slate-700"
                 />
                 <div className="mt-2 flex items-center justify-end gap-2">
                   <Button
@@ -569,7 +569,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Notes
                   </div>
-                  <div className="rounded-md border border-[var(--color-border)] bg-alma-content-elev p-3 text-slate-700 whitespace-pre-wrap">
+                  <div className="rounded-md border border-[var(--color-border)] bg-surface-2 p-3 text-slate-700 whitespace-pre-wrap">
                     {p.notes}
                   </div>
                 </section>
@@ -620,7 +620,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     rows={6}
                     value={editAbstract}
                     onChange={(e) => setEditAbstract(e.target.value)}
-                    className="bg-slate-50 text-sm text-slate-700"
+                    className="bg-surface-2 text-sm text-slate-700"
                   />
                 </div>
               </>
@@ -633,7 +633,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   value={editAbstract}
                   onChange={(e) => setEditAbstract(e.target.value)}
                   placeholder="Paste the paper's abstract here…"
-                  className="bg-slate-50 text-sm text-slate-700"
+                  className="bg-surface-2 text-sm text-slate-700"
                 />
               </div>
             )}
@@ -684,7 +684,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                 e.preventDefault()
                 removeMutation.mutate()
               }}
-              className="bg-rose-600 text-white hover:bg-rose-700"
+              className="bg-critical-600 text-white hover:bg-critical-700"
               disabled={removeMutation.isPending}
             >
               {removeMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
@@ -774,7 +774,7 @@ function RelatedWorksSection({
       <CollapsibleTrigger asChild>
         <button
           type="button"
-          className="group/rel flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-2 text-left transition hover:bg-alma-content-elev/70"
+          className="group/rel flex w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition hover:bg-surface-2/70"
         >
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -956,7 +956,7 @@ function RelatedWorkRow({
       // Lighter shade than the dialog body — matches the "more
       // forefront = lighter" rule (the dialog body now sits on warm
       // parchment, the cards inside lift to off-white).
-      className="bg-alma-content-elev"
+      className="bg-surface-2"
       isSaved={isSaved}
       reaction={reaction}
       actionDisabled={actionMutation.isPending}
@@ -986,7 +986,7 @@ function RelatedWorkRow({
             title="S2 classified this citation as influential"
             aria-label="Influential citation"
           >
-            <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-500" />
+            <Star className="h-3.5 w-3.5 fill-warning-500 text-warning-500" />
           </span>
         ) : undefined
       }

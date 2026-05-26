@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { SurfaceProvider } from '@/components/ui/surface'
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
@@ -29,25 +30,26 @@ const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        // Dialog body sits on a slightly warmer parchment so inner
-        // cards (which switch to ~white off-white per the v3 surface-
-        // contrast lesson) can lift cleanly above it. The
-        // cream-on-cream popups before 2026-04-26 night came from
-        // using bg-alma-chrome here AND in the inner cards.
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded border border-[var(--color-border)] bg-parchment-100 p-6 shadow-paper-lg',
-        className,
-      )}
-      {...props}
-    >
-      {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-alma-folio focus:ring-offset-2">
-        <X className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
-    </DialogPrimitive.Content>
+    {/* The dialog is a floating "card-desk" at level 1: its lift reads from
+     * the scrim + paper-lg shadow, not from a bright fill, so inner Cards
+     * still climb the ladder above it (provider set inside the portal so the
+     * level survives the DOM portal boundary). */}
+    <SurfaceProvider level={1}>
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
+          className,
+        )}
+        {...props}
+      >
+        {children}
+        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-alma-folio focus:ring-offset-2">
+          <X className="h-4 w-4" />
+          <span className="sr-only">Close</span>
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </SurfaceProvider>
   </DialogPortal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName

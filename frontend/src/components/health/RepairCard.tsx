@@ -121,16 +121,16 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
   // scannable triage column — an index tab at the frame, not a saturated fill.
   const spine =
     severity === 'critical'
-      ? 'border-l-2 border-l-rose-400'
+      ? 'border-l-2 border-l-critical-500'
       : severity === 'warning'
-        ? 'border-l-2 border-l-amber-400'
+        ? 'border-l-2 border-l-warning-500'
         : severity === 'info'
           ? 'border-l-2 border-l-alma-folio'
           : ''
 
   return (
     <div
-      className={`space-y-3 rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper ${spine}`}
+      className={`space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper ${spine}`}
     >
       {/* Head: what it is · cost · rolled-up severity · pending · ETA */}
       <div className="flex items-start justify-between gap-3">
@@ -177,7 +177,7 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
           ) : null}
         </div>
       ) : dims.length > 0 ? (
-        <p className="text-xs text-emerald-700">All {dims.length} repaired dimensions healthy.</p>
+        <p className="text-xs text-success-700">All {dims.length} repaired dimensions healthy.</p>
       ) : null}
 
       {/* Last run */}

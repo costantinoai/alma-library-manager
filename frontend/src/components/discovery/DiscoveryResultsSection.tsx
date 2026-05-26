@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
+import { RevealList, RevealItem } from '@/components/ui/reveal'
 
 import { AuthorSuggestionCard } from './AuthorSuggestionCard'
 import { type AuthorSuggestion } from './constants'
@@ -80,24 +81,25 @@ function RecommendationSection({
           <Badge variant="outline">{totalCount}</Badge>
         </div>
         {recs.length === 0 ? (
-          <p className="rounded-md border border-[var(--color-border)] bg-parchment-50 px-3 py-2 text-xs text-slate-500">
+          <p className="rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-xs text-slate-500">
             {emptyMessage}
           </p>
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {visibleRecs.map((rec) => (
-                <DiscoveryResultCard
-                  key={rec.id}
-                  rec={rec}
-                  onLike={onLike}
-                  onDismiss={onDismiss}
-                  onSeen={onSeen}
-                  likeLoading={likeLoadingId === rec.id}
-                  dismissLoading={dismissLoadingId === rec.id}
-                />
+            <RevealList className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {visibleRecs.map((rec, i) => (
+                <RevealItem key={rec.id} index={i} layoutId={`discovery-${rec.id}`}>
+                  <DiscoveryResultCard
+                    rec={rec}
+                    onLike={onLike}
+                    onDismiss={onDismiss}
+                    onSeen={onSeen}
+                    likeLoading={likeLoadingId === rec.id}
+                    dismissLoading={dismissLoadingId === rec.id}
+                  />
+                </RevealItem>
               ))}
-            </div>
+            </RevealList>
             {hasMore && (
               <div className="mt-4 flex justify-center">
                 <Button
@@ -141,7 +143,7 @@ function AuthorSuggestionsSection({ suggestions, visibleCount, onLoadMore }: Aut
           <Badge variant="outline">{suggestions.length}</Badge>
         </div>
         {suggestions.length === 0 ? (
-          <p className="rounded-md border border-[var(--color-border)] bg-parchment-50 px-3 py-2 text-xs text-slate-500">
+          <p className="rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-xs text-slate-500">
             No author suggestions yet. Generate more recommendations to populate this section.
           </p>
         ) : (
@@ -228,7 +230,7 @@ function SignalSuggestionsSection({
         </div>
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
           {groups.map((group) => (
-            <div key={group.key} className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+            <div key={group.key} className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
               <div className="mb-2 flex items-center gap-2">
                 <group.icon className="h-4 w-4 text-slate-600" />
                 <h4 className="text-xs font-semibold text-alma-800">{group.title}</h4>
@@ -243,11 +245,11 @@ function SignalSuggestionsSection({
                       key={`${group.key}:${item.label}`}
                       type="button"
                       onClick={() => onApplySuggestion(item.label)}
-                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-alma-chrome px-2 py-1 text-[11px] text-slate-700 transition-colors hover:bg-parchment-100"
+                      className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-surface-1 px-2 py-1 text-[11px] text-slate-700 transition-colors hover:bg-surface-2"
                       title={`Filter discovery by "${item.label}"`}
                     >
                       <span className="max-w-[130px] truncate">{item.label}</span>
-                      <span className="rounded-full bg-parchment-100 px-1 text-[10px] text-slate-600">
+                      <span className="rounded-full bg-surface-2 px-1 text-[10px] text-slate-600">
                         {item.count}
                       </span>
                     </button>

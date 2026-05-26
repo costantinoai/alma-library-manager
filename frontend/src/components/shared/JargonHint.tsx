@@ -33,7 +33,7 @@ export function JargonHint({ title, description, className, side = 'top', align 
           aria-label={`Learn about ${title}`}
           className={cn(
             'inline-flex size-4 shrink-0 items-center justify-center rounded-full text-slate-400 transition-colors',
-            'hover:bg-parchment-100 hover:text-slate-600',
+            'hover:bg-surface-2 hover:text-slate-600',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500/60 focus-visible:ring-offset-1',
             className,
           )}

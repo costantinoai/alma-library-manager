@@ -33,7 +33,7 @@ const buttonVariants = cva(
     // 2px corner — letterpress / index-card feel, not pill or bubbly.
     'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm text-sm font-medium',
     'transition-[color,background-color,border-color,box-shadow] duration-200 ease-out',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-alma-paper',
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1',
     'disabled:pointer-events-none disabled:opacity-50',
     "[&_svg:not([class*='size-']):not([class*='h-']):not([class*='w-'])]:size-4",
     '[&_svg]:shrink-0',
@@ -45,15 +45,16 @@ const buttonVariants = cva(
         // Primary — brand navy, ink-on-paper feel.
         default:
           'bg-alma-800 text-alma-cream shadow-paper-sm hover:bg-alma-700 hover:shadow-paper-md active:bg-alma-900',
-        // Accent — brand teal. Used sparingly for "discover" / decorative CTAs.
+        // Accent — Folio binding blue. The affirmative CTA (Follow / Save /
+        // Discover). Hover/active deepen through the folio ramp.
         accent:
-          'bg-alma-folio text-alma-cream shadow-paper-sm hover:bg-[#0a5957] hover:shadow-paper-md active:bg-[#073e3d]',
-        // Destructive — critical-600. Soft red ink, not shouty SaaS-saturation.
+          'bg-alma-folio text-alma-cream shadow-paper-sm hover:bg-alma-folio-600 hover:shadow-paper-md active:bg-alma-folio-700',
+        // Destructive — critical. Soft red ink, not shouty SaaS-saturation.
         destructive:
-          'bg-critical-600 text-white shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md',
-        // Success — success-600.
+          'bg-critical-600 text-white shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
+        // Success — confirm / positive commit.
         success:
-          'bg-success-600 text-white shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md',
+          'bg-success-600 text-white shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
         // Gold — fine accent / premium actions only. Deep gold on cream;
         // text is brand ink for legibility.
         gold:
@@ -63,7 +64,7 @@ const buttonVariants = cva(
         // surface when sitting inside a cream Card. Hover tints to
         // soft parchment + deepens border.
         outline:
-          'border border-[var(--color-border)] bg-alma-paper text-alma-900 shadow-paper-sm hover:border-parchment-400 hover:bg-parchment-100',
+          'border border-[var(--color-border)] bg-surface-0 text-alma-900 shadow-paper-sm hover:border-parchment-400 hover:bg-parchment-100',
         // Secondary — soft parchment fill.
         secondary:
           'bg-parchment-100 text-alma-900 hover:bg-parchment-200',
@@ -73,7 +74,7 @@ const buttonVariants = cva(
         // Link — text-only with teal underline on hover. Drops the radius
         // and shadow so it can sit inline with prose.
         link:
-          'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-[#0a5957]',
+          'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-alma-folio-600',
       },
       size: {
         default: 'h-9 px-4',

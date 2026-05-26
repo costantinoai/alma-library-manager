@@ -516,7 +516,7 @@ export function PaperCard({
               onCheckedChange={(value) => selection.onCheckedChange(value === true)}
               className={cn(
                 selection.checked &&
-                  'border-white/80 data-[state=checked]:border-white data-[state=checked]:bg-alma-chrome data-[state=checked]:text-alma-600',
+                  'border-white/80 data-[state=checked]:border-white data-[state=checked]:bg-surface-1 data-[state=checked]:text-alma-600',
               )}
             />
           </div>
@@ -553,7 +553,7 @@ export function PaperCard({
                       title="Discover similar papers — re-seed Discovery with this paper as the anchor"
                       aria-label="Discover similar papers"
                       className={cn(
-                        'inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-border)] bg-alma-chrome text-slate-500 shadow-sm transition-colors duration-150',
+                        'inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-border)] bg-surface-1 text-slate-500 shadow-sm transition-colors duration-150',
                         'hover:border-alma-300 hover:bg-alma-50 hover:text-alma-700',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500 focus-visible:ring-offset-1',
                       )}
@@ -623,7 +623,7 @@ export function PaperCard({
                       {canFollowAuthors && !isFollowed && (
                         <button
                           type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--color-border)] bg-alma-chrome text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-alma-200 hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--color-border)] bg-surface-1 text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-alma-200 hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()

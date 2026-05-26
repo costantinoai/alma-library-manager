@@ -27,6 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   type ImportResult,
+  type ImportPreflight,
   type ImportOperationEnvelope,
   type ZoteroCollection,
   importBibtexFile,
@@ -35,6 +36,10 @@ import {
   importZoteroRdfFile,
   isImportQueued,
   listZoteroCollections,
+  preflightBibtexFile,
+  preflightBibtexText,
+  preflightZotero,
+  preflightZoteroRdfFile,
 } from '@/api/client'
 
 type TabId = 'bibtex' | 'zotero' | 'zotero-rdf' | 'online'
@@ -102,6 +107,8 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [text, setText] = useState('')
   const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
+  const [preflightLoading, setPreflightLoading] = useState(false)
+  const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
   const [queued, setQueued] = useState<ImportOperationEnvelope | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -112,6 +119,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
     const dropped = e.dataTransfer.files[0]
     if (dropped && (dropped.name.endsWith('.bib') || dropped.type === 'application/x-bibtex')) {
       setFile(dropped)
+      setPreflight(null)
       setError(null)
     } else {
       setError('Please drop a .bib file')
@@ -122,26 +130,47 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
     const selected = e.target.files?.[0]
     if (selected) {
       setFile(selected)
+      setPreflight(null)
       setError(null)
     }
   }
 
+  const handleReview = async () => {
+    setPreflightLoading(true)
+    setResult(null)
+    setQueued(null)
+    setError(null)
+    try {
+      let forecast: ImportPreflight
+      if (mode === 'file' && file) {
+        forecast = await preflightBibtexFile(file)
+      } else if (mode === 'text' && text.trim()) {
+        forecast = await preflightBibtexText(text)
+      } else {
+        setError(mode === 'file' ? 'Please select a .bib file' : 'Please paste BibTeX content')
+        return
+      }
+      setPreflight(forecast)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import review failed')
+    } finally {
+      setPreflightLoading(false)
+    }
+  }
+
   const handleImport = async () => {
+    if (!preflight) {
+      await handleReview()
+      return
+    }
     setLoading(true)
     setResult(null)
     setQueued(null)
     setError(null)
     try {
-      let res
-      if (mode === 'file' && file) {
-        res = await importBibtexFile(file, collectionName || undefined)
-      } else if (mode === 'text' && text.trim()) {
-        res = await importBibtexText(text, collectionName || undefined)
-      } else {
-        setError(mode === 'file' ? 'Please select a .bib file' : 'Please paste BibTeX content')
-        setLoading(false)
-        return
-      }
+      const res = mode === 'file' && file
+        ? await importBibtexFile(file, collectionName || undefined)
+        : await importBibtexText(text, collectionName || undefined)
       if (isImportQueued(res)) {
         setQueued(res)
         // Notify parent so it can refresh Library views when the background
@@ -164,7 +193,12 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
       <ToggleGroup
         type="single"
         value={mode}
-        onValueChange={(v) => { if (v) setMode(v as 'file' | 'text') }}
+        onValueChange={(v) => {
+          if (v) {
+            setMode(v as 'file' | 'text')
+            setPreflight(null)
+          }
+        }}
         aria-label="Import source"
         className="justify-start"
       >
@@ -177,7 +211,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
           onClick={() => fileInputRef.current?.click()}
-          className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-parchment-50 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
+          className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-surface-2 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
         >
           <Upload className="h-8 w-8 text-slate-400" />
           {file ? (
@@ -190,6 +224,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
                 onClick={(e) => {
                   e.stopPropagation()
                   setFile(null)
+                  setPreflight(null)
                 }}
                 aria-label="Clear selected file"
               >
@@ -215,9 +250,12 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
       ) : (
         <textarea
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            setPreflight(null)
+          }}
           placeholder={`@article{doe2024,\n  title = {My Paper Title},\n  author = {Doe, John and Smith, Jane},\n  year = {2024},\n  journal = {Nature},\n}`}
-          className="h-48 w-full resize-y rounded-sm border border-[var(--color-border)] bg-alma-paper p-3 font-mono text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
+          className="h-48 w-full resize-y rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 font-mono text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
         />
       )}
 
@@ -236,11 +274,13 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
         </p>
       </div>
 
+      {preflight && <ImportPreflightDisplay preflight={preflight} />}
+
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-          <AlertCircle className="h-4 w-4 text-red-500" />
-          <span className="text-sm text-red-700">{error}</span>
+        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+          <AlertCircle className="h-4 w-4 text-critical-500" />
+          <span className="text-sm text-critical-700">{error}</span>
         </div>
       )}
 
@@ -250,12 +290,14 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Actions */}
       <DialogFooter>
-        <Button onClick={handleImport} disabled={loading}>
-          {loading ? (
+        <Button onClick={handleImport} disabled={loading || preflightLoading}>
+          {loading || preflightLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Importing...
+              {preflightLoading ? 'Reviewing...' : 'Importing...'}
             </>
+          ) : !preflight ? (
+            'Review import'
           ) : (
             <>
               <Upload className="mr-2 h-4 w-4" />
@@ -281,6 +323,8 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [collectionName, setCollectionName] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [preflightLoading, setPreflightLoading] = useState(false)
+  const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
   const [queued, setQueued] = useState<ImportOperationEnvelope | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -300,6 +344,7 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         library_type: libraryType,
       })
       setCollections(colls)
+      setPreflight(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to connect to Zotero')
     } finally {
@@ -307,7 +352,31 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
     }
   }
 
+  const handleReview = async () => {
+    setPreflightLoading(true)
+    setResult(null)
+    setQueued(null)
+    setError(null)
+    try {
+      setPreflight(await preflightZotero({
+        library_id: libraryId.trim(),
+        api_key: apiKey.trim(),
+        library_type: libraryType,
+        collection_key: selectedCollectionKey,
+        collection_name: collectionName || undefined,
+      }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import review failed')
+    } finally {
+      setPreflightLoading(false)
+    }
+  }
+
   const handleImport = async () => {
+    if (!preflight) {
+      await handleReview()
+      return
+    }
     setLoading(true)
     setResult(null)
     setQueued(null)
@@ -342,7 +411,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           <label className="mb-1 block text-sm font-medium text-slate-700">Library ID</label>
           <Input
             value={libraryId}
-            onChange={(e) => setLibraryId(e.target.value)}
+            onChange={(e) => {
+              setLibraryId(e.target.value)
+              setPreflight(null)
+            }}
             placeholder="e.g. 123456"
           />
           <p className="mt-1 text-xs text-slate-400">
@@ -355,7 +427,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           <Input
             type="password"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={(e) => {
+              setApiKey(e.target.value)
+              setPreflight(null)
+            }}
             placeholder="Enter your Zotero API key"
           />
           <p className="mt-1 text-xs text-slate-400">
@@ -376,7 +451,12 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           <ToggleGroup
             type="single"
             value={libraryType}
-            onValueChange={(v) => { if (v) setLibraryType(v as 'user' | 'group') }}
+            onValueChange={(v) => {
+              if (v) {
+                setLibraryType(v as 'user' | 'group')
+                setPreflight(null)
+              }
+            }}
             aria-label="Library type"
             className="justify-start"
           >
@@ -408,11 +488,14 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           </label>
           <div className="max-h-48 overflow-y-auto rounded-sm border border-[var(--color-border)]">
             <button
-              onClick={() => setSelectedCollectionKey(null)}
+              onClick={() => {
+                setSelectedCollectionKey(null)
+                setPreflight(null)
+              }}
               className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
                 selectedCollectionKey === null
                   ? 'bg-alma-50 text-alma-700'
-                  : 'text-slate-600 hover:bg-parchment-50'
+                  : 'text-slate-600 hover:bg-surface-2'
               }`}
             >
               <FolderOpen className="h-4 w-4" />
@@ -421,11 +504,14 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
             {collections.map((c) => (
               <button
                 key={c.key}
-                onClick={() => setSelectedCollectionKey(c.key)}
+                onClick={() => {
+                  setSelectedCollectionKey(c.key)
+                  setPreflight(null)
+                }}
                 className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
                   selectedCollectionKey === c.key
                     ? 'bg-alma-50 text-alma-700'
-                    : 'text-slate-600 hover:bg-parchment-50'
+                    : 'text-slate-600 hover:bg-surface-2'
                 }`}
               >
                 <span className="flex items-center gap-2">
@@ -450,7 +536,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
           </label>
           <Input
             value={collectionName}
-            onChange={(e) => setCollectionName(e.target.value)}
+            onChange={(e) => {
+              setCollectionName(e.target.value)
+              setPreflight(null)
+            }}
             placeholder="e.g. From Zotero"
           />
         </div>
@@ -458,25 +547,28 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-          <AlertCircle className="h-4 w-4 text-red-500" />
-          <span className="text-sm text-red-700">{error}</span>
+        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+          <AlertCircle className="h-4 w-4 text-critical-500" />
+          <span className="text-sm text-critical-700">{error}</span>
         </div>
       )}
 
       {/* Result */}
+      {preflight && <ImportPreflightDisplay preflight={preflight} />}
       {queued && <ImportQueuedDisplay envelope={queued} />}
       {result && <ImportResultDisplay result={result} />}
 
       {/* Import button */}
       {collections !== null && (
         <DialogFooter>
-          <Button onClick={handleImport} disabled={loading}>
-            {loading ? (
+          <Button onClick={handleImport} disabled={loading || preflightLoading}>
+            {loading || preflightLoading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Importing...
+                {preflightLoading ? 'Reviewing...' : 'Importing...'}
               </>
+            ) : !preflight ? (
+              'Review import'
             ) : (
               <>
                 <Upload className="mr-2 h-4 w-4" />
@@ -494,6 +586,8 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
+  const [preflightLoading, setPreflightLoading] = useState(false)
+  const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
   const [result, setResult] = useState<ImportResult | null>(null)
   const [queued, setQueued] = useState<ImportOperationEnvelope | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -504,6 +598,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
     const dropped = e.dataTransfer.files[0]
     if (dropped && dropped.name.toLowerCase().endsWith('.rdf')) {
       setFile(dropped)
+      setPreflight(null)
       setError(null)
     } else {
       setError('Please drop a .rdf file exported from Zotero')
@@ -514,13 +609,32 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
     const selected = e.target.files?.[0]
     if (selected) {
       setFile(selected)
+      setPreflight(null)
       setError(null)
     }
   }
 
-  const handleImport = async () => {
+  const handleReview = async () => {
     if (!file) {
       setError('Please select a .rdf file')
+      return
+    }
+    setPreflightLoading(true)
+    setResult(null)
+    setQueued(null)
+    setError(null)
+    try {
+      setPreflight(await preflightZoteroRdfFile(file))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import review failed')
+    } finally {
+      setPreflightLoading(false)
+    }
+  }
+
+  const handleImport = async () => {
+    if (!preflight) {
+      await handleReview()
       return
     }
     setLoading(true)
@@ -528,7 +642,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
     setQueued(null)
     setError(null)
     try {
-      const res = await importZoteroRdfFile(file, collectionName || undefined)
+      const res = await importZoteroRdfFile(file as File, collectionName || undefined)
       if (isImportQueued(res)) {
         setQueued(res)
         onImportComplete?.()
@@ -549,7 +663,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
         onDrop={handleDrop}
         onDragOver={(e) => e.preventDefault()}
         onClick={() => fileInputRef.current?.click()}
-        className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-parchment-50 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
+        className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-surface-2 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
       >
         <Upload className="h-8 w-8 text-slate-400" />
         {file ? (
@@ -560,6 +674,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
               onClick={(e) => {
                 e.stopPropagation()
                 setFile(null)
+                setPreflight(null)
               }}
               className="rounded p-0.5 hover:bg-slate-200"
             >
@@ -594,10 +709,12 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
         />
       </div>
 
+      {preflight && <ImportPreflightDisplay preflight={preflight} />}
+
       {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-          <AlertCircle className="h-4 w-4 text-red-500" />
-          <span className="text-sm text-red-700">{error}</span>
+        <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
+          <AlertCircle className="h-4 w-4 text-critical-500" />
+          <span className="text-sm text-critical-700">{error}</span>
         </div>
       )}
 
@@ -605,12 +722,14 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
       {result && <ImportResultDisplay result={result} />}
 
       <DialogFooter>
-        <Button onClick={handleImport} disabled={loading}>
-          {loading ? (
+        <Button onClick={handleImport} disabled={loading || preflightLoading}>
+          {loading || preflightLoading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Importing...
+              {preflightLoading ? 'Reviewing...' : 'Importing...'}
             </>
+          ) : !preflight ? (
+            'Review import'
           ) : (
             <>
               <Upload className="mr-2 h-4 w-4" />
@@ -626,6 +745,46 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
 // ---------------------------------------------------------------------------
 // Import result display
 // ---------------------------------------------------------------------------
+
+function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
+  const etaLabels = [
+    preflight.eta.openalex?.label && `OpenAlex ${preflight.eta.openalex.label}`,
+    preflight.eta.title_resolution?.label && `title search ${preflight.eta.title_resolution.label}`,
+    preflight.eta.s2_vector?.label && `S2 vectors ${preflight.eta.s2_vector.label}`,
+  ].filter(Boolean)
+  const sourceCalls = preflight.likely_source_calls
+
+  return (
+    <div className="rounded-sm border border-alma-200 bg-alma-50 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-alma-700" />
+          <span className="font-medium text-alma-900">Import review ready</span>
+        </div>
+        <Badge variant="secondary">{preflight.valid_entries} entries</Badge>
+      </div>
+      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+        <div>DOI-backed: <span className="font-medium">{preflight.identifiers.doi}</span></div>
+        <div>Title search: <span className="font-medium">{preflight.identifiers.title_search_needed}</span></div>
+        <div>Likely new rows: <span className="font-medium">{preflight.dedup.likely_new_rows}</span></div>
+        <div>Existing matches: <span className="font-medium">{preflight.dedup.existing_matches}</span></div>
+        <div>With abstracts: <span className="font-medium">{preflight.metadata.with_abstract}</span></div>
+        <div>Rich metadata: <span className="font-medium">{preflight.metadata.rich_enough_to_skip_most_hydration}</span></div>
+      </div>
+      <p className="mt-3 text-xs text-slate-600">
+        Forecast: {sourceCalls.openalex} OpenAlex request{sourceCalls.openalex === 1 ? '' : 's'},
+        {' '}{sourceCalls.semantic_scholar_title_search} title-search request{sourceCalls.semantic_scholar_title_search === 1 ? '' : 's'},
+        {' '}{sourceCalls.semantic_scholar_vector_batch_candidates} S2 vector candidate{sourceCalls.semantic_scholar_vector_batch_candidates === 1 ? '' : 's'}.
+        {etaLabels.length ? ` ${etaLabels.join(' · ')}.` : ''}
+      </p>
+      {preflight.parse_errors > 0 && (
+        <p className="mt-2 text-xs text-critical-700">
+          {preflight.parse_errors} malformed entr{preflight.parse_errors === 1 ? 'y was' : 'ies were'} skipped in this forecast.
+        </p>
+      )}
+    </div>
+  )
+}
 
 function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }) {
   const alreadyRunning = envelope.status === 'already_running'
@@ -654,9 +813,9 @@ function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }
 
 function ImportResultDisplay({ result }: { result: ImportResult }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-4">
+    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
       <div className="mb-2 flex items-center gap-2">
-        <CheckCircle className="h-5 w-5 text-green-600" />
+        <CheckCircle className="h-5 w-5 text-success-600" />
         <span className="font-medium text-alma-800">Import Complete</span>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -667,8 +826,8 @@ function ImportResultDisplay({ result }: { result: ImportResult }) {
       </div>
       {result.errors.length > 0 && (
         <div className="mt-3">
-          <p className="mb-1 text-xs font-medium text-red-700">Errors:</p>
-          <ul className="max-h-32 space-y-0.5 overflow-y-auto text-xs text-red-600">
+          <p className="mb-1 text-xs font-medium text-critical-700">Errors:</p>
+          <ul className="max-h-32 space-y-0.5 overflow-y-auto text-xs text-critical-600">
             {result.errors.slice(0, 20).map((err, i) => (
               <li key={i} className="flex items-start gap-1">
                 <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -695,12 +854,12 @@ function StatBox({
   color?: 'green' | 'yellow' | 'red'
 }) {
   const colorMap = {
-    green: 'text-green-700',
-    yellow: 'text-yellow-700',
-    red: 'text-red-700',
+    green: 'text-success-700',
+    yellow: 'text-warning-700',
+    red: 'text-critical-700',
   }
   return (
-    <div className="rounded-md bg-alma-chrome p-2 text-center shadow-sm">
+    <div className="rounded-md bg-surface-1 p-2 text-center shadow-sm">
       <div className={`text-lg font-bold ${color ? colorMap[color] : 'text-alma-800'}`}>
         {value}
       </div>

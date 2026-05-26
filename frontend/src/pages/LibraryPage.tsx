@@ -190,13 +190,13 @@ export function LibraryPage() {
       {/* Needs Attention — collapsed by default. Each row carries an
           inline reasons strip explaining WHY the paper is flagged + a
           suggested action verb so the user can act without thinking. */}
-      <details className="group rounded-sm border border-[var(--color-border)] bg-alma-chrome shadow-paper-sheet">
+      <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
         <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-2">
               <span className="font-brand text-sm font-semibold text-alma-800">Needs attention</span>
               {needsAttentionCount > 0 && (
-                <Badge variant="outline" className={needsAttentionCount > 0 ? 'text-amber-700' : ''}>
+                <Badge variant="outline" className={needsAttentionCount > 0 ? 'text-warning-700' : ''}>
                   {needsAttentionCount}
                 </Badge>
               )}
@@ -251,7 +251,7 @@ export function LibraryPage() {
           the Library and Feed surfaces read as the same product.
       ─────────────────────────────────────────────────────────────────── */}
       <div
-        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm border border-[var(--color-border)] bg-parchment-100/80 p-1 shadow-sm"
+        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm border border-[var(--color-border)] bg-surface-2/80 p-1 shadow-sm"
         role="tablist"
         aria-label="Library sections"
       >
@@ -268,8 +268,8 @@ export function LibraryPage() {
               }}
               className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-alma-chrome text-alma-800 shadow-paper-sm ring-1 ring-[var(--color-border)]'
-                  : 'text-slate-600 hover:bg-alma-chrome/60 hover:text-alma-800'
+                  ? 'bg-surface-1 text-alma-800 shadow-paper-sm ring-1 ring-[var(--color-border)]'
+                  : 'text-slate-600 hover:bg-surface-1/60 hover:text-alma-800'
               }`}
             >
               <tab.icon className={`h-4 w-4 ${isActive ? 'text-alma-folio' : 'text-slate-400'}`} />

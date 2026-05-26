@@ -13,12 +13,12 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: 'border border-alma-100 bg-white text-alma-800',
-        secondary: 'border border-alma-100 bg-white text-alma-800',
-        outline: 'border border-alma-100 bg-white text-alma-800',
-        success: 'border border-transparent bg-emerald-700/10 text-emerald-700',
-        destructive: 'border border-transparent bg-rose-700/10 text-rose-700',
-        warning: 'border border-transparent bg-amber-700/10 text-amber-700',
+        default: 'border border-alma-100 bg-surface-4 text-alma-800',
+        secondary: 'border border-alma-100 bg-surface-4 text-alma-800',
+        outline: 'border border-alma-100 bg-surface-4 text-alma-800',
+        success: 'border border-transparent bg-success-700/10 text-success-700',
+        destructive: 'border border-transparent bg-critical-700/10 text-critical-700',
+        warning: 'border border-transparent bg-warning-700/10 text-warning-700',
       },
       size: {
         sm: 'px-2 py-px text-[0.65rem]',

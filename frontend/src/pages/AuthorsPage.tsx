@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { Plus, Users } from 'lucide-react'
 
 import {
@@ -45,7 +45,6 @@ import { useToast, errorToast } from '@/hooks/useToast'
 export function AuthorsPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const reducedMotion = useReducedMotion()
 
   const [selectedAuthor, setSelectedAuthor] = useState<Author | null>(null)
   const [selectedSuggestion, setSelectedSuggestion] = useState<AuthorSuggestion | null>(null)
@@ -211,32 +210,26 @@ export function AuthorsPage() {
             description="Follow a suggestion above or add an author by OpenAlex / ORCID."
           />
         ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <AnimatePresence mode="popLayout" initial={false}>
-              {followedAuthors.map((author) => (
-                <motion.div
-                  key={author.id}
-                  layout
-                  layoutId={`author-${author.openalex_id || author.id}`}
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.96 }}
-                  transition={{ duration: reducedMotion ? 0 : 0.25, ease: 'easeOut' }}
-                >
-                  <FollowedAuthorCard
-                    author={author}
-                    signal={null}
-                    onClick={() => openDetail(author)}
-                    attentionRow={attentionByAuthor.get(author.id) ?? null}
-                    onAttentionClick={() => {
-                      const row = attentionByAuthor.get(author.id)
-                      if (row) attentionRouter.openForRow(row)
-                    }}
-                  />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </div>
+          <RevealList className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {followedAuthors.map((author, i) => (
+              <RevealItem
+                key={author.id}
+                index={i}
+                layoutId={`author-${author.openalex_id || author.id}`}
+              >
+                <FollowedAuthorCard
+                  author={author}
+                  signal={null}
+                  onClick={() => openDetail(author)}
+                  attentionRow={attentionByAuthor.get(author.id) ?? null}
+                  onAttentionClick={() => {
+                    const row = attentionByAuthor.get(author.id)
+                    if (row) attentionRouter.openForRow(row)
+                  }}
+                />
+              </RevealItem>
+            ))}
+          </RevealList>
         )}
       </section>
 

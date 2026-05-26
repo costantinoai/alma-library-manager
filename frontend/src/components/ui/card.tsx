@@ -1,88 +1,82 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
+import { Surface, useSurfaceLevel, nextLevel, type SurfaceLevel } from '@/components/ui/surface'
 
 /**
- * Card — paper-sheet surface primitive (v3 brand, "two papers, one desk").
+ * Card — paper-sheet surface on the single neutral elevation ladder.
  *
- * The card reads as a real piece of paper resting on the warm parchment
- * desk: face catching ambient light at the top edge, hairline parchment
- * border, a tight close shadow for paper thickness, and a soft far
- * ambient drop for depth. Stacked into one `--shadow-paper-sheet` token
- * so a single `shadow-paper-sheet` utility delivers the whole effect —
- * single-layer drop shadows look synthetic, layered ones read as
- * physical material.
+ * A Card reads as a real sheet of paper lifting off whatever it sits on: it
+ * renders ONE level lighter than its host surface (relational — see
+ * `surface.tsx`), paints `bg-surface-N` + `border-edge-N`, and stacks the
+ * paper-sheet shadow for physical lift. It also hands its level down, so a
+ * Card inside a Card inside a dialog all climb the same ladder with no
+ * per-call-site color choices. Depth alone decides the color.
  *
- * Two paper qualities lift from the same desk. The tone prop says which.
+ *   variant 'default'   the everyday card: relational lift + paper-sheet shadow.
+ *           'elevated'  same level, larger `shadow-paper-sheet-lg`. Hero /
+ *                       feature cards only (paper-detail header, anchored seed)
+ *                       — one or two per page; rarity keeps it loud.
+ *           'flat'      no lift, transparent fill, hairline only — does NOT
+ *                       burn a rung of the ladder (children stay at the host
+ *                       level). Dense meta-tile grids where individual lift
+ *                       would compete with the parent card.
  *
- *   - `chrome`   (DEFAULT)  cooler off-white working paper — the
- *                everyday card: settings, lens controls, branch UI
- *                chrome, alerts automation, insights tiles, dialogs,
- *                popovers, every form panel. Most cards are chrome.
- *   - `content`             warmer ivory cream reading paper — reserved
- *                for cards that BE the content the user came to read:
- *                a paper row, an author tile, a recommendation, the
- *                inner branch result tiles inside Branch Studio, the
- *                paper-detail panel body. The warmer tone is the
- *                primitive's quiet way of saying "this is the work."
- *   - `elevated`            warm content gradient + the larger
- *                paper-sheet-lg shadow. Hero / feature cards only
- *                (paper-detail header, anchored seed). One or two per
- *                page max — rarity keeps it loud.
- *   - `flat`                hairline border only, no shadow, no surface
- *                fill (transparent so it inherits its host). Dense grids
- *                of meta tiles where individual lift would compete with
- *                the parent card. Reads like a small index card.
- *
- * Pass `interactive` when the whole card is clickable. Hover deepens
- * the shadow and lifts the card 1px — a brief, calm gesture, not a
- * leap. The lift cooperates with the bottom-edge close shadow so the
- * paper appears to be peeled fractionally off the desk, not levitating.
- *
- * Migration note (v2 → v3, 2026-04-26):
- *   The v2 default tone was `paper` (cream surface, generic). v3 splits
- *   that into `chrome` and `content` — a Card that wants to be the
- *   thing-to-read explicitly opts in via tone="content". `paper` is
- *   accepted as a deprecated alias of `chrome` during the migration
- *   sweep; new callers should use `chrome` (or omit, since it's the
- *   default).
+ *   level     force an absolute level (0–4) instead of the relational host+1.
+ *   interactive  whole card is clickable: hover lifts it a touch (the spring
+ *                upgrade lives in the motion layer).
  */
-type CardTone = 'chrome' | 'content' | 'elevated' | 'flat' | 'paper'
+type CardVariant = 'default' | 'flat' | 'elevated'
 
-const Card = React.forwardRef<
-  HTMLDivElement,
-  React.HTMLAttributes<HTMLDivElement> & {
-    interactive?: boolean
-    tone?: CardTone
-  }
->(({ className, interactive, tone = 'chrome', ...props }, ref) => {
-  const resolvedTone = tone === 'paper' ? 'chrome' : tone
-  return (
-    <div
-      ref={ref}
-      className={cn(
-        // Paper-sheet geometry — 2px corner reads as crisp paper edge,
-        // not bubbly chip. The depth comes from the shadow stack, not
-        // from radius.
-        'relative rounded-sm border border-[var(--color-border)]',
-        'transition-[box-shadow,transform] duration-200 ease-out',
-        resolvedTone === 'chrome' && 'bg-alma-chrome shadow-paper-sheet',
-        resolvedTone === 'content' && 'bg-alma-content shadow-paper-sheet',
-        resolvedTone === 'elevated' && 'alma-paper-sheet-bg shadow-paper-sheet-lg',
-        resolvedTone === 'flat' && 'bg-transparent',
-        interactive &&
-          'cursor-pointer hover:-translate-y-px hover:shadow-paper-sheet-hover',
-        className,
-      )}
-      {...props}
-    />
-  )
-})
+/** @deprecated v3 two-paper tones. Kept only so existing call sites compile
+ * during the migration; resolves to the single-ladder model. Use
+ * `variant` / `level`. Removed once the sweep is complete. */
+type DeprecatedTone = 'chrome' | 'content' | 'elevated' | 'flat' | 'paper'
+
+export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
+  interactive?: boolean
+  level?: SurfaceLevel
+  variant?: CardVariant
+  /** @deprecated use `variant` / `level`. */
+  tone?: DeprecatedTone
+}
+
+const Card = React.forwardRef<HTMLDivElement, CardProps>(
+  ({ className, interactive, level, variant, tone, ...props }, ref) => {
+    // Resolve the deprecated tone → variant. chrome/content/paper were pure
+    // surface-color choices that the ladder now handles, so they're no-ops
+    // (→ 'default'); only flat/elevated carried geometry that survives.
+    const resolvedVariant: CardVariant =
+      variant ?? (tone === 'flat' ? 'flat' : tone === 'elevated' ? 'elevated' : 'default')
+
+    const host = useSurfaceLevel()
+    const isFlat = resolvedVariant === 'flat'
+    const isElevated = resolvedVariant === 'elevated'
+
+    return (
+      <Surface
+        ref={ref}
+        // flat paints nothing and adds no depth — render at the host level so
+        // descendants don't climb; otherwise lift one rung (or honor `level`).
+        level={isFlat ? host : level ?? nextLevel(host)}
+        filled={!isFlat}
+        bordered
+        className={cn(
+          'relative rounded-sm transition-[box-shadow,transform] duration-200 ease-out',
+          !isFlat && !isElevated && 'shadow-paper-sheet',
+          isElevated && 'shadow-paper-sheet-lg',
+          interactive && 'cursor-pointer hover:-translate-y-px hover:shadow-paper-sheet-hover',
+          className,
+        )}
+        {...props}
+      />
+    )
+  },
+)
 Card.displayName = 'Card'
 
 /**
- * CardHeader — sets up a section title block. Pair with `<BrandRule />`
- * inside the card body when you want an editorial gold separator
- * between header and content (mirrors the wordmark's own rule).
+ * CardHeader — section title block. Pair with `<BrandRule />` inside the card
+ * body for an editorial gold separator between header and content.
  */
 const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (

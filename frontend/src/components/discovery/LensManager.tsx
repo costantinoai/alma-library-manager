@@ -96,7 +96,7 @@ export function LensManager({
   }
 
   return (
-    <section className="space-y-3 rounded-sm border border-[var(--color-border)] bg-alma-chrome p-4 shadow-paper-sheet">
+    <section className="space-y-3 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sheet">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-0.5">
           <EyebrowLabel tone="muted">Lenses</EyebrowLabel>
@@ -141,7 +141,7 @@ export function LensManager({
                   'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
                   isActive
                     ? 'border-alma-folio bg-alma-folio-soft'
-                    : 'border-[var(--color-border)] bg-alma-chrome-elev hover:border-parchment-400',
+                    : 'border-[var(--color-border)] bg-surface-2 hover:border-parchment-400',
                 )}
               >
                 <button
@@ -167,8 +167,8 @@ export function LensManager({
                   className={cn(
                     'inline-flex items-center justify-center border-l px-2 transition-colors',
                     isActive
-                      ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-rose-50 hover:text-rose-700'
-                      : 'border-[var(--color-border)] text-slate-400 hover:bg-rose-50 hover:text-rose-700',
+                      ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-50 hover:text-critical-700'
+                      : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-50 hover:text-critical-700',
                   )}
                   aria-label={`Delete ${lens.name}`}
                   title={`Delete ${lens.name}`}
@@ -237,7 +237,7 @@ export function LensManager({
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDelete}
-              className="bg-rose-600 text-white hover:bg-rose-700"
+              className="bg-critical-600 text-white hover:bg-critical-700"
             >
               Delete lens
             </AlertDialogAction>

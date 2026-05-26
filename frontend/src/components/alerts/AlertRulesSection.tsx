@@ -603,9 +603,9 @@ function RuleFormDialog({
             />
 
             {isError && (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-                <AlertCircle className="h-4 w-4 text-red-500" />
-                <span className="text-sm text-red-700">{errorMessage}</span>
+              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+                <AlertCircle className="h-4 w-4 text-critical-500" />
+                <span className="text-sm text-critical-700">{errorMessage}</span>
               </div>
             )}
           </form>
@@ -791,7 +791,7 @@ export function AlertRulesSection() {
                       disabled={toggleMutation.isPending}
                       title={rule.enabled ? 'Disable' : 'Enable'}
                     >
-                      <Power className={`h-4 w-4 ${rule.enabled ? 'text-green-500' : 'text-slate-400'}`} />
+                      <Power className={`h-4 w-4 ${rule.enabled ? 'text-success-500' : 'text-slate-400'}`} />
                     </Button>
                     <Button
                       variant="ghost"
@@ -807,7 +807,7 @@ export function AlertRulesSection() {
                       onClick={() => setDeleteId(rule.id)}
                       title="Delete rule"
                     >
-                      <Trash2 className="h-4 w-4 text-red-400" />
+                      <Trash2 className="h-4 w-4 text-critical-500" />
                     </Button>
                   </div>
                 </div>

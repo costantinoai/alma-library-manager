@@ -1,29 +1,25 @@
 @import "tailwindcss";
 
 /* ─────────────────────────────────────────────────────────────────────────
- * ALMa v3 brand theme — "two papers, one desk"
+ * ALMa v4 brand theme — one paper ladder on a parchment desk.
  *
- * Source of truth: branding/palette.md, branding/type.md (+ this file's
- * own surface-taxonomy comment block below — the canonical tier ladder).
+ * Source of truth: branding/palette.md, branding/type.md (+ the design-system
+ * comment block below — the canonical surface ladder + color contract).
  *
- * Conceptual frame (v3, 2026-04-26):
- *   The desk is darker warm parchment. Two paper qualities lift from it:
- *   reading paper (warm cream — papers, authors, recommendations) and
- *   working paper (cooler off-white — settings, lens controls, branch
- *   studio chrome, alerts automation, insights tiles). Stacking lightens.
- *   The accent is Folio binding blue, not corporate teal.
+ * Conceptual frame (v4, 2026-05-26): a single neutral paper ladder lifts off
+ * the parchment desk; depth alone decides a surface's color (the earlier
+ * warm-content / cool-chrome two-paper split was collapsed). The accent is
+ * Folio binding blue.
  *
- * Three layers:
- *   1. Flat brand tokens — single anchor colors used by name
- *      (canvas / content / chrome / folio / ink). Mapped to Tailwind
- *      utilities like `bg-alma-canvas`, `text-alma-folio`.
- *   2. 50-950 ramps for alma / parchment / pale / gold — back-compat for
- *      the ~200 existing `bg-alma-X` etc. call sites; they now inherit
- *      the navy-anchored palette automatically.
- *   3. Semantic CSS variables (`:root` block below) — `--color-bg`,
- *      `--color-surface`, `--color-border`, `--color-text` etc. for
- *      primitive styling that wants to read by role rather than by
- *      brand name.
+ * Layers:
+ *   1. The surface ladder (--color-surface-0..4) + edge ramp (--color-edge-0..4)
+ *      — THE surface source of truth; consumed via bg-surface-N / border-edge-N
+ *      and the relational Surface/Card/SubPanel primitives.
+ *   2. The navy `alma` ramp + parchment / pale / gold ramps (ink, trim, warm
+ *      tints, borders) and the semantic ramps (success/warning/critical/info).
+ *   3. Role CSS variables (`:root` block below) — `--color-bg`, `--color-text`,
+ *      `--color-border`, `--color-accent`, `--color-focus` for primitive CSS
+ *      that reads by role.
  * ───────────────────────────────────────────────────────────────────────── */
 
 @theme {
@@ -54,38 +50,51 @@
   --color-alma-900: #0D1828;   /* BRAND INK — page-edge underside */
   --color-alma-950: #060E1A;   /* cardstock-cover deep grain wells */
 
-  /* ── Surface anchors (v3 — two papers, one desk) ───────────────────────
-   * The desk + the two paper qualities that lift from it. Used by name
-   * (e.g. `bg-alma-canvas`, `bg-alma-content`, `bg-alma-chrome`). These
-   * don't have a 50-950 ramp — they're identity surfaces that should
-   * always read the same hex.
+  /* Surfaces are the single neutral elevation ladder below
+   * (--color-surface-0..4). The old two-paper "content vs chrome"
+   * anchors are gone — depth alone decides a surface's color. */
+
+  /* ── Single neutral elevation ladder (v4 — one color per depth) ────────
+   * THE source of truth for surface contrast. Depth alone decides the
+   * color: a surface at level N is always the same hex, everywhere. The
+   * old warm "content" / cool "chrome" split is gone — there is now ONE
+   * neutral paper ladder. Lighter = more forefront (up the z-stack).
    *
-   * Lightness ladder (canvas darkest → stacked surfaces lightest):
-   *   canvas        93%   the desk
-   *   chrome        95%   working paper (settings, lens, branch chrome,
-   *                       insights tiles, alerts automation)
-   *   content       97%   reading paper (papers, authors, recommendations)
-   *   chrome-elev   97%   nested chrome (popovers/dialogs/inner sub-cards
-   *                       on chrome surfaces)
-   *   content-elev  98%   nested content (sub-cards inside a paper card,
-   *                       drop-cap frames, paper-detail abstract block)
+   *   surface-0  #F1EAD8  the desk / app body
+   *   surface-1  #F8F4E8  card on the desk · dialog/sheet body
+   *   surface-2  #FBF8EE  panel inside a card · table header band
+   *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
+   *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
    *
-   * Warmth ladder:
-   *   content (R-B differential ≈ 30) — clearly yellow-cream, "ivory"
-   *   chrome  (R-B differential ≈ 14) — neutral cream, "manila"
-   * The differential is what tells "I'm reading something" from "I'm
-   * operating something" without needing to read a label.
-   */
-  --color-alma-canvas:       #F1EAD8;   /* the desk — paper-warm, slightly darker than cards */
-  /* 2026-04-26 night — lifted ~3 luminance units toward off-white per
-   * the brand v3 contrast lesson: PaperCard's cream-on-cream against
-   * the warm canvas was too flat. The new value still carries a paper
-   * warmth (R > G > B) but reads as "off-white paper" rather than
-   * "cream slip". `*-elev` lifts another half-step for nested cases. */
-  --color-alma-content:      #FDFBF3;   /* reading paper — content cards */
-  --color-alma-content-elev: #FFFEF9;   /* stacked / nested content */
-  --color-alma-chrome:       #F8F4E8;   /* working paper — chrome cards (off-white) */
-  --color-alma-chrome-elev:  #FBF8EE;   /* stacked / nested chrome */
+   * Consumed ONLY through the static SURFACE_BG / SURFACE_BORDER literal
+   * maps in components/ui/surface.tsx — never interpolate `bg-surface-${n}`
+   * (Tailwind v4 purges class names it can't see as complete literals).
+   *
+   * `--color-edge-N` is the hairline paired to each level — a warm
+   * parchment border that fades as the surface lifts, so the separation
+   * between level N and its host is also one consistent value. */
+  --color-surface-0: #F1EAD8;
+  --color-surface-1: #F8F4E8;
+  --color-surface-2: #FBF8EE;
+  --color-surface-3: #FFFEF9;
+  --color-surface-4: #FFFFFF;
+
+  --color-edge-0: #E2D7BE;   /* hairline on the desk */
+  --color-edge-1: #E6DCC6;
+  --color-edge-2: #EBE3D2;
+  --color-edge-3: #F0EADC;
+  --color-edge-4: #F2EEE4;   /* faintest, on white */
+
+  /* ── Cool surface variant — the ONE deliberate exception ───────────────
+   * The Activity panel is system telemetry, not editorial reading, so it
+   * sits on a slightly colder off-white ladder (cool blue-grey instead of
+   * warm cream). Same depth order as the main ladder — cool-1 is the panel
+   * body, cool-2 the nested rows/boxes (lighter), cool-3 the top. This is
+   * the only surface allowed off the warm ladder; use it ONLY in the
+   * Activity panel. */
+  --color-surface-cool-1: #F2F4F7;   /* panel body            */
+  --color-surface-cool-2: #F8FAFC;   /* rows / boxes (lighter) */
+  --color-surface-cool-3: #FFFFFF;   /* chips / top            */
 
   /* ── Folio binding blue (accent) ───────────────────────────────────────
    * The accent. Replaces the v2 teal (#0E6F6D). Reads as the dyed cloth
@@ -101,22 +110,22 @@
    */
   --color-alma-folio:      #1E5B86;   /* accent — Folio binding blue */
   --color-alma-folio-soft: #DCEAF4;   /* soft accent fill */
+  --color-alma-folio-600:  #184E73;   /* accent hover — one step darker */
+  --color-alma-folio-700:  #123C58;   /* accent active — two steps darker */
 
-  /* ── Legacy aliases (v2 → v3 migration shims) ──────────────────────────
-   * Kept temporarily so utilities like `bg-alma-cream`, `text-alma-cream`,
-   * `text-alma-teal`, `bg-alma-paper` continue to render during the F5
-   * caller migration sweep. After the sweep, callers will use the
-   * semantic v3 tokens directly and these aliases will be dropped.
-   *
-   * Mapping notes:
-   *   alma-paper   → canvas (the bg surface role it played in v2)
-   *   alma-cream   → near-white #FFF9F0 (ivory text on dark sidebar
-   *                  + chrome card surface back-compat)
-   *   alma-teal    → folio (Folio binding blue replaces v2 teal)
-   */
-  --color-alma-paper: var(--color-alma-canvas);
+  /* Accent aliases — read by role. `accent` is the brand's single
+   * interactive identity: links, active nav, focus rings, and EVERY
+   * selected / active / checked / on control state. `accent-edge` is the
+   * hairline for accent-tinted panels (replaces the old hardcoded
+   * #9FC3DD in sub-panel). */
+  --color-accent:      var(--color-alma-folio);
+  --color-accent-soft: var(--color-alma-folio-soft);
+  --color-accent-edge: #9FC3DD;
+
+  /* On-ink text — near-white ivory for text/icons on dark navy surfaces
+   * (the cardstock sidebar, navy primary buttons, toast action button).
+   * The only "alma-cream" survivor; it is a text color, not a surface. */
   --color-alma-cream: #FFF9F0;
-  --color-alma-teal:  var(--color-alma-folio);
 
   /* ── Parchment ramp ─────────────────────────────────────────────────────
    * Anchored at parchment-200 (#F3EAD6 brand parchment). Used for warm
@@ -260,125 +269,60 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Layer 3 — semantic CSS variables (not exposed as Tailwind utilities).
- * Read with `var()` inside primitive CSS where the role is what matters
- * (e.g. "this is a chrome card", "this is the body background"), not the
- * specific brand color. v3 surface roles:
- *
- *   --color-bg              the desk (canvas)
- *   --color-surface-content reading paper (papers, authors, recs)
- *   --color-surface-chrome  working paper (settings, lens, branch UI,
- *                           insights tiles, alerts automation)
- *   --color-surface         legacy alias → chrome (default card)
- *   --color-surface-elev    nested chrome (popovers/dialogs over chrome)
+ * Semantic CSS variables read with `var()` inside primitive CSS where the
+ * role matters more than the specific value. Surfaces map onto the single
+ * elevation ladder (--color-surface-0..4); `--color-border` is the canonical
+ * neutral hairline for control outlines and dividers.
  * ───────────────────────────────────────────────────────────────────────── */
 :root {
-  --color-bg:              var(--color-alma-canvas);
-  --color-surface:         var(--color-alma-chrome);   /* default card */
-  --color-surface-content: var(--color-alma-content);  /* reading paper */
-  --color-surface-chrome:  var(--color-alma-chrome);   /* working paper */
-  --color-surface-elev:    var(--color-alma-chrome-elev);
-  --color-surface-content-elev: var(--color-alma-content-elev);
-  --color-text:            var(--color-alma-900);      /* ink */
-  --color-heading:         var(--color-alma-800);      /* navy */
-  --color-muted:           #64748B;
-  --color-border:          #D5C7AB;                    /* warm parchment hairline (slightly tightened for v3 darker canvas) */
-  --color-border-cool:     #DCD6C5;                    /* cooler hairline for chrome surfaces */
-  --color-accent:          var(--color-alma-folio);
-  --color-accent-soft:     var(--color-alma-folio-soft);
-  --color-focus:           var(--color-alma-folio);
+  --color-bg:          var(--color-surface-0);   /* the desk / app body */
+  --color-text:        var(--color-alma-900);    /* ink */
+  --color-heading:     var(--color-alma-800);    /* navy */
+  --color-muted:       #64748B;
+  --color-border:      #D5C7AB;                   /* warm parchment hairline — control outlines + dividers */
+  --color-border-cool: #DCD6C5;                   /* cooler hairline variant */
+  --color-accent:      var(--color-alma-folio);
+  --color-accent-soft: var(--color-alma-folio-soft);
+  --color-focus:       var(--color-alma-folio);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Surface taxonomy v3 — "two papers, one desk".
+ * Design system — one centralized ladder + one semantic color contract.
  *
- * The desk is the darkest surface; both kinds of paper lift from it. The
- * two paper qualities tell the user what kind of work they're doing
- * before they read a single label:
+ * SURFACE CONTRAST is a single neutral elevation ladder. Depth alone decides
+ * a surface's color; the same depth is always the same hex, everywhere. The
+ * relation is computed (not hand-picked) by the SurfaceProvider context in
+ * components/ui/surface.tsx, so cream-on-cream is structurally impossible.
  *
- *   - reading paper   warm ivory cream   "this contains a piece of work"
- *   - working paper   cooler off-white   "this helps me operate the system"
+ *   surface-0  #F1EAD8  the desk / app body
+ *   surface-1  #F8F4E8  card · dialog/sheet body
+ *   surface-2  #FBF8EE  panel in a card · table header band · input well host
+ *   surface-3  #FFFEF9  nested well · popover / dropdown / menu
+ *   surface-4  #FFFFFF  top of the stack (toast, deepest nest)
+ *   edge-0..4          one warm hairline paired to each surface level
  *
- * Stacking lightens. A popover on a card is brighter than the card; a
- * sub-card inside a content card is brighter than its host. The reverse
- * never happens — nothing sits ON TOP of something darker than itself.
+ *   Card  → lifts one level (paper-sheet shadow).   SubPanel → lifts one
+ *   level but recesses (inset shadow). Portals reset the counter: dialog/
+ *   sheet → level 1, popover/dropdown/menu → level 3, tooltip → off-ladder
+ *   dark ink chip.
  *
- *   ┌─────────────────────────────────────────────────────────────────┐
- *   │  DESK (canvas)                              alma-canvas #EDE3CE │
- *   │     ┌────────────────────┐  ┌────────────────────────────────┐  │
- *   │     │ chrome card        │  │ content card                   │  │
- *   │     │ (settings, lens,   │  │ (papers, authors, recs)        │  │
- *   │     │  branch UI tools,  │  │ alma-content #FAF2DC           │  │
- *   │     │  insights tiles)   │  │   ┌─────────────────────────┐  │  │
- *   │     │ alma-chrome        │  │   │ nested content sub-card │  │  │
- *   │     │ #F4F1E6            │  │   │ alma-content-elev       │  │  │
- *   │     │   ┌──────────────┐ │  │   │ #FCF7E7                 │  │  │
- *   │     │   │ chrome-elev  │ │  │   └─────────────────────────┘  │  │
- *   │     │   │ #F9F6EC      │ │  └────────────────────────────────┘  │
- *   │     │   └──────────────┘ │                                      │
- *   │     └────────────────────┘                                      │
- *   └─────────────────────────────────────────────────────────────────┘
+ * SEMANTIC + INTERACTIVE COLOR (the meaning contract):
+ *   ink        alma-900/800 text; slate-* is the neutral TEXT ramp only
+ *   accent     folio — the single interactive identity: links, active nav,
+ *              focus rings, and EVERY selected/active/checked/on state
+ *              (checkbox, radio, switch, toggle, tab, selected row, menu
+ *              highlight = accent-soft). Primary affirmative CTA.
+ *   primary    alma-800 navy — the one heavy solid button fill; brand ink
+ *   success    healthy / completed / confirmed / positive feedback
+ *   warning    caution / degraded / needs-attention / unsaved
+ *   critical   error / failed / destructive / negative (unifies red + rose)
+ *   info       neutral reference info (journal, dates, citations)
+ *   gold       trim / celebration only (saved corner, "top") — NOT a status
  *
- * Surface assignment (the canonical list):
- *
- *   CANVAS                  alma-canvas    #EDE3CE
- *     ├ App body bg
- *     └ TopBar (contiguous with body, no separate fill)
- *
- *   CONTENT card            alma-content   #FAF2DC      (Card tone="content")
- *     ├ Paper rows / paper-detail panel header
- *     ├ Author rows / author-detail panel
- *     ├ Recommendation rows in Discovery
- *     └ Discovery branch result tiles (the papers, not the branch chrome)
- *
- *   CONTENT elevated        alma-content-elev  #FCF7E7  (SubPanel tone="content")
- *     ├ Drop-cap abstract block inside paper-detail
- *     ├ Citation snippet inside paper-detail
- *     └ Inner sub-cards on a content card
- *
- *   CHROME card             alma-chrome    #F4F1E6      (Card default — tone="chrome")
- *     ├ Settings panels (one card per section)
- *     ├ Lens controls / Lens weights / branch-control chrome
- *     ├ Branch Studio outer card (the controls; not the branch tiles)
- *     ├ Alerts page suggested-automation cards
- *     ├ Insights stat tiles (each tile is a small chrome card)
- *     ├ Insights chart cards (the chart frame)
- *     ├ Dialogs, popovers, toasts, dropdown menus
- *     └ Form panels — the input itself uses the recessed-well treatment
- *
- *   CHROME elevated         alma-chrome-elev  #F9F6EC   (SubPanel tone="chrome")
- *     ├ Inner config groups inside a settings card
- *     ├ Sidebar of a multi-pane settings dialog
- *     └ Per-row chrome inside a chrome card
- *
- *   COVER                   alma-800 + cardstock texture
- *     ├ Sidebar (.alma-cardstock-cover utility)
- *     └ Any other "binding" surface (none currently)
- *
- *   OPS (deliberately cool — operational/utility surfaces only)
- *     White / slate-50 / slate-100   — Activity panel body, log rows.
- *     Use ONLY for surfaces that aren't editorial. The cool palette is
- *     what tells the user "this is system telemetry, not reading".
- *
- *   ACCENTS (orthogonal — apply on top of any surface)
- *     folio    active states, links, focus ring, bookmark ribbon
- *              (was teal in v2 — retuned to library-card blue in v3)
- *     gold     trim only — BrandRule, gilt edges, "TOP"/"premium" hits
- *     rose     destructive / error semantic state
- *     amber    warning semantic state
- *     emerald  success semantic state
- *     sky      info semantic state
- *
- * Three rules keep the ladder honest:
- *   1. Never put a same-tone surface inside another same-tone surface
- *      (chrome-on-chrome, content-on-content) without lifting to the
- *      -elev step or using a SubPanel.
- *   2. Never reverse the lift. A nested element must be EQUAL OR
- *      LIGHTER than its host. Popovers are lighter than the page.
- *   3. Content tone signals "the user is reading this." If a card is
- *      chrome to operate and contains rendered content underneath
- *      (e.g. a paper-detail panel: chrome controls header, content
- *      paper body), use TWO surfaces — don't paint the whole thing.
+ * The surface-guard test (src/test/surface-guard.test.ts) enforces that no
+ * raw surface ramp / semantic color / hex appears outside index.css and the
+ * primitive definitions — this comment block is the only place the mapping
+ * lives in prose.
  * ───────────────────────────────────────────────────────────────────────── */
 
 body {
@@ -426,21 +370,6 @@ body {
   opacity: 0.45;
   mix-blend-mode: multiply;
   border-radius: inherit;
-}
-
-/* Subtle paper-sheet gradient — used by elevated/hero content cards.
- * Brighter at the top edge (paper face catches light), warming faintly
- * toward the bottom (a hint of underside / page-curl shadow accumulating).
- * The total range is ~5 luminance units so it reads as material, not as
- * a Photoshop filter. v3: anchored on the content ladder (warm reading
- * paper). For chrome elevated cards, prefer flat alma-chrome-elev. */
-.alma-paper-sheet-bg {
-  background-image: linear-gradient(
-    180deg,
-    #FDFAF0 0%,
-    var(--color-alma-content-elev) 55%,
-    var(--color-alma-content) 100%
-  );
 }
 
 /* Cardstock cover — the sidebar reads as a small piece of dyed carton

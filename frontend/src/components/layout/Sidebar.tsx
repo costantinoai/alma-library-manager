@@ -146,13 +146,13 @@ export function Sidebar({
          */}
         <div
           className={cn(
-            'relative flex flex-col items-center border-b border-[var(--color-border)] bg-alma-chrome shadow-paper-sm transition-[padding] duration-200',
+            'relative flex flex-col items-center border-b border-[var(--color-border)] bg-surface-1 shadow-paper-sm transition-[padding] duration-200',
             collapsed ? 'px-2 pb-2 pt-2 lg:px-1.5' : 'px-4 pb-2.5 pt-2.5',
           )}
         >
           <button
             onClick={onClose}
-            className="absolute right-3 top-3 rounded-md p-1 text-alma-700 hover:bg-parchment-100 lg:hidden"
+            className="absolute right-3 top-3 rounded-md p-1 text-alma-700 hover:bg-surface-2 lg:hidden"
             aria-label="Close navigation"
           >
             <X className="h-5 w-5" />
@@ -225,7 +225,7 @@ export function Sidebar({
                         collapsed ? 'lg:justify-center lg:gap-0 lg:px-2 gap-3 px-3' : 'gap-3 px-3',
                         isActive
                           ? 'bg-[rgb(30_91_134_/_0.32)] text-alma-cream'
-                          : 'text-alma-200 hover:bg-white/[0.04] hover:text-alma-cream',
+                          : 'text-alma-200 hover:bg-surface-4/[0.04] hover:text-alma-cream',
                       )}
                     >
                       {isActive && (
@@ -288,7 +288,7 @@ export function Sidebar({
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             className={cn(
-              'hidden items-center justify-center gap-2 rounded-sm py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-alma-300 transition-colors hover:bg-white/[0.04] hover:text-alma-cream lg:flex',
+              'hidden items-center justify-center gap-2 rounded-sm py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] text-alma-300 transition-colors hover:bg-surface-4/[0.04] hover:text-alma-cream lg:flex',
               collapsed ? 'lg:w-full' : 'mt-3 w-full',
             )}
           >

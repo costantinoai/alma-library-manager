@@ -287,7 +287,7 @@ export function TagsTab() {
           )}
 
           {suggestionPaperId && (
-            <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+            <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
               <p className="mb-2 text-xs text-slate-600">
                 Paper: <span className="font-medium text-slate-800">{selectedPaper?.title ?? suggestionPaperId}</span>
               </p>
@@ -305,7 +305,7 @@ export function TagsTab() {
                   {suggestionsQuery.data?.suggestions.map((item) => (
                     <div
                       key={`${item.paper_id}:${item.tag}`}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-alma-chrome px-3 py-2"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-3 py-2"
                     >
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-slate-800">{item.tag}</p>
@@ -360,7 +360,7 @@ export function TagsTab() {
               {mergeSuggestionsQuery.data?.map((item) => (
                 <div
                   key={`${item.source_tag_id}:${item.target_tag_id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-alma-chrome px-3 py-2"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-3 py-2"
                 >
                   <div className="text-sm text-slate-700">
                     <span className="font-medium">{item.source_tag}</span>
@@ -430,7 +430,7 @@ export function TagsTab() {
                       onClick={() => setDeleteId(tag.id)}
                       title="Delete tag"
                     >
-                      <Trash2 className="h-4 w-4 text-red-400" />
+                      <Trash2 className="h-4 w-4 text-critical-500" />
                     </Button>
                   </div>
                 </div>
@@ -462,9 +462,9 @@ export function TagsTab() {
             </div>
           </div>
           {createMutation.isError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-              <AlertCircle className="h-4 w-4 text-red-500" />
-              <span className="text-sm text-red-700">Failed to create tag.</span>
+            <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+              <AlertCircle className="h-4 w-4 text-critical-500" />
+              <span className="text-sm text-critical-700">Failed to create tag.</span>
             </div>
           )}
           <DialogFooter>
@@ -506,7 +506,7 @@ export function TagsTab() {
                     className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
                       assignPubKey === like.id
                         ? 'border-alma-500 bg-alma-50'
-                        : 'border-slate-200 hover:border-[var(--color-border)] hover:bg-parchment-50'
+                        : 'border-slate-200 hover:border-[var(--color-border)] hover:bg-surface-2'
                     }`}
                   >
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />
@@ -516,7 +516,7 @@ export function TagsTab() {
                     </div>
                     <div className="flex items-center gap-0.5">
                       {Array.from({ length: like.rating ?? 0 }).map((_, i) => (
-                        <Star key={i} className="h-3 w-3 fill-amber-400 text-amber-400" />
+                        <Star key={i} className="h-3 w-3 fill-warning-500 text-warning-500" />
                       ))}
                     </div>
                   </button>

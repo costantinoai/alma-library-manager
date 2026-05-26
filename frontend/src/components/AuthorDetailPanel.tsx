@@ -91,7 +91,7 @@ function MetricCard({
   icon: ComponentType<{ className?: string }>
 }) {
   return (
-    <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3 shadow-paper-sm">
+    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-500">
         <Icon className="h-3.5 w-3.5" />
         {label}
@@ -196,7 +196,7 @@ function OpenAlexWorkRow({
   const savedInLibrary = work.already_in_db && work.local_status === 'library'
 
   return (
-    <div className="space-y-2 rounded-lg border border-slate-100 bg-alma-content-elev p-3 shadow-sm">
+    <div className="space-y-2 rounded-lg border border-slate-100 bg-surface-2 p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-alma-800">
@@ -494,7 +494,7 @@ export function AuthorDetailPanel({
                   variant="outline"
                   onClick={() => unfollowMutation.mutate()}
                   disabled={unfollowMutation.isPending}
-                  className="border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
+                  className="border-critical-100 text-critical-700 hover:bg-critical-50 hover:text-critical-700"
                 >
                   {unfollowMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -541,7 +541,7 @@ export function AuthorDetailPanel({
                     </AlertDescription>
                   </Alert>
                 ) : null}
-                <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
+                <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Author signal
@@ -574,7 +574,7 @@ export function AuthorDetailPanel({
                   />
                 </div>
 
-                <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
+                <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                     {isSuggestionOnly ? 'Shared topics' : 'Top topics'}
                   </p>
@@ -598,7 +598,7 @@ export function AuthorDetailPanel({
                 </div>
 
                 {isSuggestionOnly && suggestion && suggestion.sample_titles.length > 0 ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
+                  <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
                     <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                       Sample titles
                     </p>
@@ -613,7 +613,7 @@ export function AuthorDetailPanel({
                 ) : null}
 
                 {backfill ? (
-                  <div className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm">
+                  <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                         Background corpus
@@ -653,7 +653,7 @@ export function AuthorDetailPanel({
                       href={`https://scholar.google.com/citations?user=${resolved.scholar_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-surface-2"
                     >
                       Google Scholar <ExternalLink className="h-3 w-3" />
                     </a>
@@ -663,7 +663,7 @@ export function AuthorDetailPanel({
                       href={`https://openalex.org/${resolved.openalex_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-alma-content-elev px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-parchment-50"
+                      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-surface-2"
                     >
                       OpenAlex <ExternalLink className="h-3 w-3" />
                     </a>
@@ -711,9 +711,9 @@ export function AuthorDetailPanel({
                   <span className="ml-2 text-sm text-slate-500">Fetching from OpenAlex...</span>
                 </div>
               ) : openalexQuery.isError ? (
-                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-4">
-                  <AlertCircle className="h-4 w-4 text-red-500" />
-                  <span className="text-sm text-red-700">
+                <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+                  <AlertCircle className="h-4 w-4 text-critical-500" />
+                  <span className="text-sm text-critical-700">
                     Failed to fetch OpenAlex bibliography. This author may not have an OpenAlex ID.
                   </span>
                 </div>
@@ -746,9 +746,9 @@ export function AuthorDetailPanel({
                 <span className="ml-2 text-sm text-slate-500">Loading publications...</span>
               </div>
             ) : pubsQuery.isError ? (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-4">
-                <AlertCircle className="h-4 w-4 text-red-500" />
-                <span className="text-sm text-red-700">Failed to load publications.</span>
+              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-3 py-4">
+                <AlertCircle className="h-4 w-4 text-critical-500" />
+                <span className="text-sm text-critical-700">Failed to load publications.</span>
               </div>
             ) : publications.length === 0 ? (
               <div className="py-6 text-center">
@@ -816,7 +816,7 @@ export function AuthorDetailPanel({
               variant="outline"
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              className="text-red-600 hover:bg-red-50 hover:text-red-700"
+              className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

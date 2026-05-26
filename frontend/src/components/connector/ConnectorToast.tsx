@@ -33,7 +33,7 @@ function ConnectorToast({ notice, onClose }: { notice: ConnectorNotice; onClose:
   const copy = COPY[notice.kind]
 
   return (
-    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded border border-[var(--color-border)] border-l-4 border-l-gold-400 bg-alma-chrome p-4 shadow-paper-lg">
+    <div className="relative flex w-[360px] items-start gap-3 overflow-hidden rounded border border-[var(--color-border)] border-l-4 border-l-gold-400 bg-surface-1 p-4 shadow-paper-lg">
       {/* Connector mark — gold chip echoing the toast's gold ribbon. One
           entrance pulse draws the eye once, then settles. */}
       <div className="relative mt-0.5 shrink-0">
@@ -59,7 +59,7 @@ function ConnectorToast({ notice, onClose }: { notice: ConnectorNotice; onClose:
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="text-sm font-medium text-alma-900">{copy.title}</p>
-          <span className="rounded border border-[var(--color-border)] bg-parchment-100 px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
+          <span className="rounded border border-[var(--color-border)] bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] leading-none tracking-tight text-alma-700">
             v{notice.connectorVersion}
           </span>
         </div>
@@ -77,7 +77,7 @@ function ConnectorToast({ notice, onClose }: { notice: ConnectorNotice; onClose:
         type="button"
         aria-label="Dismiss"
         onClick={onClose}
-        className="absolute right-2 top-2 rounded-sm p-1 text-alma-400 transition-colors hover:bg-parchment-100 hover:text-alma-700"
+        className="absolute right-2 top-2 rounded-sm p-1 text-alma-400 transition-colors hover:bg-surface-2 hover:text-alma-700"
       >
         <X className="h-3.5 w-3.5" />
       </button>

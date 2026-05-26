@@ -178,14 +178,14 @@ export function AddAuthorDialog({
 
             {/* Form-level validation error (from superRefine path: []) */}
             {rootError && (
-              <p className="text-sm font-medium text-red-500">{rootError}</p>
+              <p className="text-sm font-medium text-critical-500">{rootError}</p>
             )}
 
             {/* Mutation error (backend 4xx/5xx) */}
             {isError && (
-              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-                <AlertCircle className="h-4 w-4 text-red-500" />
-                <span className="text-sm text-red-700">
+              <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
+                <AlertCircle className="h-4 w-4 text-critical-500" />
+                <span className="text-sm text-critical-700">
                   Failed to add author. Please check the provided identifier and try again.
                 </span>
               </div>

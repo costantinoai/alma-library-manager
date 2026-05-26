@@ -82,7 +82,7 @@ export function SuggestedAuthorCard({
   return (
     <article
       onClick={onClick}
-      className="group flex h-full flex-col gap-3 rounded-sm border border-alma-100 bg-alma-content-elev p-4 shadow-paper-sm text-left shadow-sm transition hover:border-alma-300 hover:shadow-md cursor-pointer"
+      className="group flex h-full flex-col gap-3 rounded-sm border border-alma-100 bg-surface-2 p-4 shadow-paper-sm text-left shadow-sm transition hover:border-alma-300 hover:shadow-md cursor-pointer"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -124,8 +124,8 @@ export function SuggestedAuthorCard({
               <span
                 className={
                   suggestion.bucket_calibration_multiplier > 1.0
-                    ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700'
-                    : 'inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700'
+                    ? 'inline-flex items-center rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success-700'
+                    : 'inline-flex items-center rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning-700'
                 }
                 title="Per-bucket outcome calibration: how often you've followed vs rejected this bucket's suggestions"
               >
@@ -140,8 +140,8 @@ export function SuggestedAuthorCard({
               <span
                 className={
                   suggestion.paper_signal_adjustment > 0
-                    ? 'inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700'
-                    : 'inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700'
+                    ? 'inline-flex items-center rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success-700'
+                    : 'inline-flex items-center rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning-700'
                 }
                 title="Net pull from your saved + dismissed papers in this area"
               >
@@ -223,7 +223,7 @@ export function SuggestedAuthorCard({
         <Button
           size="sm"
           variant="outline"
-          className="flex-1 border-alma-200 bg-white text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800"
+          className="flex-1 border-alma-200 bg-surface-1 text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800"
           onClick={(e) => {
             e.stopPropagation()
             onFollow()

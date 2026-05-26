@@ -65,7 +65,7 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
   }
 
   return (
-    <div className="space-y-4 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-4">
+    <div className="space-y-4 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
       <div className="font-brand text-sm font-semibold text-alma-800">
         Lens Weights
       </div>
@@ -113,7 +113,7 @@ export function LensWeightsPanel({ lens, onSave }: LensWeightsPanelProps) {
                 aria-label={`${channel} weight`}
               />
               {disabled && (
-                <p className="mt-1 flex items-center gap-1 text-xs text-amber-600">
+                <p className="mt-1 flex items-center gap-1 text-xs text-warning-600">
                   <AlertCircle className="h-3 w-3" />
                   Fetch vectors or configure embeddings in Settings
                   {activeModel ? ` (${activeModel})` : ''}

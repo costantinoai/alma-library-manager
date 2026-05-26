@@ -283,7 +283,7 @@ export function GraphPanel() {
             isRefreshingLabels={labelRefreshMutation.isPending}
           />
 
-          <div className="mt-4 overflow-hidden rounded-sm border border-[var(--color-border)] bg-parchment-50">
+          <div className="mt-4 overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-2">
             {data && data.nodes.length > 0 && (
               <span className="sr-only">
                 Interactive {config.label.toLowerCase()} visualization showing {data.nodes.length} nodes and {data.edges.length} connections. Use the controls panel to filter and configure the graph.
@@ -323,7 +323,7 @@ export function GraphPanel() {
           </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm shadow-sm">
+            <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Layers3 className="h-4 w-4 text-slate-500" />
@@ -340,7 +340,7 @@ export function GraphPanel() {
               </div>
               {selectedCluster ? (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-parchment-50 p-3">
+                  <div className="rounded-lg bg-surface-2 p-3">
                     <p className="text-lg font-semibold text-alma-800">{showTopics && selectedCluster.topic_text ? selectedCluster.topic_text : selectedCluster.label}</p>
                     {selectedCluster.description && (
                       <p className="mt-1 text-xs italic text-slate-600">{selectedCluster.description}</p>
@@ -386,7 +386,7 @@ export function GraphPanel() {
                                 }
                               }
                             }}
-                            className="w-full rounded-sm border border-[var(--color-border)] bg-parchment-50 px-3 py-2 text-left hover:border-[var(--color-border)] hover:bg-alma-chrome"
+                            className="w-full rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left hover:border-[var(--color-border)] hover:bg-surface-1"
                           >
                             <p className="text-sm font-medium text-alma-800">{paper.title}</p>
                             <p className="mt-1 text-xs text-slate-500">
@@ -407,14 +407,14 @@ export function GraphPanel() {
               )}
             </div>
 
-            <div className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm shadow-sm">
+            <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm shadow-sm">
               <div className="mb-3">
                 <p className="text-sm font-semibold text-alma-800">{nodeDetailTitle}</p>
                 <p className="text-xs text-slate-500">{nodeDetailSubtitle}</p>
               </div>
               {selectedNode ? (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-parchment-50 p-3">
+                  <div className="rounded-lg bg-surface-2 p-3">
                     <p className="text-base font-semibold text-alma-800">{selectedNode.name}</p>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
                       {selectedNodePublicationDate && <Badge variant="outline">{formatDate(selectedNodePublicationDate)}</Badge>}

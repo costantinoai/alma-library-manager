@@ -172,10 +172,10 @@ export function HealthDimensionDrilldown({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden bg-alma-chrome p-0">
+      <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden bg-surface-1 p-0">
         {dim ? (
           <>
-            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] bg-alma-content px-5 py-4 text-left">
+            <DialogHeader className="space-y-2 border-b border-[var(--color-border)] bg-surface-1 px-5 py-4 text-left">
               <div className="flex items-center gap-2">
                 <StatusBadge tone={dimensionBadgeTone(dim.severity)} className="capitalize">
                   {severityLabel(dim.severity)}
@@ -206,7 +206,7 @@ export function HealthDimensionDrilldown({
 
             {/* Selection toolbar */}
             {items.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-alma-chrome-elev px-5 py-2 text-sm">
+              <div className="flex flex-wrap items-center gap-3 border-b border-[var(--color-border)] bg-surface-2 px-5 py-2 text-sm">
                 <label className="flex items-center gap-2 text-slate-600">
                   <Checkbox
                     checked={allShownSelected}
@@ -234,7 +234,7 @@ export function HealthDimensionDrilldown({
                         variant="ghost"
                         icon={<Trash2 className="h-4 w-4" />}
                         pending={removeSelectedMutation.isPending}
-                        className="text-slate-500 hover:text-rose-700"
+                        className="text-slate-500 hover:text-critical-700"
                         onClick={() => removeSelectedMutation.mutate(selectedLibraryIds)}
                       >
                         Remove {selectedLibraryIds.length}
@@ -261,7 +261,7 @@ export function HealthDimensionDrilldown({
                   return (
                     <div
                       key={item.paper_id}
-                      className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3 shadow-paper-sm"
+                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm"
                     >
                       <div className="flex items-start gap-3">
                         <Checkbox
@@ -369,7 +369,7 @@ export function HealthDimensionDrilldown({
                               variant="ghost"
                               icon={<Trash2 className="h-4 w-4" />}
                               pending={removeMutation.isPending && removeMutation.variables === item.paper_id}
-                              className="text-slate-500 hover:text-rose-700"
+                              className="text-slate-500 hover:text-critical-700"
                               onClick={() => removeMutation.mutate(item.paper_id)}
                             >
                               Remove

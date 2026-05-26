@@ -83,7 +83,7 @@ export function SimilarResultsDialog({
               return (
                 <div
                   key={itemKey}
-                  className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm transition-shadow hover:shadow-sm"
+                  className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm transition-shadow hover:shadow-sm"
                 >
                   <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">
@@ -118,7 +118,7 @@ export function SimilarResultsDialog({
                         </button>
                       )}
                       {isExpanded && item.score_breakdown && (
-                        <div className="mt-2 rounded-md bg-parchment-50 p-3 text-xs text-slate-600 space-y-1">
+                        <div className="mt-2 rounded-md bg-surface-2 p-3 text-xs text-slate-600 space-y-1">
                           {Object.entries(item.score_breakdown)
                             .filter(([k]) => !['final_score', 'source_type', 'source_key'].includes(k))
                             .map(([key, detail]) => {
@@ -143,7 +143,7 @@ export function SimilarResultsDialog({
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-parchment-100 hover:text-slate-700"
+                          className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-surface-2 hover:text-slate-700"
                           title="Open paper"
                         >
                           <ExternalLink className="h-4 w-4" />

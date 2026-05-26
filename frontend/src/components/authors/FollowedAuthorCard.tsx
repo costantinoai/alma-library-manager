@@ -44,7 +44,7 @@ export function FollowedAuthorCard({
   return (
     <article
       onClick={onClick}
-      className="group flex h-full cursor-pointer flex-col gap-3 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-4 shadow-paper-sm shadow-sm transition hover:border-alma-300 hover:shadow-md"
+      className="group flex h-full cursor-pointer flex-col gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4 shadow-paper-sm shadow-sm transition hover:border-alma-300 hover:shadow-md"
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -79,7 +79,7 @@ export function FollowedAuthorCard({
                   .join(' — ') || attentionRow.suggested_action.hint
               }
               aria-label={`Resolve ${attentionRow.reason} for ${author.name}`}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 hover:text-rose-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-critical-100 bg-critical-50 text-critical-600 transition hover:border-critical-500 hover:bg-critical-100 hover:text-critical-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-critical-500"
             >
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
             </button>

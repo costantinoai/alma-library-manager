@@ -40,16 +40,16 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
       ) : null}
 
       {healthy.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-3 shadow-paper-sm">
+        <div className="flex flex-wrap items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm">
           <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
             All clear
           </span>
           {healthy.map((dim) => (
             <span
               key={dim.key}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-alma-content-elev px-2.5 py-1 text-xs text-alma-700"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-surface-2 px-2.5 py-1 text-xs text-alma-700"
             >
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
               {dim.label}
             </span>
           ))}

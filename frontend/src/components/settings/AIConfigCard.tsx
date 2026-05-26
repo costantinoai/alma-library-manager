@@ -127,7 +127,7 @@ function TierHint({ items }: { items: string[] }) {
           <Info className="h-3 w-3" />
         </button>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs bg-alma-chrome p-2.5 text-slate-700 shadow-lg">
+      <TooltipContent side="top" className="max-w-xs bg-surface-1 p-2.5 text-slate-700 shadow-lg">
         <p className="mb-1 text-xs font-semibold text-slate-700">Enables:</p>
         <ul className="list-inside list-disc space-y-0.5 text-xs text-slate-600">
           {items.map((item) => (
@@ -282,8 +282,8 @@ function ResolutionStep({
       className={cn(
         'rounded-sm border p-3',
         muted
-          ? 'border-[var(--color-border)] bg-parchment-50/60'
-          : 'border-[var(--color-border)] bg-alma-paper shadow-paper-sm',
+          ? 'border-[var(--color-border)] bg-surface-2/60'
+          : 'border-[var(--color-border)] bg-surface-1 shadow-paper-sm',
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -536,7 +536,7 @@ export function AIConfigCard() {
   if (aiStatusQuery.isError || !aiStatusQuery.data) {
     return (
       <SettingsCard icon={Brain} title="AI & Embeddings">
-        <p className="flex items-center gap-2 text-sm text-red-600">
+        <p className="flex items-center gap-2 text-sm text-critical-600">
           <AlertCircle className="h-4 w-4" /> AI endpoints not available.
         </p>
       </SettingsCard>
@@ -561,7 +561,7 @@ export function AIConfigCard() {
           <SettingsSections>
             {/* Capability tier */}
             <SettingsSection title="Capability" defaultOpen>
-              <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5">
                     <span className="text-xs font-semibold text-slate-700">
@@ -599,7 +599,7 @@ export function AIConfigCard() {
             >
               <div className="grid gap-2 lg:grid-cols-2">
                 {(status.features?.groups ?? []).map((group) => (
-                  <div key={group.id} className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-3 shadow-paper-sm">
+                  <div key={group.id} className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 shadow-paper-sm">
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                       {group.label}
                     </p>
@@ -758,7 +758,7 @@ export function AIConfigCard() {
                 <div className="flex items-center gap-3">
                   <Progress
                     value={coveragePct}
-                    className="h-2 flex-1 bg-parchment-100 [&>*]:bg-alma-500"
+                    className="h-2 flex-1 bg-surface-2 [&>*]:bg-alma-500"
                   />
                   <span className="font-mono text-xs text-slate-600">
                     {status.embeddings.total} papers ({coveragePct.toFixed(1)}%)
@@ -779,7 +779,7 @@ export function AIConfigCard() {
                   <StatTile label="Stale" value={status.embeddings.stale ?? 0} />
                 </div>
                 {status.embeddings.coverage_by_status?.library ? (
-                  <div className="rounded-md border border-[var(--color-border)] bg-parchment-50 px-2 py-1.5 text-xs text-slate-600">
+                  <div className="rounded-md border border-[var(--color-border)] bg-surface-2 px-2 py-1.5 text-xs text-slate-600">
                     Library: {status.embeddings.coverage_by_status.library.up_to_date}/
                     {status.embeddings.coverage_by_status.library.total} active-model vectors (
                     {status.embeddings.coverage_by_status.library.missing} missing)
@@ -833,7 +833,7 @@ export function AIConfigCard() {
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
                         <AlertDialogAction
                           onClick={() => deleteInactiveEmbeddingsMutation.mutate()}
-                          className="bg-red-600 text-white hover:bg-red-700"
+                          className="bg-critical-600 text-white hover:bg-critical-700"
                         >
                           Delete inactive
                         </AlertDialogAction>
@@ -1008,7 +1008,7 @@ export function AIConfigCard() {
                     })}
                   </div>
                   {status.dependency_check_warning && (
-                    <p className="text-xs text-amber-700">
+                    <p className="text-xs text-warning-700">
                       {status.dependency_check_warning}
                     </p>
                   )}
@@ -1025,11 +1025,11 @@ export function AIConfigCard() {
                 </div>
 
                 {dependencyEnv && (
-                  <Collapsible className="rounded-sm border border-[var(--color-border)] bg-parchment-50/60">
+                  <Collapsible className="rounded-sm border border-[var(--color-border)] bg-surface-2/60">
                     <CollapsibleTrigger
                       className={cn(
                         'group flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left',
-                        'hover:bg-parchment-100/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500',
+                        'hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500',
                       )}
                     >
                       <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
@@ -1151,7 +1151,7 @@ function LocalModelTier({
   if (models.length <= 1) {
     const onlyModel = models[0]
     return (
-      <div className="ml-6 rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3 text-xs text-slate-600">
+      <div className="ml-6 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 text-xs text-slate-600">
         Local model:{' '}
         <span className="font-medium text-slate-800">
           {onlyModel?.display_name ?? 'SPECTER2 Base'}
@@ -1175,7 +1175,7 @@ function LocalModelTier({
         ))}
       </RadioGroup>
       {selected !== savedSelected && (
-        <p className="flex items-center gap-1 text-xs text-amber-600">
+        <p className="flex items-center gap-1 text-xs text-warning-600">
           <AlertCircle className="h-3 w-3" />
           Changing model will re-compute all embeddings on next run.
         </p>

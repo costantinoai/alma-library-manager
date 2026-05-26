@@ -14,15 +14,14 @@ const statusBadgeVariants = cva(
   {
     variants: {
       tone: {
-        // White card chip — stable structural state ("ready", "active",
-        // neutral metadata). No saturation.
-        neutral: 'border border-alma-100 bg-white text-alma-800',
-        // Semantic chips — same translucent treatment as Folio blue,
-        // but pulled toward the matching deep semantic hue. Reads as
-        // "calm signal" against the off-white surface, NOT alarm-bright.
-        positive: 'border border-transparent bg-emerald-700/10 text-emerald-700',
-        negative: 'border border-transparent bg-rose-700/10 text-rose-700',
-        warning: 'border border-transparent bg-amber-700/10 text-amber-700',
+        // Neutral chip — stable structural state ("ready", "active",
+        // neutral metadata). No saturation; the top-of-ladder white.
+        neutral: 'border border-alma-100 bg-surface-4 text-alma-800',
+        // Semantic chips — a calm translucent wash of the matching
+        // semantic token. Reads as "signal", not alarm-bright.
+        positive: 'border border-transparent bg-success-700/10 text-success-700',
+        negative: 'border border-transparent bg-critical-700/10 text-critical-700',
+        warning: 'border border-transparent bg-warning-700/10 text-warning-700',
         // Info / accent (and any non-semantic signal) ride the brand
         // accent — Folio binding blue.
         info: 'border border-transparent bg-alma-folio/10 text-alma-folio',

@@ -133,7 +133,7 @@ export function DataManagementCard() {
         </div>
       </div>
 
-      <div className="space-y-2 rounded-sm border border-[var(--color-border)] bg-parchment-50 p-3">
+      <div className="space-y-2 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-semibold text-slate-700">OpenAlex Resolution Queue</h4>
           <AsyncButton
@@ -148,7 +148,7 @@ export function DataManagementCard() {
         {unresolvedImportsQuery.isLoading ? (
           <p className="text-xs text-slate-500">Loading unresolved publications...</p>
         ) : unresolvedImportsQuery.isError ? (
-          <p className="text-xs text-red-600">Failed to load unresolved publication list.</p>
+          <p className="text-xs text-critical-600">Failed to load unresolved publication list.</p>
         ) : (
           <>
             <p className="text-xs text-slate-600">

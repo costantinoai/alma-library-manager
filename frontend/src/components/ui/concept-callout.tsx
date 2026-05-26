@@ -59,7 +59,7 @@ export function ConceptCallout({
 }: ConceptCalloutProps) {
   return (
     <Collapsible defaultOpen={defaultOpen} className={cn('w-full', className)}>
-      <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev">
+      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2">
         <CollapsibleTrigger
           className={cn(
             'group flex w-full cursor-pointer select-none items-start gap-3 px-4 py-3 text-left',

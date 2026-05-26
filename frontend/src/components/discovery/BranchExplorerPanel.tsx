@@ -65,12 +65,12 @@ function normalizeControls(lens: Lens | null) {
 // Folio-blue, boosted tints gold, muted dims back to canvas.
 function branchTone(state: 'normal' | 'pinned' | 'boosted' | 'muted') {
   if (state === 'pinned')
-    return 'border-alma-folio/40 bg-[color-mix(in_srgb,_var(--color-alma-folio)_8%,_var(--color-alma-chrome-elev))]'
+    return 'border-alma-folio/40 bg-[color-mix(in_srgb,_var(--color-alma-folio)_8%,_var(--color-surface-2))]'
   if (state === 'boosted')
-    return 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_10%,_var(--color-alma-chrome-elev))]'
+    return 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_10%,_var(--color-surface-2))]'
   if (state === 'muted')
-    return 'border-[var(--color-border-cool)] bg-alma-canvas opacity-75'
-  return 'border-[var(--color-border-cool)] bg-alma-chrome-elev'
+    return 'border-[var(--color-border-cool)] bg-surface-0 opacity-75'
+  return 'border-[var(--color-border-cool)] bg-surface-2'
 }
 
 function closestPreset(temperature: number) {
@@ -196,7 +196,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
 
   return (
     <Card className="overflow-hidden">
-      <CardHeader className="border-b border-[var(--color-border)] bg-parchment-50">
+      <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -322,7 +322,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
         </div>
 
         <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-sm border border-[var(--color-border)] bg-alma-paper p-4 shadow-paper-sm">
+          <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <div className="flex items-center gap-1.5">
@@ -343,7 +343,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                 </div>
                 <p className="mt-0.5 text-xs text-slate-500">Low keeps refresh tight around core continuity. High pushes more lateral search and exploratory query variants.</p>
               </div>
-              <div className="rounded-sm border border-[var(--color-border)] bg-parchment-100 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
+              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
                 {temperature.toFixed(2)}
               </div>
             </div>
@@ -387,7 +387,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
               panel with a one-glance summary of what the engine is doing on
               its own. No buttons: each branch tile carries its own
               auto-weight badge and reason, so the user can drill in there. */}
-          <div className="rounded-sm border border-[var(--color-border)] bg-parchment-50 p-4">
+          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-brand text-sm font-semibold text-alma-800">Auto-tuning</p>
@@ -431,7 +431,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
         ) : null}
 
         {branchQuery.isLoading ? (
-          <div className="flex items-center justify-center rounded-sm border border-[var(--color-border)] bg-alma-chrome py-16 text-sm text-slate-500">
+          <div className="flex items-center justify-center rounded-sm border border-[var(--color-border)] bg-surface-1 py-16 text-sm text-slate-500">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Building branch studio...
           </div>
         ) : branches.length === 0 ? (
@@ -498,10 +498,10 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                       const tuned = Math.abs(weight - 1.0) >= 0.05
                       if (!tuned && !branch.auto_weight_reason) return null
                       const tone = weight >= 1.05
-                        ? 'border-alma-folio/40 bg-[color-mix(in_srgb,_var(--color-alma-folio)_8%,_var(--color-alma-paper))] text-alma-800'
+                        ? 'border-alma-folio/40 bg-[color-mix(in_srgb,_var(--color-alma-folio)_8%,_var(--color-surface-0))] text-alma-800'
                         : weight <= 0.95
-                          ? 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_8%,_var(--color-alma-paper))] text-alma-800'
-                          : 'border-[var(--color-border)] bg-parchment-50 text-alma-800'
+                          ? 'border-gold-300 bg-[color-mix(in_srgb,_var(--color-gold-400)_8%,_var(--color-surface-0))] text-alma-800'
+                          : 'border-[var(--color-border)] bg-surface-2 text-alma-800'
                       return (
                         <div className={`flex items-center justify-between gap-3 rounded-sm border px-3 py-2 text-xs ${tone}`}>
                           <span className="truncate">{branch.auto_weight_reason ?? `auto-weight ${weight.toFixed(2)}×`}</span>
@@ -526,7 +526,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                           { label: 'Engaged', value: `${Math.round((branch.engagement_rate ?? 0) * 100)}%` },
                           { label: 'Sources', value: branch.unique_sources ?? 0 },
                         ].map((tile) => (
-                          <div key={tile.label} className="rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-2.5 shadow-paper-inset-cool">
+                          <div key={tile.label} className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
                             <EyebrowLabel tone="muted">{tile.label}</EyebrowLabel>
                             <p className="mt-1 font-brand text-base font-semibold text-alma-800">{tile.value}</p>
                           </div>
@@ -535,7 +535,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                     )}
 
                     <div className="grid gap-2 md:grid-cols-2">
-                      <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-2.5 shadow-paper-inset-cool">
+                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
                         <div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-alma-folio">
                           <Volume2 className="h-3 w-3" /> Core Pull
                         </div>
@@ -545,7 +545,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                           ))}
                         </div>
                       </div>
-                      <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-2.5 shadow-paper-inset-cool">
+                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
                         <div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-gold-600">
                           <Compass className="h-3 w-3" /> Explore Push
                         </div>
@@ -558,7 +558,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                     </div>
 
                     {branch.sample_papers.length > 0 && (
-                      <div className="rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev p-2.5 shadow-paper-inset-cool">
+                      <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-2.5 shadow-paper-inset-cool">
                         <EyebrowLabel tone="muted">Representative seeds</EyebrowLabel>
                         <div className="mt-1.5 space-y-1">
                           {branch.sample_papers.slice(0, 2).map((paper, paperIndex) => (

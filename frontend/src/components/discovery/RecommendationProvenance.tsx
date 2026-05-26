@@ -205,7 +205,7 @@ function TopicPill({
       className={cn(
         'inline-flex items-center rounded-full px-2 py-[1px] text-[10.5px] font-medium leading-[1.35] tracking-tight',
         variant === 'core'
-          ? 'bg-alma-chrome text-slate-700 shadow-[inset_0_0_0_1px_theme(colors.slate.200)]'
+          ? 'bg-surface-1 text-slate-700 shadow-[inset_0_0_0_1px_theme(colors.slate.200)]'
           : 'border border-dashed border-[var(--color-border)] text-slate-500',
       )}
     >
@@ -282,7 +282,7 @@ export function RecommendationProvenance({
     <section
       aria-label="Recommendation provenance"
       className={cn(
-        'mt-3 rounded-md border border-slate-100 bg-parchment-50/50 px-3 py-2.5',
+        'mt-3 rounded-md border border-slate-100 bg-surface-2/50 px-3 py-2.5',
         className,
       )}
     >

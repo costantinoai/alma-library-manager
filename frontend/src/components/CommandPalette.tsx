@@ -222,7 +222,7 @@ export function CommandPalette({ isOpen, onClose, onNavigate }: CommandPalettePr
 
           {/* Footer — keyboard hints using the Kbd primitive for a single
               canonical shortcut-chip style across the app. */}
-          <div className="flex items-center justify-between gap-4 border-t border-[var(--color-border)] bg-parchment-50 px-4 py-2 text-xs text-slate-500">
+          <div className="flex items-center justify-between gap-4 border-t border-[var(--color-border)] bg-surface-2 px-4 py-2 text-xs text-slate-500">
             <div className="flex items-center gap-3">
               <span className="inline-flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd><span className="ml-1">navigate</span></span>
               <span className="inline-flex items-center gap-1"><Kbd>↵</Kbd><span className="ml-1">select</span></span>

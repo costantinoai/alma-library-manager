@@ -10,13 +10,14 @@ describe('StatusBadge', () => {
 
   it('applies the neutral tone classes by default', () => {
     render(<StatusBadge>Idle</StatusBadge>)
-    // Neutral = white chip with an alma border (see status-badge.tsx).
-    expect(screen.getByText('Idle')).toHaveClass('bg-white')
+    // Neutral = top-of-ladder white chip with an alma border (see status-badge.tsx).
+    expect(screen.getByText('Idle')).toHaveClass('bg-surface-4')
   })
 
   it('switches visual treatment with the tone prop', () => {
     render(<StatusBadge tone="positive">Healthy</StatusBadge>)
-    expect(screen.getByText('Healthy')).toHaveClass('text-emerald-700')
+    // Positive routes through the success semantic token.
+    expect(screen.getByText('Healthy')).toHaveClass('text-success-700')
   })
 
   it('merges a caller className', () => {

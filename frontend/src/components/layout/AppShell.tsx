@@ -75,7 +75,7 @@ export function AppShell({
 
   return (
     // No bg here on purpose — body in index.css sets the paper-warm
-    // background plus the SVG fiber-grain tile. Putting bg-alma-paper
+    // background plus the SVG fiber-grain tile. Putting a solid surface
     // on this wrapper would hide the texture (solid color over the
     // tiled bg). Surfaces above (sidebar nav area, cards, top bar)
     // cover the texture explicitly via their own bg.

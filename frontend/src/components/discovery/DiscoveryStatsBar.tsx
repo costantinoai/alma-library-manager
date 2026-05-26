@@ -56,7 +56,7 @@ export function DiscoveryStatsBar({ stats, isLoading }: DiscoveryStatsBarProps) 
         {untouched > 0 ? (
           <EyeOff className="h-4 w-4 text-alma-500" />
         ) : (
-          <Eye className="h-4 w-4 text-green-500" />
+          <Eye className="h-4 w-4 text-success-500" />
         )}
         <span className="text-sm text-slate-500">Untouched</span>
         <span className="text-sm font-bold text-alma-800">{untouched > 0 ? untouched : 0}</span>
