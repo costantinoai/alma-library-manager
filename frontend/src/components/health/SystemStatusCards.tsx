@@ -476,7 +476,16 @@ export function SystemStatusCards() {
             icon: Plug,
             description: 'Configured integrations and their last connection test.',
             states: at('plugins'),
-            reviewItems: [],
+            // Name the configured plugins so "1 configured" isn't a mystery.
+            // Unhealthy ones surface as actionable states (with a Test button)
+            // above, so here we list the healthy / not-yet-tested ones.
+            reviewItems: (op?.plugins ?? [])
+              .filter((p) => p.is_configured && p.is_healthy !== false)
+              .map((p, i) => ({
+                id: String(i),
+                primary: p.display_name || p.name,
+                secondary: p.is_healthy === true ? 'Configured · healthy' : 'Configured · not yet tested',
+              })),
             ownerPage: 'settings',
             ownerParams: { section: 'plugins' },
           },
