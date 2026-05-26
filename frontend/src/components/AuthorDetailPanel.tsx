@@ -832,7 +832,9 @@ export function AuthorDetailPanel({
             disabled={!hasAuthorRow}
             title={
               hasAuthorRow
-                ? 'Merge this author with another in your corpus / library — pick the target and which fields win.'
+                ? suggestion
+                  ? 'Merge this suggestion into one of your existing authors — that author survives, this folds in; pick which fields win.'
+                  : 'Merge another author into this one — pick the duplicate and which fields win.'
                 : 'Follow this author first (it has no local record yet) to merge it with an existing one.'
             }
           >
@@ -861,7 +863,10 @@ export function AuthorDetailPanel({
     <AuthorMergeDialog
       open={mergeOpen}
       onOpenChange={setMergeOpen}
-      primaryAuthor={resolved}
+      // From a suggestion: ABSORB it (the suggestion folds into the author you
+      // pick, which survives + keeps its follow). From a normal author detail:
+      // that author is the survivor and you pick the duplicate to absorb.
+      {...(suggestion ? { absorbAuthor: resolved } : { primaryAuthor: resolved })}
       onMerged={() => {
         // The suggestion is resolved by the merge — close the panel and let the
         // dialog's own ['author-suggestions'] invalidation refresh the rail.

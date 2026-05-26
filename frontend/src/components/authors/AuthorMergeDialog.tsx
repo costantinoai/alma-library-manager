@@ -53,7 +53,18 @@ interface MergeDiscrepancy {
 interface AuthorMergeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  primaryAuthor: Author | null
+  /**
+   * Normal mode: the FIXED survivor. The user picks the duplicate to absorb
+   * into it. (The opened author keeps its id / follow / ratings.)
+   */
+  primaryAuthor?: Author | null
+  /**
+   * Absorb mode: the FIXED author to be ABSORBED (soft-removed). The user picks
+   * the SURVIVOR from the corpus / library. Use when merging a suggestion into
+   * an author you already curate — your existing author survives, the suggestion
+   * folds in. Mutually exclusive with `primaryAuthor`.
+   */
+  absorbAuthor?: Author | null
   allowedTargetIds?: string[]
   initialTargetId?: string | null
   title?: string
@@ -86,6 +97,8 @@ function displayMetadataValue(value: string): string {
   return value || 'Not recorded'
 }
 
+// Discrepancies are always computed survivor(primary) vs absorbed(alt); the
+// merge contract keeps `primary` values unless a choice says `alt`.
 function mergeDiscrepancies(primary: Author, alt: Author): MergeDiscrepancy[] {
   return MERGE_METADATA_FIELDS.flatMap((field) => {
     const primaryValue = metadataValue(primary, field.key)
@@ -114,10 +127,11 @@ export function AuthorMergeDialog({
   open,
   onOpenChange,
   primaryAuthor,
+  absorbAuthor,
   allowedTargetIds,
   initialTargetId,
-  title = 'Merge author profiles',
-  description = 'Choose the existing author row that represents the same person, then pick which metadata value survives on the merged profile.',
+  title,
+  description,
   emptyCandidateMessage = 'No matching corpus authors.',
   contextSlot,
   onMerged,
@@ -141,15 +155,26 @@ export function AuthorMergeDialog({
   )
   const hasAllowedTargetFilter = allowedTargetIds !== undefined
   const allAuthors = authorsQuery.data ?? []
-  const resolvedPrimary =
-    primaryAuthor && allAuthors.find((candidate) => candidate.id === primaryAuthor.id)
-      ? allAuthors.find((candidate) => candidate.id === primaryAuthor.id)!
-      : primaryAuthor
+
+  // Direction. Normal mode locks the SURVIVOR (primaryAuthor); the user picks
+  // the duplicate to absorb. Absorb mode locks the author to ABSORB
+  // (absorbAuthor); the user picks the SURVIVOR. Either way the backend merge
+  // is merge(survivor.id, [absorbed.id]) — only which side is locked flips.
+  const absorbMode = !!absorbAuthor
+  const fixedProp = absorbMode ? absorbAuthor : primaryAuthor
+  // Resolve the locked author against the fetched list so we compare on the
+  // richest copy (the prop may be a thin row / synthesized suggestion).
+  const fixed = fixedProp
+    ? allAuthors.find((candidate) => candidate.id === fixedProp.id) ?? fixedProp
+    : null
+  const selected = allAuthors.find((candidate) => candidate.id === mergeTargetId) ?? null
+  const primary = absorbMode ? selected : fixed
+  const alt = absorbMode ? fixed : selected
 
   const mergeCandidates = useMemo(() => {
     const needle = mergeSearch.trim().toLowerCase()
     return allAuthors
-      .filter((candidate) => candidate.id !== resolvedPrimary?.id)
+      .filter((candidate) => candidate.id !== fixed?.id)
       .filter((candidate) => !hasAllowedTargetFilter || allowedIds.has(candidate.id))
       .filter((candidate) => {
         if (!needle) return true
@@ -165,15 +190,11 @@ export function AuthorMergeDialog({
       })
       .sort((a, b) => a.name.localeCompare(b.name))
       .slice(0, 30)
-  }, [allAuthors, allowedIds, hasAllowedTargetFilter, mergeSearch, resolvedPrimary?.id])
+  }, [allAuthors, allowedIds, hasAllowedTargetFilter, mergeSearch, fixed?.id])
 
-  const mergeTarget = useMemo(
-    () => allAuthors.find((candidate) => candidate.id === mergeTargetId) ?? null,
-    [allAuthors, mergeTargetId],
-  )
   const mergeDiffs = useMemo(
-    () => (resolvedPrimary && mergeTarget ? mergeDiscrepancies(resolvedPrimary, mergeTarget) : []),
-    [resolvedPrimary, mergeTarget],
+    () => (primary && alt ? mergeDiscrepancies(primary, alt) : []),
+    [primary, alt],
   )
 
   useEffect(() => {
@@ -191,31 +212,30 @@ export function AuthorMergeDialog({
   }, [initialTargetId, mergeTargetId, open])
 
   useEffect(() => {
-    if (open && resolvedPrimary && mergeTarget && Object.keys(mergeChoices).length === 0) {
-      setMergeChoices(defaultMergeChoices(resolvedPrimary, mergeTarget))
+    if (open && primary && alt && Object.keys(mergeChoices).length === 0) {
+      setMergeChoices(defaultMergeChoices(primary, alt))
     }
-  }, [mergeChoices, mergeTarget, open, resolvedPrimary])
+  }, [mergeChoices, primary, alt, open])
 
   const mergeMutation = useMutation({
     mutationFn: () => {
-      if (!resolvedPrimary) throw new Error('Choose a primary author first.')
-      if (!mergeTarget) throw new Error('Choose an author to merge first.')
-      return mergeAuthorProfiles(resolvedPrimary.id, [mergeTarget.id], {
-        [mergeTarget.id]: mergeChoices,
-      })
+      if (!primary) throw new Error('Choose the surviving author first.')
+      if (!alt) throw new Error('Choose an author to merge first.')
+      return mergeAuthorProfiles(primary.id, [alt.id], { [alt.id]: mergeChoices })
     },
     onSuccess: (data) => {
-      if (!resolvedPrimary) return
-      void invalidateQueries(
-        queryClient,
+      const survivorId = primary?.id
+      const keys: unknown[][] = [
         ['authors'],
         ['authors-needs-attention'],
         ['library-followed-authors'],
         ['author-suggestions'],
-        ['author-detail', resolvedPrimary.id],
-        ['author-publications', resolvedPrimary.id],
         ['feed-monitors'],
-      )
+      ]
+      if (survivorId) {
+        keys.push(['author-detail', survivorId], ['author-publications', survivorId])
+      }
+      void invalidateQueries(queryClient, ...keys)
       toast({
         title: 'Authors merged',
         description:
@@ -228,12 +248,20 @@ export function AuthorMergeDialog({
     onError: () => errorToast('Error', 'Failed to merge authors.'),
   })
 
+  const effectiveTitle =
+    title ?? (absorbMode ? 'Merge this author into another' : 'Merge author profiles')
+  const effectiveDescription =
+    description ??
+    (absorbMode
+      ? 'Pick the author in your corpus or library this one should merge into — that author survives, this one folds in. Then choose which metadata value to keep.'
+      : 'Choose the existing author row that represents the same person, then pick which metadata value survives on the merged profile.')
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogTitle>{effectiveTitle}</DialogTitle>
+          <DialogDescription>{effectiveDescription}</DialogDescription>
         </DialogHeader>
 
         {contextSlot}
@@ -241,9 +269,15 @@ export function AuthorMergeDialog({
         <div className="grid gap-4 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <EyebrowLabel tone="muted">Choose duplicate</EyebrowLabel>
-              <span className="text-[10px] text-slate-400">
-                {resolvedPrimary ? `→ ${resolvedPrimary.name}` : null}
+              <EyebrowLabel tone="muted">
+                {absorbMode ? 'Choose surviving author' : 'Choose duplicate'}
+              </EyebrowLabel>
+              <span className="truncate text-[10px] text-slate-400">
+                {fixed
+                  ? absorbMode
+                    ? `absorbing ${fixed.name}`
+                    : `→ ${fixed.name}`
+                  : null}
               </span>
             </div>
             <div className="relative">
@@ -264,19 +298,20 @@ export function AuthorMergeDialog({
                 </div>
               ) : (
                 mergeCandidates.map((candidate) => {
-                  const selected = candidate.id === mergeTargetId
+                  const isSelected = candidate.id === mergeTargetId
                   return (
                     <button
                       key={candidate.id}
                       type="button"
                       onClick={() => {
                         setMergeTargetId(candidate.id)
-                        if (resolvedPrimary) {
-                          setMergeChoices(defaultMergeChoices(resolvedPrimary, candidate))
-                        }
+                        // Recompute defaults survivor-vs-absorbed for the new pick.
+                        const p = absorbMode ? candidate : fixed
+                        const a = absorbMode ? fixed : candidate
+                        if (p && a) setMergeChoices(defaultMergeChoices(p, a))
                       }}
                       className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
-                        selected
+                        isSelected
                           ? 'border-alma-folio bg-alma-folio-soft'
                           : 'border-[var(--color-border)] bg-surface-2 hover:bg-surface-2'
                       }`}
@@ -304,13 +339,11 @@ export function AuthorMergeDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <EyebrowLabel tone="muted">Pick winning values</EyebrowLabel>
-              {mergeTarget ? (
-                <span className="truncate text-[10px] text-slate-400">
-                  ← {mergeTarget.name}
-                </span>
+              {selected ? (
+                <span className="truncate text-[10px] text-slate-400">← {selected.name}</span>
               ) : null}
             </div>
-            {resolvedPrimary && mergeTarget ? (
+            {primary && alt ? (
               mergeDiffs.length === 0 ? (
                 <Alert variant="info" className="px-3 py-2">
                   <AlertDescription className="text-xs">
@@ -342,8 +375,7 @@ export function AuthorMergeDialog({
                         >
                           {(['primary', 'alt'] as AuthorMergeFieldChoice[]).map((side) => {
                             const value = side === 'primary' ? diff.primaryValue : diff.altValue
-                            const sideName =
-                              side === 'primary' ? resolvedPrimary.name : mergeTarget.name
+                            const sideName = side === 'primary' ? primary.name : alt.name
                             const verb = side === 'primary' ? 'Keep' : 'Use'
                             const itemId = `merge-${diff.key}-${side}`
                             const isSelected = choice === side
@@ -386,7 +418,9 @@ export function AuthorMergeDialog({
               )
             ) : (
               <div className="flex min-h-[240px] items-center justify-center rounded-sm border border-dashed border-[var(--color-border)] bg-surface-2 p-6 text-center text-sm text-slate-500">
-                Select an author from the corpus to compare metadata before merging.
+                {absorbMode
+                  ? 'Select the surviving author to compare metadata before merging.'
+                  : 'Select an author from the corpus to compare metadata before merging.'}
               </div>
             )}
           </div>
@@ -398,11 +432,13 @@ export function AuthorMergeDialog({
           </Button>
           <Button
             onClick={() => mergeMutation.mutate()}
-            disabled={!resolvedPrimary || !mergeTarget || mergeMutation.isPending}
+            disabled={!primary || !alt || mergeMutation.isPending}
             title={
-              resolvedPrimary && mergeTarget
-                ? `Merge ${mergeTarget.name} into ${resolvedPrimary.name}.`
-                : 'Choose an author to merge first.'
+              primary && alt
+                ? `Merge ${alt.name} into ${primary.name}.`
+                : absorbMode
+                  ? 'Choose the surviving author first.'
+                  : 'Choose an author to merge first.'
             }
           >
             {mergeMutation.isPending ? (
