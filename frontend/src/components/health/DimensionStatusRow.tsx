@@ -1,18 +1,23 @@
 /**
  * DimensionStatusRow — a `StatusRow` adapter for a health dimension. Builds the
  * metric (count/total, or a coverage % with a mini progress bar) and makes the
- * row clickable only when the dimension has a backed affected-papers drilldown
- * (author dimensions are fixed by running the op, not by drilling into rows).
+ * row clickable so you can drill into the affected items:
+ *   - **paper** dimensions open the affected-papers drilldown modal (`onOpen`);
+ *   - **author** dimensions (`authors.*`) jump to the Authors page, whose
+ *     needs-attention section is the canonical place to repair/merge them —
+ *     reusing that surface rather than duplicating author management here.
  *
  * Used by `RepairCard` (the gaps an op repairs) and `DiagnosticsSection` (the
  * observed-only dimensions with no repair op).
  */
 import { cn } from '@/lib/utils'
+import { navigateTo } from '@/lib/hashRoute'
 import type { HealthDimension } from '@/api/client'
 import { canDrilldown } from './healthFormat'
 import { StatusRow } from './StatusRow'
 
 export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOpen: () => void }) {
+  const isAuthorDim = dim.key.startsWith('authors.')
   const isCoverage = dim.coverage_pct != null
   const pct = Math.round(dim.coverage_pct ?? 0)
 
@@ -20,7 +25,7 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
     <span className="flex items-center gap-2">
       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200" aria-hidden>
         <span
-          className={cn('block h-full rounded-full', pct >= 80 ? 'bg-emerald-600' : 'bg-amber-500')}
+          className={cn('block h-full rounded-full', pct >= 80 ? 'bg-success-600' : 'bg-warning-500')}
           style={{ width: `${Math.min(100, pct)}%` }}
         />
       </span>
@@ -43,12 +48,13 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
     </span>
   )
 
-  return (
-    <StatusRow
-      severity={dim.severity}
-      label={dim.label}
-      metric={metric}
-      onOpen={canDrilldown(dim.key) ? onOpen : undefined}
-    />
-  )
+  // Paper dims → drilldown modal; author dims → the Authors page's
+  // needs-attention section; anything else stays read-only.
+  const handleOpen = canDrilldown(dim.key)
+    ? onOpen
+    : isAuthorDim
+      ? () => navigateTo('authors')
+      : undefined
+
+  return <StatusRow severity={dim.severity} label={dim.label} metric={metric} onOpen={handleOpen} />
 }
