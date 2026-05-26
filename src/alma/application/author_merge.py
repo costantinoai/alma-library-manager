@@ -625,14 +625,21 @@ def merge_author_profiles(
             # Table may not exist on older schemas — non-fatal.
             pass
         try:
-            from alma.services.author_hydrate import enqueue_pending_author_hydration
+            from alma.services.author_hydrate import (
+                enqueue_pending_author_hydration,
+                schedule_pending_author_hydration_sweep,
+            )
 
-            enqueue_pending_author_hydration(
+            if enqueue_pending_author_hydration(
                 db,
                 primary_id,
                 priority="high",
                 reason="author_merge",
-            )
+            ):
+                schedule_pending_author_hydration_sweep(
+                    reason="author_merge",
+                    target_author_ids=[primary_id],
+                )
         except Exception as exc:
             logger.debug("author hydration enqueue skipped after merge %s: %s", primary_id, exc)
 
@@ -645,6 +652,7 @@ def discover_aliases_via_orcid(
     *,
     mailto: Optional[str] = None,
     limit: int = 10,
+    known_orcid: Optional[str] = None,
 ) -> dict:
     """Look up every OpenAlex author profile sharing the primary's ORCID.
 
@@ -681,30 +689,32 @@ def discover_aliases_via_orcid(
 
     try:
         session = _session(mailto)
-        # Step 1 — fetch the primary's ORCID.
-        primary_resp = session.get(
-            f"https://api.openalex.org/authors/{primary_oid_norm}",
-            params={"select": "id,display_name,orcid"},
-            timeout=20,
-        )
-        if primary_resp.status_code != 200:
-            return {
-                "primary_openalex_id": primary_oid_norm,
-                "orcid": None,
-                "aliases": [],
-            }
-        primary_data = primary_resp.json() or {}
-        orcid_url = (primary_data.get("orcid") or "").strip()
-        if not orcid_url:
-            return {
-                "primary_openalex_id": primary_oid_norm,
-                "orcid": None,
-                "aliases": [],
-            }
-        # OpenAlex returns the ORCID as a full URL — funnel through the
-        # canonical helper so the OpenAlex `orcid:` filter and the local
-        # `authors.orcid` column see the same form.
-        orcid_bare = normalize_orcid(orcid_url) or ""
+        orcid_bare = normalize_orcid(known_orcid or "") or ""
+        if not orcid_bare:
+            # Step 1 — fetch the primary's ORCID.
+            primary_resp = session.get(
+                f"https://api.openalex.org/authors/{primary_oid_norm}",
+                params={"select": "id,display_name,orcid"},
+                timeout=20,
+            )
+            if primary_resp.status_code != 200:
+                return {
+                    "primary_openalex_id": primary_oid_norm,
+                    "orcid": None,
+                    "aliases": [],
+                }
+            primary_data = primary_resp.json() or {}
+            orcid_url = (primary_data.get("orcid") or "").strip()
+            if not orcid_url:
+                return {
+                    "primary_openalex_id": primary_oid_norm,
+                    "orcid": None,
+                    "aliases": [],
+                }
+            # OpenAlex returns the ORCID as a full URL — funnel through the
+            # canonical helper so the OpenAlex `orcid:` filter and the local
+            # `authors.orcid` column see the same form.
+            orcid_bare = normalize_orcid(orcid_url) or ""
         if not orcid_bare:
             return {
                 "primary_openalex_id": primary_oid_norm,
@@ -774,16 +784,15 @@ def record_orcid_aliases(
     primary_author_id: str,
     *,
     mailto: Optional[str] = None,
+    known_orcid: Optional[str] = None,
 ) -> dict:
     """Preventive ORCID-based alias recording.
 
-    Called fire-and-forget from `apply_follow_state(followed=True)`
-    so that as soon as the user follows an author, every other
-    OpenAlex profile sharing the same ORCID is recorded in
-    `author_alt_identifiers`. The suggestion rail's `followed_ids`
-    UNION (see `list_author_suggestions`) then filters those alts
-    out automatically — the user never sees the duplicates as
-    fresh suggestions.
+    Used by author metadata hydration so that every other OpenAlex
+    profile sharing the same ORCID is recorded in `author_alt_identifiers`.
+    The suggestion rail's `followed_ids` UNION (see
+    `list_author_suggestions`) then filters those alts out automatically —
+    the user never sees the duplicates as fresh suggestions.
 
     Does NOT auto-merge. Two reasons:
       1. Merging is destructive (papers reattach, alt rows
@@ -816,7 +825,7 @@ def record_orcid_aliases(
             "recorded": 0,
         }
 
-    discovery = discover_aliases_via_orcid(primary_oid, mailto=mailto)
+    discovery = discover_aliases_via_orcid(primary_oid, mailto=mailto, known_orcid=known_orcid)
     aliases = discovery.get("aliases") or []
     recorded = 0
     now = datetime.utcnow().isoformat()
@@ -846,6 +855,25 @@ def record_orcid_aliases(
     discovery["primary_author_id"] = primary_id
     discovery["recorded"] = recorded
     return discovery
+
+
+def count_dedup_orcid_candidates(db: sqlite3.Connection) -> int:
+    """Followed authors with an OpenAlex id — the set the ORCID dedup sweep walks
+    (one OpenAlex ``filter=orcid:`` lookup each). Drives the Health card's pending
+    count + ETA."""
+    try:
+        row = db.execute(
+            """
+            SELECT COUNT(DISTINCT fa.author_id) AS c
+            FROM followed_authors fa
+            JOIN authors a ON a.id = fa.author_id
+            WHERE COALESCE(a.status, 'active') = 'active'
+              AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') <> ''
+            """
+        ).fetchone()
+        return int((row["c"] if row else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
 
 
 def dedup_followed_authors_by_orcid(

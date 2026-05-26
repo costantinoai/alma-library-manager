@@ -14,6 +14,7 @@ from typing import Optional
 from alma.application.followed_authors import (
     ensure_followed_author_contract,
     get_followed_author_backfill_status,
+    get_followed_author_backfill_status_map,
 )
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
@@ -183,6 +184,12 @@ def _enrich_followed_author_corpus_fields(db: sqlite3.Connection, data: dict) ->
         )
     except Exception:
         return
+    _apply_followed_author_corpus_fields(data, backfill)
+
+
+def _apply_followed_author_corpus_fields(data: dict, backfill: dict | None) -> None:
+    if not backfill:
+        return
     data["background_corpus_state"] = backfill.get("state")
     data["background_corpus_detail"] = backfill.get("detail")
     data["background_corpus_last_success_at"] = backfill.get("last_success_at")
@@ -289,6 +296,154 @@ def get_author_publication_count(
         author_id=author_id,
         author_name=author_name,
     )
+
+
+def _sql_chunks(values: list[str], *, size: int = 500) -> list[list[str]]:
+    return [values[idx : idx + size] for idx in range(0, len(values), size)]
+
+
+def _publication_counts_for_author_rows(
+    db: sqlite3.Connection,
+    rows: list[dict],
+) -> dict[str, int]:
+    """Batch `publication_count` for the authors list endpoint."""
+    author_ids = [str(row.get("id") or "").strip() for row in rows]
+    counts: dict[str, int] = {author_id: 0 for author_id in author_ids if author_id}
+    if not rows:
+        return counts
+
+    openalex_ids = sorted({
+        str(row.get("openalex_id") or "").strip()
+        for row in rows
+        if str(row.get("openalex_id") or "").strip()
+    })
+    name_keys = sorted({
+        str(row.get("name") or "").strip().lower()
+        for row in rows
+        if str(row.get("name") or "").strip()
+    })
+
+    oa_counts: dict[str, int] = {}
+    name_counts: dict[str, int] = {}
+    if _table_exists(db, "publication_authors"):
+        pa_columns = _table_columns(db, "publication_authors")
+        if "paper_id" in pa_columns and "openalex_id" in pa_columns and openalex_ids:
+            for chunk in _sql_chunks(openalex_ids):
+                placeholders = ",".join("?" for _ in chunk)
+                for row in db.execute(
+                    f"""
+                    SELECT pa.openalex_id AS openalex_id,
+                           COUNT(DISTINCT pa.paper_id) AS count
+                    FROM publication_authors pa
+                    WHERE pa.openalex_id IN ({placeholders})
+                    GROUP BY pa.openalex_id
+                    """,
+                    chunk,
+                ).fetchall():
+                    key = str(row["openalex_id"] or "").strip()
+                    if key:
+                        oa_counts[key] = int(row["count"] or 0)
+        if "paper_id" in pa_columns and "display_name" in pa_columns and name_keys:
+            for chunk in _sql_chunks(name_keys):
+                placeholders = ",".join("?" for _ in chunk)
+                for row in db.execute(
+                    f"""
+                    SELECT lower(trim(pa.display_name)) AS name_key,
+                           COUNT(DISTINCT pa.paper_id) AS count
+                    FROM publication_authors pa
+                    WHERE lower(trim(pa.display_name)) IN ({placeholders})
+                    GROUP BY lower(trim(pa.display_name))
+                    """,
+                    chunk,
+                ).fetchall():
+                    key = str(row["name_key"] or "").strip()
+                    if key:
+                        name_counts[key] = int(row["count"] or 0)
+
+    unresolved: list[dict] = []
+    for data in rows:
+        author_id = str(data.get("id") or "").strip()
+        if not author_id:
+            continue
+        openalex_id = str(data.get("openalex_id") or "").strip()
+        author_name = str(data.get("name") or "").strip()
+        if openalex_id:
+            count = oa_counts.get(openalex_id, 0)
+        elif author_name:
+            count = name_counts.get(author_name.lower(), 0)
+        else:
+            count = 0
+        if count > 0:
+            counts[author_id] = count
+        else:
+            unresolved.append(data)
+
+    if not unresolved or not _table_exists(db, "papers"):
+        return counts
+
+    paper_columns = _table_columns(db, "papers")
+    paper_sets: dict[str, set[str]] = {
+        str(row.get("id") or "").strip(): set()
+        for row in unresolved
+        if str(row.get("id") or "").strip()
+    }
+    unresolved_ids = sorted(paper_sets)
+
+    def _add_paper_ids_for_column(column: str) -> None:
+        if column not in paper_columns or not unresolved_ids:
+            return
+        for chunk in _sql_chunks(unresolved_ids):
+            placeholders = ",".join("?" for _ in chunk)
+            for paper_row in db.execute(
+                f"""
+                SELECT id, {column} AS author_key
+                FROM papers
+                WHERE {column} IN ({placeholders})
+                """,
+                chunk,
+            ).fetchall():
+                author_key = str(paper_row["author_key"] or "").strip()
+                paper_id = str(paper_row["id"] or "").strip()
+                if author_key in paper_sets and paper_id:
+                    paper_sets[author_key].add(paper_id)
+
+    _add_paper_ids_for_column("author_id")
+    _add_paper_ids_for_column("added_from")
+
+    name_authors = [
+        (
+            str(row.get("id") or "").strip(),
+            str(row.get("name") or "").strip().lower(),
+        )
+        for row in unresolved
+        if str(row.get("id") or "").strip() and str(row.get("name") or "").strip()
+    ]
+    text_columns = [column for column in ("authors", "author") if column in paper_columns]
+    if name_authors and text_columns:
+        select_cols = ", ".join(["id", *text_columns])
+        nonempty_clause = " OR ".join(
+            f"COALESCE(NULLIF(TRIM({column}), ''), '') != ''"
+            for column in text_columns
+        )
+        for paper_row in db.execute(
+            f"SELECT {select_cols} FROM papers WHERE {nonempty_clause}"
+        ).fetchall():
+            paper_id = str(paper_row["id"] or "").strip()
+            if not paper_id:
+                continue
+            haystack = " ".join(
+                str(paper_row[column] or "").lower()
+                for column in text_columns
+            )
+            if not haystack:
+                continue
+            for author_id, name_key in name_authors:
+                if name_key in haystack:
+                    paper_sets[author_id].add(paper_id)
+
+    for author_id, paper_ids in paper_sets.items():
+        counts[author_id] = len(paper_ids)
+    return counts
 
 
 def compute_author_signal(
@@ -492,22 +647,25 @@ def list_authors(
 
     followed_ids = _followed_author_ids(db)
     monitor_by_author = _author_monitor_map(db)
-    out: list[dict] = []
-    for row in rows:
-        data = dict(row)
-        data["publication_count"] = get_author_publication_count(
-            db,
-            author_id=str(data.get("id") or "").strip(),
-            author_name=str(data.get("name") or "").strip(),
-            openalex_id=str(data.get("openalex_id") or "").strip(),
-        )
+    row_dicts = [dict(row) for row in rows]
+    publication_counts = _publication_counts_for_author_rows(db, row_dicts)
+    for data in row_dicts:
         data["author_type"] = _effective_author_type(data, followed_ids)
+    followed_rows = [
+        data for data in row_dicts
+        if str(data.get("author_type") or "") == "followed"
+    ]
+    backfill_by_author = get_followed_author_backfill_status_map(db, followed_rows)
+    out: list[dict] = []
+    for data in row_dicts:
+        author_id = str(data.get("id") or "").strip()
+        data["publication_count"] = publication_counts.get(author_id, 0)
         _normalize_author_monitor_fields(
             data,
             followed_ids=followed_ids,
             monitor_by_author=monitor_by_author,
         )
-        _enrich_followed_author_corpus_fields(db, data)
+        _apply_followed_author_corpus_fields(data, backfill_by_author.get(author_id))
         out.append(data)
     return out, total
 

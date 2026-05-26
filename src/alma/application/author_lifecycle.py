@@ -101,6 +101,127 @@ def is_orphan_author(db: sqlite3.Connection, author_id: str) -> bool:
     return live_row is None
 
 
+def count_orphan_authors(db: sqlite3.Connection) -> int:
+    """Cheap single-query count of orphan authors — the same predicate as
+    :func:`is_orphan_author` (active, not followed, no live attachment) expressed
+    as one ``NOT EXISTS`` so the Health maintenance card can show a pending count
+    without the per-row scan ``garbage_collect_orphan_authors`` does."""
+    placeholders = ",".join("?" for _ in _LIVE_PAPER_STATES)
+    try:
+        row = db.execute(
+            f"""
+            SELECT COUNT(*) AS c
+            FROM authors a
+            LEFT JOIN followed_authors fa ON fa.author_id = a.id
+            WHERE COALESCE(a.status, 'active') = 'active'
+              AND fa.author_id IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM publication_authors pa
+                  JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
+                  WHERE (
+                        (lower(trim(COALESCE(a.openalex_id, ''))) <> ''
+                         AND lower(pa.openalex_id) = lower(trim(a.openalex_id)))
+                     OR (lower(trim(COALESCE(a.name, ''))) <> ''
+                         AND lower(trim(pa.display_name)) = lower(trim(a.name)))
+                  )
+              )
+            """,
+            tuple(_LIVE_PAPER_STATES),
+        ).fetchone()
+        return int((row["c"] if row else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
+# --------------------------------------------------------------------------
+# Author pool by scope — the single source of truth for "which authors does a
+# deep refresh touch", shared by routes/authors.py ``_deep_refresh_all_impl``
+# (the runner) and the Health maintenance ``refresh_authors`` count/ETA.
+# --------------------------------------------------------------------------
+
+_AUTHOR_REFRESH_SCOPES = ("library", "followed", "needs_metadata", "followed_plus_library", "corpus")
+
+
+def _scope_clauses(scope: str) -> tuple[str, str]:
+    """(join, extra WHERE) for one refresh scope. Kept here so the runner and the
+    count share exactly one definition."""
+    scope_join_map: dict[str, str] = {
+        "library": (
+            "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
+            "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
+        ),
+        "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",
+        "needs_metadata": "",
+        "followed_plus_library": (
+            "INNER JOIN ("
+            "  SELECT fa.author_id AS id FROM followed_authors fa"
+            "  UNION"
+            "  SELECT a2.id FROM authors a2"
+            "  INNER JOIN publication_authors pa2 ON lower(trim(pa2.openalex_id)) = lower(trim(a2.openalex_id))"
+            "  INNER JOIN papers p2 ON p2.id = pa2.paper_id AND p2.status = 'library'"
+            ") sub ON sub.id = a.id"
+        ),
+        "corpus": "",
+    }
+    needs_metadata_clause = (
+        """
+        AND (
+            COALESCE(a.id_resolution_status, '') IN ('error', 'no_match', 'needs_manual_review')
+            OR (
+                COALESCE(a.id_resolution_status, '') = 'unresolved'
+                AND EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
+            )
+            OR (
+                EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
+                AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') = ''
+            )
+            OR (
+                COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') != ''
+                AND (
+                    COALESCE(NULLIF(TRIM(a.orcid), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.affiliation), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.interests), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.institutions), ''), '') = ''
+                    OR COALESCE(NULLIF(TRIM(a.cited_by_year), ''), '') = ''
+                    OR COALESCE(a.works_count, 0) <= 0
+                    OR COALESCE(NULLIF(TRIM(a.last_fetched_at), ''), '') = ''
+                )
+            )
+        )
+        """
+        if scope == "needs_metadata"
+        else ""
+    )
+    return scope_join_map[scope], needs_metadata_clause
+
+
+def select_authors_for_scope(db: sqlite3.Connection, scope: str, *, count_only: bool = False):
+    """Authors a deep refresh of ``scope`` would touch. ``count_only`` returns the
+    int count (for the Health card's pending/ETA); otherwise the id/name/identifier
+    rows the runner iterates. Active (non-removed) authors only."""
+    scope = (scope or "followed").strip().lower()
+    if scope not in _AUTHOR_REFRESH_SCOPES:
+        scope = "followed"
+    join, nmc = _scope_clauses(scope)
+    if count_only:
+        row = db.execute(
+            f"SELECT COUNT(DISTINCT a.id) AS c FROM authors a {join} "
+            f"WHERE COALESCE(a.status, 'active') <> 'removed' {nmc}"
+        ).fetchone()
+        return int((row["c"] if row else 0) or 0)
+    return db.execute(
+        f"""
+        SELECT DISTINCT a.id AS id, a.name AS name,
+               a.openalex_id AS openalex_id, a.scholar_id AS scholar_id
+        FROM authors a
+        {join}
+        WHERE COALESCE(a.status, 'active') <> 'removed'
+        {nmc}
+        ORDER BY a.name
+        """
+    ).fetchall()
+
+
 def soft_remove_author(
     db: sqlite3.Connection,
     author_id: str,

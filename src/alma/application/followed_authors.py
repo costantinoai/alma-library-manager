@@ -252,29 +252,26 @@ def apply_follow_state(
 
     sync_author_monitors(db)
 
-    # Preventive ORCID alias recording on the follow path. As soon as
-    # the user follows an author, query OpenAlex for every other
-    # author profile sharing the same ORCID and INSERT each into
-    # `author_alt_identifiers`. The suggestion rail's `followed_ids`
-    # UNION (see `list_author_suggestions`) then filters those alts
-    # out automatically — the user never sees them as fresh
-    # suggestions, and a future follow attempt on one of those alts
-    # will already know it's a known split. Fire-and-forget on a
-    # short-lived background thread so the follow API call stays
-    # snappy even when OpenAlex is slow. Best-effort: any failure is
-    # silently swallowed; the worst case is the user sees a
-    # duplicate suggestion they could have been spared.
+    # Follow-time metadata hydration is targeted to this author. It fills
+    # profile fields, affiliation evidence, and ORCID aliases without making
+    # the follow request wait on external sources.
     if followed:
-        _schedule_orcid_alias_recording(author_id)
         try:
-            from alma.services.author_hydrate import enqueue_pending_author_hydration
+            from alma.services.author_hydrate import (
+                enqueue_pending_author_hydration,
+                schedule_pending_author_hydration_sweep,
+            )
 
-            enqueue_pending_author_hydration(
+            if enqueue_pending_author_hydration(
                 db,
                 author_id,
                 priority="high",
                 reason="author_follow",
-            )
+            ):
+                schedule_pending_author_hydration_sweep(
+                    reason="author_follow",
+                    target_author_ids=[author_id],
+                )
         except Exception as exc:
             logger.debug("author hydration enqueue skipped for %s: %s", author_id, exc)
 
@@ -308,48 +305,6 @@ def apply_follow_state(
                 record_missing_author_remove(db, oid, hard=True)
             except ValueError:
                 pass
-
-
-def _schedule_orcid_alias_recording(author_id: str) -> None:
-    """Fire-and-forget worker that records ORCID-discovered aliases.
-
-    Runs on the shared scheduler thread pool (`schedule_immediate`)
-    with its own short-lived DB connection. Wrapped in broad
-    try/except so an OpenAlex outage never poisons the follow flow
-    that triggered it.
-    """
-    try:
-        from alma.api.scheduler import schedule_immediate
-    except Exception:
-        # Scheduler unavailable (probe / test harness without app
-        # context). Skip silently — the alias table just won't get
-        # the proactive entries.
-        logger.debug("scheduler unavailable, skipping ORCID alias discovery")
-        return
-
-    def _runner() -> dict:
-        from alma.api.deps import open_db_connection
-        from alma.application.author_merge import record_orcid_aliases
-
-        conn = open_db_connection()
-        try:
-            try:
-                result = record_orcid_aliases(conn, author_id)
-            except Exception as exc:  # pragma: no cover - best-effort
-                logger.warning(
-                    "ORCID alias recording failed for %s: %s", author_id, exc,
-                )
-                return {"error": str(exc)}
-            return result
-        finally:
-            conn.close()
-
-    job_id = f"orcid_aliases_{uuid.uuid4().hex[:10]}"
-    try:
-        schedule_immediate(job_id, _runner)
-    except Exception:
-        # Scheduler may reject during shutdown; non-fatal.
-        logger.debug("schedule_immediate refused ORCID alias job", exc_info=True)
 
 
 def schedule_followed_author_historical_backfill(
@@ -508,15 +463,6 @@ def get_followed_author_backfill_status(
         except sqlite3.OperationalError:
             total_works = int(works_count or 0)
 
-    expected_floor = 0
-    coverage_ratio = None
-    if total_works > 0:
-        expected_floor = min(
-            25,
-            max(_AUTHOR_BACKFILL_MIN_EXPECTED, int(math.ceil(total_works * _AUTHOR_BACKFILL_EXPECTED_RATIO))),
-        )
-        coverage_ratio = round(background_count / float(total_works), 3)
-
     rows: list[sqlite3.Row] = []
     if _table_exists(db, "operation_status"):
         try:
@@ -543,12 +489,61 @@ def get_followed_author_backfill_status(
         except sqlite3.OperationalError:
             rows = []
 
-    latest = rows[0] if rows else None
+    return _backfill_status_from_inputs(
+        author_key=author_key,
+        is_followed=True,
+        background_count=background_count,
+        total_works=total_works,
+        operation_rows=rows,
+    )
+
+
+def _backfill_status_from_inputs(
+    *,
+    author_key: str,
+    is_followed: bool,
+    background_count: int,
+    total_works: int,
+    operation_rows: list[sqlite3.Row],
+) -> dict[str, Any]:
+    base = {
+        "author_id": author_key,
+        "is_followed": False,
+        "state": "not_followed",
+        "stale": False,
+        "thin": False,
+        "background_publications": int(background_count or 0),
+        "works_count": int(total_works or 0),
+        "coverage_ratio": None,
+        "expected_background_floor": 0,
+        "last_job_id": None,
+        "last_status": None,
+        "last_started_at": None,
+        "last_finished_at": None,
+        "last_success_at": None,
+        "last_error": None,
+        "age_days": None,
+        "detail": "Author is not currently followed.",
+        "recent_runs": [],
+    }
+    if not author_key or not is_followed:
+        return base
+
+    expected_floor = 0
+    coverage_ratio = None
+    if total_works > 0:
+        expected_floor = min(
+            25,
+            max(_AUTHOR_BACKFILL_MIN_EXPECTED, int(math.ceil(total_works * _AUTHOR_BACKFILL_EXPECTED_RATIO))),
+        )
+        coverage_ratio = round(background_count / float(total_works), 3)
+
+    latest = operation_rows[0] if operation_rows else None
     recent_runs: list[dict[str, Any]] = []
     latest_success: Optional[sqlite3.Row] = None
     latest_failure: Optional[sqlite3.Row] = None
     active_run: Optional[sqlite3.Row] = None
-    for row in rows:
+    for row in operation_rows:
         status = str(row["status"] or "").strip().lower()
         if active_run is None and status in {"queued", "running", "cancelling"}:
             active_run = row
@@ -623,3 +618,101 @@ def get_followed_author_backfill_status(
         "detail": detail,
         "recent_runs": recent_runs[:4],
     }
+
+
+def get_followed_author_backfill_status_map(
+    db: sqlite3.Connection,
+    author_rows: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Batch freshness and maintenance status for followed author rows."""
+    author_ids = [
+        str(row.get("id") or "").strip()
+        for row in author_rows
+        if str(row.get("id") or "").strip()
+    ]
+    if not author_ids:
+        return {}
+
+    followed_ids: set[str] = set()
+    if _table_exists(db, "followed_authors"):
+        placeholders = ",".join("?" for _ in author_ids)
+        followed_ids = {
+            str(row["author_id"] or "").strip()
+            for row in db.execute(
+                f"SELECT author_id FROM followed_authors WHERE author_id IN ({placeholders})",
+                author_ids,
+            ).fetchall()
+        }
+
+    background_counts: dict[str, int] = {author_id: 0 for author_id in author_ids}
+    if _table_exists(db, "publication_authors") and _table_exists(db, "papers") and _table_exists(db, "authors"):
+        placeholders = ",".join("?" for _ in author_ids)
+        for row in db.execute(
+            f"""
+            SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
+            FROM authors a
+            JOIN publication_authors pa ON lower(a.openalex_id) = lower(pa.openalex_id)
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE a.id IN ({placeholders})
+              AND p.status <> 'library'
+            GROUP BY a.id
+            """,
+            author_ids,
+        ).fetchall():
+            background_counts[str(row["author_id"] or "").strip()] = int(row["c"] or 0)
+
+    operation_rows_by_author: dict[str, list[sqlite3.Row]] = {author_id: [] for author_id in author_ids}
+    if _table_exists(db, "operation_status"):
+        deep_keys = [f"authors.deep_refresh:{author_id}" for author_id in author_ids]
+        history_placeholders = ",".join("?" for _ in author_ids)
+        deep_placeholders = ",".join("?" for _ in deep_keys)
+        try:
+            rows = db.execute(
+                f"""
+                SELECT
+                    job_id,
+                    status,
+                    message,
+                    error,
+                    started_at,
+                    finished_at,
+                    updated_at,
+                    operation_key,
+                    trigger_source,
+                    current_author
+                FROM operation_status
+                WHERE (operation_key = 'authors.history_backfill' AND current_author IN ({history_placeholders}))
+                   OR operation_key IN ({deep_placeholders})
+                ORDER BY COALESCE(finished_at, updated_at, started_at) DESC
+                """,
+                [*author_ids, *deep_keys],
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            operation_key = str(row["operation_key"] or "").strip()
+            if operation_key.startswith("authors.deep_refresh:"):
+                author_id = operation_key.split(":", 1)[1]
+            else:
+                author_id = str(row["current_author"] or "").strip()
+            if author_id in operation_rows_by_author and len(operation_rows_by_author[author_id]) < 8:
+                operation_rows_by_author[author_id].append(row)
+
+    statuses: dict[str, dict[str, Any]] = {}
+    for row in author_rows:
+        author_id = str(row.get("id") or "").strip()
+        if not author_id:
+            continue
+        works_count_raw = row.get("works_count")
+        try:
+            works_count = int(works_count_raw) if works_count_raw is not None else 0
+        except (TypeError, ValueError):
+            works_count = 0
+        statuses[author_id] = _backfill_status_from_inputs(
+            author_key=author_id,
+            is_followed=author_id in followed_ids,
+            background_count=background_counts.get(author_id, 0) if author_id in followed_ids else 0,
+            total_works=works_count,
+            operation_rows=operation_rows_by_author.get(author_id, []),
+        )
+    return statuses

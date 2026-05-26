@@ -43,9 +43,9 @@ import { formatTimestamp } from '@/lib/utils'
 export interface AuthorAttentionRouter {
   /** Dispatch by `row.suggested_action.code`: opens the matching
    *  dialog, defers to `onOpenDetail` for review/manual_search, or
-   *  fires the deep-refresh mutation as the default. */
+   *  fires the identity/profile refresh mutation as the default. */
   openForRow: (row: AuthorNeedsAttentionRow) => void
-  /** True while the deep-refresh mutation is in flight for `authorId`. */
+  /** True while the identity/profile refresh mutation is in flight for `authorId`. */
   isRefreshingFor: (authorId: string) => boolean
   /** Render once near the top of the consuming page so the dialogs
    *  can mount alongside other modals. */
@@ -62,7 +62,7 @@ interface UseAuthorAttentionRouterOpts {
 /**
  * Centralised router for needs-attention actions. Owns the three
  * sub-dialog states (`reviewRow`, `identifierRow`, `conflictRow`) and
- * the deep-refresh mutation so multiple entry points (the
+ * the identity/profile refresh mutation so multiple entry points (the
  * needs-attention section AND the per-card warning triangle on
  * `FollowedAuthorCard`) dispatch through one source of truth — no
  * duplicated dialog state, no double mutation queues.
@@ -79,7 +79,7 @@ export function useAuthorAttentionRouter(
   const refreshMutation = useMutation({
     mutationFn: (authorId: string) =>
       api.post<{ status?: string; job_id?: string }>(
-        `/authors/${encodeURIComponent(authorId)}/deep-refresh`,
+        `/authors/${encodeURIComponent(authorId)}/identity-profile-refresh`,
       ),
     onSuccess: (data, authorId) => {
       void invalidateQueries(
@@ -151,7 +151,7 @@ interface AuthorsNeedsAttentionSectionProps {
  * Reads from the `/authors/needs-attention` endpoint, which already
  * ranks by severity (error > no_match > review > unresolved). The
  * action button dispatches either the modal detail panel (so the user
- * can review candidates manually) or the per-author deep-refresh
+ * can review candidates manually) or the per-author identity/profile
  * endpoint for retries.
  */
 export function AuthorsNeedsAttentionSection({

@@ -340,6 +340,164 @@ def _apply_author_resolution_result(
     db.execute(f"UPDATE authors SET {', '.join(updates)} WHERE id = ?", tuple(params))
 
 
+def _summarize_hierarchical_identity(result) -> str:
+    """Build the persisted reason from the current hierarchical identity bundle."""
+    details = [
+        str(e.detail or "").strip()
+        for e in list(getattr(result, "evidence", []) or [])[:4]
+        if str(e.detail or "").strip()
+    ]
+    if not details:
+        if getattr(result, "author_name", None):
+            details.append(f"No confident identity match found for {result.author_name}")
+        else:
+            details.append("No confident identity match found")
+    confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+    if confidence:
+        details.append(f"confidence={confidence:.2f}")
+    openalex_id = str(getattr(result, "openalex_id", "") or "").strip()
+    if openalex_id:
+        details.append(f"openalex={_norm_oaid(openalex_id)}")
+    scholar_id = str(getattr(result, "scholar_id", "") or "").strip()
+    if scholar_id:
+        details.append(f"scholar={scholar_id}")
+    orcid = normalize_orcid(str(getattr(result, "orcid", "") or "")) or ""
+    if orcid:
+        details.append(f"orcid={orcid}")
+    return "; ".join(details)[:1000]
+
+
+def _load_author_refresh_target(
+    db: sqlite3.Connection,
+    requested_author_id: str,
+) -> tuple[str, sqlite3.Row]:
+    """Load the exact local author row used by refresh jobs."""
+    requested = str(requested_author_id or "").strip()
+    cursor = db.execute(
+        "SELECT name, openalex_id, scholar_id, orcid, last_fetched_at FROM authors WHERE id=?",
+        (requested,),
+    )
+    row = cursor.fetchone()
+    if row:
+        return requested, row
+
+    raise HTTPException(status_code=404, detail="Author not found")
+
+
+def _resolve_and_persist_author_identity(
+    db: sqlite3.Connection,
+    author_id: str,
+    row: sqlite3.Row,
+    *,
+    job_id: str | None = None,
+    use_semantic_scholar_evidence: bool | None = None,
+):
+    """Run the current identity resolver once and persist its own evidence."""
+    from alma.api.scheduler import add_job_log
+    from alma.application.author_identity import (
+        persist_identity_result,
+        resolve_identity_hierarchical,
+    )
+
+    before_openalex = _norm_oaid(str(row["openalex_id"] or "").strip()) or None
+    before_scholar = str(row["scholar_id"] or "").strip() or None
+    before_orcid = normalize_orcid(str(row["orcid"] or "")) or None
+
+    _id_settings = _id_resolution_settings()
+    semantic_scholar_enabled = (
+        _id_settings["semantic_scholar_enabled"]
+        if use_semantic_scholar_evidence is None
+        else bool(use_semantic_scholar_evidence)
+    )
+    if job_id and not semantic_scholar_enabled:
+        add_job_log(
+            job_id,
+            "Semantic Scholar identity evidence skipped: existing OpenAlex/ORCID identity is sufficient for this intent",
+            step="identity_scope",
+            data={"use_semantic_scholar": False},
+        )
+    hierarchical = resolve_identity_hierarchical(
+        db,
+        author_id=author_id,
+        author_name=str(row["name"] or "").strip() or None,
+        openalex_id=before_openalex,
+        scholar_id=before_scholar,
+        orcid=before_orcid,
+        use_semantic_scholar=semantic_scholar_enabled,
+        use_orcid=_id_settings["orcid_enabled"],
+        use_preprints=semantic_scholar_enabled,
+    )
+    persist_identity_result(db, author_id, hierarchical)
+    db.execute(
+        "UPDATE authors SET id_resolution_reason = ? WHERE id = ?",
+        (_summarize_hierarchical_identity(hierarchical), author_id),
+    )
+    if db.in_transaction:
+        db.commit()
+
+    after_openalex = _norm_oaid(str(hierarchical.openalex_id or before_openalex or "").strip()) or None
+    after_scholar = str(hierarchical.scholar_id or before_scholar or "").strip() or None
+    after_orcid = normalize_orcid(str(hierarchical.orcid or before_orcid or "")) or None
+    identity_changed = (
+        before_openalex != after_openalex
+        or before_scholar != after_scholar
+        or before_orcid != after_orcid
+    )
+
+    if job_id:
+        add_job_log(
+            job_id,
+            (
+                f"Identity resolution: method={hierarchical.method}, "
+                f"confidence={round(hierarchical.confidence, 3)}, "
+                f"status={hierarchical.status}"
+            ),
+            step="identity_resolution",
+            data=hierarchical.to_dict(),
+        )
+
+    return {
+        "identity": hierarchical,
+        "openalex_id": after_openalex,
+        "identity_changed": identity_changed,
+    }
+
+
+def _apply_author_profile_from_openalex(
+    db: sqlite3.Connection,
+    author_id: str,
+    *,
+    openalex_id: str | None,
+    author_name: str,
+    job_id: str | None = None,
+    profile_cache: dict | None = None,
+    preloaded_profile: dict | None = None,
+) -> dict[str, Any]:
+    """Fetch or reuse one OpenAlex profile and persist it through the canonical writer."""
+    from alma.api.scheduler import add_job_log
+    from alma.application.author_profile import apply_author_profile_update
+
+    profile = None
+    if preloaded_profile is not None:
+        profile = preloaded_profile
+    elif isinstance(profile_cache, dict) and profile_cache and openalex_id:
+        profile = profile_cache.get(_norm_oaid(openalex_id))
+    elif openalex_id:
+        from alma.openalex.client import fetch_author_profile
+
+        profile = fetch_author_profile(openalex_id)
+
+    profile_summary = apply_author_profile_update(db, author_id, profile)
+    if job_id:
+        add_job_log(
+            job_id,
+            f"Profile refresh for {author_name}: updated {', '.join(profile_summary.get('updated') or ['nothing'])}",
+            step="profile_refresh",
+            data=profile_summary,
+        )
+    return profile_summary
+
+
 def _normalize_text(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
 
@@ -791,96 +949,12 @@ def _refresh_author_cache_impl(
         add_job_log(job_id, "Cancelled before fetch start", step="cancelled")
         return {"success": False, "author_id": author_id, "mode": mode, "cancelled": True}
 
-    requested_author_id = str(author_id or "").strip()
-    cursor = db.execute(
-        "SELECT name, openalex_id, scholar_id, orcid, last_fetched_at FROM authors WHERE id=?",
-        (requested_author_id,),
-    )
-    row = cursor.fetchone()
-    resolved_author_id = requested_author_id
-    if not row:
-        fallback_author_id = resolve_canonical_author_id(
-            db,
-            requested_author_id,
-            create_if_missing=True,
-            fallback_name=requested_author_id,
-        )
-        if fallback_author_id:
-            cursor = db.execute(
-                "SELECT name, openalex_id, scholar_id, orcid, last_fetched_at FROM authors WHERE id=?",
-                (fallback_author_id,),
-            )
-            row = cursor.fetchone()
-            if row:
-                resolved_author_id = str(fallback_author_id or "").strip() or requested_author_id
-                if job_id and resolved_author_id != requested_author_id:
-                    add_job_log(
-                        job_id,
-                        f"Recovered author refresh target from {requested_author_id} to canonical author {resolved_author_id}",
-                        step="refresh_recover_author",
-                        data={"requested_author_id": requested_author_id, "resolved_author_id": resolved_author_id},
-                    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Author not found")
-
-    author_id = resolved_author_id
-
+    author_id, row = _load_author_refresh_target(db, str(author_id or "").strip())
     author_name = row["name"]
     last_fetched = row["last_fetched_at"]
 
-    # Phase D (2026-04-24) — hierarchical identity resolver with explicit
-    # tier + confidence + preprint triangulation. Layers over the existing
-    # `resolve_author_identity` cascade. The result is persisted with the
-    # new id_resolution_method / id_resolution_confidence columns so the
-    # Settings UI can surface "resolved via ORCID" vs "needs manual review".
-    from alma.application.author_identity import (
-        persist_identity_result,
-        resolve_identity_hierarchical,
-    )
-
-    _id_settings = _id_resolution_settings()
-    hierarchical = resolve_identity_hierarchical(
-        db,
-        author_id=author_id,
-        author_name=str(author_name or "").strip() or None,
-        openalex_id=str(row["openalex_id"] or "").strip() or None,
-        scholar_id=str(row["scholar_id"] or "").strip() or None,
-        orcid=str(row["orcid"] or "").strip() or None,
-        use_semantic_scholar=_id_settings["semantic_scholar_enabled"],
-        use_orcid=_id_settings["orcid_enabled"],
-        use_preprints=_id_settings["semantic_scholar_enabled"],
-    )
-    persist_identity_result(db, author_id, hierarchical)
-    db.commit()
-
-    if job_id:
-        add_job_log(
-            job_id,
-            (
-                f"Identity resolution: method={hierarchical.method}, "
-                f"confidence={round(hierarchical.confidence, 3)}, "
-                f"status={hierarchical.status}"
-            ),
-            step="identity_resolution",
-            data=hierarchical.to_dict(),
-        )
-
-    # Legacy resolver kept for backward-compat evidence display on the
-    # dossier page. The hierarchical bundle is the source of truth for
-    # the identity columns; the legacy result contributes `id_resolution_reason`.
-    resolution = resolve_author_identity(
-        db,
-        author_id=author_id,
-        author_name=str(author_name or "").strip() or None,
-        openalex_id=hierarchical.openalex_id or str(row["openalex_id"] or "").strip() or None,
-        scholar_id=hierarchical.scholar_id or str(row["scholar_id"] or "").strip() or None,
-        orcid=hierarchical.orcid or str(row["orcid"] or "").strip() or None,
-        use_semantic_scholar=_id_settings["semantic_scholar_enabled"],
-        use_orcid=_id_settings["orcid_enabled"],
-    )
-    _apply_author_resolution_result(db, author_id, resolution)
-    db.commit()
-    openalex_id = hierarchical.openalex_id or resolution.openalex_id or (str(row["openalex_id"] or "").strip() or None)
+    identity_result = _resolve_and_persist_author_identity(db, author_id, row, job_id=job_id)
+    openalex_id = identity_result["openalex_id"] or (str(row["openalex_id"] or "").strip() or None)
     followed_row = db.execute(
         "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
         (author_id,),
@@ -1035,41 +1109,19 @@ def _refresh_author_cache_impl(
     # centroid unconditionally, so Scholar-only authors benefit from any
     # embeddings we have while modern-backfill authors get a second-pass
     # update after their works landed.
-    from alma.application.author_profile import (
-        apply_author_profile_update,
-        refresh_author_centroid_safe,
-    )
+    from alma.application.author_profile import refresh_author_centroid_safe
 
     if openalex_id:
         try:
-            # Profile-source preference (cheapest first):
-            #   1. `backfill_profile` — already paid for inside Phase 1
-            #      of `refresh_author_works_and_vectors` (and that path
-            #      itself prefers the pre-batched cache, so no double
-            #      hit either way).
-            #   2. `profile_cache` — bulk pre-flight via
-            #      `batch_get_author_profiles`. Used when modern
-            #      backfill didn't run (e.g. Scholar fallback path).
-            #   3. fresh `fetch_author_profile` — final fallback.
-            cache_hit = None
-            if isinstance(profile_cache, dict) and profile_cache and openalex_id:
-                cache_hit = profile_cache.get(_norm_oaid(openalex_id))
-            if backfill_profile is not None:
-                profile = backfill_profile
-            elif cache_hit is not None:
-                profile = cache_hit
-            else:
-                from alma.openalex.client import fetch_author_profile
-
-                profile = fetch_author_profile(openalex_id)
-            profile_summary = apply_author_profile_update(db, author_id, profile)
-            if job_id:
-                add_job_log(
-                    job_id,
-                    f"Profile refresh for {author_name}: updated {', '.join(profile_summary.get('updated') or ['nothing'])}",
-                    step="profile_refresh",
-                    data=profile_summary,
-                )
+            _apply_author_profile_from_openalex(
+                db,
+                author_id,
+                openalex_id=openalex_id,
+                author_name=str(author_name or "").strip() or author_id,
+                job_id=job_id,
+                profile_cache=profile_cache,
+                preloaded_profile=backfill_profile,
+            )
         except Exception as e:
             logger.warning("Failed to refresh author profile for %s: %s", author_id, e)
             if job_id:
@@ -1127,6 +1179,129 @@ def _refresh_author_cache_impl(
     }
 
 
+def _refresh_author_identity_profile_impl(
+    db: sqlite3.Connection,
+    author_id: str,
+    *,
+    job_id: Optional[str] = None,
+) -> dict:
+    """Refresh author identity/profile only; no works, vectors, or broad rebuild."""
+    from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
+    from alma.application.author_profile import refresh_author_centroid_safe
+
+    _ensure_author_resolution_columns(db)
+
+    if job_id and is_cancellation_requested(job_id):
+        set_job_status(
+            job_id,
+            status="cancelled",
+            finished_at=datetime.utcnow().isoformat(),
+            message="Author identity/profile refresh cancelled before execution",
+        )
+        add_job_log(job_id, "Cancelled before identity/profile refresh start", step="cancelled")
+        return {"success": False, "author_id": author_id, "mode": "identity_profile", "cancelled": True}
+
+    author_id, row = _load_author_refresh_target(db, str(author_id or "").strip())
+    author_name = str(row["name"] or "").strip() or author_id
+
+    if job_id:
+        add_job_log(
+            job_id,
+            (
+                f"Identity/profile refresh started for {author_name} ({author_id}); "
+                "works, S2 vector fetch, and full centroid rebuild are skipped"
+            ),
+            step="identity_profile_start",
+            data={"intent": "identity_profile", "skips": ["works", "s2_vectors", "centroid_full_rebuild"]},
+        )
+
+    has_stable_identity = bool(
+        _norm_oaid(str(row["openalex_id"] or "").strip())
+        and normalize_orcid(str(row["orcid"] or ""))
+    )
+    identity_result = _resolve_and_persist_author_identity(
+        db,
+        author_id,
+        row,
+        job_id=job_id,
+        use_semantic_scholar_evidence=not has_stable_identity,
+    )
+    openalex_id = identity_result["openalex_id"] or (str(row["openalex_id"] or "").strip() or None)
+
+    if openalex_id:
+        try:
+            _apply_author_profile_from_openalex(
+                db,
+                author_id,
+                openalex_id=openalex_id,
+                author_name=author_name,
+                job_id=job_id,
+            )
+        except Exception as exc:
+            logger.warning("Identity/profile OpenAlex profile update failed for %s: %s", author_id, exc)
+            if job_id:
+                add_job_log(
+                    job_id,
+                    f"Profile refresh warning for {author_name}: {exc}",
+                    level="WARNING",
+                    step="profile_refresh",
+                )
+    elif job_id:
+        add_job_log(
+            job_id,
+            f"Skipped profile refresh for {author_name}: no OpenAlex ID after identity resolution",
+            level="WARNING",
+            step="profile_refresh",
+        )
+
+    centroid_refreshed = False
+    if identity_result["identity_changed"] and openalex_id:
+        centroid_refreshed = refresh_author_centroid_safe(db, openalex_id)
+        if job_id:
+            add_job_log(
+                job_id,
+                (
+                    f"Centroid recompute for {author_name}: "
+                    f"{'updated' if centroid_refreshed else 'no embeddings yet / skipped'}"
+                ),
+                step="centroid_refresh",
+                data={"openalex_id": openalex_id, "updated": bool(centroid_refreshed), "reason": "identity_changed"},
+            )
+    elif job_id:
+        add_job_log(
+            job_id,
+            f"Centroid recompute skipped for {author_name}: identity unchanged",
+            step="centroid_refresh_skipped",
+            data={"openalex_id": openalex_id, "reason": "identity_unchanged"},
+        )
+
+    if db.in_transaction:
+        db.commit()
+
+    total_count = authors_app.get_author_publication_count(
+        db,
+        author_id=author_id,
+        author_name=author_name,
+        openalex_id=str(openalex_id or "").strip(),
+    )
+    if job_id:
+        add_job_log(
+            job_id,
+            f"Identity/profile refresh done for {author_name}: total={total_count}",
+            step="identity_profile_done",
+        )
+
+    return {
+        "success": True,
+        "author_id": author_id,
+        "count": total_count,
+        "new_count": 0,
+        "mode": "identity_profile",
+        "centroid_refreshed": bool(centroid_refreshed),
+        "message": f"Identity/profile refresh done for {author_name}: {total_count} total",
+    }
+
+
 def _deep_refresh_all_impl(
     db: sqlite3.Connection,
     *,
@@ -1138,12 +1313,12 @@ def _deep_refresh_all_impl(
     DRY contract (2026-04-24): the per-author iteration funnels through
     `_refresh_author_cache_impl` — the **exact** pipeline the popup's
     "Refresh author" button uses. That runs (1) hierarchical identity
-    resolution + persistence of method/confidence/evidence, (2) legacy
-    resolver for dossier evidence, (3) works + SPECTER2 vectors backfill
-    via `refresh_author_works_and_vectors` (modern path) with Scholar
-    fallback, (4) profile refresh via `apply_author_profile_update`
-    (name, affiliation, institutions, citedby, h_index, works_count,
-    interests, cited_by_year, orcid), (5) author centroid recompute.
+    resolution + persistence of method/confidence/evidence, (2) works +
+    SPECTER2 vectors backfill via `refresh_author_works_and_vectors`
+    (modern path) with Scholar fallback, (3) profile refresh via
+    `apply_author_profile_update` (name, affiliation, institutions,
+    citedby, h_index, works_count, interests, cited_by_year, orcid),
+    (4) author centroid recompute.
 
     Scope (`library` / `followed` / `corpus`) narrows the author pool so
     the user can keep heavy full-corpus runs separate from fast
@@ -1166,80 +1341,13 @@ def _deep_refresh_all_impl(
     """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
 
-    scope = (scope or "followed").strip().lower()
-    if scope not in {"library", "followed", "needs_metadata", "followed_plus_library", "corpus"}:
-        scope = "followed"
+    # Author-pool selection lives in author_lifecycle so the Health maintenance
+    # ``refresh_authors`` count/ETA shares exactly this definition (DRY — one
+    # source of truth for "which authors does scope X touch").
+    from alma.application.author_lifecycle import select_authors_for_scope
 
-    scope_join_map: dict[str, str] = {
-        # All authors of any paper currently in the user's library.
-        "library": (
-            "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
-            "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
-        ),
-        # Explicitly followed authors only.
-        "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",
-        # Targeted metadata repair: rows where identity/profile state is
-        # incomplete or failed, without sweeping every placeholder row.
-        "needs_metadata": "",
-        # Default scope used by the Settings UI: union of followed +
-        # every author of every library paper. Captures the
-        # "adjacent-author" signal (co-authors of papers I've kept)
-        # that Discovery uses to surface related work, without sweeping
-        # the long tail of placeholder rows that live only in the
-        # corpus scope.
-        "followed_plus_library": (
-            "INNER JOIN ("
-            "  SELECT fa.author_id AS id FROM followed_authors fa"
-            "  UNION"
-            "  SELECT a2.id FROM authors a2"
-            "  INNER JOIN publication_authors pa2 ON lower(trim(pa2.openalex_id)) = lower(trim(a2.openalex_id))"
-            "  INNER JOIN papers p2 ON p2.id = pa2.paper_id AND p2.status = 'library'"
-            ") sub ON sub.id = a.id"
-        ),
-        # Every active author row. Available via API but no longer
-        # surfaced in the Settings UI — see lifecycle decision
-        # 2026-04-26 (soft-removed authors stay in the table for
-        # Discovery's negative-signal reads but are filtered out of
-        # bulk refresh / scope queries here).
-        "corpus": "",
-    }
-    scope_join = scope_join_map[scope]
-    needs_metadata_clause = """
-        AND (
-            COALESCE(a.id_resolution_status, '') IN ('error', 'no_match', 'needs_manual_review')
-            OR (
-                COALESCE(a.id_resolution_status, '') = 'unresolved'
-                AND EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
-            )
-            OR (
-                EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id)
-                AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') = ''
-            )
-            OR (
-                COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') != ''
-                AND (
-                    COALESCE(NULLIF(TRIM(a.orcid), ''), '') = ''
-                    OR COALESCE(NULLIF(TRIM(a.affiliation), ''), '') = ''
-                    OR COALESCE(NULLIF(TRIM(a.interests), ''), '') = ''
-                    OR COALESCE(NULLIF(TRIM(a.institutions), ''), '') = ''
-                    OR COALESCE(NULLIF(TRIM(a.cited_by_year), ''), '') = ''
-                    OR COALESCE(a.works_count, 0) <= 0
-                    OR COALESCE(NULLIF(TRIM(a.last_fetched_at), ''), '') = ''
-                )
-            )
-        )
-    """ if scope == "needs_metadata" else ""
-    rows = db.execute(
-        f"""
-        SELECT DISTINCT a.id AS id, a.name AS name,
-               a.openalex_id AS openalex_id, a.scholar_id AS scholar_id
-        FROM authors a
-        {scope_join}
-        WHERE COALESCE(a.status, 'active') <> 'removed'
-        {needs_metadata_clause}
-        ORDER BY a.name
-        """
-    ).fetchall()
+    scope = (scope or "followed").strip().lower()
+    rows = select_authors_for_scope(db, scope)
     total = len(rows)
     if total == 0:
         if job_id:
@@ -1356,9 +1464,9 @@ def _deep_refresh_all_impl(
         worker_db = open_db_connection()
         try:
             # DRY: same pipeline as the popup "Refresh author" button —
-            # hierarchical identity resolve → legacy resolver → works
-            # backfill (OpenAlex or Scholar fallback) → profile update →
-            # centroid recompute. Runs on the worker's own connection;
+            # hierarchical identity resolve → works backfill (OpenAlex or
+            # Scholar fallback) → profile update → centroid recompute.
+            # Runs on the worker's own connection;
             # `profile_cache` lets backfill skip its own profile fetch.
             # `is_batch_member=True` mutes the inner ctx so workers
             # don't clobber the aggregator's job-row progress fields.
@@ -2004,7 +2112,7 @@ def follow_author_from_paper(
     _user: dict = Depends(get_current_user),
 ):
     try:
-        from alma.openalex.client import fetch_author_profile, upsert_work_sidecars
+        from alma.openalex.client import upsert_work_sidecars
 
         _ensure_author_resolution_columns(db)
         ensure_followed_author_contract(db)
@@ -2171,34 +2279,6 @@ def follow_author_from_paper(
             )
             author_id = primary_id
 
-        if resolved_openalex:
-            try:
-                profile = fetch_author_profile(_norm_oaid(resolved_openalex))
-                if profile:
-                    db.execute(
-                        """
-                        UPDATE authors SET
-                            affiliation = COALESCE(?, affiliation),
-                            citedby = ?,
-                            h_index = ?,
-                            interests = ?,
-                            works_count = ?,
-                            orcid = COALESCE(?, orcid)
-                        WHERE id = ?
-                        """,
-                        (
-                            profile.get("affiliation"),
-                            profile.get("citedby", 0),
-                            profile.get("h_index", 0),
-                            json.dumps(profile.get("interests")) if profile.get("interests") else None,
-                            profile.get("works_count", 0),
-                            normalize_orcid(profile.get("orcid")),
-                            author_id,
-                        ),
-                    )
-            except Exception as exc:
-                logger.debug("OpenAlex profile enrichment failed during paper-author follow for %s: %s", author_id, exc)
-
         already_followed = db.execute(
             "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
             (author_id,),
@@ -2270,7 +2350,7 @@ def create_author(
         ```
     """
     try:
-        from alma.openalex.client import fetch_author_profile, get_author_name_by_id
+        from alma.openalex.client import get_author_name_by_id
         _ensure_author_resolution_columns(db)
 
         scholar_id = (author.scholar_id or "").strip() or None
@@ -2345,34 +2425,6 @@ def create_author(
                 now_iso,
             ),
         )
-
-        if resolved_openalex:
-            try:
-                profile = fetch_author_profile(_norm_oaid(resolved_openalex))
-                if profile:
-                    db.execute(
-                        """
-                        UPDATE authors SET
-                            affiliation = COALESCE(?, affiliation),
-                            citedby = ?,
-                            h_index = ?,
-                            interests = ?,
-                            works_count = ?,
-                            orcid = COALESCE(?, orcid)
-                        WHERE id = ?
-                        """,
-                        (
-                            profile.get("affiliation"),
-                            profile.get("citedby", 0),
-                            profile.get("h_index", 0),
-                            json.dumps(profile.get("interests")) if profile.get("interests") else None,
-                            profile.get("works_count", 0),
-                            normalize_orcid(profile.get("orcid")),
-                            primary_id,
-                        ),
-                    )
-            except Exception as exc:
-                logger.warning("OpenAlex profile enrichment failed during author creation for '%s': %s", primary_id, exc)
 
         _sync_follow_state(db, primary_id, followed=True)
         db.commit()
@@ -4620,6 +4672,78 @@ def garbage_collect_orphan_authors_endpoint(
         job_id,
         operation_key=operation_key,
         queued_message=f"Queued author GC sweep ({'dry-run' if dry_run else 'live'})",
+    )
+
+
+@router.post(
+    "/{author_id}/identity-profile-refresh",
+    summary="Refresh author identity/profile",
+    description=(
+        "Refreshes identity and profile metadata only. Does not paginate works, "
+        "fetch S2 vectors, or recompute the centroid unless the resolved identity changes."
+    ),
+)
+def identity_profile_refresh_author(
+    author_id: str,
+    background: bool = Query(True, description="Run as background job and track in Activity"),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Cheap author repair path for needs-attention retry/profile refresh."""
+    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+
+    if not background:
+        try:
+            return _refresh_author_identity_profile_impl(db, author_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise_internal(f"Identity/profile refresh failed for author {author_id}", e)
+
+    row = db.execute("SELECT name FROM authors WHERE id = ?", (author_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Author not found")
+    author_name = row["name"] or author_id
+    operation_key = f"authors.identity_profile_refresh:{normalize_author_id(author_id)}"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message=f"Identity/profile refresh already running for {author_name}",
+        )
+
+    job_id = f"author_identity_profile_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=datetime.utcnow().isoformat(),
+        message=f"Refreshing author identity/profile: {author_name}",
+    )
+    add_job_log(job_id, f"Queued identity/profile refresh for {author_name}", step="queued")
+
+    def _runner() -> dict:
+        conn = open_db_connection()
+        try:
+            return _refresh_author_identity_profile_impl(conn, author_id, job_id=job_id)
+        finally:
+            conn.close()
+
+    schedule_immediate(job_id, _runner)
+    return _immediate_job_response(
+        job_id,
+        operation_key=operation_key,
+        queued_message=f"Queued identity/profile refresh for {author_name}",
+        extra={
+            "success": True,
+            "author_id": author_id,
+            "count": None,
+            "new_count": 0,
+            "mode": "identity_profile",
+        },
     )
 
 

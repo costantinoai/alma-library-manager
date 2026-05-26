@@ -23,6 +23,7 @@ from alma.application.author_affiliation import (
 )
 from alma.application.author_profile import apply_author_profile_update
 from alma.core.utils import (
+    normalize_id_list,
     normalize_orcid,
     utcnow as _utcnow,
     utcnow_iso as _utcnow_iso,
@@ -379,7 +380,11 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
         try:
             from alma.application.author_merge import record_orcid_aliases
 
-            alias_result = record_orcid_aliases(conn, author_id)
+            alias_result = record_orcid_aliases(
+                conn,
+                author_id,
+                known_orcid=detail.get("orcid"),
+            )
             alias_count = int(alias_result.get("aliases_recorded") or alias_result.get("recorded") or 0)
         except Exception as exc:
             logger.debug("OpenAlex ORCID alias hydration skipped for %s: %s", author_id, exc)
@@ -737,11 +742,18 @@ def enqueue_pending_author_hydration(
     priority: Literal["high", "low"],
     reason: str = "author_seen",
 ) -> bool:
-    """Mark an author as needing hydration.
+    """Mark an author as needing hydration (ledger write only).
 
-    High-priority callers reset terminal rows and schedule a sweep.
-    Low-priority callers only write ledger rows; they ride the next
-    manual/follow-triggered sweep.
+    High-priority callers reset terminal rows so the author re-enters the
+    eligible pool; low-priority callers leave terminal rows alone (they ride
+    the next sweep). This function does NOT schedule a sweep — that is a
+    visible, separate step the caller owns (call
+    ``schedule_pending_author_hydration_sweep`` explicitly after a
+    user-facing high-priority enqueue like follow/merge). Decoupling the two
+    keeps "mark needs hydration" free of a hidden background-job side-effect,
+    and stops ``_enqueue_candidates_for_run`` (which runs *inside* a sweep)
+    from recursively re-scheduling sweeps. ``reason`` is retained for the
+    caller's intent/logging.
     """
     if priority not in {"high", "low"}:
         raise ValueError("priority must be 'high' or 'low'")
@@ -798,11 +810,6 @@ def enqueue_pending_author_hydration(
                 ),
             )
             queued = True
-    if queued and priority == "high":
-        try:
-            schedule_pending_author_hydration_sweep(reason=reason)
-        except Exception as exc:
-            logger.debug("auto author hydration schedule skipped: %s", exc)
     return queued
 
 
@@ -811,9 +818,15 @@ def _enqueue_candidates_for_run(
     *,
     limit: int | None,
     force: bool,
+    target_author_ids: list[str] | tuple[str, ...] | None = None,
 ) -> int:
     ensure_author_hydration_tables(conn)
+    target_ids = normalize_id_list(target_author_ids)
     params: list[Any] = []
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
     limit_clause = ""
     if limit is not None:
         params.append(max(1, int(limit)))
@@ -828,6 +841,7 @@ def _enqueue_candidates_for_run(
             OR COALESCE(NULLIF(TRIM(orcid), ''), '') != ''
             OR COALESCE(NULLIF(TRIM(semantic_scholar_id), ''), '') != ''
           )
+          {target_clause}
         ORDER BY
             CASE WHEN author_type = 'followed' THEN 0 ELSE 1 END,
             COALESCE(last_fetched_at, added_at, '') DESC,
@@ -855,14 +869,23 @@ def _select_source_candidates(
     source: str,
     limit: int | None,
     force: bool,
+    target_author_ids: list[str] | tuple[str, ...] | None = None,
 ) -> list[sqlite3.Row]:
     ensure_author_hydration_tables(conn)
     now = _utcnow_iso()
     params: list[Any] = [source]
+    target_ids = normalize_id_list(target_author_ids)
+    target_clause = ""
+    if target_ids:
+        target_clause = f"AND a.id IN ({','.join('?' for _ in target_ids)})"
+        params.extend(target_ids)
     force_clause = "1 = 1" if force else """
     (
         es.status IN ('pending', 'queued')
-        OR es.status = ?
+        OR (
+            es.status = ?
+            AND (es.next_retry_at IS NULL OR es.next_retry_at <= ?)
+        )
         OR (
             a.author_type = 'followed'
             AND es.status = 'unchanged'
@@ -875,7 +898,7 @@ def _select_source_candidates(
     )
     """
     if not force:
-        params.extend([RETRYABLE_STATUS, now])
+        params.extend([RETRYABLE_STATUS, now, now])
     limit_clause = ""
     if limit is not None:
         params.append(max(1, int(limit)))
@@ -887,6 +910,7 @@ def _select_source_candidates(
         JOIN authors a ON a.id = es.author_id
         WHERE es.source = ?
           AND COALESCE(a.status, 'active') != 'removed'
+          {target_clause}
           AND {force_clause}
         ORDER BY
             CASE WHEN a.author_type = 'followed' THEN 0 ELSE 1 END,
@@ -898,11 +922,39 @@ def _select_source_candidates(
     ).fetchall()
 
 
+def count_metadata_candidates(
+    conn: sqlite3.Connection,
+    *,
+    force: bool = False,
+    target_author_ids: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Total author-source fetches a metadata rehydration would make right now —
+    the sum of eligible candidates across the OpenAlex / S2 / ORCID / Crossref
+    phases (one upstream call each). Drives the Health card's pending count + ETA."""
+    try:
+        ensure_author_hydration_tables(conn)
+        total = 0
+        for source in (OPENALEX_SOURCE, S2_SOURCE, ORCID_SOURCE, CROSSREF_SOURCE):
+            total += len(
+                _select_source_candidates(
+                    conn,
+                    source=source,
+                    limit=None,
+                    force=force,
+                    target_author_ids=target_author_ids,
+                )
+            )
+        return int(total)
+    except Exception:
+        return 0
+
+
 def run_author_metadata_rehydration(
     job_id: str | None = None,
     *,
     limit: int | None = None,
     force: bool = False,
+    target_author_ids: list[str] | tuple[str, ...] | None = None,
     set_job_status: Callable[..., Any] | None = None,
     add_job_log: Callable[..., Any] | None = None,
     is_cancellation_requested: Callable[[str], bool] | None = None,
@@ -917,9 +969,20 @@ def run_author_metadata_rehydration(
     try:
         ensure_author_hydration_tables(conn)
         bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
-        enqueued = _enqueue_candidates_for_run(conn, limit=bounded_limit, force=force)
+        target_ids = normalize_id_list(target_author_ids)
+        enqueued = _enqueue_candidates_for_run(
+            conn,
+            limit=bounded_limit,
+            force=force,
+            target_author_ids=target_ids,
+        )
         if add_job_log:
-            add_job_log(jid, "Prepared author hydration ledger", step="prepare", data={"enqueued": enqueued, "limit": bounded_limit})
+            add_job_log(
+                jid,
+                "Prepared author hydration ledger",
+                step="prepare",
+                data={"enqueued": enqueued, "limit": bounded_limit, "target_author_ids": target_ids},
+            )
 
         phases = [
             ("openalex", OPENALEX_SOURCE),
@@ -930,7 +993,13 @@ def run_author_metadata_rehydration(
         total_candidates = 0
         source_rows: dict[str, list[sqlite3.Row]] = {}
         for _, source in phases:
-            rows = _select_source_candidates(conn, source=source, limit=bounded_limit, force=force)
+            rows = _select_source_candidates(
+                conn,
+                source=source,
+                limit=bounded_limit,
+                force=force,
+                target_author_ids=target_ids,
+            )
             source_rows[source] = rows
             total_candidates += len(rows)
         processed = 0
@@ -940,7 +1009,11 @@ def run_author_metadata_rehydration(
                 status="running",
                 processed=0,
                 total=total_candidates,
-                message=f"Hydrating metadata for {total_candidates} author-source candidate(s)",
+                message=(
+                    f"Hydrating metadata for {total_candidates} author-source candidate(s)"
+                    if not target_ids
+                    else f"Hydrating metadata for {total_candidates} source candidate(s) on {len(target_ids)} target author(s)"
+                ),
             )
 
         for phase_name, source in phases:
@@ -996,7 +1069,14 @@ def run_author_metadata_rehydration(
         )
         if add_job_log:
             add_job_log(jid, msg, step="done", data=dict(summary))
-        return {"success": True, "message": msg, "summary": dict(summary), "processed": processed, "total": total_candidates}
+        return {
+            "success": True,
+            "message": msg,
+            "summary": dict(summary),
+            "processed": processed,
+            "total": total_candidates,
+            "target_author_ids": target_ids,
+        }
     finally:
         if close_conn:
             conn.close()
@@ -1006,6 +1086,7 @@ def schedule_pending_author_hydration_sweep(
     *,
     reason: str = "author_follow",
     limit: int | None = None,
+    target_author_ids: list[str] | tuple[str, ...] | None = None,
 ) -> str | None:
     """Idempotent author-metadata hydration sweep.
 
@@ -1016,10 +1097,17 @@ def schedule_pending_author_hydration_sweep(
     from alma.core.job_envelope import schedule_with_envelope
 
     bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
-    queued_message = (
-        f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
-        if bounded_limit is not None
-        else "Author metadata hydration auto-queued for all eligible authors"
+    target_ids = normalize_id_list(target_author_ids)
+    if target_ids:
+        queued_message = f"Author metadata hydration auto-queued for {len(target_ids)} target author(s)"
+    elif bounded_limit is not None:
+        queued_message = f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
+    else:
+        queued_message = "Author metadata hydration auto-queued for all eligible authors"
+    operation_key = (
+        "authors.rehydrate_metadata"
+        if not target_ids
+        else "authors.rehydrate_metadata:" + hashlib.sha1("|".join(target_ids).encode("utf-8")).hexdigest()[:12]
     )
 
     def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
@@ -1034,6 +1122,7 @@ def schedule_pending_author_hydration_sweep(
                 job_id,
                 limit=bounded_limit,
                 force=False,
+                target_author_ids=target_ids,
                 set_job_status=set_job_status,
                 add_job_log=add_job_log,
                 is_cancellation_requested=is_cancellation_requested,
@@ -1042,7 +1131,7 @@ def schedule_pending_author_hydration_sweep(
         return _runner
 
     return schedule_with_envelope(
-        operation_key="authors.rehydrate_metadata",
+        operation_key=operation_key,
         job_id_prefix="author_metadata_rehydrate",
         trigger_source=f"auto:{reason}",
         queued_message=queued_message,
@@ -1051,12 +1140,14 @@ def schedule_pending_author_hydration_sweep(
         log_data={
             "reason": reason,
             "limit": bounded_limit,
-            "all_eligible": bounded_limit is None,
+            "all_eligible": not target_ids and bounded_limit is None,
+            "target_author_ids": target_ids,
+            "target_count": len(target_ids),
         },
         extra_status_fields={
             "started_at": _utcnow_iso(),
             "processed": 0,
-            "total": bounded_limit or 0,
+            "total": len(target_ids) or bounded_limit or 0,
         },
     )
 
