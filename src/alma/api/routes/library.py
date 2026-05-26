@@ -1421,7 +1421,13 @@ def delete_topic_alias(
 def list_followed_authors(
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Return all followed authors, joining with the authors table for display names."""
+    """Return all followed authors, joining with the authors table for display names.
+
+    Deliberately fast: the canonical author *signal* is computed by the
+    separate ``/followed-authors/signals`` endpoint so the grid (which drives
+    off this list) never waits on the signal context build, and a dismiss that
+    invalidates this list updates the grid instantly.
+    """
     ensure_followed_author_contract(db)
     rows = db.execute(
         """
@@ -1440,6 +1446,38 @@ def list_followed_authors(
         )
         for r in rows
     ]
+
+
+@router.get(
+    "/followed-authors/signals",
+    summary="Canonical author signals for every followed author",
+    description=(
+        "Batched author-signal map keyed by author_id. Split from the "
+        "followed-authors list so the (slow) signal context build never blocks "
+        "the (fast) list that drives the grid. Computed on demand."
+    ),
+)
+def list_followed_author_signals(
+    db: sqlite3.Connection = Depends(get_db),
+):
+    from alma.application.author_signal import compute_author_signals
+
+    ensure_followed_author_contract(db)
+    rows = db.execute(
+        """
+        SELECT fa.author_id, a.name, a.openalex_id
+        FROM followed_authors fa
+        LEFT JOIN authors a ON a.id = fa.author_id
+        """
+    ).fetchall()
+    # One context build + one centroid query for the whole grid.
+    return compute_author_signals(
+        db,
+        [
+            {"id": r["author_id"], "openalex_id": r["openalex_id"], "name": r["name"]}
+            for r in rows
+        ],
+    )
 
 
 @router.post(

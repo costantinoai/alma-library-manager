@@ -53,8 +53,12 @@ VALID_FEED_ACTIONS = {
     "like",
     "love",
     "dislike",
+    "dismiss",
 }
-VALID_FEED_STATUSES = {"new", *VALID_FEED_ACTIONS}
+# Resting `feed_items.status` values. Note that `dismiss` is an *action* that
+# settles to the `dismissed` status (hidden from the inbox forever); every
+# other action settles to a status that matches its own name.
+VALID_FEED_STATUSES = {"new", "dismissed", *(VALID_FEED_ACTIONS - {"dismiss"})}
 
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -682,6 +686,11 @@ def list_feed_items(
     # other mutation flows that already write.
     where = ["1=1"]
     params: list[object] = []
+    # Dismissed items are hidden from the inbox forever — the user said "not
+    # interested, get it out of my Feed". Only the durable negative signal in
+    # the corpus survives. Excluded across every status filter (including
+    # "all"), so a dismissed paper never reappears on refresh.
+    where.append("COALESCE(fi.status, 'new') <> 'dismissed'")
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
     filter_to_new_papers = False
@@ -868,6 +877,13 @@ def apply_feed_action(
         )
     elif action == "dislike":
         library_app.sink_disliked_paper(db, paper_id)
+    elif action == "dismiss":
+        # Dismiss is signal-only: no Library membership change and — unlike
+        # `dislike` — no hard rating=1 stamp on the paper. The only corpus
+        # effect is the small negative feedback event recorded below; the
+        # paper is hidden from the inbox forever via the `dismissed` resting
+        # status set at the end of this function.
+        pass
 
     library_app.sync_surface_resolution(
         db,
@@ -890,7 +906,10 @@ def apply_feed_action(
             value={
                 "action": action,
                 "rating": {"add": 3, "like": 4, "love": 5, "dislike": 1}.get(action),
-                "signal_value": {"add": 0, "like": 1, "love": 2, "dislike": -1}.get(action, 0),
+                # `dismiss` is a small (-1) negative signal with no rating
+                # stamp — lighter than an explicit `dislike` (which also sets
+                # the star rating to 1).
+                "signal_value": {"add": 0, "like": 1, "love": 2, "dislike": -1, "dismiss": -1}.get(action, 0),
             },
             context={
                 "mode": "feed",
@@ -907,13 +926,17 @@ def apply_feed_action(
     except Exception as exc:
         logger.debug("Feed action feedback recording failed for %s: %s", feed_item_id, exc)
 
+    # `dismiss` settles every feed row for this paper to the `dismissed`
+    # resting status so `list_feed_items` drops it from the inbox for good;
+    # every other action settles to a status matching its own name.
+    resting_status = "dismissed" if action == "dismiss" else action
     db.execute(
         """
         UPDATE feed_items
         SET status = ?
         WHERE paper_id = ?
         """,
-        (action, paper_id),
+        (resting_status, paper_id),
     )
     db.commit()
 
@@ -921,6 +944,66 @@ def apply_feed_action(
         "feed_item_id": feed_item_id,
         "paper_id": paper_id,
         "action": action,
+    }
+
+
+def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> Optional[dict]:
+    """Reverse a Feed ``dismiss``: restore the paper to the inbox and drop the
+    small negative signal the dismissal recorded.
+
+    Mirrors the connector's ``undo_from_extension`` precedent — it deletes the
+    feedback event the action wrote rather than surgically un-applying the
+    derived ``preference_profiles`` delta (an aggregate that decays and is
+    recomputed over time). Every dismissed feed row for the paper is restored
+    to ``new`` so the card reappears in the chronological inbox.
+
+    Returns ``None`` when the feed item no longer exists.
+    """
+    row = db.execute(
+        "SELECT id, paper_id FROM feed_items WHERE id = ?",
+        (feed_item_id,),
+    ).fetchone()
+    if not row:
+        return None
+
+    paper_id = row["paper_id"]
+
+    # Restore visibility: every `dismissed` row for this paper goes back to
+    # `new` (dismiss had overwritten all of them, so the prior per-row status
+    # is unrecoverable — `new` is the honest untriaged default).
+    db.execute(
+        """
+        UPDATE feed_items
+        SET status = 'new'
+        WHERE paper_id = ?
+          AND COALESCE(status, 'new') = 'dismissed'
+        """,
+        (paper_id,),
+    )
+
+    # Drop the small negative signal — the most recent feed dismiss event for
+    # this paper. The action lives in the event's `value` JSON.
+    if _table_exists(db, "feedback_events"):
+        db.execute(
+            """
+            DELETE FROM feedback_events
+            WHERE id = (
+                SELECT id FROM feedback_events
+                WHERE entity_type = 'publication' AND entity_id = ?
+                  AND event_type = 'feed_action'
+                  AND value LIKE '%"action": "dismiss"%'
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+            )
+            """,
+            (paper_id,),
+        )
+
+    db.commit()
+    return {
+        "feed_item_id": feed_item_id,
+        "paper_id": paper_id,
+        "action": "undo_dismiss",
     }
 
 

@@ -3986,6 +3986,37 @@ def get_author_detail(
 
 
 @router.get(
+    "/{author_id}/neighbourhood",
+    summary="Author neighbourhood ego-network (3D explorer)",
+    description=(
+        "On-demand ego-network around one author: co-authors, citation "
+        "neighbours, and semantically-similar authors, plus the co-authorship "
+        "edges among them. Computed lazily (only when requested) and bounded "
+        "per relation. Shape: {center, nodes[], links[], counts}."
+    ),
+)
+def get_author_neighbourhood(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_neighbourhood import build_author_neighbourhood
+
+    try:
+        payload = build_author_neighbourhood(db, author_id)
+        if payload is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Author with ID {author_id} not found",
+            )
+        return payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_internal(f"Failed to build neighbourhood for author {author_id}", e)
+
+
+@router.get(
     "/{author_id}/dossier",
     summary="Get author dossier",
     description="Return history, corpus split, topics, venues, collaborators, and recommended next actions for one author.",

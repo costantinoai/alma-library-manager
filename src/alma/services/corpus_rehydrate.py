@@ -1381,6 +1381,50 @@ def run_corpus_metadata_rehydration(
         )
         total = len(rows)
         summary["candidates"] = total
+
+        # Local-only preflight before any remote metadata phase starts. Activity
+        # previously exposed OpenAlex's candidate count as the job total even
+        # when S2/Crossref/landing-page phases had work; this log makes the
+        # real multi-phase budget visible without changing runner semantics.
+        s2_preflight_rows = _select_s2_candidates(
+            conn, limit=limit, target_paper_ids=target_ids
+        )
+        crossref_preflight_ids = _select_crossref_abstract_candidates(
+            conn, limit=limit, seed_paper_ids=target_ids or None
+        )
+        abstract_preflight_ids = _select_abstract_recovery_candidates(
+            conn, limit=limit, target_paper_ids=target_ids
+        )
+        phase_preflight = {
+            "title_resolution_attempted": int(summary["title_resolution_attempted"]),
+            "title_resolution_resolved": int(summary["title_resolution_resolved"]),
+            "openalex_candidates": total,
+            "s2_candidates": len(s2_preflight_rows),
+            "crossref_candidates": len(crossref_preflight_ids),
+            "abstract_recovery_candidates": len(abstract_preflight_ids),
+            "total_phase_candidates": (
+                total
+                + len(s2_preflight_rows)
+                + len(crossref_preflight_ids)
+                + len(abstract_preflight_ids)
+            ),
+            "limit": limit,
+            "force": force,
+            "target_paper_ids": target_ids,
+            "estimated_remote_calls": {
+                "openalex": (total + batch_size - 1) // batch_size,
+                "semantic_scholar": (len(s2_preflight_rows) + 99) // 100,
+                "crossref": 1 if crossref_preflight_ids else 0,
+                "abstract_recovery": len(abstract_preflight_ids),
+            },
+        }
+        summary["phase_preflight_total"] = phase_preflight["total_phase_candidates"]
+        add_job_log(
+            job_id,
+            "Prepared corpus metadata phase budget",
+            step="phase_preflight",
+            data=phase_preflight,
+        )
         if total == 0:
             add_job_log(
                 job_id,
@@ -2565,7 +2609,7 @@ def schedule_pending_hydration_sweep(
     Returns the active or newly-queued job_id; returns None if the
     scheduler isn't importable (e.g., during tests or CLI tools).
     """
-    from alma.core.job_envelope import schedule_with_envelope
+    from alma.core.job_envelope import schedule_with_envelope, target_scoped_operation_key
 
     target_ids = normalize_id_list(target_paper_ids)
     if limit is None and reason == "paper_insert":
@@ -2605,7 +2649,10 @@ def schedule_pending_hydration_sweep(
         return _runner
 
     return schedule_with_envelope(
-        operation_key="papers.rehydrate_metadata:openalex:metadata",
+        operation_key=target_scoped_operation_key(
+            "papers.rehydrate_metadata:openalex:metadata",
+            target_ids,
+        ),
         job_id_prefix="paper_metadata_rehydrate",
         trigger_source=f"auto:{reason}",
         queued_message=queued_message,

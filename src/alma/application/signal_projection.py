@@ -103,6 +103,7 @@ def load_projected_paper_signals(
     *,
     half_life_days: float = _EVENT_HALF_LIFE_DAYS,
     max_age_days: float = _EVENT_MAX_AGE_DAYS,
+    author_only: bool = False,
 ) -> ProjectedPaperSignals:
     """Load paper feedback and project it onto adjacent ranking signals.
 
@@ -114,6 +115,13 @@ def load_projected_paper_signals(
     canonical write path landed. The downstream per-paper projections
     (authors / topics / venues / keywords / tags / semantic / citation
     neighbours) fan out automatically; no per-source duplication.
+
+    ``author_only`` skips the paper/topic/venue/tag/semantic/citation
+    projections and computes ONLY the author + author-name maps. The
+    semantic-neighbour pass is an O(seeds × embedded-papers) numpy loop
+    (~0.7s on a few-thousand-paper corpus), so a caller that consumes
+    only ``.author`` / ``.author_name`` (the author signal) should not pay
+    for the paper-level fan-out it then throws away.
     """
 
     now = datetime.now(timezone.utc)
@@ -167,13 +175,14 @@ def load_projected_paper_signals(
 
     if paper_strength:
         _project_authors(db, paper_ids, paper_strength, out)
-        _project_topics(db, paper_ids, paper_strength, out)
-        _project_venues_keywords(db, paper_ids, paper_strength, out)
-        _project_tags(db, paper_ids, paper_strength, out)
-        _project_semantic_neighbors(db, paper_ids, paper_strength, out)
-        _project_citation_neighbors(db, paper_ids, paper_strength, out)
+        if not author_only:
+            _project_topics(db, paper_ids, paper_strength, out)
+            _project_venues_keywords(db, paper_ids, paper_strength, out)
+            _project_tags(db, paper_ids, paper_strength, out)
+            _project_semantic_neighbors(db, paper_ids, paper_strength, out)
+            _project_citation_neighbors(db, paper_ids, paper_strength, out)
 
-    _project_author_feedback(db, out)
+    _project_author_feedback(db, out, author_only=author_only)
 
     out.paper = _squash_map(out.paper, saturation=1.5)
     out.author = _squash_map(out.author, saturation=1.5)
@@ -550,7 +559,9 @@ def _project_citation_neighbors(
         return
 
 
-def _project_author_feedback(db: sqlite3.Connection, out: ProjectedPaperSignals) -> None:
+def _project_author_feedback(
+    db: sqlite3.Connection, out: ProjectedPaperSignals, *, author_only: bool = False
+) -> None:
     author_signals: dict[str, float] = defaultdict(float)
 
     try:
@@ -601,7 +612,13 @@ def _project_author_feedback(db: sqlite3.Connection, out: ProjectedPaperSignals)
 
     if author_signals:
         author_signal_map = dict(author_signals)
-        _project_author_profiles(db, author_signal_map, out)
+        # Profiles spill only to topic / venue / keyword / tag — the author
+        # signal reads neither, so skip them for author-only callers. Coauthor
+        # and institution spill DO feed ``out.author`` (collaborators /
+        # lab-mates of a followed author are weak preference candidates), so
+        # they always run.
+        if not author_only:
+            _project_author_profiles(db, author_signal_map, out)
         _project_author_coauthors(db, author_signal_map, out)
         _project_author_institutions(db, author_signal_map, out)
 

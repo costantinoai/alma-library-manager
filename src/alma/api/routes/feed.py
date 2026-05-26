@@ -556,6 +556,44 @@ def dislike_feed_item(
         raise_internal("Failed to dislike feed item", exc)
 
 
+@router.post("/{feed_item_id}/dismiss", summary="Dismiss feed paper — hide from Feed forever + small negative signal")
+def dismiss_feed_item(
+    feed_item_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return _run_feed_action(feed_item_id=feed_item_id, action="dismiss", db=db, user=user)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_internal("Failed to dismiss feed item", exc)
+
+
+@router.post("/{feed_item_id}/undo-dismiss", summary="Undo a feed dismissal — restore to inbox + drop the negative signal")
+def undo_feed_dismiss(
+    feed_item_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    # Lightweight corrective action — no Activity envelope (mirrors the
+    # connector's /undo), so an accidental dismiss + immediate undo leaves no
+    # operation noise behind.
+    try:
+        result = feed_app.undo_feed_dismiss(db, feed_item_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Feed item not found")
+        item = feed_app.get_feed_item(db, feed_item_id)
+        return {
+            "item": FeedItemResponse(**item).model_dump() if item else None,
+            "result": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_internal("Failed to undo feed dismissal", exc)
+
+
 @router.post("/bulk-action", summary="Apply one action to multiple feed items")
 def bulk_feed_action(
     body: FeedBulkActionRequest,

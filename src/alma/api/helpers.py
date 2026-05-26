@@ -17,8 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 def raise_internal(message: str, exc: Exception) -> None:
-    """Log an internal error and raise HTTP 500."""
-    logger.error("%s: %s", message, redact_sensitive_text(str(exc)))
+    """Log an internal error (with full traceback) and raise HTTP 500.
+
+    ``exc_info=exc`` makes the logger emit the complete stack trace, not just
+    the exception's ``str()`` — otherwise a 500 leaves nothing in the server
+    log to debug from. The client still receives only ``message`` (the
+    redacted summary), so we don't leak internals over HTTP.
+    """
+    logger.error("%s: %s", message, redact_sensitive_text(str(exc)), exc_info=exc)
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=message,

@@ -1094,7 +1094,7 @@ def schedule_pending_author_hydration_sweep(
     but for the ``authors`` table. Both go through the canonical
     Activity envelope (:func:`alma.core.job_envelope.schedule_with_envelope`).
     """
-    from alma.core.job_envelope import schedule_with_envelope
+    from alma.core.job_envelope import schedule_with_envelope, target_scoped_operation_key
 
     bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
     target_ids = normalize_id_list(target_author_ids)
@@ -1104,11 +1104,7 @@ def schedule_pending_author_hydration_sweep(
         queued_message = f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
     else:
         queued_message = "Author metadata hydration auto-queued for all eligible authors"
-    operation_key = (
-        "authors.rehydrate_metadata"
-        if not target_ids
-        else "authors.rehydrate_metadata:" + hashlib.sha1("|".join(target_ids).encode("utf-8")).hexdigest()[:12]
-    )
+    operation_key = target_scoped_operation_key("authors.rehydrate_metadata", target_ids)
 
     def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
         from alma.api.scheduler import (

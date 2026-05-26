@@ -46,6 +46,7 @@ import sqlite3
 import uuid
 from typing import Any, Callable, Optional
 
+from alma.core.job_envelope import target_scoped_operation_key
 from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
@@ -291,7 +292,7 @@ def schedule_post_hydration_chain(
         return _run
 
     job_id = _schedule_with_envelope(
-        operation_key=_S2_FETCH_OPERATION_KEY,
+        operation_key=target_scoped_operation_key(_S2_FETCH_OPERATION_KEY, target_ids),
         job_id_prefix="auto_s2_fetch",
         chain_id=chain_id,
         chain_step="s2_fetch",
@@ -380,7 +381,7 @@ def schedule_post_s2_chain(
         return _run
 
     job_id = _schedule_with_envelope(
-        operation_key=_LOCAL_FILL_OPERATION_KEY,
+        operation_key=target_scoped_operation_key(_LOCAL_FILL_OPERATION_KEY, target_ids),
         job_id_prefix="auto_local_specter2",
         chain_id=chain_id,
         chain_step="local_specter2_fill",

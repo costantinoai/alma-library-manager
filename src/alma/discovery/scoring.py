@@ -34,6 +34,7 @@ from alma.core.scoring_math import (
 )
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
+from alma.application.author_signal import build_discovery_author_affinity
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
@@ -217,7 +218,6 @@ def compute_preference_profile(
         settings = load_settings(conn)
 
     topic_weights: Dict[str, float] = {}
-    author_affinity: Dict[str, float] = {}
     journal_affinity: Dict[str, float] = {}
 
     def _accumulate(pubs: List[dict], weight: float) -> None:
@@ -238,10 +238,6 @@ def compute_preference_profile(
                             topic_weights[term] = topic_weights.get(term, 0) + weight * (tr["score"] or 0.5)
                 except sqlite3.OperationalError:
                     logger.warning("publication_topics table not available for preference profile")
-
-            for parsed_name in parse_author_names(pub.get("authors") or ""):
-                for key in author_affinity_keys(parsed_name):
-                    author_affinity[key] = author_affinity.get(key, 0) + weight
 
             journal = (pub.get("journal") or "").strip().lower()
             if journal:
@@ -356,8 +352,17 @@ def compute_preference_profile(
     # just compete with the dominant author on log-curve terms instead
     # of being drowned by the linear max.
     topic_weights = log_prevalence_weights(topic_weights)
-    author_affinity = log_prevalence_weights(author_affinity)
     journal_affinity = log_prevalence_weights(journal_affinity)
+
+    # Author affinity is the canonical author signal (one definition, shared
+    # with the Authors page, suggestions, and rankings — see
+    # `alma.application.author_signal`). We take its STABLE preference
+    # (library + rating + embedding similarity + neighborhood); the volatile
+    # interaction component keeps flowing through `_projected_feedback_adjustment`
+    # / `_dismissal_cluster_penalty` below, so the two never double-count the
+    # same feedback. This replaces the old name-prevalence count and gives the
+    # ranker embedding-similarity-aware author affinity for free.
+    author_affinity = build_discovery_author_affinity(conn)
 
     # -- Feedback centroids from past recommendations --
     # Structured per-author / per-topic / per-venue / per-keyword / per-tag

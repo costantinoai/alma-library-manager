@@ -52,19 +52,25 @@ Range: 0…1.
 
 ### `author_affinity`
 
-Has the candidate's author appeared in your Library, your follow
-list, or as a co-author of your saved authors?
+Does the candidate's author match the canonical author signal ALMa has
+learned from your Library, ratings, graph context, and embeddings?
 
-Computed as a weighted sum:
+ALMa computes one shared author signal and reuses it here. The Discovery
+ranker takes the stable components only:
 
-| Match | Weight |
+| Component | What it means |
 |---|---|
-| Followed author | 1.0 |
-| Author of a saved Library paper | 0.7 |
-| Co-author of a saved-Library author | 0.4 |
-| Author cited by saved papers | 0.3 |
+| Saved footprint | Saved Library papers by this author, normalized against the author with the largest saved footprint. |
+| Rating | Average rating of saved papers by this author; 5★ is positive, 3★ neutral, 1★ negative. |
+| Similarity | Author SPECTER2 centroid against the Library centroid. Author centroids use their own scale: cosine ≤0.35 is absent/0, cosine 1.0 is 100, and values between scale linearly. |
+| Neighborhood | Co-authorship with your Library circle and cited-by-Library adjacency, using soft saturation so one/few links are visible but do not become 100. |
 
-Range: 0…1 (clamped).
+The volatile interaction component (fresh likes, dismisses, follows,
+and projected paper feedback) flows through `feedback_adj` instead, so the
+same feedback is not counted twice.
+
+Range: -1…1 internally. Negative author affinity can lower candidates;
+the UI displays positive affinity as 0…100.
 
 ### `journal_affinity`
 

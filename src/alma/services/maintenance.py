@@ -47,6 +47,12 @@ COST_CHEAP = "cheap"  # local DB work only
 COST_NETWORK = "network"  # remote API calls (OpenAlex / Crossref / S2)
 COST_COMPUTE = "compute"  # local CPU/GPU (SPECTER2)
 
+SOURCE_OPENALEX = "openalex"
+SOURCE_SEMANTIC_SCHOLAR = "semantic_scholar"
+SOURCE_CROSSREF = "crossref"
+SOURCE_ORCID = "orcid"
+SOURCE_LANDING_PAGE = "landing_page"
+
 
 # --------------------------------------------------------------------------
 # Runner bindings — bind the scheduler callbacks to each bounded runner at the
@@ -262,6 +268,10 @@ class MaintenanceTask:
     runner: Callable[..., None]  # (job_id, cap, target_paper_ids=None, params=None) -> None
     default_enabled: bool = False
     default_daily_cap: int = 200
+    hard_cap: Optional[int] = None
+    sources: tuple[str, ...] = ()
+    local_compute: bool = False
+    destructive: bool = False
     # --- optional, for the author / dedup jobs folded in from Corpus maintenance ---
     # Pending count for backlogs that aren't a health-payload path (authors, twins).
     # Signature: (conn, params=None) -> int. Takes precedence over candidate_path.
@@ -297,6 +307,13 @@ REGISTRY: dict[str, MaintenanceTask] = {
             job_id_prefix="maint_corpus_metadata",
             cost=COST_NETWORK,
             runner=_run_corpus_metadata,
+            hard_cap=500,
+            sources=(
+                SOURCE_OPENALEX,
+                SOURCE_SEMANTIC_SCHOLAR,
+                SOURCE_CROSSREF,
+                SOURCE_LANDING_PAGE,
+            ),
         ),
         MaintenanceTask(
             key="s2_vector",
@@ -311,6 +328,8 @@ REGISTRY: dict[str, MaintenanceTask] = {
             job_id_prefix="maint_s2_vector",
             cost=COST_NETWORK,
             runner=_run_s2_vector,
+            hard_cap=5000,
+            sources=(SOURCE_SEMANTIC_SCHOLAR,),
         ),
         MaintenanceTask(
             key="embedding",
@@ -325,6 +344,8 @@ REGISTRY: dict[str, MaintenanceTask] = {
             job_id_prefix="maint_embedding",
             cost=COST_COMPUTE,
             runner=_run_embedding,
+            hard_cap=5000,
+            local_compute=True,
         ),
         MaintenanceTask(
             key="title_resolution",
@@ -339,6 +360,8 @@ REGISTRY: dict[str, MaintenanceTask] = {
             job_id_prefix="maint_title_resolution",
             cost=COST_NETWORK,
             runner=_run_title_resolution,
+            hard_cap=1000,
+            sources=(SOURCE_SEMANTIC_SCHOLAR,),
             # Honest pending: the op's own eligibility (excludes terminal_no_match /
             # unmatched), not the raw identity.unresolved gap it would skip past.
             count_fn=_count_title_resolution_eligible,
@@ -358,6 +381,13 @@ REGISTRY: dict[str, MaintenanceTask] = {
             cost=COST_NETWORK,
             runner=_run_author_metadata,
             count_fn=_count_author_metadata,
+            hard_cap=500,
+            sources=(
+                SOURCE_OPENALEX,
+                SOURCE_ORCID,
+                SOURCE_SEMANTIC_SCHOLAR,
+                SOURCE_CROSSREF,
+            ),
         ),
         MaintenanceTask(
             key="refresh_authors",
@@ -374,6 +404,9 @@ REGISTRY: dict[str, MaintenanceTask] = {
             cost=COST_NETWORK,
             runner=_run_refresh_authors,
             count_fn=_count_refresh_authors,
+            hard_cap=500,
+            sources=(SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR),
+            local_compute=True,
             params_spec={
                 "scope": {
                     "options": ["followed", "followed_plus_library", "library", "needs_metadata", "corpus"],
@@ -395,6 +428,8 @@ REGISTRY: dict[str, MaintenanceTask] = {
             cost=COST_CHEAP,
             runner=_run_gc_orphan_authors,
             count_fn=_count_gc_orphans,
+            hard_cap=5000,
+            destructive=True,
             params_spec={"dry_run": {"default": False}},
         ),
         MaintenanceTask(
@@ -412,6 +447,9 @@ REGISTRY: dict[str, MaintenanceTask] = {
             cost=COST_NETWORK,
             runner=_run_dedup_orcid,
             count_fn=_count_dedup_orcid,
+            hard_cap=500,
+            sources=(SOURCE_OPENALEX,),
+            destructive=True,
         ),
         MaintenanceTask(
             key="dedup_preprint_twins",
@@ -428,6 +466,8 @@ REGISTRY: dict[str, MaintenanceTask] = {
             cost=COST_CHEAP,
             runner=_run_dedup_preprint_twins,
             count_fn=_count_preprint_twins,
+            hard_cap=5000,
+            destructive=True,
             params_spec={"scope": {"options": ["library", "corpus"], "default": "library"}},
         ),
     )
@@ -470,6 +510,14 @@ def get_task_daily_cap(conn: sqlite3.Connection, task: MaintenanceTask) -> int:
         return max(1, int(str(raw).strip()))
     except (TypeError, ValueError):
         return task.default_daily_cap
+
+
+def _apply_hard_cap(task: MaintenanceTask, limit: int) -> int:
+    """Clamp one run's item budget by the task's static safety ceiling."""
+    limit = max(1, int(limit))
+    if task.hard_cap is None:
+        return limit
+    return min(limit, max(1, int(task.hard_cap)))
 
 
 def get_task_batch_size(conn: sqlite3.Connection, task: MaintenanceTask) -> Optional[int]:
@@ -563,6 +611,57 @@ def task_pending_count(
     return _candidate_count(health_payload, task.candidate_path)
 
 
+def _task_budget(
+    conn: sqlite3.Connection,
+    task: MaintenanceTask,
+    *,
+    health_payload: Optional[dict[str, Any]] = None,
+    params: Optional[dict[str, Any]] = None,
+    batch_size: Optional[int] = None,
+    target_paper_ids: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+) -> dict[str, Any]:
+    """Canonical pending/batch/ETA budget for maintenance UI and launches."""
+    from alma.services.eta import detect_auth, estimate_eta
+
+    effective = {**default_params(task), **(params or {})}
+    target_ids = [str(pid) for pid in (target_paper_ids or []) if str(pid).strip()]
+    if target_ids:
+        pending = len(target_ids)
+    else:
+        payload = health_payload
+        if payload is None:
+            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        pending = task_pending_count(conn, task, payload, params=effective)
+
+    if batch_size is not None:
+        batch = int(batch_size)
+    elif isinstance(params, dict) and params.get("batch_size") is not None:
+        batch = int(params["batch_size"])
+    else:
+        batch = get_task_batch_size(conn, task)
+
+    pending = max(0, int(pending))
+    selected = pending if limit is None else min(pending, max(0, int(limit)))
+    openalex_authed, s2_authed = detect_auth()
+    return {
+        "params": effective,
+        "target_paper_ids": target_ids,
+        "target_count": len(target_ids),
+        "candidates_pending": pending,
+        "run_limit": int(limit) if limit is not None else None,
+        "selected_items": int(selected),
+        "batch_size": batch,
+        "eta": estimate_eta(
+            task.eta_key or task.key,
+            selected,
+            openalex_authed=openalex_authed,
+            s2_authed=s2_authed,
+            batch_size=batch,
+        ),
+    }
+
+
 def _last_run(conn: sqlite3.Connection, operation_key: str) -> Optional[dict[str, Any]]:
     """Most-recent operation_status row for ``operation_key`` (any trigger)."""
     try:
@@ -634,38 +733,34 @@ def describe_task(
     conn: sqlite3.Connection, task: MaintenanceTask, health_payload: dict[str, Any]
 ) -> dict[str, Any]:
     """Full operations-status record for one task (the GET payload shape)."""
-    from alma.services.eta import batch_bounds, detect_auth, estimate_eta
+    from alma.services.eta import batch_bounds
 
-    pending = task_pending_count(conn, task, health_payload)
-    openalex_authed, s2_authed = detect_auth()
-    batch = get_task_batch_size(conn, task)  # None for fixed-batch ops
+    budget = _task_budget(conn, task, health_payload=health_payload)
     bounds = batch_bounds(task.eta_key or task.key)
     return {
         "key": task.key,
         "label": task.label,
         "description": task.description,
         "cost": task.cost,
+        "sources": list(task.sources),
+        "local_compute": bool(task.local_compute),
+        "destructive": bool(task.destructive),
+        "hard_cap": task.hard_cap,
         "repairs": list(task.health_dimensions),
         "operation_key": task.operation_key,
-        "candidates_pending": pending,
+        "candidates_pending": budget["candidates_pending"],
         # Run-time controls the UI should render (scope select / dry-run preview).
         "params_spec": task.params_spec,
         # Per-op API batch size (items/request). Present only for overridable ops;
         # the UI renders a bounded control and both the ETA + the runner honor it.
-        "batch_size": batch,
+        "batch_size": budget["batch_size"],
         "batch_size_default": bounds[0] if bounds else None,
         "batch_size_max": bounds[1] if bounds else None,
         # ETA to drain the whole backlog over the network for the DEFAULT params +
         # the configured batch size (None for local / nothing-pending). Recomputed
         # each poll (shrinks as work completes); the /estimate endpoint recomputes
         # it live when the user changes scope or batch size.
-        "eta": estimate_eta(
-            task.eta_key or task.key,
-            pending,
-            openalex_authed=openalex_authed,
-            s2_authed=s2_authed,
-            batch_size=batch,
-        ),
+        "eta": budget["eta"],
         "enabled": get_task_enabled(conn, task),
         "default_enabled": task.default_enabled,
         "daily_cap": get_task_daily_cap(conn, task),
@@ -686,23 +781,18 @@ def estimate_task(
     (e.g. a different scope or a dragged batch slider), so the UI can refresh the
     ETA live without re-listing every operation. ``batch_size`` here is the user's
     in-progress choice (not yet persisted); falls back to the stored config."""
-    from alma.services.eta import detect_auth, estimate_eta
-
-    effective = {**default_params(task), **(params or {})}
-    pending = task_pending_count(conn, task, health_payload, params=effective)
-    openalex_authed, s2_authed = detect_auth()
-    batch = batch_size if batch_size is not None else get_task_batch_size(conn, task)
+    budget = _task_budget(
+        conn,
+        task,
+        health_payload=health_payload,
+        params=params,
+        batch_size=batch_size,
+    )
     return {
         "key": task.key,
-        "params": effective,
-        "candidates_pending": pending,
-        "eta": estimate_eta(
-            task.eta_key or task.key,
-            pending,
-            openalex_authed=openalex_authed,
-            s2_authed=s2_authed,
-            batch_size=batch,
-        ),
+        "params": budget["params"],
+        "candidates_pending": budget["candidates_pending"],
+        "eta": budget["eta"],
     }
 
 
@@ -720,6 +810,46 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def _maintenance_preflight_payload(
+    conn: sqlite3.Connection,
+    task: MaintenanceTask,
+    *,
+    limit: int,
+    trigger_source: str,
+    target_paper_ids: Optional[list[str]] = None,
+    params: Optional[dict[str, Any]] = None,
+    health_payload: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Activity payload describing the bounded work selected for this run."""
+    budget = _task_budget(
+        conn,
+        task,
+        health_payload=health_payload,
+        params=params,
+        target_paper_ids=target_paper_ids,
+        limit=limit,
+    )
+    return {
+        "task_key": task.key,
+        "operation_key": task.operation_key,
+        "label": task.label,
+        "cost": task.cost,
+        "sources": list(task.sources),
+        "local_compute": bool(task.local_compute),
+        "destructive": bool(task.destructive),
+        "hard_cap": task.hard_cap,
+        "trigger_source": trigger_source,
+        "params": budget["params"],
+        "target_paper_ids": budget["target_paper_ids"],
+        "target_count": budget["target_count"],
+        "candidates_pending": budget["candidates_pending"],
+        "run_limit": budget["run_limit"],
+        "selected_items": budget["selected_items"],
+        "batch_size": budget["batch_size"],
+        "eta": budget["eta"],
+    }
+
+
 def _schedule_task(
     conn: sqlite3.Connection,
     task: MaintenanceTask,
@@ -730,6 +860,7 @@ def _schedule_task(
     log_message: str,
     target_paper_ids: Optional[list[str]] = None,
     params: Optional[dict[str, Any]] = None,
+    health_payload: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
     """Schedule one bounded run of ``task`` (shared by run-now + the healer).
 
@@ -749,6 +880,15 @@ def _schedule_task(
     if batch is not None and "batch_size" not in run_params:
         run_params["batch_size"] = batch
     run_params = run_params or None
+    preflight = _maintenance_preflight_payload(
+        conn,
+        task,
+        limit=limit,
+        trigger_source=trigger_source,
+        target_paper_ids=target_paper_ids,
+        params=run_params,
+        health_payload=health_payload,
+    )
 
     def _factory(job_id: str) -> Callable[[], None]:
         return lambda: runner(job_id, limit, target_paper_ids, run_params)
@@ -760,6 +900,7 @@ def _schedule_task(
         queued_message=queued_message,
         runner_factory=_factory,
         log_message=log_message,
+        log_data={"preflight": preflight},
     )
 
 
@@ -778,9 +919,12 @@ def run_task_now(
     ``params_spec`` defaults so a plain Run-now still works).
     """
     targets = [str(p) for p in (target_paper_ids or []) if str(p).strip()] or None
-    limit = len(targets) if targets else get_task_daily_cap(conn, task)
+    requested_limit = len(targets) if targets else get_task_daily_cap(conn, task)
+    limit = _apply_hard_cap(task, requested_limit)
     effective = {**default_params(task), **(params or {})}
     bits = [f"{len(targets)} selected" if targets else f"limit {limit}"]
+    if targets and limit < requested_limit:
+        bits.append(f"cap {limit}")
     if effective:
         bits.append(", ".join(f"{k}={v}" for k, v in effective.items()))
     scope = " · ".join(bits)
@@ -890,7 +1034,7 @@ def maintenance_repair_periodic() -> None:
         # Worst severity first, then the larger remaining budget.
         candidates.sort(key=lambda c: (c[0], -c[1]))
         rank, remaining, task = candidates[0]
-        batch = min(remaining, HEALER_PER_TICK_LIMIT)
+        batch = _apply_hard_cap(task, min(remaining, HEALER_PER_TICK_LIMIT))
 
         job_id = _schedule_task(
             conn,
@@ -899,6 +1043,7 @@ def maintenance_repair_periodic() -> None:
             trigger_source="scheduler",
             queued_message=f"Idle maintenance: {task.label} (limit {batch})",
             log_message=f"Idle healer queued {task.label} (batch {batch})",
+            health_payload=payload,
         )
         logger.info(
             "idle maintenance: queued %s (batch=%d, remaining_cap=%d, job=%s)",

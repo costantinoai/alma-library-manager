@@ -16,6 +16,10 @@ from alma.application.followed_authors import (
     get_followed_author_backfill_status,
     get_followed_author_backfill_status_map,
 )
+from alma.application.author_signal import (
+    compute_author_signal,
+    library_centroid as _library_centroid,
+)
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
@@ -446,62 +450,10 @@ def _publication_counts_for_author_rows(
     return counts
 
 
-def compute_author_signal(
-    db: sqlite3.Connection,
-    *,
-    author_id: str,
-    author_name: str,
-    openalex_id: str,
-) -> Optional[dict]:
-    """Derive a "how much we like this author" signal from their local papers.
-
-    The signal blends three components on a 0-100 scale:
-      - library_ratio (40): fraction of known papers we saved to Library
-      - rating_quality (40): mean rating of Library papers (1-5 → 0-1)
-      - volume (20): number of Library papers, capped at 10
-
-    Returns None if we have no local papers for this author yet. The caller
-    is expected to render "no signal" in that case rather than a zero score.
-    """
-    if not _table_exists(db, "papers"):
-        return None
-    where, params = _author_paper_clause(
-        db,
-        author_id=author_id,
-        author_name=author_name,
-        openalex_id=openalex_id,
-    )
-    if not where:
-        return None
-    rows = db.execute(
-        f"SELECT p.status AS status, p.rating AS rating FROM papers p WHERE {where}",
-        params,
-    ).fetchall()
-    total = len(rows)
-    if total == 0:
-        return None
-
-    library_rows = [r for r in rows if str(r["status"] or "").strip() == "library"]
-    library_count = len(library_rows)
-    ratings = [int(r["rating"] or 0) for r in library_rows if int(r["rating"] or 0) > 0]
-    avg_rating = (sum(ratings) / len(ratings)) if ratings else 0.0
-
-    library_ratio = library_count / total
-    rating_component = ((avg_rating - 1) / 4) if avg_rating >= 1 else 0.0
-    volume_component = min(library_count, 10) / 10
-
-    composite = (
-        library_ratio * 40.0
-        + rating_component * 40.0
-        + volume_component * 20.0
-    )
-
-    return {
-        "score": round(composite, 1),
-        "library_papers": library_count,
-        "total_papers": total,
-        "avg_rating": round(avg_rating, 2) if avg_rating else None,
-    }
+# `compute_author_signal` now lives in `alma.application.author_signal` (the
+# single canonical definition, blending library + rating + interaction +
+# similarity + neighborhood). It is imported at the top of this module and
+# re-exported here so existing callers (`get_author_detail`) are unchanged.
 
 
 def _author_paper_clause(
@@ -2032,41 +1984,14 @@ def _semantic_similar_candidates(
     if not model:
         return []
 
-    # Library centroid — mean of active-model embeddings for saved papers.
-    # ``LIMIT`` bounds Python work on very large libraries; centroid is an
-    # average so a 1k-paper cap is already more than enough for stable
-    # direction.
-    try:
-        lib_rows = db.execute(
-            """
-            SELECT pe.embedding AS embedding
-            FROM publication_embeddings pe
-            JOIN papers p ON p.id = pe.paper_id
-            WHERE p.status = 'library' AND pe.model = ?
-            LIMIT 1000
-            """,
-            (model,),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    if not lib_rows:
-        return []
-    from alma.core.vector_blob import decode_vector, decode_vectors_uniform
+    # Library centroid — the single shared definition (also used by the
+    # canonical author signal's similarity component) so the rail and the
+    # signal can never drift apart.
+    from alma.core.vector_blob import decode_vector
 
-    # Uniform decoder rescues legacy fp32 rows by byte length and
-    # filters out anything still wrong-shape; everything that survives
-    # shares the same dim so np.stack / np.mean don't crash.
-    lib_matrix, _ = decode_vectors_uniform(
-        row["embedding"] for row in lib_rows
-    )
-    if lib_matrix.size == 0:
+    lib_centroid, expected_dim = _library_centroid(db, model)
+    if lib_centroid is None:
         return []
-    lib_centroid = np.mean(lib_matrix, axis=0)
-    lib_norm = float(np.linalg.norm(lib_centroid))
-    if lib_norm <= 0.0:
-        return []
-    lib_centroid = lib_centroid / lib_norm
-    expected_dim = int(lib_centroid.shape[0])
 
     # Candidate authors — openalex_ids with ≥2 embedded papers (any
     # status) and at least some corpus mass so we can form a meaningful

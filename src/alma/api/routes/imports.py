@@ -29,6 +29,7 @@ from alma.api.models import (
     ZoteroImportRequest,
 )
 from alma.application import imports as imports_app
+from alma.application import import_preflight
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.library.importer import (
     ImportResult,
@@ -61,6 +62,19 @@ class ResolveImportedRequest(BaseModel):
     unresolved_only: bool = True
     limit: int = 1000
     background: bool = True
+
+
+class ImportPreflightResponse(BaseModel):
+    source: str
+    total_entries: int
+    valid_entries: int
+    parse_errors: int
+    errors: list[str] = Field(default_factory=list)
+    identifiers: dict
+    metadata: dict
+    dedup: dict
+    likely_source_calls: dict
+    eta: dict
 
 
 # Phase C — online source search import.
@@ -322,6 +336,106 @@ def _queue_import_background(
         status="queued",
         operation_key=operation_key,
         message=queued_message,
+    )
+
+
+# ===================================================================
+# Import Preflight
+# ===================================================================
+
+@router.post(
+    "/import/preflight/bibtex",
+    response_model=ImportPreflightResponse,
+    summary="Preview enrichment cost for a BibTeX file upload",
+)
+async def preflight_bibtex_file_endpoint(
+    file: UploadFile = File(..., description="A .bib file to preview"),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Parse a BibTeX file without writing rows and forecast enrichment cost."""
+    try:
+        raw = await file.read()
+        content = raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("Failed reading uploaded BibTeX file for preflight: %s", redact_sensitive_text(str(exc)))
+        raise HTTPException(status_code=400, detail="Cannot read uploaded file")
+    parsed = import_preflight.parse_bibtex_records(content)
+    return import_preflight.summarize_records(
+        db,
+        parsed.records,
+        source="bibtex",
+        errors=parsed.errors,
+    )
+
+
+@router.post(
+    "/import/preflight/bibtex/text",
+    response_model=ImportPreflightResponse,
+    summary="Preview enrichment cost for pasted BibTeX text",
+)
+def preflight_bibtex_text_endpoint(
+    req: BibtexTextImportRequest,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Parse pasted BibTeX without writing rows and forecast enrichment cost."""
+    if not req.content or not req.content.strip():
+        raise HTTPException(status_code=400, detail="BibTeX content is empty")
+    parsed = import_preflight.parse_bibtex_records(req.content)
+    return import_preflight.summarize_records(
+        db,
+        parsed.records,
+        source="bibtex",
+        errors=parsed.errors,
+    )
+
+
+@router.post(
+    "/import/preflight/zotero/rdf",
+    response_model=ImportPreflightResponse,
+    summary="Preview enrichment cost for a Zotero RDF export",
+)
+async def preflight_zotero_rdf_file_endpoint(
+    file: UploadFile = File(..., description="A Zotero RDF (.rdf) export file to preview"),
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Parse Zotero RDF without writing rows and forecast enrichment cost."""
+    try:
+        raw = await file.read()
+        content = raw.decode("utf-8", errors="replace")
+    except Exception as exc:
+        logger.warning("Failed reading uploaded Zotero RDF file for preflight: %s", redact_sensitive_text(str(exc)))
+        raise HTTPException(status_code=400, detail="Cannot read uploaded file")
+    parsed = import_preflight.parse_zotero_rdf_records(content)
+    return import_preflight.summarize_records(
+        db,
+        parsed.records,
+        source="zotero_rdf",
+        errors=parsed.errors,
+    )
+
+
+@router.post(
+    "/import/preflight/zotero",
+    response_model=ImportPreflightResponse,
+    summary="Preview enrichment cost for a Zotero library import",
+)
+def preflight_zotero_endpoint(
+    req: ZoteroImportRequest,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Fetch Zotero metadata without writing rows and forecast enrichment cost."""
+    api_key = _resolve_zotero_api_key(req.api_key)
+    parsed = import_preflight.fetch_zotero_records(
+        req.library_id,
+        api_key,
+        library_type=req.library_type,
+        collection_key=req.collection_key,
+    )
+    return import_preflight.summarize_records(
+        db,
+        parsed.records,
+        source="zotero",
+        errors=parsed.errors,
     )
 
 

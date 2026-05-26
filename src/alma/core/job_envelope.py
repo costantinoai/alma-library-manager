@@ -16,8 +16,29 @@ no-op.
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
+
+
+def target_scoped_operation_key(
+    operation_key: str,
+    target_ids: Iterable[str] | None,
+    *,
+    scope: str = "target",
+) -> str:
+    """Return a stable target-scoped key, or the base key for bulk work.
+
+    Bulk jobs and targeted action jobs must not dedup each other: otherwise a
+    broad backlog drain can hide a newly inserted or followed target. The target
+    set is sorted so callers get the same key for the same set regardless of
+    order, while Activity payloads can still preserve the original display order.
+    """
+    ids = sorted({str(item).strip() for item in (target_ids or []) if str(item).strip()})
+    if not ids:
+        return operation_key
+    digest = hashlib.sha1("|".join(ids).encode("utf-8")).hexdigest()[:12]
+    return f"{operation_key}:{scope}:{digest}"
 
 
 def schedule_with_envelope(
