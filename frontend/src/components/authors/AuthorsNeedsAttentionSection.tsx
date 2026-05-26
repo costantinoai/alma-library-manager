@@ -394,7 +394,7 @@ function ReviewProfilesDialog({
       emptyCandidateMessage="No followed alternate profiles are available to merge from this warning."
       onMerged={onClose}
       contextSlot={
-        <SubPanel tone="chrome" padded={false} className="px-3 py-2">
+        <SubPanel variant="flat" padded={false} className="px-3 py-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <EyebrowLabel tone="muted" className="shrink-0">
               In this warning

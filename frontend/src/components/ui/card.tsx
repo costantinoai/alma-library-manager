@@ -27,26 +27,15 @@ import { Surface, useSurfaceLevel, nextLevel, type SurfaceLevel } from '@/compon
  */
 type CardVariant = 'default' | 'flat' | 'elevated'
 
-/** @deprecated v3 two-paper tones. Kept only so existing call sites compile
- * during the migration; resolves to the single-ladder model. Use
- * `variant` / `level`. Removed once the sweep is complete. */
-type DeprecatedTone = 'chrome' | 'content' | 'elevated' | 'flat' | 'paper'
-
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   interactive?: boolean
   level?: SurfaceLevel
   variant?: CardVariant
-  /** @deprecated use `variant` / `level`. */
-  tone?: DeprecatedTone
 }
 
 const Card = React.forwardRef<HTMLDivElement, CardProps>(
-  ({ className, interactive, level, variant, tone, ...props }, ref) => {
-    // Resolve the deprecated tone → variant. chrome/content/paper were pure
-    // surface-color choices that the ladder now handles, so they're no-ops
-    // (→ 'default'); only flat/elevated carried geometry that survives.
-    const resolvedVariant: CardVariant =
-      variant ?? (tone === 'flat' ? 'flat' : tone === 'elevated' ? 'elevated' : 'default')
+  ({ className, interactive, level, variant = 'default', ...props }, ref) => {
+    const resolvedVariant: CardVariant = variant
 
     const host = useSurfaceLevel()
     const isFlat = resolvedVariant === 'flat'
@@ -64,7 +53,11 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
           'relative rounded-sm transition-[box-shadow,transform] duration-200 ease-out',
           !isFlat && !isElevated && 'shadow-paper-sheet',
           isElevated && 'shadow-paper-sheet-lg',
-          interactive && 'cursor-pointer hover:-translate-y-px hover:shadow-paper-sheet-hover',
+          // Interactive: lifts off the desk on hover, presses back flush on
+          // click (tactile paper feel). The transform/shadow transition is
+          // already declared above; press is a touch quicker via active:.
+          interactive &&
+            'cursor-pointer hover:-translate-y-0.5 hover:shadow-paper-sheet-hover active:translate-y-0 active:shadow-paper-sm active:duration-75',
           className,
         )}
         {...props}

@@ -460,12 +460,8 @@ export function PaperCard({
 
   return (
     <Card
-      // tone="content" — papers in Feed/Discovery/Library use the
-      // warmer parchment-tinted surface so they read as "real paper
-      // with ink on it" against the cream chrome around them. Avoids
-      // the cream-on-cream flatness when a PaperCard sits inside a
-      // section Card.
-      tone="content"
+      // A PaperCard lifts one level off whatever surface it sits on; the
+      // relational ladder handles the contrast, so no manual tone is needed.
       className={cn(
         'group/paper-card relative overflow-hidden transition-all duration-150 hover:shadow-md',
         rootClickable && 'cursor-pointer',

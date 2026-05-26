@@ -40,7 +40,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
   const topSignalKey = sortedSignals[0]?.key
 
   return (
-    <SubPanel tone="parchment" padded={false} className="mt-3 space-y-3 p-4">
+    <SubPanel padded={false} className="mt-3 space-y-3 p-4">
       <div className="flex items-center justify-between">
         <EyebrowLabel tone="muted">Score Breakdown</EyebrowLabel>
         {breakdown.source_type && (
@@ -141,7 +141,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
           return isTop ? (
             <SubPanel
               key={s.key}
-              tone="paper"
+              variant="flat"
               padded={false}
               className="flex items-center gap-2 px-2 py-1.5 text-xs"
             >

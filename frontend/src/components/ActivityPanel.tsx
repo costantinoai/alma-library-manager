@@ -600,7 +600,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
 
   if (step === 'retrieval_channels') {
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 space-y-2 p-2">
+      <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}
@@ -621,7 +621,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     const graphFallback = asRecord(data.graph_fallback)
     const laneRuns = Array.isArray(data.external_lane_runs) ? data.external_lane_runs.slice(0, 8) : []
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 space-y-2 p-2">
+      <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graph Fallback</p>
           {renderMetricChips(graphFallback)}
@@ -651,7 +651,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
 
   if (step === 'scoring_inputs') {
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 p-2">
+      <SubPanel cool padded={false} className="mt-2 p-2">
         {renderMetricChips({
           positive_docs: data.positive_texts,
           negative_docs: data.negative_texts,
@@ -670,7 +670,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
 
   if (step === 'scoring_profile') {
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 space-y-2 p-2">
+      <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Score Range</p>
           {renderMetricChips(asRecord(data.score_range))}
@@ -696,7 +696,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
     const topCandidates = Array.isArray(data.top_candidates) ? data.top_candidates.slice(0, 5) : []
     if (topCandidates.length === 0) return null
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 space-y-1 p-2">
+      <SubPanel cool padded={false} className="mt-2 space-y-1 p-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Top Ranked Candidates</p>
         {topCandidates.map((item, idx) => {
           const record = asRecord(item)
@@ -718,7 +718,7 @@ function renderDiscoveryLogData(step: string | undefined, data: Record<string, u
 
   if (step === 'done') {
     return (
-      <SubPanel tone="cool" padded={false} className="mt-2 space-y-2 p-2">
+      <SubPanel cool padded={false} className="mt-2 space-y-2 p-2">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Channels</p>
           {renderMetricChips(asRecord(data.channels))}

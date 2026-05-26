@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AppShell, type Page } from '@/components/layout/AppShell'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { PageReveal } from '@/components/ui/reveal'
 import { parseHashRoute, navigateTo } from '@/lib/hashRoute'
 
 const FeedPage = lazy(() => import('@/pages/FeedPage').then((m) => ({ default: m.FeedPage })))
@@ -93,7 +94,7 @@ function AppContent() {
       onRefresh={handleRefresh}
     >
       <Suspense fallback={<PageLoader />}>
-        {renderPage()}
+        <PageReveal key={currentPage}>{renderPage()}</PageReveal>
       </Suspense>
       <Toaster />
     </AppShell>

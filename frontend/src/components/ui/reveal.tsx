@@ -35,6 +35,23 @@ export function RevealList({ children, ...props }: RevealListProps) {
   )
 }
 
+/** Per-route page entrance — a single calm fade + rise on mount. Wrap the
+ * routed page and give it a `key` that changes on navigation so it replays.
+ * Composes cleanly with RevealList (the page settles, then its lists stagger). */
+export function PageReveal({ className, children }: { className?: string; children: React.ReactNode }) {
+  const reduced = useReducedMotion()
+  return (
+    <motion.div
+      className={className}
+      initial={{ opacity: 0, y: reduced ? 0 : 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: reduced ? 0 : 0.32, ease: EASE }}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
 export interface RevealItemProps {
   /** Position in the list — drives the entrance stagger delay. */
   index?: number

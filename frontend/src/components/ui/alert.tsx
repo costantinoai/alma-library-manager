@@ -15,7 +15,7 @@ const alertVariants = cva(
       variant: {
         default: "bg-surface-1 text-alma-900",
         destructive:
-          "border-red-500/50 text-red-500 dark:border-red-500 [&>svg]:text-red-500 dark:border-red-900/50 dark:text-red-900 dark:dark:border-red-900 dark:[&>svg]:text-red-900",
+          "border-red-500/50 text-red-500 [&>svg]:text-red-500",
         // Soft "negative" tone matching the StatusBadge `negative` palette —
         // rose-200/rose-50/rose-700. Use for anti-affordance content (top
         // negative preferences, suppressed entities, dislike summaries) where

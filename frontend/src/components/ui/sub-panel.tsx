@@ -18,40 +18,44 @@ import { Surface, useSurfaceLevel, nextLevel, type SurfaceLevel } from '@/compon
  *           'flat'     ladder surface, hairline only, no inset — plain
  *                      grouping box.
  *
+ *   cool     recessed box on the COOL surface variant — the one deliberate
+ *            exception, used ONLY inside the Activity panel (telemetry).
  *   level    force an absolute level (0–4) instead of the relational host+1.
  */
 type SubPanelVariant = 'default' | 'accent' | 'flat'
-
-/** @deprecated v3 tones. Kept so existing call sites compile during the
- * migration; map onto the single-ladder variants. The cool "ops" telemetry
- * surface is folded into the neutral ladder. Removed after the sweep. */
-type DeprecatedSubTone = 'content' | 'chrome' | 'ops' | 'accent' | 'parchment' | 'paper' | 'cool'
-
-const TONE_TO_VARIANT: Record<DeprecatedSubTone, SubPanelVariant> = {
-  content: 'default',
-  parchment: 'default',
-  ops: 'default',
-  cool: 'default',
-  chrome: 'flat',
-  paper: 'flat',
-  accent: 'accent',
-}
 
 export interface SubPanelProps extends React.HTMLAttributes<HTMLDivElement> {
   variant?: SubPanelVariant
   level?: SurfaceLevel
   /** Apply default p-4 spacing. Disable for tight compositions. */
   padded?: boolean
-  /** @deprecated use `variant` / `level`. */
-  tone?: DeprecatedSubTone
+  /** Cool telemetry variant — Activity panel only (the one cool surface). */
+  cool?: boolean
 }
 
 const SubPanel = React.forwardRef<HTMLDivElement, SubPanelProps>(
-  ({ className, variant, level, padded = true, tone, ...props }, ref) => {
-    const resolved: SubPanelVariant = variant ?? (tone ? TONE_TO_VARIANT[tone] : 'default')
+  ({ className, variant = 'default', level, padded = true, cool = false, ...props }, ref) => {
     const host = useSurfaceLevel()
-    const isFlat = resolved === 'flat'
-    const isAccent = resolved === 'accent'
+    const isFlat = variant === 'flat'
+    const isAccent = variant === 'accent'
+
+    // Cool variant is off the warm ladder (Activity panel telemetry): a cool
+    // recessed box. Rendered directly rather than via the (warm) Surface.
+    if (cool) {
+      return (
+        <div
+          ref={ref}
+          className={cn(
+            'rounded-sm border border-[var(--color-border-cool)] bg-surface-cool-2',
+            padded && 'p-4',
+            !isFlat && 'shadow-paper-inset-cool',
+            className,
+          )}
+          {...props}
+        />
+      )
+    }
+
     return (
       <Surface
         ref={ref}
@@ -76,5 +80,3 @@ SubPanel.displayName = 'SubPanel'
 
 export { SubPanel }
 export type { SubPanelVariant }
-/** @deprecated alias kept for back-compat; use SubPanelVariant. */
-export type SubPanelTone = DeprecatedSubTone
