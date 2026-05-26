@@ -111,21 +111,26 @@ runtime fine) reads as one warning instead of a contradiction.
 
 ## Background actions
 
-Heavy embedding work does not run inline. It goes through Activity:
+Heavy embedding work does not run inline. It runs as **maintenance
+operations on the [Health](../concepts/health.md) page** — Settings only
+configures the provider and then points to Health to act ("Fix in
+Health →"). Each operation has a **Run now** button, an opt-in
+auto-repair toggle, and (for network operations) an ETA; all are
+Activity-enveloped:
 
-* **Backfill S2 vectors** — also fills DOI, abstract, URL,
+* **Fetch missing S2 vectors** — also fills DOI, abstract, URL,
   publication date, year, and citation count from the same
   Semantic Scholar response, so a vector hit doubles as cheap
   metadata repair.
-* **Compute missing embeddings** — local SPECTER2 only runs on
+* **AI compute missing embeddings** — local SPECTER2 only runs on
   papers that already have both a title and an abstract. The
-  status card surfaces a separate **blocked missing
-  title/abstract** count for rows that still need metadata
-  repair before they are eligible.
-* **Rebuild graph projections**
+  embedding repair card surfaces a separate **blocked: missing
+  text** count for rows that still need metadata repair before
+  they are eligible.
+* **Rebuild graph projections** (from Insights → Graph).
 
-If the blocked count is large, run **Settings → Corpus maintenance
-→ Rehydrate metadata** first. The job runs in three phases and is
+If the blocked count is large, run **Rehydrate corpus metadata** in
+Health first. That operation runs in three phases and is
 **Activity-enveloped** (visible in the Activity panel with
 queued → running → completed status):
 
@@ -153,10 +158,10 @@ After configuring:
 
 1. **Settings → AI & embeddings → Status** should show the selected
    provider and environment as healthy.
-2. **Backfill S2 vectors** should land vectors for the subset Semantic
-   Scholar already knows.
-3. **Compute missing embeddings** should fill part of the remaining gap
-   if you selected `local`.
+2. On **Health**, **Fetch missing S2 vectors** should land vectors for
+   the subset Semantic Scholar already knows.
+3. **AI compute missing embeddings** (also on Health) should fill part
+   of the remaining gap if you selected `local`.
 4. **Insights → Graph** should stop showing the cold-start / no-vector
    state once enough embeddings exist.
 

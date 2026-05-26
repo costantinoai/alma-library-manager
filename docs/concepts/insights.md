@@ -132,7 +132,7 @@ quality, source quality, the AI similarity profile, followed-author growth,
 alert delivery + usefulness, feedback-learning activity, and the evaluation
 scorecards. Read it to understand *how the pipeline is behaving*. The actionable
 operational health (degraded monitors, failed jobs, plugins) is **not** here —
-it lives on the **[Health](health.md)** page's Status tab.
+it lives in the **[Health](health.md)** page's System status cards.
 
 ## How fresh is what I'm seeing?
 
@@ -180,4 +180,4 @@ GET /api/v1/reports/signal-impact
 
 The diagnostics endpoints (`/insights/diagnostics/sections/{section}`) power
 the **Activity** tab. Their `operational` section also feeds the
-**[Health](health.md)** page's Status tab (the actionable operational view).
+**[Health](health.md)** page's System status cards (the actionable operational view).

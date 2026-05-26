@@ -55,9 +55,10 @@ Semantic Scholar exposes pre-computed `specter_v2` vectors via
 unchanged. This is the **default and preferred path** — no local
 compute, no GPU, no model download.
 
-The **Backfill S2 vectors** action in Settings → AI runs across your
-corpus and writes vectors for every paper S2 has one for. Coverage
-is typically 70–95% on a normal Library.
+The **Fetch missing S2 vectors** operation on the
+[Health](health.md) page runs across your corpus and writes vectors for
+every paper S2 has one for. Coverage is typically 70–95% on a normal
+Library.
 
 ### 2. Local SPECTER2 compute
 
