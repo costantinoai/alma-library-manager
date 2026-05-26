@@ -100,8 +100,10 @@ interface SystemComponent {
   icon: LucideIcon
   description: string
   severity: Severity
-  /** Right-aligned metric, e.g. "2 degraded" / "healthy" / "rate-limited". */
+  /** Second-line metric, e.g. "2 with errors" / "maintenance due" / "operational". */
   metric: string
+  /** Optional measurement caveat shown in the popup (e.g. the diagnostics window). */
+  note?: string
   states: OperationalState[]
   reviewItems: ReviewItem[]
   ownerPage: string
@@ -122,6 +124,9 @@ interface SourceRow {
   source?: string
   http_errors?: number
   transport_errors?: number
+  requests?: number
+  operations?: number
+  status_counts?: Record<string, number>
   last_error?: string
 }
 
@@ -130,16 +135,40 @@ const worstSeverity = (states: OperationalState[], floor: Severity): Severity =>
   return ranked.reduce((worst, s) => (severityRank(s) < severityRank(worst) ? s : worst), 'ok')
 }
 
-// Spell raw HTTP codes into a glance-readable reason (kept from the old card).
+// HTTP status code → short reason, for spelling out the error mix.
+const CODE_REASON: Record<string, string> = {
+  '400': 'bad request',
+  '401': 'auth rejected',
+  '403': 'forbidden',
+  '404': 'not found',
+  '429': 'rate-limited',
+  '500': 'server error',
+  '502': 'bad gateway',
+  '503': 'unavailable',
+  '504': 'timeout',
+}
+
+// A specific, time-scoped reason for a source's recent HTTP failures, built from
+// the actual status mix — NOT a generic present-tense "is throttling us". Source
+// diagnostics are aggregated across the last feed + discovery refreshes, so this
+// describes what happened "across recent refreshes", not a live probe of "now".
 const humanizeSourceError = (s: SourceRow): string => {
-  const raw = (s.last_error ?? '').trim()
-  if (/\b429\b/.test(raw))
-    return 'Rate-limited (HTTP 429) — the source is throttling us. ALMa backs off and retries; a verified API key raises the limit.'
-  if (/\b50\d\b/.test(raw)) return `Source server error (${raw}) — usually transient; ALMa retries automatically.`
-  if (/\b40[13]\b/.test(raw)) return `Access rejected (${raw}) — check the API key for this source.`
-  if (raw) return raw
-  const total = (s.http_errors ?? 0) + (s.transport_errors ?? 0)
-  return `${s.http_errors ?? 0} HTTP / ${s.transport_errors ?? 0} transport error${total === 1 ? '' : 's'}`
+  const sc = s.status_counts ?? {}
+  const breakdown = Object.entries(sc)
+    .filter(([code]) => Number(code) >= 400)
+    .sort((a, b) => b[1] - a[1])
+    .map(([code, n]) => `${n}× ${code}${CODE_REASON[code] ? ` (${CODE_REASON[code]})` : ''}`)
+    .join(', ')
+  const httpErr = s.http_errors ?? 0
+  const transportErr = s.transport_errors ?? 0
+  const reqs = s.requests ?? httpErr + transportErr
+  const ops = s.operations ?? 0
+  const window = ops > 0 ? ` across the last ${ops} refresh${ops === 1 ? '' : 'es'}` : ' recently'
+  const lead = breakdown
+    ? `${breakdown} — ${httpErr} of ${reqs} requests failed${window}.`
+    : `${httpErr} HTTP / ${transportErr} transport error${httpErr + transportErr === 1 ? '' : 's'}${window}.`
+  const why = (sc['429'] ?? 0) > 0 ? ' ALMa backs off and retries; a verified API key raises the 429 limit.' : ''
+  return lead + why
 }
 
 // Which component a degraded state belongs to — by remediation kind, falling
@@ -364,6 +393,7 @@ export function SystemStatusCards() {
           name: 'Upstream sources',
           icon: Globe,
           description: 'OpenAlex, Crossref & Semantic Scholar — the APIs that resolve and enrich papers.',
+          note: 'HTTP behaviour aggregated over recent feed + discovery refreshes — a rolling window, not a live probe of right now.',
           states: at('sources'),
           reviewItems: badSources.map((s, i) => ({
             id: String(i),
@@ -512,12 +542,18 @@ export function SystemStatusCards() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
               aria-label={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
-              className="group inline-flex items-center gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev px-3 py-1.5 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev px-3 py-2 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
-              <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[c.severity])} />
-              <Icon className="h-4 w-4 shrink-0 text-alma-500" />
-              <span className="text-sm font-medium text-alma-800">{c.name}</span>
-              <span className="text-xs tabular-nums text-slate-500">· {c.metric}</span>
+              <Icon className="mt-0.5 h-4 w-4 shrink-0 text-alma-500" />
+              <span className="min-w-0 flex-1">
+                {/* Line 1 — component name + status dot. */}
+                <span className="flex items-center gap-1.5">
+                  <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[c.severity])} />
+                  <span className="truncate text-sm font-medium text-alma-800">{c.name}</span>
+                </span>
+                {/* Line 2 — the metric. */}
+                <span className="mt-0.5 block truncate text-xs tabular-nums text-slate-500">{c.metric}</span>
+              </span>
             </motion.button>
           )
         })}
@@ -539,6 +575,8 @@ export function SystemStatusCards() {
                 </DialogTitle>
                 <DialogDescription className="text-slate-600">{openComp.description}</DialogDescription>
               </DialogHeader>
+
+              {openComp.note ? <p className="-mt-1 text-xs italic text-slate-500">{openComp.note}</p> : null}
 
               {hasIssues(openComp) ? (
                 <div className="space-y-2">
