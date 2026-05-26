@@ -186,29 +186,33 @@ export function HealthPage() {
         </p>
       </ConceptCallout>
 
-      {/* Persistent vitals triage. */}
-      {snapshotQuery.isError ? (
-        <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-200 bg-rose-50 p-4">
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-rose-600" />
-            <p className="text-sm text-rose-800">Couldn't load the health snapshot.</p>
+      {/* Vitals + System status — ONE panel (the bright forefront band): the
+          colored data-health ribbon up top, then a one-line strip of clickable
+          system-component chips. They share a panel because together they ARE
+          the at-a-glance "is everything OK?" — clicking a chip opens its detail. */}
+      <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-alma-content p-4 shadow-paper-sm sm:p-5">
+        {snapshotQuery.isError ? (
+          <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-200 bg-rose-50 p-3">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-rose-600" />
+              <p className="text-sm text-rose-800">Couldn't load the health snapshot.</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => snapshotQuery.refetch()}>
+              Retry
+            </Button>
           </div>
-          <Button size="sm" variant="outline" onClick={() => snapshotQuery.refetch()}>
-            Retry
-          </Button>
-        </div>
-      ) : snapshotQuery.isLoading ? (
-        <div className="h-40 animate-pulse rounded-sm bg-alma-chrome-elev" />
-      ) : snapshot ? (
-        <HealthVitals snapshot={snapshot} />
-      ) : null}
+        ) : snapshotQuery.isLoading ? (
+          <div className="h-24 animate-pulse rounded-sm bg-alma-chrome-elev" />
+        ) : snapshot ? (
+          <HealthVitals snapshot={snapshot} />
+        ) : null}
 
-      {/* Operational health on top — an active incident (rate-limited source,
-          failed job) should be the first thing seen, before the repair backlog.
-          One card per system component; status + count + one-click fix in each. */}
-      <section className="space-y-3">
-        <SectionLabel>System status</SectionLabel>
-        <SystemStatusCards />
+        <div className="border-t border-[var(--color-border)] pt-4">
+          <SectionLabel>System status</SectionLabel>
+          <div className="mt-2">
+            <SystemStatusCards />
+          </div>
+        </div>
       </section>
 
       {/* The affected-papers drilldown, opened by any status row on the page. */}

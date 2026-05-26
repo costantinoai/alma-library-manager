@@ -8,8 +8,13 @@
  * exception to the "calm off-white" rule, justified because it IS the triage.
  * The per-dimension counts (critical / warnings) live IN the ribbon + legend;
  * the redundant scoreboard tiles were folded away (the operational glance now
- * lives in the System status cards below). On load the segments grow from zero
- * — the "vital signs coming online" beat — honoring prefers-reduced-motion.
+ * lives in the one-line System status strip that shares this panel). On load
+ * the segments grow from zero — the "vital signs coming online" beat —
+ * honoring prefers-reduced-motion.
+ *
+ * Renders bare content (no card chrome): `HealthPage` wraps this and the
+ * System status strip in ONE panel so the ribbon and the component glance read
+ * as a single band.
  */
 import { motion, useReducedMotion } from 'framer-motion'
 
@@ -33,7 +38,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
   const coverage = Math.round(totals.embedding_coverage_pct ?? 0)
 
   return (
-    <section className="rounded-sm border border-[var(--color-border)] bg-alma-content p-4 shadow-paper-sm sm:p-5">
+    <div>
       {/* Vitals ribbon */}
       <div
         className="flex h-2 w-full overflow-hidden rounded-full bg-alma-100"
@@ -91,6 +96,6 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
           {totals.embeddings_ready ? 'ready' : 'ready at ≥80%'}
         </span>
       </div>
-    </section>
+    </div>
   )
 }

@@ -25,6 +25,7 @@ import {
   Activity,
   AlertTriangle,
   Bell,
+  CheckCircle2,
   Cpu,
   Globe,
   Plug,
@@ -160,14 +161,25 @@ function componentOfState(s: OperationalState): string {
   return 'jobs'
 }
 
-// Severity → subtle left spine. Only attention cards get a tinted spine; a
-// healthy card stays calm with the neutral border (brand: saturated tones in an
-// off-white card read as alarms, so we reserve them for the triage signal).
-const SPINE: Record<Severity, string> = {
-  critical: 'border-l-2 border-l-rose-500',
-  warning: 'border-l-2 border-l-amber-500',
-  info: 'border-l-2 border-l-alma-folio',
-  ok: '',
+// Severity → status-dot color. The dot is the at-a-glance status on each chip —
+// the controlled bit of semantic color (like the ribbon), not decoration.
+const DOT: Record<Severity, string> = {
+  critical: 'bg-rose-500',
+  warning: 'bg-amber-500',
+  info: 'bg-alma-folio',
+  ok: 'bg-emerald-500',
+}
+
+// Per-component plain-English "what healthy means / how it's configured", shown
+// in the popup when a component has no issues so the user understands the green.
+const HEALTHY_NOTE: Record<string, string> = {
+  monitors: 'All feed monitors are refreshing cleanly — new papers are arriving on schedule.',
+  sources: 'OpenAlex, Crossref and Semantic Scholar are reachable and responding without errors.',
+  ai: 'An embedding provider is configured and operational — Discovery similarity and the paper map are powered.',
+  authors: 'Every tracked author has a clean identity bridge and an up-to-date historical corpus.',
+  alerts: 'Scheduled digests are configured and delivering.',
+  plugins: 'All configured integrations passed their last connection test.',
+  jobs: 'No background jobs have failed in the last 24 hours.',
 }
 
 export function SystemStatusCards() {
@@ -465,9 +477,9 @@ export function SystemStatusCards() {
 
   if (sections.operational.loading) {
     return (
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="flex flex-wrap gap-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-32 animate-pulse rounded-sm bg-alma-content-elev" />
+          <div key={i} className="h-9 w-36 animate-pulse rounded-sm bg-alma-chrome-elev" />
         ))}
       </div>
     )
@@ -482,72 +494,44 @@ export function SystemStatusCards() {
   }
 
   const hasIssues = (c: SystemComponent) => c.states.length > 0 || c.reviewItems.length > 0
+  const HeaderIcon = openComp?.icon
 
   return (
     <>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      {/* One-line strip — every component is a clickable chip; the colored dot
+          is the at-a-glance status, full detail opens in the centered popup. */}
+      <div className="flex flex-wrap gap-2">
         {components.map((c, i) => {
           const Icon = c.icon
-          const attention = c.severity !== 'ok'
-          const actionable = hasIssues(c)
           return (
-            <motion.div
+            <motion.button
               key={c.id}
-              initial={reducedMotion ? false : { opacity: 0, y: 8 }}
+              type="button"
+              onClick={() => setOpenComp(c)}
+              initial={reducedMotion ? false : { opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35, ease: 'easeOut', delay: 0.04 * i }}
-              className={cn(
-                'flex flex-col rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-4 shadow-paper-sm',
-                SPINE[c.severity],
-              )}
+              transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
+              aria-label={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
+              className="group inline-flex items-center gap-2 rounded-sm border border-[var(--color-border)] bg-alma-chrome-elev px-3 py-1.5 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
-              {/* Header — icon + name + status pill */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span
-                    className={cn(
-                      'grid h-7 w-7 shrink-0 place-items-center rounded-sm',
-                      attention ? 'bg-alma-100 text-alma-700' : 'bg-alma-50 text-alma-600',
-                    )}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span className="truncate text-sm font-medium text-alma-900">{c.name}</span>
-                </div>
-                <StatusBadge tone={dimensionBadgeTone(c.severity)} size="sm" className="shrink-0 capitalize">
-                  {severityLabel(c.severity)}
-                </StatusBadge>
-              </div>
-
-              {/* Description */}
-              <p className="mt-2 flex-1 text-xs leading-relaxed text-slate-500">{c.description}</p>
-
-              {/* Footer — metric + action */}
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <span className="truncate text-xs tabular-nums text-slate-600">{c.metric}</span>
-                {actionable ? (
-                  <AsyncButton
-                    size="sm"
-                    variant="outline"
-                    className="shrink-0 border-alma-200 text-alma-700 hover:bg-alma-50"
-                    onClick={() => setOpenComp(c)}
-                  >
-                    Review &amp; fix
-                  </AsyncButton>
-                ) : null}
-              </div>
-            </motion.div>
+              <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[c.severity])} />
+              <Icon className="h-4 w-4 shrink-0 text-alma-500" />
+              <span className="text-sm font-medium text-alma-800">{c.name}</span>
+              <span className="text-xs tabular-nums text-slate-500">· {c.metric}</span>
+            </motion.button>
           )
         })}
       </div>
 
-      {/* Per-component detail + one-click remediation. */}
+      {/* Centered per-component detail — what's healthy / how it's configured,
+          or the degraded issues + one-click remediation. One Dialog, no route. */}
       <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenComp(null)}>
-        <DialogContent className="max-h-[80vh] max-w-2xl overflow-y-auto bg-alma-chrome">
+        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto bg-alma-chrome">
           {openComp ? (
             <>
               <DialogHeader>
                 <DialogTitle className="flex flex-wrap items-center gap-2 text-alma-900">
+                  {HeaderIcon ? <HeaderIcon className="h-5 w-5 text-alma-600" /> : null}
                   {openComp.name}
                   <StatusBadge tone={dimensionBadgeTone(openComp.severity)} size="sm" className="capitalize">
                     {severityLabel(openComp.severity)}
@@ -556,52 +540,60 @@ export function SystemStatusCards() {
                 <DialogDescription className="text-slate-600">{openComp.description}</DialogDescription>
               </DialogHeader>
 
-              <div className="space-y-2">
-                {/* Actionable degraded states with their one-click remediation. */}
-                {openComp.states.map((state) => (
-                  <div
-                    key={state.id}
-                    className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
-                  >
-                    <p className="text-sm font-medium text-alma-800">{state.label}</p>
-                    {state.detail ? <p className="mt-1 text-xs text-slate-500">{state.detail}</p> : null}
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {(state.targets ?? []).map((target) => {
-                        const handler = remediation[target.action]
-                        if (!handler) return null
-                        const arg = handler.getArg(target)
-                        if (!arg) return null
-                        const pending =
-                          handler.mutation.isPending && (handler.argless || handler.mutation.variables === arg)
-                        return (
-                          <AsyncButton
-                            key={`${state.id}-${target.id ?? arg}`}
-                            size="sm"
-                            variant="outline"
-                            className="border-alma-200 text-alma-700 hover:bg-alma-50"
-                            icon={handler.icon}
-                            pending={pending}
-                            onClick={() => (handler.argless ? handler.mutation.mutate(undefined) : handler.mutation.mutate(arg))}
-                          >
-                            {handler.label(target)}
-                          </AsyncButton>
-                        )
-                      })}
+              {hasIssues(openComp) ? (
+                <div className="space-y-2">
+                  {/* Degraded states with their one-click remediation. */}
+                  {openComp.states.map((state) => (
+                    <div
+                      key={state.id}
+                      className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
+                    >
+                      <p className="text-sm font-medium text-alma-800">{state.label}</p>
+                      {state.detail ? <p className="mt-1 text-xs text-slate-500">{state.detail}</p> : null}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {(state.targets ?? []).map((target) => {
+                          const handler = remediation[target.action]
+                          if (!handler) return null
+                          const arg = handler.getArg(target)
+                          if (!arg) return null
+                          const pending =
+                            handler.mutation.isPending && (handler.argless || handler.mutation.variables === arg)
+                          return (
+                            <AsyncButton
+                              key={`${state.id}-${target.id ?? arg}`}
+                              size="sm"
+                              variant="outline"
+                              className="border-alma-200 text-alma-700 hover:bg-alma-50"
+                              icon={handler.icon}
+                              pending={pending}
+                              onClick={() => (handler.argless ? handler.mutation.mutate(undefined) : handler.mutation.mutate(arg))}
+                            >
+                              {handler.label(target)}
+                            </AsyncButton>
+                          )
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
 
-                {/* Review-only items (no one-click fix) — e.g. rate-limited sources. */}
-                {openComp.reviewItems.map((item) => (
-                  <div
-                    key={`review-${item.id}`}
-                    className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
-                  >
-                    <p className="text-sm font-medium text-alma-800">{item.primary}</p>
-                    {item.secondary ? <p className="mt-1 text-xs text-slate-500">{item.secondary}</p> : null}
-                  </div>
-                ))}
-              </div>
+                  {/* Review-only items (no one-click fix) — e.g. rate-limited sources. */}
+                  {openComp.reviewItems.map((item) => (
+                    <div
+                      key={`review-${item.id}`}
+                      className="rounded-sm border border-[var(--color-border)] bg-alma-content-elev p-3"
+                    >
+                      <p className="text-sm font-medium text-alma-800">{item.primary}</p>
+                      {item.secondary ? <p className="mt-1 text-xs text-slate-500">{item.secondary}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Healthy — explain in plain English what "healthy" means here. */
+                <Alert variant="success">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <AlertDescription>{HEALTHY_NOTE[openComp.id] ?? `${openComp.name} is healthy.`}</AlertDescription>
+                </Alert>
+              )}
 
               <div className="flex justify-end">
                 <AsyncButton
