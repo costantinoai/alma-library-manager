@@ -82,20 +82,23 @@
   --color-edge-3: #F0EADC;
   --color-edge-4: #F2EEE4;   /* faintest, on white */
 
-  /* ── Cool surface variant — the ONE deliberate exception ───────────────
+  /* ── Activity surface variant — the ONE deliberate exception ──────────
    * The Activity panel is system telemetry, not editorial reading, so it
-   * sits on a colder blue-grey ladder (instead of warm cream). It carries a
-   * clear master-detail hierarchy: dark chrome → lighter list → lightest
-   * detail. The only surface off the warm ladder; use ONLY in Activity.
+   * sits on its own neutral ladder instead of the warm cream one. The tone
+   * is "white paper + elephant musk": bright white-paper content framed by a
+   * soft warm grey-taupe chrome (NOT blue-grey — the legacy `cool` name is
+   * kept only to avoid churning its ~18 call sites). Master-detail
+   * hierarchy: greige chrome → paper list → lighter paper → white. Use ONLY
+   * in Activity.
    *
-   *   cool-0  chrome — taskbar, tab bar, panel frame, log header (darkest)
-   *   cool-1  left column — the operation / job list rows
-   *   cool-2  right column — detail + record items (even lighter)
+   *   cool-0  chrome — taskbar, tab bar, panel frame, log header (elephant musk, darkest)
+   *   cool-1  left column — the operation / job list rows (white paper)
+   *   cool-2  right column — detail + record items (lighter paper)
    *   cool-3  deepest nested boxes / chips / code blocks (white) */
-  --color-surface-cool-0: #D8E0EA;   /* chrome (darkest)              */
-  --color-surface-cool-1: #E7ECF2;   /* left list items               */
-  --color-surface-cool-2: #F2F6FA;   /* right detail items (lighter)  */
-  --color-surface-cool-3: #FFFFFF;   /* deepest boxes / chips         */
+  --color-surface-cool-0: #E7E3DB;   /* elephant musk — warm greige frame */
+  --color-surface-cool-1: #F4F1EB;   /* white-paper list rows             */
+  --color-surface-cool-2: #FBF9F4;   /* lighter paper — detail items      */
+  --color-surface-cool-3: #FFFFFF;   /* white — deepest boxes / chips     */
 
   /* ── Folio binding blue (accent) ───────────────────────────────────────
    * The accent. Replaces the v2 teal (#0E6F6D). Reads as the dyed cloth
