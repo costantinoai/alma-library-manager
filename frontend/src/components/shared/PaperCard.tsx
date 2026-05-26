@@ -179,9 +179,9 @@ const SIGNAL_META: Record<string, { label: string; color: string; description: s
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.round(score)
   let barColor: string
-  if (pct >= 70) barColor = 'bg-emerald-500'
-  else if (pct >= 40) barColor = 'bg-amber-500'
-  else barColor = 'bg-red-400'
+  if (pct >= 70) barColor = 'bg-success-500'
+  else if (pct >= 40) barColor = 'bg-warning-500'
+  else barColor = 'bg-critical-500'
   return (
     <div className="flex items-center gap-2">
       <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">

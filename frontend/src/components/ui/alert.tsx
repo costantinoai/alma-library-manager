@@ -15,19 +15,18 @@ const alertVariants = cva(
       variant: {
         default: "bg-surface-1 text-alma-900",
         destructive:
-          "border-red-500/50 text-red-500 [&>svg]:text-red-500",
-        // Soft "negative" tone matching the StatusBadge `negative` palette —
-        // rose-200/rose-50/rose-700. Use for anti-affordance content (top
-        // negative preferences, suppressed entities, dislike summaries) where
-        // `destructive` red is too loud.
+          "border-critical-500/50 text-critical-500 [&>svg]:text-critical-500",
+        // Soft "negative" tone matching the StatusBadge `negative` palette.
+        // Use for anti-affordance content (top negative preferences, suppressed
+        // entities, dislike summaries) where `destructive` is too loud.
         negative:
-          "border-rose-200 bg-rose-50 text-rose-800 [&>svg]:text-rose-700",
+          "border-critical-200 bg-critical-50 text-critical-800 [&>svg]:text-critical-700",
         warning:
-          "border-amber-200 bg-amber-50 text-amber-800 [&>svg]:text-amber-700",
+          "border-warning-200 bg-warning-50 text-warning-800 [&>svg]:text-warning-700",
         success:
-          "border-emerald-200 bg-emerald-50 text-emerald-800 [&>svg]:text-emerald-700",
+          "border-success-200 bg-success-50 text-success-800 [&>svg]:text-success-700",
         info:
-          "border-sky-200 bg-sky-50 text-sky-800 [&>svg]:text-sky-700",
+          "border-info-200 bg-info-50 text-info-800 [&>svg]:text-info-700",
       },
     },
     defaultVariants: {

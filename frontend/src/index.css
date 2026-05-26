@@ -68,17 +68,14 @@
    *
    * Consumed ONLY through the static SURFACE_BG / SURFACE_BORDER literal
    * maps in components/ui/surface.tsx — never interpolate `bg-surface-${n}`
-   * (Tailwind v4 purges class names it can't see as complete literals).
-   *
-   * `--color-edge-N` is the hairline paired to each level — a warm
-   * parchment border that fades as the surface lifts, so the separation
-   * between level N and its host is also one consistent value. */
+   * (Tailwind v4 purges class names it can't see as complete literals). */
   --color-surface-0: #F1EAD8;
   --color-surface-1: #F8F4E8;
   --color-surface-2: #FBF8EE;
   --color-surface-3: #FFFEF9;
   --color-surface-4: #FFFFFF;
 
+  /* `--color-edge-N` is the warm hairline paired to each level. */
   --color-edge-0: #E2D7BE;   /* hairline on the desk */
   --color-edge-1: #E6DCC6;
   --color-edge-2: #EBE3D2;
@@ -92,8 +89,8 @@
    * body, cool-2 the nested rows/boxes (lighter), cool-3 the top. This is
    * the only surface allowed off the warm ladder; use it ONLY in the
    * Activity panel. */
-  --color-surface-cool-1: #F2F4F7;   /* panel body            */
-  --color-surface-cool-2: #F8FAFC;   /* rows / boxes (lighter) */
+  --color-surface-cool-1: #E6EAF0;   /* panel body (deepest cool) */
+  --color-surface-cool-2: #F1F4F8;   /* rows / boxes (lighter)    */
   --color-surface-cool-3: #FFFFFF;   /* chips / top            */
 
   /* ── Folio binding blue (accent) ───────────────────────────────────────
@@ -179,29 +176,52 @@
    * warning / negative / info) and orthogonal to brand recolor. Don't
    * shift them with the rebrand.
    */
+  /* Full standard ramps (50–900) so every semantic surface — soft tints
+   * (50/100/200), fills (400/500/600), and strong text/borders (700/800) —
+   * sources from the token, not raw emerald/amber/rose/sky classes. */
   --color-success-50:  #ecfdf5;
   --color-success-100: #d1fae5;
+  --color-success-200: #a7f3d0;
+  --color-success-300: #6ee7b7;
+  --color-success-400: #34d399;
   --color-success-500: #10b981;
   --color-success-600: #059669;
   --color-success-700: #047857;
+  --color-success-800: #065f46;
+  --color-success-900: #064e3b;
 
   --color-warning-50:  #fffbeb;
   --color-warning-100: #fef3c7;
+  --color-warning-200: #fde68a;
+  --color-warning-300: #fcd34d;
+  --color-warning-400: #fbbf24;
   --color-warning-500: #f59e0b;
   --color-warning-600: #d97706;
   --color-warning-700: #b45309;
+  --color-warning-800: #92400e;
+  --color-warning-900: #78350f;
 
   --color-critical-50:  #fff1f2;
   --color-critical-100: #ffe4e6;
+  --color-critical-200: #fecdd3;
+  --color-critical-300: #fda4af;
+  --color-critical-400: #fb7185;
   --color-critical-500: #f43f5e;
   --color-critical-600: #e11d48;
   --color-critical-700: #be123c;
+  --color-critical-800: #9f1239;
+  --color-critical-900: #881337;
 
   --color-info-50:  #f0f9ff;
   --color-info-100: #e0f2fe;
+  --color-info-200: #bae6fd;
+  --color-info-300: #7dd3fc;
+  --color-info-400: #38bdf8;
   --color-info-500: #0ea5e9;
   --color-info-600: #0284c7;
   --color-info-700: #0369a1;
+  --color-info-800: #075985;
+  --color-info-900: #0c4a6e;
 
   /* ── Fonts ──────────────────────────────────────────────────────────────
    * Display / brand → Merriweather Semibold. UI / body → Inter.
