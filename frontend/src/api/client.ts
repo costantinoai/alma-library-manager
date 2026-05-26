@@ -550,6 +550,16 @@ export interface OpenAlexUsage {
   summary: string
 }
 
+/** Live validity of the OpenAlex API key (Settings → Connections).
+ *  Same contract as {@link SemanticScholarStatus}: `valid===true` → green
+ *  dot; `false` → key rejected; `null` → set but unverified or not
+ *  configured. */
+export interface OpenAlexStatus {
+  configured: boolean
+  valid: boolean | null
+  detail: string
+}
+
 /** Live validity of the Semantic Scholar API key (Settings → Connections).
  *  `valid===true` → green dot; `false` → key rejected; `null` → set but
  *  unverified (probe couldn't complete) or not configured. */

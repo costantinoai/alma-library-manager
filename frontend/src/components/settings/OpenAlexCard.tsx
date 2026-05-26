@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle, Globe, RefreshCw, Save } from 'lucide-react'
 
-import { api, type Settings, type OpenAlexUsage } from '@/api/client'
+import { api, type Settings, type OpenAlexUsage, type OpenAlexStatus } from '@/api/client'
 import { AsyncButton, SettingsCard, StatTile } from '@/components/settings/primitives'
 import {
   Form,
@@ -17,6 +17,24 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+
+/**
+ * Resolve the connection-dot appearance from the live key-validity probe.
+ * Green = the key works; red = OpenAlex rejected it; amber = set but
+ * unverified; grey = not configured / still checking. Mirrors the Semantic
+ * Scholar card so both connections read the same way.
+ */
+function dotState(status: OpenAlexStatus | undefined, loading: boolean) {
+  if (loading) return { dot: 'bg-alma-300', label: 'Checking…', text: 'text-slate-500' }
+  if (!status || !status.configured)
+    return { dot: 'bg-alma-300', label: 'Not set', text: 'text-slate-500' }
+  if (status.valid === true)
+    return { dot: 'bg-emerald-500', label: 'Connected', text: 'text-emerald-700' }
+  if (status.valid === false)
+    return { dot: 'bg-rose-500', label: 'Key rejected', text: 'text-rose-700' }
+  return { dot: 'bg-amber-500', label: "Couldn't verify", text: 'text-amber-700' }
+}
 
 const openalexSchema = z.object({
   openalex_email: z
@@ -80,6 +98,20 @@ export function OpenAlexCard({
     enabled: formData.backend === 'openalex',
   })
 
+  // On-demand key-validity probe (one cheap /rate-limit call). No polling —
+  // refetches only on mount, manual re-check, or when the SettingsPage
+  // invalidates the key after a save.
+  const statusQuery = useQuery({
+    queryKey: ['openalex-status'],
+    queryFn: () => api.get<OpenAlexStatus>('/settings/openalex/status'),
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+    enabled: formData.backend === 'openalex',
+  })
+
+  const state = dotState(statusQuery.data, statusQuery.isLoading || statusQuery.isFetching)
+
   if (formData.backend !== 'openalex') return null
 
   const handleSave = async () => {
@@ -104,6 +136,27 @@ export function OpenAlexCard({
             void handleSave()
           }}
         >
+          <div className="flex items-center justify-between gap-2 rounded-md bg-parchment-50 px-3 py-2">
+            <span className="inline-flex items-center gap-2 text-sm">
+              <span className={cn('h-2 w-2 rounded-full', state.dot)} aria-hidden />
+              <span className={cn('font-medium', state.text)}>{state.label}</span>
+              {statusQuery.data?.detail && (
+                <span className="text-xs text-slate-500">— {statusQuery.data.detail}</span>
+              )}
+            </span>
+            <AsyncButton
+              type="button"
+              variant="outline"
+              size="sm"
+              icon={<RefreshCw className="h-3 w-3" />}
+              pending={statusQuery.isFetching}
+              onClick={() => statusQuery.refetch()}
+              className="h-7 px-2 text-xs"
+            >
+              Re-check
+            </AsyncButton>
+          </div>
+
           <FormField
             control={form.control}
             name="openalex_email"

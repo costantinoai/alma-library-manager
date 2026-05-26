@@ -321,6 +321,58 @@ class OpenAlexClient:
         except Exception:
             return None
 
+    def probe_credentials(self, timeout: float = 8) -> Dict[str, Any]:
+        """Live check of the configured OpenAlex API key.
+
+        Mirrors the Semantic Scholar status contract consumed by
+        Settings → Connections (``configured`` / ``valid`` / ``detail``),
+        so the OpenAlex card can render the same connection pill:
+
+          - ``configured=False`` — no API key set.
+          - ``valid=True``       — OpenAlex accepted the key (200, or 429,
+                                   which still proves the key authenticated
+                                   before the rate limiter kicked in).
+          - ``valid=False``      — OpenAlex rejected the key (401 / 403).
+          - ``valid=None``       — probe could not complete or returned an
+                                   unexpected status; validity unknown.
+
+        Probes ``/rate-limit`` directly (bypasses the response cache, like
+        :meth:`get_rate_limit_status`) so a manual re-check always re-probes
+        with the current key.
+        """
+        if not self._api_key:
+            return {"configured": False, "valid": None, "detail": "No API key set."}
+        try:
+            url = f"{BASE_URL}/rate-limit"
+            merged = self._inject_auth(None)
+            resp = self._session.get(url, params=merged, timeout=timeout)
+            self._update_rate_limits(resp)
+        except Exception as exc:
+            return {
+                "configured": True,
+                "valid": None,
+                "detail": f"Could not reach OpenAlex ({exc.__class__.__name__}).",
+            }
+        if resp.status_code == 200:
+            return {"configured": True, "valid": True, "detail": "Key accepted."}
+        if resp.status_code == 429:
+            return {
+                "configured": True,
+                "valid": True,
+                "detail": "Key accepted (rate-limited right now).",
+            }
+        if resp.status_code in (401, 403):
+            return {
+                "configured": True,
+                "valid": False,
+                "detail": "OpenAlex rejected the key (invalid or unauthorized).",
+            }
+        return {
+            "configured": True,
+            "valid": None,
+            "detail": f"Unexpected OpenAlex response ({resp.status_code}).",
+        }
+
     # ------------------------------------------------------------------
     # Auth helpers
     # ------------------------------------------------------------------

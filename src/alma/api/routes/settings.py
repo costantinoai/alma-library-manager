@@ -591,6 +591,34 @@ def get_openalex_usage():
         )
 
 
+@router.get("/openalex/status")
+def get_openalex_status():
+    """Report whether the OpenAlex API key is configured and, if so, whether
+    a live probe accepts it. Drives the connection pill in Settings →
+    Connections → OpenAlex, mirroring the Semantic Scholar status contract.
+
+    States (green dot = ``valid is True``):
+      - ``configured=False`` — no key set (env or secret store).
+      - ``valid=True``       — probe returned 200, or 429 (key authenticated
+                               before the rate limiter applied).
+      - ``valid=False``      — OpenAlex rejected the key (401 / 403).
+      - ``valid=None``       — probe could not complete / unexpected status.
+
+    The probe hits ``/rate-limit`` directly (bypasses the response cache) so
+    a manual re-check always re-probes with the current key.
+    """
+    try:
+        client = get_openalex_client()
+        return client.probe_credentials()
+    except Exception as e:
+        logger.error("Failed to probe OpenAlex credentials: %s", e)
+        return {
+            "configured": bool(get_openalex_api_key()),
+            "valid": None,
+            "detail": "Could not probe OpenAlex.",
+        }
+
+
 @router.get("/semantic-scholar/status")
 def get_semantic_scholar_status():
     """Report whether the Semantic Scholar key is configured and, if so,
