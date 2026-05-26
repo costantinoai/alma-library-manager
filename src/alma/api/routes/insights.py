@@ -1603,13 +1603,31 @@ def get_corpus_health(
 ):
     try:
         envelope = mv.get(db, health_service.HEALTH_CORPUS_VIEW_KEY)
+        authors_envelope = mv.get(db, health_service.HEALTH_AUTHORS_VIEW_KEY)
     except Exception as exc:
         raise_internal("Failed to compute corpus health", exc)
     payload = envelope.get("payload") or {}
+    authors_payload = authors_envelope.get("payload") or {}
+
+    # Unified health snapshot: corpus/paper dimensions AND author-identity
+    # dimensions in ONE set, so the Health page's vitals ribbon counts every
+    # dimension and each repair card (corpus OR author) resolves its repaired
+    # dimensions the same way. `assess_authors` already emits uniform dimension
+    # records; we just concatenate them and recompute the severity histogram.
+    # `papers_total` / coverage stay corpus facts (authors aren't papers).
+    all_dims = [*(payload.get("dimensions") or []), *(authors_payload.get("dimensions") or [])]
+    by_severity = {s: 0 for s in ("ok", "info", "warning", "critical")}
+    for dim in all_dims:
+        sev = dim.get("severity") or "ok"
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+    totals = {**(payload.get("totals") or {}), "dimensions_by_severity": by_severity}
+
     return {
         **payload,
-        "stale": envelope.get("stale", False),
-        "rebuilding": envelope.get("rebuilding", False),
+        "dimensions": all_dims,
+        "totals": totals,
+        "stale": envelope.get("stale", False) or authors_envelope.get("stale", False),
+        "rebuilding": envelope.get("rebuilding", False) or authors_envelope.get("rebuilding", False),
         "computed_at": envelope.get("computed_at"),
     }
 
