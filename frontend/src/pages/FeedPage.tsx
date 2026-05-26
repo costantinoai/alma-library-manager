@@ -27,6 +27,7 @@ import {
   listFeedMonitors,
   listFeedInbox,
   refreshFeedInbox,
+  removeFromLibrary,
   updateReadingStatus,
   type FeedAction,
   type FeedInboxItem,
@@ -70,8 +71,14 @@ function deriveFeedReaction(status?: string | null): PaperReaction {
 }
 
 function deriveFeedIsSaved(itemStatus?: string | null, paperStatus?: string | null): boolean {
-  if (itemStatus === 'add' || itemStatus === 'like' || itemStatus === 'love') return true
-  return paperStatus === 'library'
+  // Resolved library membership is authoritative: a paper just removed from
+  // the Library (status 'removed') reads as not-saved even though the feed
+  // item still carries its old 'add'/'like'/'love' action — that's what lets
+  // the Save button toggle off. Fall back to the feed action only while the
+  // paper row is still unresolved.
+  if (paperStatus === 'library') return true
+  if (paperStatus === 'removed') return false
+  return itemStatus === 'add' || itemStatus === 'like' || itemStatus === 'love'
 }
 
 const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
@@ -288,6 +295,19 @@ export function FeedPage() {
       })
     },
     onError: (err) => errorToast('Reading list update failed', getApiErrorMessage(err)),
+  })
+
+  // Library membership toggle (D2/D3): the Feed Save button adds to Library;
+  // clicking it again removes the paper (soft transition to 'removed', which
+  // also writes the small negative signal that Remove-from-Library always
+  // carries — same as removing elsewhere).
+  const removeFromLibraryMutation = useMutation({
+    mutationFn: ({ paperId }: { paperId: string }) => removeFromLibrary(paperId),
+    onSuccess: async () => {
+      await invalidateFeedAction()
+      toast({ title: 'Removed from library', description: 'The paper is no longer in your Library.' })
+    },
+    onError: (err) => errorToast('Remove failed', getApiErrorMessage(err)),
   })
 
   const bulkMutation = useMutation({
@@ -678,7 +698,11 @@ export function FeedPage() {
                   onQueue={() =>
                     item.paper_id && queueMutation.mutate({ paperId: item.paper_id, nextQueued: !isQueued })
                   }
-                  onAdd={() => actionMutation.mutate({ id: item.id, action: 'add' })}
+                  onAdd={() =>
+                    isSaved && item.paper_id
+                      ? removeFromLibraryMutation.mutate({ paperId: item.paper_id })
+                      : actionMutation.mutate({ id: item.id, action: 'add' })
+                  }
                   onLike={() => actionMutation.mutate({ id: item.id, action: 'like' })}
                   onLove={() => actionMutation.mutate({ id: item.id, action: 'love' })}
                   onDislike={() => actionMutation.mutate({ id: item.id, action: 'dislike' })}
@@ -686,9 +710,10 @@ export function FeedPage() {
                   dismissLabel="Dismiss"
                   dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"
-                  actionDisabled={actionMutation.isPending || queueMutation.isPending}
+                  actionDisabled={actionMutation.isPending || queueMutation.isPending || removeFromLibraryMutation.isPending}
                   reaction={reaction}
                   isSaved={isSaved}
+                  savedClickRemoves
                   isQueued={isQueued}
                   trailingHeader={isNew ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
                   forceShowAbstract={viewMode === 'extended'}

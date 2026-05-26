@@ -11,7 +11,7 @@ import { StarRating } from '@/components/StarRating'
 import { trackInteraction } from '@/api/client'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
-import { formatPercent, formatYearMonth } from '@/lib/format'
+import { formatPercent, formatPaperDate } from '@/lib/format'
 import { byWeightedDesc } from '@/lib/sort'
 
 export interface PaperCardPaper {
@@ -114,6 +114,10 @@ interface PaperCardProps {
   reaction?: PaperReaction
   /** Whether the paper is already saved to Library (controls Save button). */
   isSaved?: boolean
+  /** When saved, clicking Save removes from Library (toggle). Surfaces whose
+   *  Save handler removes (Feed) set this so the title reads "Remove from
+   *  library". */
+  savedClickRemoves?: boolean
   /** Whether the paper is already on the reading list (controls Queue button). */
   isQueued?: boolean
   /** When true, the abstract is expanded by default (Feed extended view). */
@@ -352,6 +356,7 @@ export function PaperCard({
   trailingHeader,
   reaction = null,
   isSaved = false,
+  savedClickRemoves = false,
   isQueued = false,
   forceShowAbstract = false,
   suppressSummaries = false,
@@ -379,10 +384,11 @@ export function PaperCard({
   // T15 — derived display helpers for the card's metadata strip.
   //
   // Year inline with authors: pub_date preferred over bare year because
-  // "Feb 2024" is more scannable than "2024". Short-form via en-GB
-  // locale because it's compact ("13 Feb 2024" not "February 13, 2024").
+  // "Feb 2024" is more scannable than "2024". Rendered at the precision the
+  // source provides — "26 May 2026" when the day is known, else "May 2026",
+  // else the bare year — never fabricating a day (see lessons.md).
   const yearInline = ((): string | null => {
-    const formatted = formatYearMonth((paper.publication_date || '').trim())
+    const formatted = formatPaperDate((paper.publication_date || '').trim())
     if (formatted) return formatted
     if (paper.year != null) return String(paper.year)
     return null
@@ -861,6 +867,7 @@ export function PaperCard({
               dislikeTitle={dislikeTitle}
               reaction={reaction}
               isSaved={isSaved}
+              savedClickRemoves={savedClickRemoves}
               isQueued={isQueued}
               showLabels={showActionLabels}
             />

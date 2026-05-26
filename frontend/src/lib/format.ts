@@ -36,3 +36,34 @@ export function formatYearMonth(value: string | null | undefined): string {
   if (Number.isNaN(parsed.getTime())) return ''
   return parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
 }
+
+/**
+ * Format a paper's publication date at the precision the source actually
+ * provides — never fabricating a day (see lessons.md "Don't fabricate missing
+ * timestamps"):
+ *   "2026-05-26" → "26 May 2026"   (full date when the day is known)
+ *   "2026-05"    → "May 2026"      (month precision)
+ *   "2026"       → "2026"          (year precision)
+ * Returns '' when the input is falsy or unparseable. Built from the raw
+ * Y/M/D components (not Date string parsing) so a local timezone behind UTC
+ * can't shift "the 26th" back to the 25th.
+ */
+export function formatPaperDate(value: string | null | undefined): string {
+  if (!value) return ''
+  const s = value.trim()
+  if (/^\d{4}$/.test(s)) return s
+  const ym = s.match(/^(\d{4})-(\d{2})$/)
+  if (ym) {
+    return new Date(Number(ym[1]), Number(ym[2]) - 1, 1)
+      .toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+  }
+  const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (ymd) {
+    return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]))
+      .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+  // Unknown shape: parse but don't assume day precision.
+  const parsed = new Date(s)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+}

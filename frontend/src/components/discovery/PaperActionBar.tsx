@@ -25,6 +25,11 @@ interface PaperActionBarProps {
   reaction?: PaperReaction
   /** Whether the paper is already saved to Library. Toggles Save → Saved. */
   isSaved?: boolean
+  /** When saved, clicking Save removes the paper from Library (a true toggle).
+   *  Only surfaces whose Save handler actually removes (e.g. Feed) set this;
+   *  it switches the saved-state title from "Already saved" to "Remove from
+   *  library" so the affordance stays truthful elsewhere. */
+  savedClickRemoves?: boolean
   /** Whether the paper is already on the reading list. Toggles Queue → Queued. */
   isQueued?: boolean
   /** Explicit label-visibility override. When unset, compact hides labels. */
@@ -167,6 +172,7 @@ export function PaperActionBar({
   dislikeTitle = 'Negative signal — keeps the paper visible',
   reaction = null,
   isSaved = false,
+  savedClickRemoves = false,
   isQueued = false,
   showLabels,
 }: PaperActionBarProps) {
@@ -213,7 +219,7 @@ export function PaperActionBar({
           compact={compact}
           disabled={disabled}
           showLabel={showLabel}
-          title={isSaved ? 'Already saved to library' : 'Save to library'}
+          title={isSaved ? (savedClickRemoves ? 'Remove from library' : 'Already saved to library') : 'Save to library'}
           onClick={onAdd}
           iconFilled={isSaved}
           active={isSaved}
