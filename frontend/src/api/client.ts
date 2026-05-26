@@ -2,7 +2,7 @@ import { repairDisplayText } from '@/lib/utils'
 
 const BASE_URL = '/api/v1'
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
@@ -10,6 +10,19 @@ class ApiError extends Error {
     super(message)
     this.name = 'ApiError'
   }
+}
+
+/**
+ * Extract a human-readable message from a caught error for toast surfaces.
+ * For an {@link ApiError} this is the backend `detail` plus the HTTP status,
+ * so a failed mutation shows *why* it failed instead of a bare "X failed".
+ */
+export function getApiErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    return err.status ? `${err.message} (HTTP ${err.status})` : err.message
+  }
+  if (err instanceof Error && err.message) return err.message
+  return 'Unexpected error — see server logs.'
 }
 
 /**
@@ -1275,8 +1288,8 @@ export interface FeedMatchedMonitor {
   monitor_label?: string | null
 }
 
-export type FeedItemStatus = 'new' | 'add' | 'like' | 'love' | 'dislike'
-export type FeedAction = 'add' | 'like' | 'love' | 'dislike'
+export type FeedItemStatus = 'new' | 'add' | 'like' | 'love' | 'dislike' | 'dismissed'
+export type FeedAction = 'add' | 'like' | 'love' | 'dislike' | 'dismiss'
 
 export interface FeedInboxItem {
   id: string
@@ -3463,6 +3476,19 @@ export function feedLove(feedItemId: string): Promise<{ item: FeedInboxItem | nu
 
 export function feedDislike(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
   return api.post(`/feed/${encodeURIComponent(feedItemId)}/dislike`)
+}
+
+/** Dismiss a feed item: hides the paper from the Feed inbox forever and
+ *  records a small negative signal in the corpus (no Library change, no
+ *  star-rating stamp — lighter than an explicit dislike). */
+export function feedDismiss(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
+  return api.post(`/feed/${encodeURIComponent(feedItemId)}/dismiss`)
+}
+
+/** Undo a feed dismissal: restores the paper to the inbox and removes the
+ *  small negative signal the dismiss recorded. Powers the toast "Undo". */
+export function feedUndoDismiss(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
+  return api.post(`/feed/${encodeURIComponent(feedItemId)}/undo-dismiss`)
 }
 
 export function feedBulkAction(

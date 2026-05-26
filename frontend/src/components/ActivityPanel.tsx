@@ -378,9 +378,9 @@ function OperationsView({
         type="button"
         onClick={() => onSelect(op.job_id)}
         className={cn(
-          'flex w-full items-start gap-3 border-l-2 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
+          'flex w-full items-start gap-3 border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
           statusAccent(op.status),
-          isChild && 'bg-surface-cool-2/60 pl-8',
+          isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
         )}
       >
@@ -960,7 +960,7 @@ function OperationDetailView({
       )}
 
       {/* ── LOG STREAM TOOLBAR ── */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-1/95 px-4 py-2 backdrop-blur">
+      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-surface-cool-0/95 px-4 py-2 backdrop-blur">
         <EyebrowLabel tone="muted">Log stream</EyebrowLabel>
         <span className="text-[11px] tabular-nums text-slate-400">
           {filteredLogs.length}/{logs.length}
@@ -1229,7 +1229,7 @@ export function ActivityPanel() {
             inside the same shell. */}
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-1 px-4 py-2 shadow-sm hover:bg-surface-cool-2"
+          className="flex w-full items-center justify-between border-t border-slate-200 bg-surface-cool-0 px-4 py-2 shadow-sm hover:bg-surface-cool-1"
         >
           <div className="flex items-center gap-2">
             <Activity className="h-4 w-4 text-slate-500" />
@@ -1252,13 +1252,13 @@ export function ActivityPanel() {
             top area; on desktop we respect the user-resizable panelHeight. */}
         {isOpen && (
           <div
-            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-1 shadow-2xl lg:max-h-none"
+            className="flex max-h-[75vh] flex-col border-t border-slate-200 bg-surface-cool-0 shadow-2xl lg:max-h-none"
             style={{ height: `${panelHeight}px` }}
           >
           {/* Resize handle */}
           <div
             onMouseDown={handleResizeStart}
-            className="h-2 cursor-ns-resize border-b border-slate-200 bg-surface-cool-2 hover:bg-surface-cool-2"
+            className="h-2 cursor-ns-resize border-b border-slate-200 bg-surface-cool-0 hover:bg-surface-cool-1"
             title="Drag to resize activity panel"
           />
 
@@ -1319,7 +1319,7 @@ export function ActivityPanel() {
                 <QueryErrorView title="Failed to load operations" message={opsError} />
               ) : (
                 <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-2">
-                  <ScrollArea className="h-full border-r border-slate-100">
+                  <ScrollArea className="h-full border-r border-slate-200">
                     <OperationsView
                       ops={operations}
                       selectedJobId={selectedJobId}

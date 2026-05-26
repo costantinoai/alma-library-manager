@@ -2,7 +2,7 @@ import { Loader2, UserMinus, UserPlus } from 'lucide-react'
 
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { type StatusBadgeTone } from '@/components/ui/status-badge'
+import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { truncate } from '@/lib/utils'
 
 interface SuggestedAuthorCardProps {
@@ -94,24 +94,28 @@ export function SuggestedAuthorCard({
                 the brand accent at low alpha reads as "metadata
                 stamp" rather than "alarm" while still being clearly
                 a chip and not body text. */}
-            <span
-              className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-alma-folio"
+            <StatusBadge
+              tone="accent"
+              size="sm"
+              className="uppercase tracking-wide"
               title={kindTone(suggestion.suggestion_type)}
             >
               {kindLabel(suggestion.suggestion_type)}
-            </span>
+            </StatusBadge>
             {/* Consensus chip — only when ≥2 independent buckets agree.
                 The bonus is band-relative (+12 / +17 / +21 / +24 for
                 2 / 3 / 4 / 5 buckets) and is already folded into the
                 progress bar score; this chip explains *why* the score
                 climbed when no single bucket would justify it. */}
             {suggestion.consensus_count && suggestion.consensus_count >= 2 ? (
-              <span
-                className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-alma-folio"
+              <StatusBadge
+                tone="accent"
+                size="sm"
+                className="uppercase tracking-wide"
                 title={(suggestion.consensus_buckets ?? []).join(' · ')}
               >
                 {suggestion.consensus_count} sources
-              </span>
+              </StatusBadge>
             ) : null}
             {/* Bucket calibration — only when the multiplier deviates
                 meaningfully from 1.0 (fresh DB returns 1.0 for every
@@ -121,34 +125,30 @@ export function SuggestedAuthorCard({
                 out for you in the past" / "haven't". */}
             {typeof suggestion.bucket_calibration_multiplier === 'number' &&
             Math.abs(suggestion.bucket_calibration_multiplier - 1.0) >= 0.05 ? (
-              <span
-                className={
-                  suggestion.bucket_calibration_multiplier > 1.0
-                    ? 'inline-flex items-center rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success-700'
-                    : 'inline-flex items-center rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning-700'
-                }
+              <StatusBadge
+                tone={suggestion.bucket_calibration_multiplier > 1.0 ? 'positive' : 'warning'}
+                size="sm"
+                className="uppercase tracking-wide"
                 title="Per-bucket outcome calibration: how often you've followed vs rejected this bucket's suggestions"
               >
                 {suggestion.bucket_calibration_multiplier > 1.0 ? '↑' : '↓'} bucket{' '}
                 {suggestion.bucket_calibration_multiplier.toFixed(2)}×
-              </span>
+              </StatusBadge>
             ) : null}
             {/* Paper-feedback projection — surface only when the magnitude
                 cleared a small noise floor so neutral cards stay quiet. */}
             {typeof suggestion.paper_signal_adjustment === 'number' &&
             Math.abs(suggestion.paper_signal_adjustment) >= 1 ? (
-              <span
-                className={
-                  suggestion.paper_signal_adjustment > 0
-                    ? 'inline-flex items-center rounded-full bg-success-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success-700'
-                    : 'inline-flex items-center rounded-full bg-warning-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning-700'
-                }
+              <StatusBadge
+                tone={suggestion.paper_signal_adjustment > 0 ? 'positive' : 'warning'}
+                size="sm"
+                className="uppercase tracking-wide"
                 title="Net pull from your saved + dismissed papers in this area"
               >
                 {suggestion.paper_signal_adjustment > 0
                   ? `+${suggestion.paper_signal_adjustment.toFixed(1)} from saves`
                   : `${suggestion.paper_signal_adjustment.toFixed(1)} from rejects`}
-              </span>
+              </StatusBadge>
             ) : null}
             {suggestion.local_paper_count ? (
               <span className="text-[11px] text-slate-500">
@@ -186,13 +186,14 @@ export function SuggestedAuthorCard({
         {signals.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {signals.map((signal, idx) => (
-              <span
+              <StatusBadge
                 key={`${signal.kind}-${idx}`}
+                tone="accent"
+                size="sm"
                 title={signal.subject || signal.label}
-                className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium text-alma-folio"
               >
                 {truncate(signal.label, 38)}
-              </span>
+              </StatusBadge>
             ))}
           </div>
         ) : legacyCaption ? (
@@ -206,12 +207,9 @@ export function SuggestedAuthorCard({
       {signals.length === 0 && suggestion.shared_topics.length > 0 ? (
         <div className="flex flex-wrap gap-1">
           {suggestion.shared_topics.slice(0, 3).map((topic) => (
-            <span
-              key={topic}
-              className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium text-alma-folio"
-            >
+            <StatusBadge key={topic} tone="accent" size="sm">
               {truncate(topic, 24)}
-            </span>
+            </StatusBadge>
           ))}
         </div>
       ) : null}

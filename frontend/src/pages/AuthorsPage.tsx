@@ -215,7 +215,7 @@ export function AuthorsPage() {
               <RevealItem
                 key={author.id}
                 index={i}
-                layoutId={`author-${author.openalex_id || author.id}`}
+
               >
                 <FollowedAuthorCard
                   author={author}

@@ -528,7 +528,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           {visibleLikes.map((like, i) => {
             const isSelected = selectedKeys.has(like.id)
             return (
-            <RevealItem key={like.id} index={i} layoutId={`saved-${like.id}`}>
+            <RevealItem key={like.id} index={i}>
             <div
               className="relative rounded-sm"
             >

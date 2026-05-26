@@ -3,10 +3,19 @@ import { toast as sonnerToast } from 'sonner'
 
 type ToastVariant = 'default' | 'destructive'
 
+interface ToastAction {
+  /** Button copy, e.g. "Undo". */
+  label: string
+  /** Fired when the action button is clicked. Sonner auto-dismisses after. */
+  onClick: () => void
+}
+
 interface ToastInput {
   title?: React.ReactNode
   description?: React.ReactNode
   variant?: ToastVariant
+  /** Optional inline action button (e.g. an "Undo" affordance). */
+  action?: ToastAction
 }
 
 interface ToastHandle {
@@ -16,8 +25,11 @@ interface ToastHandle {
 }
 
 function emit(input: ToastInput, id?: string | number): string | number {
-  const options: Parameters<typeof sonnerToast.success>[1] =
-    id !== undefined ? { id, description: input.description } : { description: input.description }
+  const options: Parameters<typeof sonnerToast.success>[1] = {
+    description: input.description,
+    ...(id !== undefined ? { id } : {}),
+    ...(input.action ? { action: input.action } : {}),
+  }
   return input.variant === 'destructive'
     ? sonnerToast.error(input.title as React.ReactNode, options)
     : sonnerToast.success(input.title as React.ReactNode, options)

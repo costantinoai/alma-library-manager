@@ -84,14 +84,18 @@
 
   /* ── Cool surface variant — the ONE deliberate exception ───────────────
    * The Activity panel is system telemetry, not editorial reading, so it
-   * sits on a slightly colder off-white ladder (cool blue-grey instead of
-   * warm cream). Same depth order as the main ladder — cool-1 is the panel
-   * body, cool-2 the nested rows/boxes (lighter), cool-3 the top. This is
-   * the only surface allowed off the warm ladder; use it ONLY in the
-   * Activity panel. */
-  --color-surface-cool-1: #E6EAF0;   /* panel body (deepest cool) */
-  --color-surface-cool-2: #F1F4F8;   /* rows / boxes (lighter)    */
-  --color-surface-cool-3: #FFFFFF;   /* chips / top            */
+   * sits on a colder blue-grey ladder (instead of warm cream). It carries a
+   * clear master-detail hierarchy: dark chrome → lighter list → lightest
+   * detail. The only surface off the warm ladder; use ONLY in Activity.
+   *
+   *   cool-0  chrome — taskbar, tab bar, panel frame, log header (darkest)
+   *   cool-1  left column — the operation / job list rows
+   *   cool-2  right column — detail + record items (even lighter)
+   *   cool-3  deepest nested boxes / chips / code blocks (white) */
+  --color-surface-cool-0: #D8E0EA;   /* chrome (darkest)              */
+  --color-surface-cool-1: #E7ECF2;   /* left list items               */
+  --color-surface-cool-2: #F2F6FA;   /* right detail items (lighter)  */
+  --color-surface-cool-3: #FFFFFF;   /* deepest boxes / chips         */
 
   /* ── Folio binding blue (accent) ───────────────────────────────────────
    * The accent. Replaces the v2 teal (#0E6F6D). Reads as the dyed cloth

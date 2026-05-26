@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { ChevronDown, ChevronUp, Sparkles, UserSearch } from 'lucide-react'
 
 import {
@@ -35,7 +35,6 @@ interface SuggestedAuthorsRailProps {
 export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const reducedMotion = useReducedMotion()
 
   // ── Acted-on set + sequential mutation queue ─────────────────────
   // The acted-on set is the primary defense against the "card bounces
@@ -237,8 +236,6 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
   const hasError = suggestionsQuery.isError
   const empty = !isLoading && !hasError && visible.length === 0
 
-  const animationDuration = reducedMotion ? 0 : 0.25
-
   return (
     <section className="space-y-3">
       <header className="flex items-center justify-between gap-3">
@@ -268,46 +265,35 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
           description="Save more papers to your Library and their authors will surface here."
         />
       ) : (
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-          <AnimatePresence mode="popLayout" initial={false}>
-            {visible.map((s) => {
-              const keyId = s.openalex_id || s.key
-              return (
-                <motion.div
-                  key={keyId}
-                  layout
-                  layoutId={`suggested-${keyId}`}
-                  initial={{ opacity: 0, y: 12, scale: 0.96 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -12, scale: 0.92 }}
-                  transition={{ duration: animationDuration, ease: 'easeOut' }}
-                  className="h-full"
-                >
-                  <SuggestedAuthorCard
-                    suggestion={s}
-                    onClick={() => onOpenDetail?.(s)}
-                    onFollow={() => followMutation.mutate(s)}
-                    onReject={() => {
-                      if (!s.openalex_id) {
-                        errorToast('Error', 'Cannot dismiss: missing OpenAlex ID.')
-                        return
-                      }
-                      rejectMutation.mutate(s)
-                    }}
-                    followPending={
-                      followMutation.isPending &&
-                      followMutation.variables?.openalex_id === s.openalex_id
+        <RevealList className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {visible.map((s, i) => {
+            const keyId = s.openalex_id || s.key
+            return (
+              <RevealItem key={keyId} index={i} className="h-full">
+                <SuggestedAuthorCard
+                  suggestion={s}
+                  onClick={() => onOpenDetail?.(s)}
+                  onFollow={() => followMutation.mutate(s)}
+                  onReject={() => {
+                    if (!s.openalex_id) {
+                      errorToast('Error', 'Cannot dismiss: missing OpenAlex ID.')
+                      return
                     }
-                    rejectPending={
-                      rejectMutation.isPending &&
-                      rejectMutation.variables?.openalex_id === s.openalex_id
-                    }
-                  />
-                </motion.div>
-              )
-            })}
-          </AnimatePresence>
-        </div>
+                    rejectMutation.mutate(s)
+                  }}
+                  followPending={
+                    followMutation.isPending &&
+                    followMutation.variables?.openalex_id === s.openalex_id
+                  }
+                  rejectPending={
+                    rejectMutation.isPending &&
+                    rejectMutation.variables?.openalex_id === s.openalex_id
+                  }
+                />
+              </RevealItem>
+            )
+          })}
+        </RevealList>
       )}
 
       {/* See-more toggle — flips between top-5 row and full 5×5 grid.

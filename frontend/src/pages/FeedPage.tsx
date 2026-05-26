@@ -18,6 +18,9 @@ import {
   feedAdd,
   feedBulkAction,
   feedDislike,
+  getApiErrorMessage,
+  feedDismiss,
+  feedUndoDismiss,
   feedLike,
   feedLove,
   getFeedStatus,
@@ -77,6 +80,9 @@ const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
   like: 'Liked',
   love: 'Loved',
   dislike: 'Disliked',
+  // Dismissed items never appear in the inbox (the list query excludes them),
+  // but the label keeps the status map exhaustive over FeedItemStatus.
+  dismissed: 'Dismissed',
 }
 
 const FEED_FILTERS: readonly FeedFilter[] = ['all', 'new'] as const
@@ -128,6 +134,7 @@ function actionLabel(action: FeedAction): string {
     case 'like': return 'Saved to Library with a +1 preference signal'
     case 'love': return 'Saved to Library with a +2 preference signal'
     case 'dislike': return 'Recorded a -1 signal and kept the paper out of Library'
+    case 'dismiss': return 'Hidden from Feed and recorded a small negative signal'
   }
 }
 
@@ -227,19 +234,41 @@ export function FeedPage() {
     )
   }
 
+  // Reverses a single dismiss (restores the card + drops the negative
+  // signal). Wired to the transient "Undo" button on the dismiss toast.
+  const undoDismissMutation = useMutation({
+    mutationFn: ({ id }: { id: string }) => feedUndoDismiss(id),
+    onSuccess: async () => {
+      await invalidateFeedAction()
+      toast({ title: 'Dismissal undone', description: 'The paper is back in your Feed.' })
+    },
+    onError: (err) => errorToast('Undo failed', getApiErrorMessage(err)),
+  })
+
   const actionMutation = useMutation({
     mutationFn: async ({ id, action }: { id: string; action: FeedAction }) => {
       if (action === 'add') return feedAdd(id)
       if (action === 'like') return feedLike(id)
       if (action === 'love') return feedLove(id)
+      if (action === 'dismiss') return feedDismiss(id)
       return feedDislike(id)
     },
     onSuccess: async (_data, vars) => {
       await invalidateFeedAction()
+      // Dismiss is the one "forever" action, so it carries a transient Undo
+      // affordance; everything else gets the plain confirmation toast.
+      if (vars.action === 'dismiss') {
+        toast({
+          title: 'Dismissed from Feed',
+          description: 'Hidden from your Feed with a small negative signal.',
+          action: { label: 'Undo', onClick: () => undoDismissMutation.mutate({ id: vars.id }) },
+        })
+        return
+      }
       toast({ title: 'Feed updated', description: actionLabel(vars.action) })
     },
-    onError: () => {
-      errorToast('Action failed')
+    onError: (err) => {
+      errorToast('Action failed', getApiErrorMessage(err))
     },
   })
 
@@ -258,7 +287,7 @@ export function FeedPage() {
           : 'The paper is no longer on your reading list.',
       })
     },
-    onError: () => errorToast('Reading list update failed'),
+    onError: (err) => errorToast('Reading list update failed', getApiErrorMessage(err)),
   })
 
   const bulkMutation = useMutation({
@@ -269,8 +298,8 @@ export function FeedPage() {
       setSelectedIds(new Set())
       toast({ title: 'Bulk action applied', description: `${appliedCount} feed items updated.` })
     },
-    onError: () => {
-      errorToast('Bulk action failed')
+    onError: (err) => {
+      errorToast('Bulk action failed', getApiErrorMessage(err))
     },
   })
 
@@ -300,7 +329,7 @@ export function FeedPage() {
           : `No new papers found across ${monitorsTotal} monitors${degraded > 0 ? ` (${degraded} degraded)` : ''}.`,
       })
     },
-    onError: () => errorToast('Refresh failed', 'Could not fetch new papers.'),
+    onError: (err) => errorToast('Refresh failed', getApiErrorMessage(err)),
   })
 
   const items = useMemo(() => {
@@ -558,6 +587,7 @@ export function FeedPage() {
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'like' })} disabled={bulkMutation.isPending}>Like</Button>
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'love' })} disabled={bulkMutation.isPending}>Love</Button>
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'dislike' })} disabled={bulkMutation.isPending}>Dislike</Button>
+            <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'dismiss' })} disabled={bulkMutation.isPending}>Dismiss</Button>
             <span className="mx-1 h-5 w-px bg-alma-200" aria-hidden />
             <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} disabled={bulkMutation.isPending}>
               Clear
@@ -624,7 +654,7 @@ export function FeedPage() {
             const isQueued = paper?.reading_status === 'reading'
             const isNew = Boolean(item.is_new)
             return (
-              <RevealItem key={item.id} index={i} layoutId={`feed-${item.id}`}>
+              <RevealItem key={item.id} index={i}>
               <div
                 className="relative rounded-sm"
               >
@@ -652,6 +682,9 @@ export function FeedPage() {
                   onLike={() => actionMutation.mutate({ id: item.id, action: 'like' })}
                   onLove={() => actionMutation.mutate({ id: item.id, action: 'love' })}
                   onDislike={() => actionMutation.mutate({ id: item.id, action: 'dislike' })}
+                  onDismiss={() => actionMutation.mutate({ id: item.id, action: 'dismiss' })}
+                  dismissLabel="Dismiss"
+                  dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"
                   actionDisabled={actionMutation.isPending || queueMutation.isPending}
                   reaction={reaction}

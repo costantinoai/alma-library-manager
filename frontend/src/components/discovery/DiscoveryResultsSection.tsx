@@ -88,7 +88,7 @@ function RecommendationSection({
           <>
             <RevealList className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {visibleRecs.map((rec, i) => (
-                <RevealItem key={rec.id} index={i} layoutId={`discovery-${rec.id}`}>
+                <RevealItem key={rec.id} index={i}>
                   <DiscoveryResultCard
                     rec={rec}
                     onLike={onLike}
