@@ -380,12 +380,16 @@ class OpenAlexClient:
     def _inject_auth(
         self, params: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Return a copy of *params* with ``api_key`` and ``mailto`` added."""
+        """Return a copy of *params* with the ``api_key`` added.
+
+        The ``mailto``/polite-pool parameter was discontinued by OpenAlex on
+        2026-02-13 and is now ignored server-side — we no longer send it (the
+        configured contact email still feeds the Crossref polite pool + the
+        User-Agent elsewhere). The API key is the sole identity mechanism.
+        """
         merged = dict(params) if params else {}
         if self._api_key:
             merged["api_key"] = self._api_key
-        if self._mailto:
-            merged["mailto"] = self._mailto
         return merged
 
     # ------------------------------------------------------------------

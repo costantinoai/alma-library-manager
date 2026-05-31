@@ -30,30 +30,10 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
-def _session(mailto: Optional[str] = None):
-    """Backward-compatible requests-like session wrapper."""
-    base_params = {"mailto": mailto} if str(mailto or "").strip() else {}
-
-    class _CompatSession:
-        def __init__(self, mailto_value: Optional[str]) -> None:
-            self.params = {"mailto": mailto_value} if str(mailto_value or "").strip() else {}
-
-        def get(self, url: str, **kwargs):
-            params = dict(kwargs.pop("params", {}) or {})
-            for key, value in base_params.items():
-                params.setdefault(key, value)
-            url_text = str(url or "").strip()
-            if not url_text.startswith("http"):
-                url_text = f"https://api.openalex.org/{url_text.lstrip('/')}"
-            return requests.get(url_text, params=params, **kwargs)
-
-    return _CompatSession(mailto)
-
-
 def find_author_id_by_name(name: str, mailto: Optional[str] = None) -> Optional[str]:
     try:
-        session = _session(mailto)
-        resp = session.get("https://api.openalex.org/authors", params={"search": name, "per-page": 1}, timeout=20)
+        client = get_client()
+        resp = client.get("/authors", params={"search": name, "per-page": 1}, timeout=20)
         data = resp.json()
         results = data.get("results", [])
         if results:
@@ -69,13 +49,9 @@ def get_author_name_by_id(author_openalex_id: str, mailto: Optional[str] = None)
     Returns the display name or None if not found.
     """
     try:
-        session = _session(mailto)
-        # Accept both bare IDs (A...) and full URLs (https://openalex.org/A...)
+        client = get_client()
         aid = _normalize_openalex_author_id(author_openalex_id)
-        url = str(author_openalex_id or "").strip() or f"https://openalex.org/{aid}"
-        if not url.startswith("http"):
-            url = f"https://openalex.org/{aid}"
-        resp = session.get(url, timeout=20)
+        resp = client.get(f"/authors/{aid}", timeout=20)
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -95,9 +71,9 @@ def find_author_by_orcid(orcid: str, mailto: Optional[str] = None) -> Optional[D
         o = orcid.strip()
         if o.startswith('http'):
             o = o.rstrip('/').split('/')[-1]
-        session = _session(mailto)
-        resp = session.get(
-            "https://api.openalex.org/authors",
+        client = get_client()
+        resp = client.get(
+            "/authors",
             params={"filter": f"orcid:{o}", "per-page": 1},
             timeout=20,
         )
@@ -207,7 +183,7 @@ def fetch_works_for_author(
     """
     works: List[Dict] = []
     try:
-        session = _session(mailto)
+        client = get_client()
         # Use official works API filter: author.id:A... (recommended by OpenAlex)
         oaid = _normalize_openalex_author_id(author_openalex_id)
         filt = f"author.id:{oaid}"
@@ -225,7 +201,7 @@ def fetch_works_for_author(
                 "sort": "cited_by_count:desc",
                 "select": _WORKS_SELECT_FIELDS,
             }
-            resp = session.get("https://api.openalex.org/works", params=params, timeout=30)
+            resp = client.get("/works", params=params, timeout=30)
             # Raise for non-200 to surface proper logging and exit
             resp.raise_for_status()
             data = resp.json() or {}
@@ -349,7 +325,7 @@ def fetch_works_page_for_author(
         ``fetch_works_for_author``.
     """
     try:
-        session = _session(mailto)
+        client = get_client()
         oaid = _normalize_openalex_author_id(author_openalex_id)
         filt = f"author.id:{oaid}"
         params = {
@@ -359,7 +335,7 @@ def fetch_works_page_for_author(
             "sort": sort,
             "select": _WORKS_SELECT_FIELDS,
         }
-        resp = session.get("https://api.openalex.org/works", params=params, timeout=30)
+        resp = client.get("/works", params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json() or {}
     except Exception as exc:
@@ -467,10 +443,10 @@ def fetch_author_profile(
     works_count, url_picture (thumbnail), orcid, cited_by_year, institutions, email_domain
     """
     try:
-        session = _session(mailto)
+        client = get_client()
         aid = _normalize_openalex_author_id(author_openalex_id)
         params = {"select": _AUTHOR_PROFILE_SELECT_FIELDS}
-        resp = session.get(f"https://api.openalex.org/authors/{aid}", params=params, timeout=20)
+        resp = client.get(f"/authors/{aid}", params=params, timeout=20)
         if resp.status_code != 200:
             return None
         return _shape_author_profile(resp.json() or {})
@@ -505,7 +481,7 @@ def batch_get_author_profiles(
     if not raw_ids:
         return {}
 
-    session = _session(mailto)
+    client = get_client()
     batch_size = max(1, min(int(batch_size or 50), 50))
     max_workers = max(1, int(max_workers or 1))
     chunks = [raw_ids[i : i + batch_size] for i in range(0, len(raw_ids), batch_size)]
@@ -517,8 +493,8 @@ def batch_get_author_profiles(
                 f"https://openalex.org/{aid}" for aid in ids
             )
             try:
-                resp = session.get(
-                    "https://api.openalex.org/authors",
+                resp = client.get(
+                    "/authors",
                     params={
                         "filter": pipe_filter,
                         "per-page": len(ids),
@@ -581,7 +557,7 @@ def get_author_metrics(
         or None on failure.
     """
     try:
-        session = _session(mailto)
+        client = get_client()
         aid = _normalize_openalex_author_id(author_openalex_id)
         params = {
             "select": ",".join([
@@ -593,7 +569,7 @@ def get_author_metrics(
                 "works_api_url",
             ])
         }
-        resp = session.get(f"https://api.openalex.org/authors/{aid}", params=params, timeout=20)
+        resp = client.get(f"/authors/{aid}", params=params, timeout=20)
         if resp.status_code != 200:
             return None
         data = resp.json() or {}
@@ -1071,7 +1047,7 @@ def _get_author_details(
     Returns None on failure.
     """
     try:
-        session = _session(mailto)
+        client = get_client()
         aid = _normalize_openalex_author_id(openalex_author_id)
         params = {
             "select": ",".join([
@@ -1082,7 +1058,7 @@ def _get_author_details(
                 "works_count",
             ])
         }
-        r = session.get(f"https://api.openalex.org/authors/{aid}", params=params, timeout=20)
+        r = client.get(f"/authors/{aid}", params=params, timeout=20)
         if r.status_code != 200:
             return None
         d = r.json() or {}
@@ -1923,7 +1899,7 @@ def resolve_openalex_candidates_from_scholar(
         logger.warning(f"Scholar fetch failed for {scholar_id}: {e}")
 
     # No sample title? Still try author search fallback
-    session = _session(mailto)
+    client = get_client()
     if sample_title:
         try:
             params = {
@@ -1937,7 +1913,7 @@ def resolve_openalex_candidates_from_scholar(
                     "doi",
                 ]),
             }
-            r = session.get("/works", params=params, timeout=30)
+            r = client.get("/works", params=params, timeout=30)
             r.raise_for_status()
             works = (r.json() or {}).get("results", []) or []
             for w in works:
@@ -2008,7 +1984,7 @@ def resolve_openalex_candidates_from_scholar(
     if not candidates and name:
         try:
             params = {"search": name, "per-page": 10, "select": "id,display_name,orcid,last_known_institution"}
-            r = session.get("/authors", params=params, timeout=20)
+            r = client.get("/authors", params=params, timeout=20)
             if r.status_code == 200:
                 results = (r.json() or {}).get("results", [])
                 for rec in results:
@@ -2031,7 +2007,7 @@ def resolve_openalex_candidates_from_scholar(
         if not cand.get("orcid") or not cand.get("institution"):
             try:
                 normalized_aid = _normalize_openalex_author_id(aid)
-                details_resp = session.get(f"/authors/{normalized_aid}", timeout=20)
+                details_resp = client.get(f"/authors/{normalized_aid}", timeout=20)
                 if details_resp.status_code == 200:
                     details = details_resp.json() or {}
                     cand["orcid"] = cand.get("orcid") or details.get("orcid")
