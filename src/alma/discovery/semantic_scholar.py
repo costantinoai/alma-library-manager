@@ -21,6 +21,15 @@ FIELDS = (
     "influentialCitationCount,tldr,"
     "abstract,url,publicationDate,embedding.specter_v2"
 )
+# `/paper/search/bulk` supports a NARROWER field set than `/paper/{id}` and
+# `/paper/search`: it rejects `tldr` and `embedding.specter_v2` with a hard
+# HTTP 400 ("Unrecognized or unsupported fields"). Verified live 2026-06-01.
+# Sending the full FIELDS made every bulk call 400 and silently fall back to
+# interactive search — and the follow-on `/paper/batch` hydration never ran.
+# Request only bulk-supported fields here, then hydrate `tldr` + the SPECTER2
+# vector via a single `/paper/batch` (see search_papers_bulk).
+_BULK_UNSUPPORTED_FIELDS = frozenset({"tldr", "embedding.specter_v2"})
+BULK_FIELDS = ",".join(f for f in FIELDS.split(",") if f not in _BULK_UNSUPPORTED_FIELDS)
 AUTHOR_FIELDS = "authorId,name,aliases,affiliations,homepage,url,externalIds,paperCount,citationCount,hIndex"
 
 
@@ -401,7 +410,9 @@ def search_papers_bulk(
     params: dict[str, Any] = {
         "query": query.strip(),
         "limit": min(limit, 100),
-        "fields": FIELDS,
+        # Bulk endpoint rejects tldr / embedding.specter_v2 (400). Request the
+        # supported subset here; the `/paper/batch` pass below fills the rest.
+        "fields": BULK_FIELDS,
     }
     # Only emit filter params when non-empty so the URL stays short in
     # the common "no filter" case.  S2 rejects requests that send
@@ -430,6 +441,12 @@ def search_papers_bulk(
             return search_papers(query, limit=limit)
 
         papers = (resp.json() or {}).get("data") or []
+        # One `/paper/batch` to backfill the fields bulk can't return
+        # (tldr + embedding.specter_v2). NOT redundant with the bulk call —
+        # bulk 400s on those fields, so this is the only way to get the
+        # SPECTER2 vector + TLDR for bulk-discovered candidates in one extra
+        # request (instead of N per-paper GETs). Stays within S2's 1 rps via
+        # the shared SourceHttpClient gate.
         hydrated_by_id = fetch_papers_batch(
             [
                 str((paper or {}).get("paperId") or "").strip()
