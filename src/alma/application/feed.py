@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 import uuid
 from typing import Optional
@@ -1342,6 +1343,10 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     papers_found = 0
     items_created = 0
     usage_before = openalex_usage_snapshot()
+    # S-4: collect papers needing hydration across BOTH monitor phases and fire
+    # ONE background sweep after the loops, instead of auto-scheduling a job per
+    # candidate (N+1 schedule_with_envelope + operation_status scans).
+    pending_hydration_ids: set[str] = set()
 
     with source_diagnostics_scope() as source_diag:
         author_ready = [m for m in author_monitors if m.get("health") == "ready" and m.get("openalex_id")]
@@ -1498,7 +1503,22 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         # non-author monitor loop starts doing remote searches.
         _commit_if_pending(db)
 
-        for monitor in non_author_monitors:
+        # S-3: split the non-author monitors into a PARALLEL network phase
+        # (Phase A, db-free) + a SEQUENTIAL db-write phase (Phase B), instead of
+        # a strictly serial loop where each monitor blocked the next on its full
+        # ~8s cross-source search (N monitors ≈ N×8s wall-clock). Phase A
+        # overlaps the FAST sources across monitors (OpenAlex 100 req/s,
+        # Crossref); S2 (1 rps) and arXiv (1 req/3s) stay globally serialized by
+        # their per-source SourceHttpClient gates, so concurrency never exceeds
+        # any documented rate limit — the win is wall-clock, not call volume.
+        # Phase B keeps every write on the single SQLite writer, original order.
+        _FEED_MONITOR_CONCURRENCY = 3
+
+        def _plan_and_search(monitor: dict) -> dict:
+            """DB-FREE worker: resolve the search plan, run the remote
+            multi-source search, filter locally. Runs on a pool thread, so it
+            must touch neither ``db`` nor shared mutable state. Returns a result
+            dict (or ``{'error_reason': ...}``) drained sequentially below."""
             try:
                 monitor_query, search_query, search_settings, monitor_temperature = _monitor_search_plan(
                     monitor,
@@ -1506,66 +1526,9 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     search_temperature=search_temperature,
                 )
             except FeedQuerySyntaxError as exc:
-                error_text = str(exc)
-                diag = {
-                    "monitor_id": monitor["id"],
-                    "monitor_type": monitor["monitor_type"],
-                    "label": monitor["label"],
-                    "status": "failed",
-                    "reason": error_text,
-                    "papers_found": 0,
-                    "items_created": 0,
-                }
-                monitor_diagnostics.append(diag)
-                monitor_app.update_feed_monitor_result(
-                    db,
-                    str(monitor["id"]),
-                    status="failed",
-                    result=diag,
-                    error=error_text,
-                )
-                db.commit()
-                monitor_idx += 1
-                continue
-
+                return {"error_reason": str(exc)}
             if not monitor_query or not search_query:
-                diag = {
-                    "monitor_id": monitor["id"],
-                    "monitor_type": monitor["monitor_type"],
-                    "label": monitor["label"],
-                    "status": "failed",
-                    "reason": "missing_query",
-                    "papers_found": 0,
-                    "items_created": 0,
-                }
-                monitor_diagnostics.append(diag)
-                monitor_app.update_feed_monitor_result(
-                    db,
-                    str(monitor["id"]),
-                    status="failed",
-                    result=diag,
-                    error="missing_query",
-                )
-                db.commit()
-                monitor_idx += 1
-                continue
-
-            _log(
-                "refresh_monitor",
-                f"Feed refresh: searching {monitor['monitor_type']} monitor '{monitor['label']}'",
-                data={
-                    "monitor_id": monitor["id"],
-                    "monitor_type": monitor["monitor_type"],
-                    "query": monitor_query,
-                    "search_query": search_query,
-                },
-            )
-            # Release any pending write txn before the cross-source search
-            # (OpenAlex / Crossref / Semantic Scholar / arXiv). Without this
-            # the writer lock is held for the full remote round-trip per
-            # monitor, which is the main cause of Library / Authors page
-            # freezes reported on 2026-04-22.
-            _commit_if_pending(db)
+                return {"error_reason": "missing_query"}
             try:
                 search_limit_for_monitor = _monitor_search_limit(monitor, search_limit)
                 candidates = source_search.search_across_sources(
@@ -1579,13 +1542,54 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 )
             except Exception as exc:
                 logger.debug("Non-author monitor refresh failed for %s: %s", monitor["label"], exc)
-                error_text = str(exc)
+                return {"error_reason": str(exc)}
+            candidates, filter_stats = _filter_monitor_candidates(
+                monitor=monitor,
+                query=monitor_query,
+                candidates=candidates,
+                from_year=from_year,
+            )
+            return {
+                "monitor_query": monitor_query,
+                "search_query": search_query,
+                "search_limit": search_limit_for_monitor,
+                "candidates": candidates,
+                "filter_stats": filter_stats,
+            }
+
+        # Phase A — concurrent network search. NB: the per-source HTTP
+        # diagnostics (source_diag) are collected via a context that does not
+        # propagate to pool threads, so http_source_diagnostics may under-count
+        # parallel searches — an observability-only trade-off, not correctness.
+        plan_by_monitor: dict[str, dict] = {}
+        if non_author_monitors:
+            with ThreadPoolExecutor(
+                max_workers=max(1, min(_FEED_MONITOR_CONCURRENCY, len(non_author_monitors))),
+                thread_name_prefix="feed-monitor",
+            ) as monitor_pool:
+                future_map = {
+                    monitor_pool.submit(_plan_and_search, monitor): str(monitor.get("id") or "")
+                    for monitor in non_author_monitors
+                }
+                for future in as_completed(future_map):
+                    mid = future_map[future]
+                    try:
+                        plan_by_monitor[mid] = future.result()
+                    except Exception as exc:  # defensive; _plan_and_search already guards
+                        plan_by_monitor[mid] = {"error_reason": str(exc)}
+
+        # Phase B — sequential DB writes, original monitor order preserved so
+        # Activity progress + monitor_idx stay deterministic.
+        for monitor in non_author_monitors:
+            plan = plan_by_monitor.get(str(monitor.get("id") or "")) or {"error_reason": "no_result"}
+            error_reason = plan.get("error_reason")
+            if error_reason:
                 diag = {
                     "monitor_id": monitor["id"],
                     "monitor_type": monitor["monitor_type"],
                     "label": monitor["label"],
                     "status": "failed",
-                    "reason": error_text,
+                    "reason": error_reason,
                     "papers_found": 0,
                     "items_created": 0,
                 }
@@ -1595,17 +1599,26 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     str(monitor["id"]),
                     status="failed",
                     result=diag,
-                    error=error_text,
+                    error=error_reason,
                 )
                 db.commit()
                 monitor_idx += 1
                 continue
 
-            candidates, filter_stats = _filter_monitor_candidates(
-                monitor=monitor,
-                query=monitor_query,
-                candidates=candidates,
-                from_year=from_year,
+            monitor_query = plan["monitor_query"]
+            search_query = plan["search_query"]
+            search_limit_for_monitor = plan["search_limit"]
+            candidates = plan["candidates"]
+            filter_stats = plan["filter_stats"]
+            _log(
+                "refresh_monitor",
+                f"Feed refresh: searched {monitor['monitor_type']} monitor '{monitor['label']}'",
+                data={
+                    "monitor_id": monitor["id"],
+                    "monitor_type": monitor["monitor_type"],
+                    "query": monitor_query,
+                    "search_query": search_query,
+                },
             )
             found = len(candidates)
             papers_found += found
@@ -1788,10 +1801,6 @@ def refresh_feed_monitor(
     from_year = _resolve_feed_from_year(discovery_settings)
     now = datetime.utcnow().isoformat()
     usage_before = openalex_usage_snapshot()
-    # S-4: collect papers that need hydration across BOTH monitor phases and
-    # fire ONE background sweep after the loops, instead of auto-scheduling a
-    # job per candidate (N+1 schedule_with_envelope + operation_status scans).
-    pending_hydration_ids: set[str] = set()
     with source_diagnostics_scope() as source_diag:
         if monitor.get("monitor_type") == "author":
             if monitor.get("health") != "ready" or not monitor.get("openalex_id"):
