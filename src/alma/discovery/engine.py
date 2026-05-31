@@ -43,7 +43,7 @@ from alma.discovery.scoring import (
     score_candidate,
 )
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.utils import normalize_doi
+from alma.core.utils import normalize_doi, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
 
@@ -331,55 +331,54 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
     count = 0
     for rec in recs:
         try:
-            paper_id = uuid.uuid4().hex
             doi_raw = (rec.get("doi") or "").strip()
-            # `INSERT OR IGNORE`, not `ON CONFLICT(doi)`: `papers.doi` has no
-            # UNIQUE constraint on this schema (only an idx; partial UNIQUE
-            # is on `openalex_id`), so an explicit `ON CONFLICT(doi)` raises
-            # OperationalError. The legacy implementation here did exactly
-            # that and was silently bombing every call since the v0.9.1
-            # schema swap — the `except Exception: logger.debug(...)` below
-            # swallowed the error and the function returned 0 every time.
-            # Dedup now flows through the SELECT-by-DOI-or-(title,authors)
-            # lookup + the fill-only secondary UPDATE further down, which is
-            # the same approach `_upsert_candidate_paper` and the lens
-            # refresh's `library_app.upsert_paper` already use.
-            #
-            # `openalex_id` and S2 ids are also omitted from the INSERT
-            # (partial UNIQUE on `openalex_id` in `api/deps.py:469`); they
-            # are filled by the IntegrityError-guarded UPDATE below, after
-            # we've resolved the canonical paper row.
-            conn.execute(
-                """INSERT OR IGNORE INTO papers
-                       (id, title, authors, abstract, url, doi,
-                        journal, publication_date, year, cited_by_count,
-                        tldr, influential_citation_count)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    paper_id,
-                    rec.get("title", "") or "",
-                    rec.get("authors", "") or "",
-                    rec.get("abstract", "") or "",
-                    rec.get("url", "") or "",
-                    doi_raw,
-                    rec.get("journal", "") or "",
-                    rec.get("publication_date", "") or "",
-                    rec.get("year"),
-                    rec.get("cited_by_count", 0) or 0,
-                    rec.get("tldr", "") or "",
-                    rec.get("influential_citation_count"),
-                ),
+            # Canonical dedup: resolve against the SAME triple Feed
+            # (`_upsert_candidate_paper`) and the importer use —
+            # openalex_id -> case-insensitive DOI -> (year, normalized
+            # title). The previous bespoke `WHERE doi=? OR (title=? AND
+            # authors=?)` SELECT had no openalex_id leg, no empty-DOI
+            # guard (so doi='' matched any no-DOI row and could steal an
+            # unrelated paper's id), and compared exact title+authors
+            # instead of normalized-title+year — silently minting
+            # duplicate paper rows that never converged with Feed/import.
+            existing_id = resolve_existing_paper_id(
+                conn,
+                openalex_id=rec.get("openalex_id"),
+                doi=doi_raw,
+                title=rec.get("title"),
+                year=rec.get("year"),
             )
-            row = conn.execute(
-                "SELECT id FROM papers WHERE doi = ? OR (title = ? AND authors = ?)",
-                (
-                    doi_raw,
-                    rec.get("title", ""),
-                    rec.get("authors", ""),
-                ),
-            ).fetchone()
-            if row:
-                paper_id = row["id"]
+            if existing_id:
+                paper_id = existing_id
+            else:
+                # New paper. `INSERT OR IGNORE`, not `ON CONFLICT(doi)`:
+                # `papers.doi` has no UNIQUE constraint on this schema
+                # (only an idx; partial UNIQUE is on `openalex_id`).
+                # `openalex_id` + S2 ids are omitted here and filled by
+                # the IntegrityError-guarded UPDATE below (partial UNIQUE
+                # on `openalex_id`, api/deps.py:469).
+                paper_id = uuid.uuid4().hex
+                conn.execute(
+                    """INSERT OR IGNORE INTO papers
+                           (id, title, authors, abstract, url, doi,
+                            journal, publication_date, year, cited_by_count,
+                            tldr, influential_citation_count)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        paper_id,
+                        rec.get("title", "") or "",
+                        rec.get("authors", "") or "",
+                        rec.get("abstract", "") or "",
+                        rec.get("url", "") or "",
+                        doi_raw,
+                        rec.get("journal", "") or "",
+                        rec.get("publication_date", "") or "",
+                        rec.get("year"),
+                        rec.get("cited_by_count", 0) or 0,
+                        rec.get("tldr", "") or "",
+                        rec.get("influential_citation_count"),
+                    ),
+                )
             # Fill-only secondary UPDATE: covers both the
             # already-existed-and-INSERT-was-ignored case AND the brand-new
             # row case (no-op when fields already match).
