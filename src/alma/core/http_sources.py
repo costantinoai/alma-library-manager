@@ -197,7 +197,14 @@ def _crossref_params() -> dict[str, str]:
 
 
 def _crossref_min_interval() -> float:
-    return 0.12 if get_crossref_mailto() else 0.25
+    # Crossref retuned its REST limits on 2025-12-01 (first change since 2013).
+    # The *list/search* path — which is what ALMa hits via /works?query — is now
+    # the stricter ceiling: polite = 3 req/s (3 concurrent), anonymous = 1 req/s.
+    # (Single-record /works/{doi} is looser at 10 req/s polite, but we pace to the
+    # search ceiling since search dominates and one client serves both.) Crossref
+    # also advertises live limits via X-Rate-Limit-Limit / -Interval headers; a
+    # future enhancement is to read those and adapt dynamically.
+    return 0.34 if get_crossref_mailto() else 1.05
 
 
 def _crossref_max_concurrency() -> int:
