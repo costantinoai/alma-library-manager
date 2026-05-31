@@ -463,7 +463,13 @@ def _resolve_feed_from_year(settings: dict[str, str]) -> int:
         return recent_floor
 
 
-def _upsert_candidate_paper(db: sqlite3.Connection, candidate: dict, *, now: str) -> str | None:
+def _upsert_candidate_paper(
+    db: sqlite3.Connection,
+    candidate: dict,
+    *,
+    now: str,
+    pending_hydration_ids: set[str] | None = None,
+) -> str | None:
     title = str(candidate.get("title") or "").strip()
     if not title:
         return None
@@ -553,14 +559,18 @@ def _upsert_candidate_paper(db: sqlite3.Connection, candidate: dict, *, now: str
         )
     except Exception as exc:
         logger.debug("Feed candidate sidecar upsert failed for %s: %s", paper_id, exc)
-    # Enqueue for cross-source metadata hydration so a Feed-discovered
-    # paper missing an abstract enters the rehydration runner's
-    # candidate pool on the next sweep instead of waiting for a manual
-    # corpus-maintenance click.
+    # Enqueue for cross-source metadata hydration so a Feed-discovered paper
+    # missing an abstract enters the rehydration runner's candidate pool.
+    # S-4: `auto_schedule=False` — writing the ledger row per candidate is
+    # cheap, but auto-scheduling per candidate fires one schedule_with_envelope
+    # + operation_status scan PER paper (N+1). The caller collects the new ids
+    # and fires ONE schedule_pending_hydration_sweep after the monitor loops.
     try:
         from alma.services.corpus_rehydrate import enqueue_pending_hydration
 
-        enqueue_pending_hydration(db, paper_id)
+        needs_hydration = enqueue_pending_hydration(db, paper_id, auto_schedule=False)
+        if needs_hydration and pending_hydration_ids is not None:
+            pending_hydration_ids.add(paper_id)
     except Exception as exc:
         logger.debug("Feed candidate hydration enqueue skipped for %s: %s", paper_id, exc)
     return paper_id
@@ -1415,7 +1425,9 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                             "referenced_works": work.get("referenced_works"),
                             "source_api": "openalex",
                         }
-                        paper_id = _upsert_candidate_paper(db, candidate, now=now)
+                        paper_id = _upsert_candidate_paper(
+                            db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                        )
                         if not paper_id:
                             continue
                         if _insert_feed_item(
@@ -1429,7 +1441,9 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         ):
                             items_created += 1
                             author_items += 1
-                        db.commit()
+                        # S-8: per-candidate commit dropped — the per-author
+                        # commit below (after update_feed_monitor_result) flushes
+                        # this author's writes in one fsync instead of one/paper.
                     status_value = "completed" if author_items > 0 or found > 0 else "noop"
                     diag = {
                         "monitor_id": monitor["id"],
@@ -1601,7 +1615,9 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 source_name = str(candidate.get("source_api") or "").strip()
                 if source_name:
                     source_counts[source_name] = int(source_counts.get(source_name) or 0) + 1
-                paper_id = _upsert_candidate_paper(db, candidate, now=now)
+                paper_id = _upsert_candidate_paper(
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                )
                 if not paper_id:
                     continue
                 if _insert_feed_item(
@@ -1615,7 +1631,9 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 ):
                     items_created += 1
                     monitor_items += 1
-                db.commit()
+                # S-8: per-candidate commit dropped — the per-monitor commit
+                # below (after update_feed_monitor_result) flushes this
+                # monitor's writes in one fsync instead of one per paper.
 
             status_value = "completed" if monitor_items > 0 or found > 0 else "noop"
             diag = {
@@ -1655,6 +1673,21 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     # per-item UPDATE loop and any leftover implicit txn here would
     # compound the lock pressure during scoring.
     _commit_if_pending(db)
+
+    # S-4: one bounded, target-scoped hydration sweep for everything this
+    # refresh discovered, instead of one auto-scheduled job per candidate.
+    # Idempotent against an already-running sweep; no-op when nothing is new.
+    if pending_hydration_ids:
+        try:
+            from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
+
+            schedule_pending_hydration_sweep(
+                reason="feed_refresh",
+                target_paper_ids=list(pending_hydration_ids),
+            )
+        except Exception as exc:
+            logger.debug("Feed refresh hydration sweep skipped: %s", exc)
+
     _log(
         "scoring",
         f"Feed refresh: scoring {items_created} new feed items",
@@ -1719,6 +1752,8 @@ def refresh_feed_monitor(
     if monitor is None:
         return None
 
+    # S-4: collect hydration targets for one post-refresh sweep (see refresh_feed_inbox).
+    pending_hydration_ids: set[str] = set()
     discovery_settings = read_discovery_settings(db)
     author_per_refresh = _setting_int(discovery_settings, "monitor_defaults.author_per_refresh", 20, 1, 100)
     search_limit = _setting_int(discovery_settings, "monitor_defaults.search_limit", 15, 1, 50)
@@ -1753,6 +1788,10 @@ def refresh_feed_monitor(
     from_year = _resolve_feed_from_year(discovery_settings)
     now = datetime.utcnow().isoformat()
     usage_before = openalex_usage_snapshot()
+    # S-4: collect papers that need hydration across BOTH monitor phases and
+    # fire ONE background sweep after the loops, instead of auto-scheduling a
+    # job per candidate (N+1 schedule_with_envelope + operation_status scans).
+    pending_hydration_ids: set[str] = set()
     with source_diagnostics_scope() as source_diag:
         if monitor.get("monitor_type") == "author":
             if monitor.get("health") != "ready" or not monitor.get("openalex_id"):
@@ -1808,7 +1847,9 @@ def refresh_feed_monitor(
                     "referenced_works": work.get("referenced_works"),
                     "source_api": "openalex",
                 }
-                paper_id = _upsert_candidate_paper(db, candidate, now=now)
+                paper_id = _upsert_candidate_paper(
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                )
                 if not paper_id:
                     continue
                 if _insert_feed_item(
@@ -1821,7 +1862,7 @@ def refresh_feed_monitor(
                     monitor_label=str(monitor.get("label") or ""),
                 ):
                     items_created += 1
-                db.commit()
+                # S-8: commit moved to the single per-monitor commit below.
 
             diag = {
                 "monitor_id": monitor["id"],
@@ -1909,7 +1950,9 @@ def refresh_feed_monitor(
                 source_name = str(candidate.get("source_api") or "").strip()
                 if source_name:
                     source_counts[source_name] = int(source_counts.get(source_name) or 0) + 1
-                paper_id = _upsert_candidate_paper(db, candidate, now=now)
+                paper_id = _upsert_candidate_paper(
+                    db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
+                )
                 if not paper_id:
                     continue
                 if _insert_feed_item(
@@ -1922,7 +1965,7 @@ def refresh_feed_monitor(
                     monitor_label=str(monitor.get("label") or ""),
                 ):
                     items_created += 1
-                db.commit()
+                # S-8: commit moved to the single per-monitor commit below.
 
             diag = {
                 "monitor_id": monitor["id"],
@@ -1948,6 +1991,18 @@ def refresh_feed_monitor(
         )
         db.commit()
         http_source_diagnostics = source_diag.summary()
+
+    # S-4: one bounded hydration sweep for this monitor's new papers.
+    if pending_hydration_ids:
+        try:
+            from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
+
+            schedule_pending_hydration_sweep(
+                reason="feed_refresh",
+                target_paper_ids=list(pending_hydration_ids),
+            )
+        except Exception as exc:
+            logger.debug("Feed monitor refresh hydration sweep skipped: %s", exc)
 
     try:
         scored = score_feed_items(db)
