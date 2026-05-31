@@ -3968,10 +3968,15 @@ def _retrieve_external_channel(
             fields["timed_out_sources"] = list(timed_out)
         return fields
 
-    # Keep the pool small enough that each lane's internal 5-source fan-out
-    # (ThreadPoolExecutor inside `search_across_sources`) doesn't balloon total
-    # concurrent HTTP connections.  6 lane workers × 5 sources = 30 peak.
-    lane_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="lens-lane")
+    # S-6: 12 lane workers (was 6). A single refresh queues ~26-30 lane futures
+    # (branch core/explore + taste + graph + external + S2-recommend +, before
+    # S-2, the per-author fetches); 6 workers serialized them into ~5 waves. The
+    # rate-limited sources can't be sped up by more workers — S2 is gated to 1
+    # rps process-wide by SourceHttpClient._concurrency_slot, arXiv to 1 req/3s —
+    # so widening only overlaps the FAST sources (OpenAlex 100 req/s, Crossref).
+    # Worst case 12 × 2 OpenAlex sub-calls (search_works_hybrid) ≈ 3 OA req/s
+    # averaged over the 8s lane deadline, far under the 100 req/s key ceiling.
+    lane_executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="lens-lane")
 
     def _submit_source_search(
         cache_key: tuple,
