@@ -4401,31 +4401,38 @@ def _retrieve_external_channel(
     }.get(recommendation_mode, 0.20 + (0.25 * temperature))
     follow_budget = max(3, int(round(limit * follow_budget_base)))
     follow_author_limit = min(6, follow_budget)
-    followed_author_futures: list[tuple[str, "Future[list[dict]]", list]] = []
-    for row in followed_rows:
-        openalex_id = (row["openalex_id"] or "").strip()
-        if not openalex_id:
-            continue
-        holder: dict[str, int] = {}
+    # S-2: ONE batched OpenAlex OR-filter call (author.id:A1|A2|...) for all
+    # followed authors instead of one request per author. Mirrors the Feed
+    # path (batch_fetch_recent_works_for_authors); frees the per-author worker
+    # slots on lane_executor for the branch/taste/S2 lanes. A pipe filter is a
+    # single OpenAlex list call regardless of author count (≤100 ids/filter),
+    # far under the 100 req/s key limit.
+    followed_author_ids = [
+        (row["openalex_id"] or "").strip()
+        for row in followed_rows
+        if (row["openalex_id"] or "").strip()
+    ]
+    followed_author_holder: dict[str, int] = {}
+    followed_author_future: "Future[dict[str, list[dict]]] | None" = None
+    if followed_author_ids:
 
-        def _timed_author_fetch(
-            aid: str = openalex_id,
+        def _timed_batch_author_fetch(
+            ids: list[str] = followed_author_ids,
             from_year: int = year_floor,
             per_fetch: int = follow_author_limit,
-            holder: dict[str, int] = holder,
-        ) -> list[dict]:
+            holder: dict[str, int] = followed_author_holder,
+        ) -> dict[str, list[dict]]:
             started = perf_counter()
             try:
-                return openalex_related.fetch_recent_works_for_author(
-                    aid,
+                return openalex_related.batch_fetch_recent_works_for_authors(
+                    ids,
                     from_year=from_year,
-                    limit=per_fetch,
+                    per_author_limit=per_fetch,
                 )
             finally:
                 holder["ms"] = int(round((perf_counter() - started) * 1000))
 
-        future = lane_executor.submit(_timed_author_fetch)
-        followed_author_futures.append((openalex_id, future, holder))
+        followed_author_future = lane_executor.submit(_timed_batch_author_fetch)
 
     # --- Consume pass: branch plans first (each resolve blocks only on the
     # --- slowest single future because the rest are already mid-flight).
@@ -4555,41 +4562,47 @@ def _retrieve_external_channel(
                 }
             )
 
-    # --- Consume pass: followed-author fetches.
-    for openalex_id, future, holder in followed_author_futures:
+    # --- Consume pass: followed-author fetches (one batched OpenAlex call).
+    if followed_author_future is not None:
         try:
             # F4: bound the wait (was unbounded → only the ~20-30 s HTTP
             # timeout). TimeoutError is an Exception subclass in 3.11, so the
             # handler below degrades a slow fetch to empty without stalling.
-            recs = future.result(timeout=source_search.DEFAULT_LANE_DEADLINE_S) or []
+            recs_by_author = (
+                followed_author_future.result(timeout=source_search.DEFAULT_LANE_DEADLINE_S) or {}
+            )
         except Exception as exc:
-            logger.warning("followed-author works fetch failed for %s: %s", openalex_id, exc)
-            recs = []
-        for item in recs:
-            base = float(item.get("score", 0.3) or 0.3)
-            score = _clamp(base, 0.05, 1.0)
-            out.append(
+            logger.warning("followed-author batch works fetch failed: %s", exc)
+            recs_by_author = {}
+        # One call served every author, so the timing is shared across the
+        # per-author lane_runs entries below.
+        batch_ms = int(followed_author_holder.get("ms") or 0)
+        for author_key, recs in recs_by_author.items():
+            for item in recs:
+                base = float(item.get("score", 0.3) or 0.3)
+                score = _clamp(base, 0.05, 1.0)
+                out.append(
+                    {
+                        **item,
+                        "score": round(score, 4),
+                        "source_type": "followed_author",
+                        "source_key": author_key,
+                        "branch_mode": "followed_author",
+                        "source_api": "openalex",
+                    }
+                )
+            lane_runs.append(
                 {
-                    **item,
-                    "score": round(score, 4),
-                    "source_type": "followed_author",
-                    "source_key": openalex_id,
-                    "branch_mode": "followed_author",
-                    "source_api": "openalex",
+                    "lane_type": "followed_author",
+                    "query": author_key,
+                    "source_key": author_key,
+                    "from_year": year_floor,
+                    "result_count": len(recs),
+                    "duration_ms": batch_ms,
                 }
             )
-        lane_runs.append(
-            {
-                "lane_type": "followed_author",
-                "query": openalex_id,
-                "source_key": openalex_id,
-                "from_year": year_floor,
-                "result_count": len(recs),
-                "duration_ms": int(holder.get("ms") or 0),
-            }
-        )
-        if len(out) >= (limit + follow_budget):
-            break
+            if len(out) >= (limit + follow_budget):
+                break
 
     # S2 list-mode recommendations lane — consume the future submitted above
     # (runs concurrently with branch + taste + followed-author lanes on the
