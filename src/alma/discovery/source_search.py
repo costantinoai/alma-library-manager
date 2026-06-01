@@ -184,6 +184,106 @@ def resolve_source_policy(
     return enabled, normalized
 
 
+def _build_source_calls(query, *, per_source_limit, from_year, settings, semantic_scholar_mode, enabled):
+    """Assemble the ``(source_name, thunk)`` list for the enabled discovery
+    sources. Shared by ``search_across_sources`` + ``stream_across_sources`` so
+    the call shape and the S2 bulk-filter pass-throughs live in one place."""
+    s2_fields_of_study = _split_csv_setting(settings, "sources.semantic_scholar.fields_of_study")
+    s2_publication_types = _split_csv_setting(settings, "sources.semantic_scholar.publication_types")
+    s2_open_access_pdf = _setting_bool(settings or {}, "sources.semantic_scholar.open_access_pdf", False)
+    source_calls = []
+    if enabled["openalex"]:
+        source_calls.append(
+            ("openalex", lambda: openalex_related.search_works_hybrid(query, limit=per_source_limit, from_year=from_year))
+        )
+    if enabled["semantic_scholar"]:
+        source_calls.append(
+            (
+                "semantic_scholar",
+                (
+                    lambda: semantic_scholar.search_papers_bulk(
+                        query,
+                        limit=per_source_limit,
+                        from_year=from_year,
+                        fields_of_study=s2_fields_of_study or None,
+                        publication_types=s2_publication_types or None,
+                        open_access_pdf=s2_open_access_pdf,
+                    )
+                    if semantic_scholar_mode == "bulk"
+                    else semantic_scholar.search_papers(query, limit=per_source_limit)
+                ),
+            )
+        )
+    if enabled["crossref"]:
+        source_calls.append(
+            ("crossref", lambda: crossref.search_works(query, limit=per_source_limit, from_year=from_year))
+        )
+    if enabled["arxiv"]:
+        source_calls.append(
+            ("arxiv", lambda: arxiv.search_works(query, limit=per_source_limit, from_year=from_year))
+        )
+    if enabled["biorxiv"]:
+        source_calls.append(
+            ("biorxiv", lambda: biorxiv.search_works(query, limit=per_source_limit, from_year=from_year))
+        )
+    return source_calls
+
+
+def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weights, mode, temperature, enabled=None):
+    """Dedup + personal-rescore candidates from ``(source_name, items)`` pairs.
+    Shared by ``search_across_sources`` + ``merge_streamed_results``; ``enabled``
+    filters sources when provided (the streamed path passes it)."""
+    merged: Dict[str, dict] = {}
+    for source_name, items in items_by_source:
+        if enabled is not None and not enabled.get(source_name):
+            continue
+        if not items:
+            continue
+
+        total = max(len(items), 1)
+        for idx, item in enumerate(items):
+            candidate = dict(item)
+            key = _candidate_key(candidate)
+            if key.endswith("url:"):
+                continue
+
+            base = float(candidate.get("score", 0.0) or 0.0)
+            rank_factor = _clamp(1.0 - (idx / total), 0.05, 1.0)
+            source_weight = float(source_weights.get(source_name, 0.0) or 0.0)
+            if source_weight <= 0.0:
+                continue
+
+            # Explore mode intentionally rewards slightly deeper ranks to broaden
+            # retrieval surface; core mode stays closer to top-ranked items.
+            mode_bias = 0.6 if mode == "explore" else 0.85
+            temperature_bias = _clamp(0.75 + (temperature * 0.5), 0.65, 1.15)
+            weighted = _clamp(
+                ((base * mode_bias) + (rank_factor * (1.0 - mode_bias))) * source_weight * temperature_bias,
+                0.01,
+                1.0,
+            )
+            candidate["score"] = round(weighted, 4)
+            candidate["source_api"] = source_name
+            candidate["source_key"] = str(candidate.get("source_key") or query)
+            candidate["source_type"] = (
+                str(candidate.get("source_type") or "").strip()
+                or ("preprint_lane" if source_name in PREPRINT_SOURCE_KEYS else "external_search")
+            )
+            candidate["query"] = query
+
+            prev = merged.get(key)
+            if prev is None:
+                merged[key] = candidate
+                continue
+            if float(prev.get("score", 0.0) or 0.0) < candidate["score"]:
+                merged[key] = _merge_candidate_metadata(candidate, prev)
+            else:
+                merged[key] = _merge_candidate_metadata(prev, candidate)
+
+    ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+    return ranked[: max(1, limit)]
+
+
 def search_across_sources(
     query: str,
     *,
@@ -224,50 +324,14 @@ def search_across_sources(
 
     # Per-source limit is intentionally bounded to avoid request explosions.
     per_source_limit = max(3, min(25, limit))
-    # Semantic Scholar bulk-search filter pass-throughs (T12, 2026-04-25).
-    # All three default to None / False so the call shape is unchanged
-    # when the user hasn't configured any filter — keeps existing lens
-    # behavior stable.  Parsed here once per lane so each source closure
-    # captures the resolved values.
-    s2_fields_of_study = _split_csv_setting(settings, "sources.semantic_scholar.fields_of_study")
-    s2_publication_types = _split_csv_setting(settings, "sources.semantic_scholar.publication_types")
-    s2_open_access_pdf = _setting_bool(settings or {}, "sources.semantic_scholar.open_access_pdf", False)
-    merged: Dict[str, dict] = {}
-    source_calls = []
-    if enabled["openalex"]:
-        source_calls.append(
-            ("openalex", lambda: openalex_related.search_works_hybrid(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["semantic_scholar"]:
-        source_calls.append(
-            (
-                "semantic_scholar",
-                (
-                    lambda: semantic_scholar.search_papers_bulk(
-                        query,
-                        limit=per_source_limit,
-                        from_year=from_year,
-                        fields_of_study=s2_fields_of_study or None,
-                        publication_types=s2_publication_types or None,
-                        open_access_pdf=s2_open_access_pdf,
-                    )
-                    if semantic_scholar_mode == "bulk"
-                    else semantic_scholar.search_papers(query, limit=per_source_limit)
-                ),
-            )
-        )
-    if enabled["crossref"]:
-        source_calls.append(
-            ("crossref", lambda: crossref.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["arxiv"]:
-        source_calls.append(
-            ("arxiv", lambda: arxiv.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["biorxiv"]:
-        source_calls.append(
-            ("biorxiv", lambda: biorxiv.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
+    source_calls = _build_source_calls(
+        query,
+        per_source_limit=per_source_limit,
+        from_year=from_year,
+        settings=settings,
+        semantic_scholar_mode=semantic_scholar_mode,
+        enabled=enabled,
+    )
 
     per_source_ms: dict[str, int] = {}
 
@@ -341,52 +405,14 @@ def search_across_sources(
             slowest = max(per_source_ms.items(), key=lambda kv: kv[1])
             diagnostics["slowest_source"] = {"source": slowest[0], "duration_ms": slowest[1]}
 
-    for source_name, items in results_by_source:
-        if not items:
-            continue
-
-        total = max(len(items), 1)
-        for idx, item in enumerate(items):
-            candidate = dict(item)
-            key = _candidate_key(candidate)
-            if key.endswith("url:"):
-                continue
-
-            base = float(candidate.get("score", 0.0) or 0.0)
-            rank_factor = _clamp(1.0 - (idx / total), 0.05, 1.0)
-            source_weight = float(source_weights.get(source_name, 0.0) or 0.0)
-            if source_weight <= 0.0:
-                continue
-
-            # Explore mode intentionally rewards slightly deeper ranks to broaden
-            # retrieval surface; core mode stays closer to top-ranked items.
-            mode_bias = 0.6 if mode == "explore" else 0.85
-            temperature_bias = _clamp(0.75 + (temperature * 0.5), 0.65, 1.15)
-            weighted = _clamp(
-                ((base * mode_bias) + (rank_factor * (1.0 - mode_bias))) * source_weight * temperature_bias,
-                0.01,
-                1.0,
-            )
-            candidate["score"] = round(weighted, 4)
-            candidate["source_api"] = source_name
-            candidate["source_key"] = str(candidate.get("source_key") or query)
-            candidate["source_type"] = (
-                str(candidate.get("source_type") or "").strip()
-                or ("preprint_lane" if source_name in PREPRINT_SOURCE_KEYS else "external_search")
-            )
-            candidate["query"] = query
-
-            prev = merged.get(key)
-            if prev is None:
-                merged[key] = candidate
-                continue
-            if float(prev.get("score", 0.0) or 0.0) < candidate["score"]:
-                merged[key] = _merge_candidate_metadata(candidate, prev)
-            else:
-                merged[key] = _merge_candidate_metadata(prev, candidate)
-
-    ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
-    return ranked[: max(1, limit)]
+    return _merge_candidates_from_sources(
+        results_by_source,
+        query,
+        limit=limit,
+        source_weights=source_weights,
+        mode=mode,
+        temperature=temperature,
+    )
 
 
 def stream_across_sources(
@@ -424,45 +450,14 @@ def stream_across_sources(
         return
 
     per_source_limit = max(3, min(25, limit))
-    s2_fields_of_study = _split_csv_setting(settings, "sources.semantic_scholar.fields_of_study")
-    s2_publication_types = _split_csv_setting(settings, "sources.semantic_scholar.publication_types")
-    s2_open_access_pdf = _setting_bool(settings or {}, "sources.semantic_scholar.open_access_pdf", False)
-
-    source_calls = []
-    if enabled["openalex"]:
-        source_calls.append(
-            ("openalex", lambda: openalex_related.search_works_hybrid(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["semantic_scholar"]:
-        source_calls.append(
-            (
-                "semantic_scholar",
-                (
-                    lambda: semantic_scholar.search_papers_bulk(
-                        query,
-                        limit=per_source_limit,
-                        from_year=from_year,
-                        fields_of_study=s2_fields_of_study or None,
-                        publication_types=s2_publication_types or None,
-                        open_access_pdf=s2_open_access_pdf,
-                    )
-                    if semantic_scholar_mode == "bulk"
-                    else semantic_scholar.search_papers(query, limit=per_source_limit)
-                ),
-            )
-        )
-    if enabled["crossref"]:
-        source_calls.append(
-            ("crossref", lambda: crossref.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["arxiv"]:
-        source_calls.append(
-            ("arxiv", lambda: arxiv.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
-    if enabled["biorxiv"]:
-        source_calls.append(
-            ("biorxiv", lambda: biorxiv.search_works(query, limit=per_source_limit, from_year=from_year))
-        )
+    source_calls = _build_source_calls(
+        query,
+        per_source_limit=per_source_limit,
+        from_year=from_year,
+        settings=settings,
+        semantic_scholar_mode=semantic_scholar_mode,
+        enabled=enabled,
+    )
 
     deadline = lane_deadline_s if lane_deadline_s is not None else DEFAULT_LANE_DEADLINE_S
     deadline_enabled = deadline and deadline > 0
@@ -534,50 +529,12 @@ def merge_streamed_results(
         return []
 
     enabled, source_weights = resolve_source_policy(settings)
-    merged: Dict[str, dict] = {}
-
-    for source_name, items in raw_by_source.items():
-        if not enabled.get(source_name):
-            continue
-        if not items:
-            continue
-        total = max(len(items), 1)
-        for idx, item in enumerate(items):
-            candidate = dict(item)
-            key = _candidate_key(candidate)
-            if key.endswith("url:"):
-                continue
-
-            base = float(candidate.get("score", 0.0) or 0.0)
-            rank_factor = _clamp(1.0 - (idx / total), 0.05, 1.0)
-            source_weight = float(source_weights.get(source_name, 0.0) or 0.0)
-            if source_weight <= 0.0:
-                continue
-
-            mode_bias = 0.6 if mode == "explore" else 0.85
-            temperature_bias = _clamp(0.75 + (temperature * 0.5), 0.65, 1.15)
-            weighted = _clamp(
-                ((base * mode_bias) + (rank_factor * (1.0 - mode_bias))) * source_weight * temperature_bias,
-                0.01,
-                1.0,
-            )
-            candidate["score"] = round(weighted, 4)
-            candidate["source_api"] = source_name
-            candidate["source_key"] = str(candidate.get("source_key") or query)
-            candidate["source_type"] = (
-                str(candidate.get("source_type") or "").strip()
-                or ("preprint_lane" if source_name in PREPRINT_SOURCE_KEYS else "external_search")
-            )
-            candidate["query"] = query
-
-            prev = merged.get(key)
-            if prev is None:
-                merged[key] = candidate
-                continue
-            if float(prev.get("score", 0.0) or 0.0) < candidate["score"]:
-                merged[key] = _merge_candidate_metadata(candidate, prev)
-            else:
-                merged[key] = _merge_candidate_metadata(prev, candidate)
-
-    ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
-    return ranked[: max(1, limit)]
+    return _merge_candidates_from_sources(
+        raw_by_source.items(),
+        query,
+        limit=limit,
+        source_weights=source_weights,
+        mode=mode,
+        temperature=temperature,
+        enabled=enabled,
+    )
