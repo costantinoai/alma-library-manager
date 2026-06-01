@@ -378,85 +378,24 @@ def search_works(
         return []
 
 
-def find_similar_works(
-    query: str,
-    limit: int = 12,
-    from_year: Optional[int] = None,
-) -> List[Dict]:
-    """Use OpenAlex semantic work search when available."""
-    query = (query or "").strip()
-    if not query:
-        return []
-
-    client = get_client()
-    try:
-        resp = client.get(
-            "/find/works",
-            params={
-                "query": query,
-                "limit": min(limit, 25),
-            },
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            logger.debug("OpenAlex semantic find/works returned HTTP %d", resp.status_code)
-            return []
-
-        payload = resp.json() or {}
-        raw_items = payload.get("results") or payload.get("data") or payload.get("works") or []
-        results: List[Dict] = []
-        total = max(len(raw_items), 1)
-        for idx, item in enumerate(raw_items):
-            if not isinstance(item, dict):
-                continue
-            work = item.get("work") if isinstance(item.get("work"), dict) else item
-            if not isinstance(work, dict):
-                continue
-            year = work.get("publication_year")
-            if from_year is not None:
-                try:
-                    if year is not None and int(year) < int(from_year):
-                        continue
-                except (TypeError, ValueError):
-                    pass
-            mapped = _work_to_result(work, float(item.get("score") or _score_by_rank(idx, total)))
-            if mapped:
-                mapped["source_type"] = "external_semantic_search"
-                results.append(mapped)
-        return results
-    except Exception as exc:
-        logger.debug("OpenAlex semantic find/works failed: %s", exc)
-        return []
-
-
 def search_works_hybrid(
     query: str,
     limit: int = 20,
     from_year: Optional[int] = None,
 ) -> List[Dict]:
-    """Blend lexical and semantic OpenAlex search for broader new-paper retrieval."""
-    lexical = search_works(query=query, limit=limit, from_year=from_year)
-    semantic = find_similar_works(query=query, limit=max(4, min(limit, 12)), from_year=from_year)
+    """Lexical OpenAlex work search for new-paper retrieval.
 
-    merged: dict[str, Dict] = {}
-    for idx, item in enumerate(lexical):
-        candidate = dict(item)
-        candidate["score"] = round(max(float(candidate.get("score", 0.0) or 0.0), _score_by_rank(idx, max(len(lexical), 1)) * 0.92), 4)
-        key = normalize_doi(candidate.get("doi") or "") or candidate.get("openalex_id") or (candidate.get("title") or "").strip().lower()
-        if key:
-            merged[str(key)] = candidate
-    for idx, item in enumerate(semantic):
-        candidate = dict(item)
-        candidate["score"] = round(max(float(candidate.get("score", 0.0) or 0.0), _score_by_rank(idx, max(len(semantic), 1)) * 0.88), 4)
-        key = normalize_doi(candidate.get("doi") or "") or candidate.get("openalex_id") or (candidate.get("title") or "").strip().lower()
-        if not key:
-            continue
-        existing = merged.get(str(key))
-        if existing is None or float(candidate.get("score", 0.0) or 0.0) > float(existing.get("score", 0.0) or 0.0):
-            merged[str(key)] = candidate
-
-    ranked = sorted(merged.values(), key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
-    return ranked[: max(1, limit)]
+    Note (2026-06-01, verified live): the former "semantic" blend called
+    OpenAlex ``/find/works``, which **404s** — OpenAlex's natural-language
+    semantic search is a separate, paid product (~1000 credits/call vs 10 for a
+    lexical list query) that is NOT exposed at that path. The dead call returned
+    nothing on every invocation while costing an extra round-trip per lane/
+    monitor (~30 lanes × every refresh). It is removed; this function now is the
+    lexical ``/works?search=`` path it effectively already was. Wiring real
+    OpenAlex semantic search is a deliberate, cost-gated product decision —
+    tracked as an open question in ``tasks/27_DISCOVERY_FEED_OPTIMIZATION.md``.
+    """
+    return search_works(query=query, limit=limit, from_year=from_year)
 
 
 def fetch_citing_works(
