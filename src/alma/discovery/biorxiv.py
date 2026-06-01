@@ -5,12 +5,22 @@ from __future__ import annotations
 from datetime import datetime
 import logging
 import re
+from time import monotonic
 from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
+
+# S-NEW-B: bioRxiv has NO keyword-search endpoint (date-range/DOI/category only),
+# so every keyword monitor/lane must pull the SAME recent date window and filter
+# locally. Without a cache, N callers in one refresh re-fetch identical pages
+# (~2-3s latency each). Cache the raw window per (server, interval) briefly so
+# all callers in a refresh share one pull, then re-rank locally per query.
+_WINDOW_CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_WINDOW_CACHE_TTL_S = 300.0
+_WINDOW_PAGE_CURSORS = (0, 100)
 
 _STOPWORDS = {
     "the",
@@ -195,6 +205,43 @@ def reconcile_published_versions(
     return out
 
 
+def _fetch_recent_window(server: str, interval: str) -> List[dict]:
+    """Pull (and briefly cache) the recent bioRxiv window for (server, interval).
+
+    Returns the ~200 most-recent raw entries for the window. Cached per
+    (server, interval) for a short TTL so every keyword monitor/lane in a single
+    refresh shares ONE network pull instead of re-fetching identical pages —
+    bioRxiv has no keyword endpoint, so all callers necessarily request the same
+    window. The cache is query-independent (raw entries); callers re-rank locally.
+    """
+    key = (server, interval)
+    cached = _WINDOW_CACHE.get(key)
+    now = monotonic()
+    if cached is not None and (now - cached[0]) < _WINDOW_CACHE_TTL_S:
+        return cached[1]
+
+    entries: List[dict] = []
+    client = get_source_http_client("biorxiv")
+    for cursor in _WINDOW_PAGE_CURSORS:
+        try:
+            resp = client.get(f"/details/{server}/{interval}/{cursor}/json", timeout=20)
+            if resp.status_code != 200:
+                logger.debug("bioRxiv window returned HTTP %d", resp.status_code)
+                break
+            page = (resp.json() or {}).get("collection") or []
+            if not page:
+                break
+            entries.extend(e for e in page if isinstance(e, dict))
+            if len(page) < 100:
+                break
+        except Exception as exc:
+            logger.warning("bioRxiv window fetch failed: %s", exc)
+            break
+
+    _WINDOW_CACHE[key] = (now, entries)
+    return entries
+
+
 def search_works(
     query: str,
     *,
@@ -202,7 +249,12 @@ def search_works(
     from_year: Optional[int] = None,
     server: str = "biorxiv",
 ) -> List[dict]:
-    """Search recent bioRxiv entries by local lexical reranking."""
+    """Search recent bioRxiv entries by local lexical reranking.
+
+    The recent window is fetched once per (server, interval) and shared across
+    callers via `_fetch_recent_window`; this function only re-ranks it locally
+    for `query`, so N monitors hitting bioRxiv in one refresh cost one pull.
+    """
     query = (query or "").strip()
     if not query:
         return []
@@ -215,43 +267,24 @@ def search_works(
     else:
         interval = "180d"
 
+    entries = _fetch_recent_window(server, interval)
     out: list[tuple[float, dict]] = []
     seen_keys: set[str] = set()
-    client = get_source_http_client("biorxiv")
-    for cursor in (0, 100):
-        try:
-            resp = client.get(f"/details/{server}/{interval}/{cursor}/json", timeout=20)
-            if resp.status_code != 200:
-                logger.debug("bioRxiv search returned HTTP %d", resp.status_code)
-                break
-            payload = resp.json() or {}
-            entries = payload.get("collection") or []
-            if not entries:
-                break
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                score = _lexical_score(query, entry)
-                if score <= 0.0:
-                    continue
-                candidate = _entry_to_candidate(entry, score, server=server)
-                if not candidate:
-                    continue
-                year = candidate.get("year")
-                if from_year and isinstance(year, int) and year < from_year:
-                    continue
-                dedupe_key = str(candidate.get("canonical_doi") or candidate.get("doi") or candidate.get("url") or "")
-                if dedupe_key in seen_keys:
-                    continue
-                seen_keys.add(dedupe_key)
-                out.append((score, candidate))
-            if len(out) >= max(limit * 2, 20):
-                break
-            if len(entries) < 100:
-                break
-        except Exception as exc:
-            logger.warning("bioRxiv query search failed: %s", exc)
-            return []
+    for entry in entries:
+        score = _lexical_score(query, entry)
+        if score <= 0.0:
+            continue
+        candidate = _entry_to_candidate(entry, score, server=server)
+        if not candidate:
+            continue
+        year = candidate.get("year")
+        if from_year and isinstance(year, int) and year < from_year:
+            continue
+        dedupe_key = str(candidate.get("canonical_doi") or candidate.get("doi") or candidate.get("url") or "")
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+        out.append((score, candidate))
 
     out.sort(key=lambda item: item[0], reverse=True)
     top = [candidate for _, candidate in out[: max(1, limit)]]
