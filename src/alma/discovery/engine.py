@@ -43,7 +43,7 @@ from alma.discovery.scoring import (
     score_candidate,
 )
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.utils import normalize_doi, resolve_existing_paper_id
+from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
 
@@ -276,32 +276,29 @@ def get_existing_recommendation_titles(conn: sqlite3.Connection) -> Set[str]:
         return set()
 
 
-def canonical_candidate_key(candidate: dict) -> str:
-    """Canonical recommendation identity key: DOI -> URL -> title."""
-    doi = normalize_doi((candidate.get("doi") or "").strip())
-    if doi:
-        return f"doi:{doi.lower()}"
-    url = (candidate.get("url") or "").strip().lower()
-    if url:
-        return f"url:{url}"
-    title = (candidate.get("title") or "").strip().lower()
-    return f"title:{title}"
+# D-7: one canonical in-memory dedup key (canonical_doi -> doi -> openalex_id ->
+# year+title -> url -> title), shared with discovery/source_search. The old
+# DOI->URL->title variant ignored openalex_id + year, so the same paper keyed
+# differently between the retrieval merge and this skip-set and dedup missed.
+canonical_candidate_key = candidate_dedup_key
 
 
 def get_existing_recommendation_keys(conn: sqlite3.Connection) -> Set[str]:
     """Return canonical identity keys from existing recommendations."""
     try:
         rows = conn.execute(
-            """SELECT p.title, p.url, p.doi
+            """SELECT p.title, p.url, p.doi, p.openalex_id, p.year
                FROM recommendations r
                LEFT JOIN papers p ON r.paper_id = p.id"""
         ).fetchall()
         return {
-            canonical_candidate_key(
+            candidate_dedup_key(
                 {
                     "title": r["title"],
                     "url": r["url"],
                     "doi": r["doi"],
+                    "openalex_id": r["openalex_id"],
+                    "year": r["year"],
                 }
             )
             for r in rows
@@ -481,10 +478,18 @@ def get_local_titles(conn: sqlite3.Connection) -> Set[str]:
 def get_local_keys(conn: sqlite3.Connection) -> Set[str]:
     """Return canonical identity keys from local papers."""
     try:
-        rows = conn.execute("SELECT title, url, doi FROM papers").fetchall()
+        rows = conn.execute(
+            "SELECT title, url, doi, openalex_id, year FROM papers"
+        ).fetchall()
         return {
-            canonical_candidate_key(
-                {"title": r["title"], "url": r["url"], "doi": r["doi"]}
+            candidate_dedup_key(
+                {
+                    "title": r["title"],
+                    "url": r["url"],
+                    "doi": r["doi"],
+                    "openalex_id": r["openalex_id"],
+                    "year": r["year"],
+                }
             )
             for r in rows
         }

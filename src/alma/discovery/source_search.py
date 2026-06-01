@@ -13,7 +13,7 @@ from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
     setting_float as _setting_float,
 )
-from alma.core.utils import normalize_doi
+from alma.core.utils import candidate_dedup_key as _candidate_key, normalize_doi
 from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
 
 logger = logging.getLogger(__name__)
@@ -117,20 +117,6 @@ def _merge_candidate_metadata(best: dict, other: dict) -> dict:
     if source_names:
         merged["source_apis"] = source_names
     return merged
-
-
-def _candidate_key(item: dict) -> str:
-    canonical_doi = normalize_doi((item.get("canonical_doi") or "").strip())
-    if canonical_doi:
-        return f"doi:{canonical_doi.lower()}"
-    doi = normalize_doi((item.get("doi") or "").strip())
-    if doi:
-        return f"doi:{doi.lower()}"
-    title = (item.get("title") or "").strip().lower()
-    if title:
-        return f"title:{title}"
-    url = (item.get("url") or "").strip().lower()
-    return f"url:{url}"
 
 
 
@@ -253,7 +239,7 @@ def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weig
         for idx, item in enumerate(items):
             candidate = dict(item)
             key = _candidate_key(candidate)
-            if key.endswith("url:"):
+            if key in ("url:", "title:"):
                 continue
 
             base = float(candidate.get("score", 0.0) or 0.0)

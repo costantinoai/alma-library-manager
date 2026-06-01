@@ -69,6 +69,42 @@ def normalize_title_key(title: Optional[str]) -> str:
     return _TITLE_KEY_NOISE_RE.sub("", title.strip().lower())
 
 
+def candidate_dedup_key(item: dict) -> str:
+    """Canonical in-memory dedup key for a candidate / paper dict (D-7).
+
+    One identity function shared by the retrieval merge (``source_search``) and
+    the local skip-set (``engine``), which previously hand-rolled three
+    divergent variants (DOI→title→URL vs DOI→URL→title, neither using
+    ``openalex_id`` or year) — so the same paper keyed differently across them
+    and dedup silently missed. Priority, strongest identity first:
+
+        canonical_doi → doi → openalex_id → (year + normalized title) → url → title
+
+    Callers that compare against this MUST supply the same fields (e.g. the
+    local skip-set selects ``openalex_id`` and ``year``, not just title/url/doi).
+    Returns a prefixed key; ``"url:"`` / ``"title:"`` (empty suffix) signal an
+    identity-less item the caller should drop.
+    """
+    canonical_doi = normalize_doi((item.get("canonical_doi") or "").strip())
+    if canonical_doi:
+        return f"doi:{canonical_doi.lower()}"
+    doi = normalize_doi((item.get("doi") or "").strip())
+    if doi:
+        return f"doi:{doi.lower()}"
+    openalex_id = str(item.get("openalex_id") or "").strip()
+    if openalex_id:
+        return f"openalex:{openalex_id.rsplit('/', 1)[-1].lower()}"
+    title_key = normalize_title_key(item.get("title"))
+    year = item.get("year")
+    if title_key and year not in (None, ""):
+        return f"yt:{year}:{title_key}"
+    url = str(item.get("url") or "").strip().lower()
+    if url:
+        return f"url:{url}"
+    title = str(item.get("title") or "").strip().lower()
+    return f"title:{title}"
+
+
 def resolve_existing_paper_id(
     conn: sqlite3.Connection,
     *,
