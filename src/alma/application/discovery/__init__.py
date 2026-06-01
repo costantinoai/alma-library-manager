@@ -50,8 +50,8 @@ def _jsonable_numeric(value: Any) -> Any:
         return tolist()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from alma.core.utils import normalize_doi
-from . import library as library_app
-from .feed import _commit_if_pending
+from .. import library as library_app
+from ..feed import _commit_if_pending
 
 
 def _safe_div(numerator: float, denominator: float) -> float:
