@@ -762,7 +762,13 @@ export function FeedPage() {
                   dismissLabel="Dismiss"
                   dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"
-                  actionDisabled={actionMutation.isPending || queueMutation.isPending || removeFromLibraryMutation.isPending}
+                  actionDisabled={
+                    /* U-6: disable only THIS card while its own action is
+                       in-flight — not every card in the inbox. */
+                    (actionMutation.isPending && actionMutation.variables?.id === item.id) ||
+                    (queueMutation.isPending && queueMutation.variables?.paperId === item.paper_id) ||
+                    (removeFromLibraryMutation.isPending && removeFromLibraryMutation.variables?.paperId === item.paper_id)
+                  }
                   reaction={reaction}
                   isSaved={isSaved}
                   savedClickRemoves
@@ -843,7 +849,9 @@ export function FeedPage() {
                       </div>
                     )}
                   </div>
-                  {(actionMutation.isPending || queueMutation.isPending) && (
+                  {/* U-6: the "applying" spinner belongs to the in-flight card only. */}
+                  {((actionMutation.isPending && actionMutation.variables?.id === item.id) ||
+                    (queueMutation.isPending && queueMutation.variables?.paperId === item.paper_id)) && (
                     <div className="mt-2 flex items-center gap-1 text-xs text-slate-500">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Applying action...

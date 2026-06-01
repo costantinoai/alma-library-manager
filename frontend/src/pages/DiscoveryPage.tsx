@@ -398,13 +398,17 @@ export function DiscoveryPage() {
       })
   }
 
-  const anyActionPending =
-    dismissMutation.isPending ||
-    likeMutation.isPending ||
-    addMutation.isPending ||
-    loveMutation.isPending ||
-    dislikeMutation.isPending ||
-    queueMutation.isPending
+  // U-6: only the card whose action is in-flight should disable, not all 50.
+  // Every rec mutation takes the rec id as its sole argument, so the in-flight
+  // mutation's `.variables` is exactly that id.
+  const pendingRecId =
+    (dismissMutation.isPending && (dismissMutation.variables as string)) ||
+    (likeMutation.isPending && (likeMutation.variables as string)) ||
+    (addMutation.isPending && (addMutation.variables as string)) ||
+    (loveMutation.isPending && (loveMutation.variables as string)) ||
+    (dislikeMutation.isPending && (dislikeMutation.variables as string)) ||
+    (queueMutation.isPending && (queueMutation.variables as string)) ||
+    null
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, any> | null) ?? null
 
   const renderProfileList = (
@@ -1070,7 +1074,7 @@ export function DiscoveryPage() {
                     seed: cardPaper.id,
                     seedTitle: cardPaper.title,
                   })}
-                  actionDisabled={anyActionPending}
+                  actionDisabled={pendingRecId === rec.id}
                   reaction={deriveDiscoveryReaction(rec)}
                   isSaved={paper?.status === 'library' || rec.user_action === 'save'}
                 >
