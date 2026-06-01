@@ -46,6 +46,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
+from alma.core.scoring_math import clamp as _clamp
 from alma.application.signal_projection import load_projected_paper_signals
 
 logger = logging.getLogger(__name__)
@@ -92,10 +93,6 @@ _NEIGHBORHOOD_CITED_SCALE = 4.0
 # A component value within ±this of zero reads as "neutral" (grey) rather than
 # positive/negative in the UI breakdown.
 _NEUTRAL_BAND = 0.05
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, value))
 
 
 @dataclass

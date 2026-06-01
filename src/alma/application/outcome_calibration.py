@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from alma.application.signal_projection import normalize_feedback_event_value
-from alma.core.scoring_math import age_decay, clamp
+from alma.core.scoring_math import age_decay, clamp, days_since as _days_since
 
 
 # Bayesian priors. α=β means the prior peaks at 0.5 (no opinion); a
@@ -175,22 +175,6 @@ def compute_outcome_calibration(
         out.multipliers[key] = clamp(multiplier, multiplier_lo, multiplier_hi)
     return out
 
-
-def _days_since(raw, now: datetime) -> float | None:
-    if not raw:
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0)
 
 
 def compute_author_bucket_calibration(

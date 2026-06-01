@@ -12,7 +12,8 @@ default) takes effect everywhere by construction.
 from __future__ import annotations
 
 import math
-from typing import Mapping
+from datetime import datetime, timezone
+from typing import Mapping, Optional
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -79,3 +80,25 @@ def log_prevalence_weights(counts: Mapping[str, float]) -> dict[str, float]:
         key: math.copysign(math.log1p(abs(value)) / max_log, value)
         for key, value in counts.items()
     }
+
+
+def days_since(raw, now: datetime) -> Optional[float]:
+    """Whole-day age of an ISO timestamp ``raw`` relative to ``now`` (made
+    UTC-aware), clamped to >= 0; ``None`` when missing/unparseable. Uses
+    ``datetime.fromisoformat`` (+ trailing-Z handling). The more permissive
+    strptime-loop variant in ``application/paper_signal`` accepts a wider set of
+    SQLite timestamp formats and is intentionally kept separate."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0)

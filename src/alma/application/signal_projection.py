@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from alma.core.scoring_math import age_decay, clamp as _shared_clamp
+from alma.core.scoring_math import age_decay, clamp as _clamp, days_since as _days_since
 
 
 _POSITIVE_ACTIONS = {
@@ -877,22 +877,6 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def _days_since(raw: Any, now: datetime) -> float | None:
-    if not raw:
-        return None
-    text = str(raw).strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return max(0.0, (now - dt.astimezone(timezone.utc)).total_seconds() / 86400.0)
-
 
 def _parse_keywords(raw: Any) -> list[str]:
     value = _coerce_value(raw)
@@ -927,5 +911,3 @@ def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
         yield values[idx : idx + size]
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return _shared_clamp(value, lo, hi)

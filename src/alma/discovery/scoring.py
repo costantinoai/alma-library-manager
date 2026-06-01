@@ -28,7 +28,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from alma.core.scoring_math import (
-    clamp as _shared_clamp,
+    clamp as _clamp,
     consensus_bonus as _shared_consensus_bonus,
     log_prevalence_weights,
 )
@@ -78,8 +78,6 @@ _DISMISSAL_KEYWORD_PENALTY_PER_HIT = 1.0
 _DISMISSAL_PENALTY_CAP = 30.0
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return _shared_clamp(value, lo, hi)
 
 
 def _consensus_bonus(consensus_count: int) -> float:

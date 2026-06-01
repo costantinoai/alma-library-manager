@@ -32,6 +32,8 @@ from alma.openalex.client import (
 )
 from alma.core.scoring_math import age_decay, clamp
 
+_clamp = clamp  # D-3: canonical clamp under the legacy local name
+
 
 def _jsonable_numeric(value: Any) -> Any:
     """json.dumps default for numpy scalars / arrays.
@@ -2864,10 +2866,6 @@ def _candidate_negative_preference_penalty(
             penalty += min(0.35, 0.12 + (weight * 0.18))
 
     return _clamp(penalty, 0.0, 0.95)
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return clamp(value, lo, hi)
 
 
 def _resolve_branch_temperature(

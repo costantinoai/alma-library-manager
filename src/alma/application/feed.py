@@ -20,6 +20,11 @@ from alma.application.feed_query_language import (
 from . import feed_monitors as monitor_app
 from . import library as library_app
 from alma.core.scoring_math import clamp
+from alma.core.settings_helpers import (
+    setting_bool as _setting_bool,
+    setting_float as _setting_float,
+    setting_int as _setting_int,
+)
 from alma.core.http_sources import (
     openalex_usage_delta,
     openalex_usage_snapshot,
@@ -111,33 +116,6 @@ def prune_feed_items_for_missing_monitors(db: sqlite3.Connection) -> int:
     return int(cursor.rowcount or 0)
 
 
-def _setting_int(settings: dict[str, str], key: str, default: int, lo: int, hi: int) -> int:
-    raw = settings.get(key)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    return int(clamp(value, lo, hi))
-
-
-def _setting_float(settings: dict[str, str], key: str, default: float, lo: float, hi: float) -> float:
-    raw = settings.get(key)
-    if raw is None:
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    return clamp(value, lo, hi)
-
-
-def _setting_bool(settings: dict[str, str], key: str, default: bool) -> bool:
-    raw = settings.get(key)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_json_dict(raw: object) -> dict:

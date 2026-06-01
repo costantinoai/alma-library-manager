@@ -8,7 +8,11 @@ from time import perf_counter
 from typing import Any, Dict, Optional
 
 from alma.core.http_sources import bind_source_diagnostics
-from alma.core.scoring_math import clamp as _shared_clamp
+from alma.core.scoring_math import clamp as _clamp
+from alma.core.settings_helpers import (
+    setting_bool as _setting_bool,
+    setting_float as _setting_float,
+)
 from alma.core.utils import normalize_doi
 from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
 
@@ -41,8 +45,6 @@ DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
 }
 
 
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return _shared_clamp(value, lo, hi)
 
 
 def _is_blank(value: object) -> bool:
@@ -131,21 +133,6 @@ def _candidate_key(item: dict) -> str:
     return f"url:{url}"
 
 
-def _setting_bool(settings: dict[str, str], key: str, default: bool) -> bool:
-    raw = settings.get(key)
-    if raw is None:
-        return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _setting_float(settings: dict[str, str], key: str, default: float) -> float:
-    raw = settings.get(key)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
 
 
 def _split_csv_setting(settings: Optional[dict[str, str]], key: str) -> list[str]:
