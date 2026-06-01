@@ -68,6 +68,25 @@ _DIMENSION_KEY_EXPR: dict[str, str] = {
 }
 
 
+def _finalize_calibration(out, *, multiplier_lo: float, multiplier_hi: float):
+    """Beta-Bernoulli posterior mean per key (alpha=beta=2 priors -> neutral 0.5
+    at zero traffic) mapped linearly to a multiplier in [lo, hi] (quality 0.5 ->
+    1.0, no scaling). Shared by the paper-Discovery + author-bucket calibrators."""
+    keys = set(out.positive_counts) | set(out.negative_counts) | set(out.impressions)
+    for key in keys:
+        positives = out.positive_counts.get(key, 0.0)
+        negatives = out.negative_counts.get(key, 0.0)
+        quality = (positives + _PRIOR_ALPHA) / (
+            positives + negatives + _PRIOR_ALPHA + _PRIOR_BETA
+        )
+        out.quality[key] = quality
+        center = (multiplier_lo + multiplier_hi) / 2.0
+        spread = (multiplier_hi - multiplier_lo) / 2.0
+        multiplier = center + spread * ((quality * 2.0) - 1.0)
+        out.multipliers[key] = clamp(multiplier, multiplier_lo, multiplier_hi)
+    return out
+
+
 def compute_outcome_calibration(
     db: sqlite3.Connection,
     *,
@@ -157,23 +176,7 @@ def compute_outcome_calibration(
                 out.negative_counts.get(dim_key, 0.0) + abs(signal) * weight
             )
 
-    keys = set(out.positive_counts) | set(out.negative_counts) | set(out.impressions)
-    for key in keys:
-        positives = out.positive_counts.get(key, 0.0)
-        negatives = out.negative_counts.get(key, 0.0)
-        # Beta-Bernoulli posterior mean. With α=β=2 priors and zero
-        # traffic, returns 0.5 — neutral, no opinion.
-        quality = (positives + _PRIOR_ALPHA) / (
-            positives + negatives + _PRIOR_ALPHA + _PRIOR_BETA
-        )
-        out.quality[key] = quality
-        # Map quality ∈ [0, 1] to a multiplier ∈ [lo, hi] linearly,
-        # with quality=0.5 (neutral) → 1.0 (no scaling).
-        center = (multiplier_lo + multiplier_hi) / 2.0
-        spread = (multiplier_hi - multiplier_lo) / 2.0
-        multiplier = center + spread * ((quality * 2.0) - 1.0)
-        out.multipliers[key] = clamp(multiplier, multiplier_lo, multiplier_hi)
-    return out
+    return _finalize_calibration(out, multiplier_lo=multiplier_lo, multiplier_hi=multiplier_hi)
 
 
 
@@ -273,19 +276,7 @@ def compute_author_bucket_calibration(
         if bucket:
             out.impressions[bucket] = int(row["n"] or 0)
 
-    keys = set(out.positive_counts) | set(out.negative_counts) | set(out.impressions)
-    for key in keys:
-        positives = out.positive_counts.get(key, 0.0)
-        negatives = out.negative_counts.get(key, 0.0)
-        quality = (positives + _PRIOR_ALPHA) / (
-            positives + negatives + _PRIOR_ALPHA + _PRIOR_BETA
-        )
-        out.quality[key] = quality
-        center = (multiplier_lo + multiplier_hi) / 2.0
-        spread = (multiplier_hi - multiplier_lo) / 2.0
-        multiplier = center + spread * ((quality * 2.0) - 1.0)
-        out.multipliers[key] = clamp(multiplier, multiplier_lo, multiplier_hi)
-    return out
+    return _finalize_calibration(out, multiplier_lo=multiplier_lo, multiplier_hi=multiplier_hi)
 
 
 def compose_calibration_multipliers(
