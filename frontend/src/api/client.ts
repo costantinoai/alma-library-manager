@@ -1349,6 +1349,8 @@ export interface FeedInboxPaper {
   reading_status?: string | null
   openalex_id?: string | null
   cited_by_count?: number
+  tldr?: string | null
+  influential_citation_count?: number
 }
 
 export interface FeedMatchedMonitor {

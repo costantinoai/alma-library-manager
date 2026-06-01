@@ -780,7 +780,9 @@ def list_feed_items(
             p.added_from AS p_added_from,
             p.reading_status AS p_reading_status,
             p.openalex_id AS p_openalex_id,
-            p.cited_by_count AS p_cited_by_count
+            p.cited_by_count AS p_cited_by_count,
+            p.tldr AS p_tldr,
+            p.influential_citation_count AS p_influential_citation_count
         FROM feed_items fi
         LEFT JOIN papers p ON p.id = fi.paper_id
         LEFT JOIN authors a ON a.id = fi.author_id
@@ -838,7 +840,9 @@ def list_feed_items_for_ids(db: sqlite3.Connection, feed_item_ids: list[str]) ->
             p.added_from AS p_added_from,
             p.reading_status AS p_reading_status,
             p.openalex_id AS p_openalex_id,
-            p.cited_by_count AS p_cited_by_count
+            p.cited_by_count AS p_cited_by_count,
+            p.tldr AS p_tldr,
+            p.influential_citation_count AS p_influential_citation_count
         FROM feed_items fi
         LEFT JOIN papers p ON p.id = fi.paper_id
         LEFT JOIN authors a ON a.id = fi.author_id
@@ -2094,6 +2098,12 @@ def _map_feed_row(
             "reading_status": row["p_reading_status"],
             "openalex_id": row["p_openalex_id"],
             "cited_by_count": int(row["p_cited_by_count"] or 0),
+            # U-5: surface the S2 TLDR + influential-citation count the feed card
+            # already renders (FeedPage passes paper.tldr / .influential_citation_count
+            # to PaperCard). The query previously omitted them, so they were always
+            # null/0 even when the paper row had them.
+            "tldr": row["p_tldr"],
+            "influential_citation_count": int(row["p_influential_citation_count"] or 0),
         }
         if row["p_id"]
         else None,
