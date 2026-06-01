@@ -1758,10 +1758,18 @@ def refresh_feed_monitor(
         if ctx is not None:
             ctx.log_step(step, message, **kwargs)
 
-    monitor_app.sync_author_monitors(db)
-    prune_feed_items_for_missing_monitors(db)
+    # S-11: a single non-author monitor (query/venue/preprint/branch) already
+    # exists in feed_monitors without the author-mirror sync, and the corpus-wide
+    # orphan prune is pure waste for it. Only sync+prune when the target is an
+    # author monitor (the sync materializes it) or isn't found yet (maybe a
+    # freshly-followed author not yet mirrored).
     monitors = monitor_app.list_feed_monitors(db)
     monitor = next((item for item in monitors if str(item.get("id") or "") == str(monitor_id or "")), None)
+    if monitor is None or str(monitor.get("monitor_type") or "") == "author":
+        monitor_app.sync_author_monitors(db)
+        prune_feed_items_for_missing_monitors(db)
+        monitors = monitor_app.list_feed_monitors(db)
+        monitor = next((item for item in monitors if str(item.get("id") or "") == str(monitor_id or "")), None)
     if monitor is None:
         return None
 
