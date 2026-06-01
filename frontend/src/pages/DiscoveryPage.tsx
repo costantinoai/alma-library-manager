@@ -155,6 +155,10 @@ export function DiscoveryPage() {
     queryKey: ['lens-recommendations', selectedLensId],
     queryFn: () => listLensRecommendations(selectedLensId as string, { limit: 200, offset: 0 }),
     enabled: Boolean(selectedLensId),
+    // Recommendations only change when the user refreshes the lens (an explicit
+    // mutation that invalidates this key). Without a staleTime every lens switch
+    // + window refocus refetched the full 200-rec list for no new data.
+    staleTime: 60_000,
   })
 
   const seededSimilarityQuery = useQuery({

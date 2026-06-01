@@ -203,6 +203,10 @@ export function FeedPage() {
       }),
     retry: 1,
     placeholderData: (previous) => previous,
+    // The inbox only gains rows on an explicit refresh (which invalidates this
+    // key); a short staleTime stops a full refetch on every filter toggle /
+    // window refocus while keeping it fresh enough.
+    staleTime: 30_000,
   })
 
   const monitorQueryState = useQuery({
