@@ -327,6 +327,23 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/plugins` | Plugin inventory (Slack, etc.) |
 | `GET` `POST` `DELETE` | `/operations[/…]` | Bulk operation endpoints |
 
+### Browser connector (extension)
+
+Endpoints the [Firefox connector](../user-guide/browser-connector.md)
+talks to. `GET /extension/ping` is a pure-read handshake that also
+returns an **instance identity** payload — `{profile, db_fingerprint}` —
+so the connector can bind an offline-queued capture to a specific
+database and deliver it only when the same instance answers (it never
+slips into the wrong DB). Captures are ingested through the single
+canonical path, `POST /extension/save`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/extension/ping` | Handshake + instance identity (`{profile, db_fingerprint}`); pure read |
+| `POST` | `/extension/lookup` | Membership check + metadata preview (read-only) |
+| `POST` | `/extension/save` | Save the open paper (add/like/love → 3/4/5 stars) |
+| `POST` | `/extension/undo` | Reverse a connector save |
+
 ## OpenAPI artefact
 
 The raw OpenAPI 3 document is bundled with these docs at

@@ -28,6 +28,17 @@ APScheduler background loop. You can also trigger them manually from
 **Settings → Discovery weights → Feed monitor defaults** or from the
 per-author "Refresh now" action.
 
+### Monitor health
+
+The Feed status strip surfaces a **"{N} degraded"** count when one or
+more monitors are unhealthy. Hovering it opens a tooltip that lists
+each degraded monitor by label, with its `health_reason` (or
+`last_error`) when available — capped at 8 entries, with a
+"+N more — see Settings" line when there are more. The values come from
+the monitor's `health` / `health_reason` / `last_error` fields, so the
+strip is a quick read on which sources are failing without leaving the
+Feed.
+
 ## Window and ordering
 
 The Feed is bounded to roughly the **last 60 days** by publication
@@ -62,6 +73,12 @@ real "new this fetch" count.
 
 ## Actions on a Feed item
 
+Each card shows the paper's metadata alongside a one-line **TL;DR**
+(`tldr`) and an **influential-citation count**
+(`influential_citation_count`) when those are available — both are now
+carried on the wire by the feed list query, so the card reflects the
+same enriched content as the rest of the app.
+
 Each card carries the standard rating vocabulary:
 
 | Action | What it does |
@@ -69,12 +86,22 @@ Each card carries the standard rating vocabulary:
 | **Save** | Transitions the paper to `library`, default rating 3. |
 | **Like** | Saves with rating 4. |
 | **Love** | Saves with rating 5. |
-| **Dislike** | Records a negative signal (rating 1). The paper **stays visible** in the Feed — chronological truth is preserved. |
+| **Dislike** | Down-weights the paper — records a negative signal and stamps rating 1. The paper **stays visible** in the Feed; chronological truth is preserved. |
+| **Dismiss** | **Hides the paper from the Feed for good** — settles every `feed_items` row for the paper to `status = 'dismissed'`, which the list query excludes permanently. Sends a small negative signal (no rating stamp), and offers an **undo** right after. |
 | **Queue** (reading status select) | Adds the paper to the Reading list. Independent of saving. |
 
-There is no "Dismiss" in the Feed. Dismiss is a Discovery verb
-(hide-from-recommender). The Feed is your inbox; you read it
-chronologically and act on individual items.
+The Dislike-vs-Dismiss split is the core nuance (D6). **Dislike** is the
+soft verb: it lowers the paper's standing without removing it, so the
+inbox keeps its complete chronological record. **Dismiss** is the one
+"forever" verb in the Feed: it hides the paper from the inbox for good —
+but because that's a heavy action, it always carries a transient **Undo**
+that restores the rows to `new` and drops the negative signal. Both
+actions also feed Discovery (Dislike and Dismiss both down-weight what
+the recommender shows).
+
+Dismiss applies per card and in bulk: the per-card control and the
+selection bar's **Dismiss** button both settle the chosen items to
+`dismissed`.
 
 ## Refresh contract
 
@@ -92,6 +119,17 @@ While a refresh is running:
   timing.
 * If a source fails (e.g. OpenAlex returns 5xx), the failure is
   recorded against that source only; other sources still complete.
+
+A refresh runs in the background job pool — the triggering `POST`
+returns immediately — and while it's running, an in-page
+**RefreshRunningBanner** shows on the Feed so you know a lens/feed
+refresh is in flight without watching the Activity panel.
+
+Near the top of the Feed, a collapsed **ConceptCallout** explains the
+action contract in one place: Add / Like / Love save the paper (Love
+rates it 5★), Dislike down-weights it but keeps it visible, and Dismiss
+hides it for good (with undo). This keeps the Dislike-vs-Dismiss split
+discoverable without per-button tooltips.
 
 ## Read endpoints
 
@@ -113,5 +151,14 @@ parameter set.
   use [Discovery](discovery.md).
 * It is **not** a search interface. To search, use the global search
   box (top of the app) or query the Library / Corpus Explorer.
-* It is **not** infinite. The 60-day window keeps it scannable. To
-  see older items, use Library (saved) or Discovery (candidates).
+* It is **not** infinite. The bound is a **60-day time window** by
+  publication date — not a 60-item cap. The inbox keeps it scannable;
+  to see items older than 60 days, use Library (saved) or Discovery
+  (candidates).
+
+The inbox isn't hard-capped at one page either. It loads the first
+**60 items** and offers a **"Load more · N of TOTAL"** button that
+grows the list a page (60) at a time, all within the 60-day window —
+`TOTAL` is the full count the backend reports for that window. The
+button is hidden when an author filter is active, since that view
+already shows the complete filtered set.

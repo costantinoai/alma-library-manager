@@ -381,12 +381,32 @@ same lens use cached candidates and are dramatically faster. See
 [Performance](../operations/performance.md) for the full budget
 table and how to profile your own refresh.
 
+A lens refresh now runs in the background job pool: the refresh
+`POST` returns instantly, and an in-page `RefreshRunningBanner`
+shows while the job runs and self-clears when it finishes. You can
+keep reading the current cards while the new set is being built.
+
+## Find & add — in-page author search
+
+The **Find & add** panel at the top of the Discovery page also
+supports **clickable, library-integrated author search**. Type
+`author:<name>` and instead of papers the panel renders **author
+cards** — each showing the author's institution and their top-cited
+papers, with no ranking bar. Clicking a card opens the same
+`AuthorDetailPanel` popup the Authors page uses (you do **not** have
+to follow the author first). Results are deduped against your local
+authors, so a card you already track is marked accordingly
+(`existing_author_id` / `already_followed`). The cards are backed by
+the `/library/import/search/authors` and
+`/library/import/search/authors/top-works` endpoints.
+
 ## What Discovery is not
 
 * It is **not a search engine.** Discovery does not take a free-text
-  query; it operates over your saved corpus. To search arbitrary
-  papers, use the global search box or the Online search panel
-  inside the Import dialog.
+  query for its ranked recommendations; those operate over your saved
+  corpus. To search arbitrary papers, use the global search box or the
+  **Find & add** panel embedded at the top of the Discovery page (the
+  `OnlineSearchTab`) — title, DOI, OpenAlex URL, or `author:<name>`.
 * It is **not deterministic.** Two refreshes of the same lens with
   the same Library can produce slightly different orderings — the
   signals shift as you save / dismiss things.

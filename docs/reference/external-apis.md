@@ -17,11 +17,17 @@ metadata, citations, topics, institutions, and the works graph.
 
 * **Endpoints used**: `/works`, `/works/{id}`, `/works/{id}/related-works`,
   `/authors`, `/authors/{id}`, `/topics`, `/sources`, `/institutions`.
+* **No semantic `/find/works`**: the natural-language `/find/works`
+  semantic call was removed — it 404s and is a separate paid product
+  (~1000 credits/call). Hybrid search is now purely the lexical
+  `/works?search=` path.
 * **API key — REQUIRED (since 2026-02-13)**: every request needs
   `OPENALEX_API_KEY`. OpenAlex retired the email "polite pool"; without a
   key you get 100 free credits/day and then **HTTP 409**. A free key
-  (openalex.org/settings/api) gives standard limits — 100k calls/day,
-  10/s. Set it in `.env` or via **Settings → Connections → OpenAlex**.
+  (openalex.org/settings/api) gives standard limits — 100,000 credits/day
+  (singleton GETs cost 0 credits, list requests 1 each), at a typical
+  ~10 req/s. Set it in `.env` or via
+  **Settings → Connections → OpenAlex**.
 * **Contact email (optional)**: `OPENALEX_EMAIL` no longer affects rate
   limits (the polite pool is gone) but still sets a courteous User-Agent
   and feeds the Crossref polite pool.
@@ -42,10 +48,19 @@ recommendations, author recommendations, related papers.
 
 * **Endpoints used**:
   * `/paper/batch` for bulk metadata + `specter_v2` vectors.
+  * `/paper/search/bulk` for broad non-interactive monitor/lane
+    retrieval.
   * `/paper/{id}/related` and `/paper/{id}/citations`.
   * `/recommendations/v1/papers/forpaper/{id}` for the
     `s2_related` recommendation channel.
   * `/author/{id}/papers` and `/author/{id}/recommendations`.
+* **Bulk search is two-step (bulk → batch)**: `/paper/search/bulk`
+  hard-400s (`Unrecognized or unsupported fields`) on `tldr` and
+  `embedding.specter_v2`, so ALMa requests only a bulk-supported field
+  subset (`BULK_FIELDS`) for breadth, then issues a single
+  `/paper/batch` to backfill the two fields bulk can't return (`tldr` +
+  the SPECTER2 vector). One extra request hydrates the whole bulk slice
+  rather than N per-paper GETs (`discovery/semantic_scholar.py`).
 * **API key — strongly recommended**: set `SEMANTIC_SCHOLAR_API_KEY`
   (free at semanticscholar.org/product/api), in `.env` or via
   **Settings → Connections → Semantic Scholar**. Without one you share
@@ -75,7 +90,11 @@ recommendations, author recommendations, related papers.
   (`core/http_sources.SourceHttpClient`) engages a 30-second floor
   on the per-request interval for the next 60 seconds. Retries: 5
   attempts, jittered exponential backoff capped at 60 seconds. Fresh
-  429s within the cooldown re-arm the floor.
+  429s within the cooldown re-arm the floor. While the cooldown is
+  armed, Discovery and Feed **drop the S2 source for the rest of that
+  refresh pass** (via `is_in_adaptive_cooldown()`) instead of having
+  each lane queue behind the 30s floor and wait out its deadline; the
+  window self-clears after 60s (`discovery/source_search.py`).
 * **Terminal statuses** for vector fetch: `unmatched`,
   `missing_vector`, `lookup_error`, `bad_local_doi`.
   `bad_local_doi` is set before any HTTP call when the local DOI
@@ -112,8 +131,13 @@ metadata fallback when OpenAlex doesn't have a paper.
     per HTTP call (~50× round-trip reduction at full backlog vs the
     singleton path).
 * **Polite pool**: Set `CROSSREF_MAILTO` to identify yourself. They
-  ask for it; honour the request. Polite pool gives 10 RPS for
-  singletons / 3 RPS for list queries; public pool is 5 RPS / 1 RPS.
+  ask for it; honour the request. Crossref retuned its REST limits on
+  2025-12-01: the list/search path — what ALMa hits via `/works?query` —
+  is now the stricter ceiling at **3 req/s polite / 1 req/s anonymous**.
+  Single-record `/works/{doi}` is looser (10 req/s polite), but one
+  client serves both paths, so ALMa paces to the search ceiling:
+  **0.34s interval polite / 1.05s anonymous**, with concurrency
+  **3 polite / 1 anonymous** (`core/http_sources.py`).
 * **Used as a fallback**, not the primary path. Most papers resolve
   through OpenAlex first.
 
@@ -121,8 +145,12 @@ metadata fallback when OpenAlex doesn't have a paper.
 
 * **arXiv**: ALMa uses arXiv's metadata API to resolve preprints
   not yet indexed by OpenAlex.
-* **bioRxiv** (also covers medRxiv): same pattern — preprint
-  metadata fall-through.
+* **bioRxiv** (also covers medRxiv): same fall-through pattern, but
+  bioRxiv has **no keyword-search endpoint** (date-range / DOI /
+  category only). ALMa pulls a shared recent date window, caches it
+  per `(server, interval)` for 300s so every keyword monitor/lane in
+  one refresh shares a single network pull, then filters and re-ranks
+  locally per query (`discovery/biorxiv.py`).
 
 These are read-only fall-through paths. Each has its own DOI
 prefix that triggers the

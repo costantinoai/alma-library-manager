@@ -66,13 +66,34 @@ including the dependency environment path.
 | `SLACK_TOKEN` | Slack bot OAuth token. |
 | `SLACK_CHANNEL` | Default channel for digests. |
 
+### Email / SMTP
+
+The email digest channel (sibling of Slack). Normally configured from
+**Settings → Email digests**; these env vars override the stored
+settings for headless setups.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SMTP_HOST` | *(unset)* | SMTP server host. Email delivery is off until this, the From address, and at least one recipient are set. |
+| `SMTP_PORT` | `587` | SMTP port. `587` = STARTTLS, `465` = implicit TLS (chosen automatically from the port). |
+| `SMTP_USERNAME` | *(unset)* | SMTP auth username. Leave unset for an unauthenticated relay. |
+| `SMTP_PASSWORD` | *(unset)* | SMTP auth password. Overrides the `smtp.password` secret store entry. |
+| `SMTP_FROM` | *(falls back to `SMTP_USERNAME`)* | From address on digest emails. |
+| `SMTP_TO` | *(unset)* | Recipient list, separated by commas, semicolons, or newlines. |
+
+`SMTP_USE_TLS` has no env var — the STARTTLS toggle lives only in
+`settings.json` (`smtp_use_tls`, default `true`) and is ignored on
+port 465.
+
 ### Scheduler
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. |
+| `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
 | `AUTHOR_REFRESH_HOUR` | `3` | Hour-of-day (UTC) for nightly author refresh. |
 | `ALERT_CHECK_INTERVAL_HOURS` | `6` | How often the alert dispatcher runs. |
+| `ALMA_DEEP_REFRESH_WORKERS` | `4` | Concurrency for the per-author deep-refresh fan-out (clamped 1–16). |
 | `SCHOLAR_RETRY_DELAYS` | `1,2,4,8` | Comma-separated retry backoff for `scholarly`. |
 
 ### Secrets file
@@ -80,6 +101,18 @@ including the dependency environment path.
 `ALMA_SECRETS_PATH` — path to a JSON file with secrets that
 shouldn't be in `.env` (default `data/secrets.json`). Currently only
 used by select cleanup paths; most users can ignore it.
+
+The store holds namespaced runtime credentials written by the
+Settings cards (so they never land in `settings.json`):
+
+| Key | Set from | Holds |
+|---|---|---|
+| `slack.bot_token` | Settings → Channels | Slack bot OAuth token. |
+| `smtp.password` | Settings → Email digests | SMTP auth password (overridable by `SMTP_PASSWORD`). |
+| `semantic_scholar.api_key` | Settings → External APIs | Semantic Scholar API key. |
+| `openalex.api_key` | Settings → External APIs | OpenAlex API key. |
+| `openai.api_key` | Settings → AI & embeddings | OpenAI embedding key. |
+| `zotero.api_key` | Settings → External APIs | Zotero API key. |
 
 ## `.env.example`
 
@@ -127,6 +160,7 @@ Settings page.
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
 | Settings → Channels | `data/secrets.json` (Slack bot token, key `slack.bot_token`) and `settings.json` (`slack_channel`, `check_interval_hours`) |
+| Settings → Email digests | `settings.json` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`, `smtp_use_tls`) and `data/secrets.json` (SMTP password, key `smtp.password`) |
 | Settings → Data & system → Corpus Explorer | (no setting; opens modal) |
 | Settings → Data & system → Backup / restore | (no setting; runs operations) |
 

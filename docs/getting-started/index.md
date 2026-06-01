@@ -43,9 +43,13 @@ on the bare-metal path is a dependency build mismatch.
 
 </div>
 
-After the app is running, do the [first-run pass](first-run.md): add your
-OpenAlex API key, follow authors, import papers if you have them, and
-refresh Feed / Discovery.
+After the app is running, the [first-run pass](first-run.md) takes over.
+On a fresh database ALMa shows a **guided onboarding flow** instead of an
+empty app — it walks you through your API keys, resolving your own author
+identity, following authors, keyword monitors, your first lens, and a
+first Discovery run. You can replay it later from **Settings → Restart
+onboarding**. See [First run](first-run.md) for what each step does and
+for the manual paths if you'd rather set things up by hand.
 
 ## Docker requirements
 

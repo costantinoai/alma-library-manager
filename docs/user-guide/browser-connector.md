@@ -126,9 +126,12 @@ save will go to (e.g. **`:8000`** or **`:8001`**) with a live status dot.
 
 The connector automatically probes the standard local ports
 (**`:8000`** Docker, **`:8001`** dev) and offers any that are running,
-even if you never configured them (tagged **DETECTED**). If your saved
-default is down but another instance is up, the popup connects to the
-running one for you.
+even if you never configured them (tagged **DETECTED**). The probe
+**never silently retargets**: the active instance stays the one you
+selected even when it's offline, so a Save you make while it's down
+queues for **that** instance rather than landing in a different
+database (see [Offline capture queue](#offline-capture-queue) below).
+To switch, click the pill and pick another server.
 
 ### Servers panel (gear → Servers)
 
@@ -161,13 +164,75 @@ think about it:
 
 * Both standard ports are **auto-detected** and appear in the server
   dropdown with live status.
-* If your saved default is offline, the popup **auto-connects to the
-  running instance** for that session (without changing your saved
-  default).
+* The active target **stays the instance you selected**, even if it's
+  offline — the popup does **not** auto-connect to whichever ALMa
+  happens to be running. That's deliberate: it means a Save made while
+  your target is down [queues for that exact
+  instance](#offline-capture-queue) rather than slipping into the other
+  database. Switch targets yourself with one click on the pill.
 * The pill always shows the **active target** (e.g. `:8001`), so you can
-  see at a glance which database a save lands in — switch with one click.
+  see at a glance which database a save lands in.
 * A save only ever writes to one database. If a paper "doesn't show up",
   check the pill — you were probably pointed at the other instance.
+
+## Offline capture queue
+
+You don't have to wait for ALMa to be up to save a paper. When the
+active instance is **down**, the Save button reads **"Save for later"**
+and clicking it **queues** the capture instead of failing. The queue
+lives in the extension's own storage, so it **survives browser
+restarts** — close Firefox, reopen it days later, and the paper is still
+waiting.
+
+Queued captures **sync on their own** when the target instance comes
+back. The connector drains the queue automatically:
+
+* every time you **open the popup**,
+* when the **extension starts** (e.g. after a browser restart), and
+* on a **periodic ~5-minute alarm**, so the queue empties even if you
+  never open the popup again — Firefox just has to be running while the
+  target ALMa is up.
+
+Delivery always goes through the same **`POST /extension/save`** path a
+live save uses — there is one canonical way papers enter ALMa, and the
+offline queue is not a side door into the database.
+
+!!! tip "Undo a queued capture"
+    Right after queuing, **Undo** pulls the capture back **out of the
+    offline queue** (nothing was sent yet). This is distinct from undoing
+    an already-committed server save, which reverses it on the server (see
+    the **Undo** note under [First use](#first-use)).
+
+### Never the wrong database
+
+Two ALMa instances can answer on the same `localhost` port at different
+times (dev today, Docker tomorrow). To guarantee a queued capture lands
+in the database it was *meant* for, each instance now publishes a small
+**identity** on its handshake — `GET /extension/ping` returns
+`{profile, db_fingerprint}` (a read-only fingerprint of which database
+is behind that address; no write happens on the GET).
+
+Every queued capture is bound to the **server URL plus that instance's
+last-seen identity**. When the connector tries to deliver, it **re-pings**
+the address and sends **only if the identity still matches**:
+
+* **Match** → delivered.
+* **First contact** (the URL was never reached before queuing, so there
+  was no identity to record) → the connector **adopts** the instance that
+  answers first, then delivers.
+* **Different database now at that address** → the capture is **held**
+  (a "conflict"), never delivered, until the right instance returns. The
+  popup tells you when captures are being held for a database that isn't
+  the one currently answering.
+
+!!! note "Older ALMa instances still work"
+    A reachable ALMa from **before this feature** (or any server that
+    reports **no** identity) still receives your queued captures, trusted
+    by URL — exactly as the connector behaved before identities existed.
+    The strong never-the-wrong-database guarantee kicks in whenever the
+    server **does** report an identity.
+
+The queue holds up to **200** captures.
 
 ## How identification works
 
@@ -205,8 +270,13 @@ the running ALMa (a compatible connector stays silent).
 ??? failure "The connection pill is red / says \"offline\""
     The active server isn't reachable.
 
+    * **You can still Save.** With the target down the button reads
+      **"Save for later"** — clicking it queues the capture for that exact
+      instance and it syncs automatically when ALMa returns (see
+      [Offline capture queue](#offline-capture-queue)).
     * **Click the pill** — a running instance on a standard port appears
-      in the dropdown (tagged DETECTED); pick it.
+      in the dropdown (tagged DETECTED); pick it if you'd rather save to a
+      different instance that's up right now.
     * Confirm ALMa is running and that opening its address in a normal tab
       loads the app (the dev server is on `:8001`, Docker on `:8000`).
     * For a custom port / LAN address, add it in the **Servers** panel

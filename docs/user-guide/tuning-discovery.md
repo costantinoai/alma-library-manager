@@ -140,6 +140,12 @@ strongest "why" signal we have. The chip is informational — the
 bonus is already in the score. It exists so you know *why* a card
 outranked another that looked similar in the ten signals.
 
+The provenance chips are now **plain-language bands** rather than raw
+signal numbers — e.g. "close topic", "related wording", "Matches what
+you save", or "Near a disliked paper". The exact underlying figure is
+shown on hover, and the full numeric breakdown still lives in the
+**Score Breakdown** panel.
+
 ## Refreshing and visible cards
 
 A lens refresh stages 50 cards on the page after all filters and
@@ -147,6 +153,11 @@ diversity caps. To keep the initial scroll focused, only the first
 20 cards render by default — click *Show all 50 recommendations*
 below the list to expand the rest. Switching lenses resets to the
 curated 20.
+
+The refresh now runs in the background job pool: the `POST` returns
+instantly and a live in-page banner shows while the job runs,
+self-clearing when it finishes. You can keep reading the current
+cards while the new set is built.
 
 The four retrieval lanes (lexical, vector, graph, external) each
 emit their own row in the Activity panel under the parent

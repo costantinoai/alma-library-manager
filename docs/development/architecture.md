@@ -19,10 +19,11 @@ alma/
 │   │   ├── deps.py               # DB connections, schema bootstrap
 │   │   ├── models.py             # Pydantic request / response models
 │   │   ├── helpers.py            # Shared helpers (raise_internal, row_to_paper_response)
-│   │   └── routes/               # 25 route modules, one per domain
+│   │   └── routes/               # 29 route modules, one per domain
 │   ├── application/              # Application-layer use-cases
+│   │   └── discovery/            # Discovery use-case package (lenses, seeds, scoring, retrieval)
 │   ├── core/                     # Shared utilities (text normalisation, etc.)
-│   ├── discovery/                # Recommendation engine, scoring, similarity
+│   ├── discovery/                # Source clients + recommendation engine, scoring, similarity
 │   ├── library/                  # Importers, deduplication, enrichment
 │   ├── ai/                       # Embedding providers and dependency probes
 │   ├── openalex/                 # OpenAlex HTTP client + helpers
@@ -77,6 +78,45 @@ flowchart TD
   (signal lab, S2 vectors).
 * **Domain modules** — `discovery/`, `library/`, `ai/`, `openalex/`
   encapsulate their own state, helpers, and external-API contracts.
+
+### Two discovery locations
+
+The word "discovery" names **two distinct packages** — they are not the
+same layer:
+
+* **`src/alma/discovery/`** (top-level domain module) — the source
+  clients and the recommendation **engine**. HTTP clients
+  (`arxiv.py`, `biorxiv.py`, `crossref.py`, `semantic_scholar.py`,
+  `orcid.py`, `openalex_related.py`), the `engine.py` recommendation
+  engine, `scoring.py`, `similarity.py`, `source_search.py`, and
+  `defaults.py`. This is the `discovery/*` node in the flowchart above.
+* **`src/alma/application/discovery/`** (application-layer use-case
+  package) — the refresh use-case that orchestrates a Discovery run.
+  Formerly one monolithic `application/discovery.py`; split into a
+  package in **D-9**. Every public name is still re-exported from
+  `alma.application.discovery`, so callers and the
+  [single-intent table](#single-intent-per-action) below are
+  unaffected.
+
+The application-layer package lays out as:
+
+```
+src/alma/application/discovery/
+├── __init__.py        # Refresh orchestrator + the re-export surface
+├── lens_crud.py       # Settings / recommendations / lenses / lens-signals /
+│                      #   branch lifecycle, plus row ↔ JSON mapping
+├── seed_profile.py    # Seed loading, library preference profiling,
+│                      #   branch building, branch-query planner
+├── scoring_loop.py    # Per-candidate scoring pass (ScoringContext, score_candidates)
+└── retrieval/         # Candidate-retrieval channels + channel merge
+    ├── __init__.py    # Re-exports every channel + merge helper
+    ├── _common.py     # Candidate keying, future-draining helpers
+    ├── merge.py       # Channel merge, diversity selection, mix summary
+    ├── lexical.py     # Lexical retrieval channel
+    ├── vector.py      # Vector (embedding) retrieval channel
+    ├── graph.py       # Citation-graph retrieval channel
+    └── external.py    # External-source retrieval channel
+```
 
 ## Shared Ranking Signals
 
@@ -237,11 +277,66 @@ See [Background jobs](../operations/background-jobs.md).
 * **One file**, `data/scholar.db`. WAL mode.
 * **Schema migration** runs on every backend start. Adds missing
   columns / tables; never drops anything destructive.
+  `api.deps.init_db_schema()` is the **single source of truth** for
+  creating columns — e.g. the six `recommendations` provenance columns
+  (`source_type`, `source_api`, `source_key`, `branch_id`,
+  `branch_label`, `branch_mode`) are created here at startup (D-10).
+  Hot paths are **forward-only**: they assume the current shape and
+  carry no inline `ALTER … ADD COLUMN` guards. The per-refresh ALTER
+  guard the Discovery refresh once ran was removed once startup owned
+  the columns — consistent with the project's *forward-only code,
+  decoupled validators + migrators* principle.
 * **`check_same_thread=False`** is required on FastAPI sync
   generator deps. Pinned by lessons.
 * **No ORM**. Routes use raw SQLite via thin helpers in
   `alma/api/deps.py`. Keeps the schema explicit and queries
   inspectable.
+
+### Concurrency & write contention
+
+SQLite allows **one writer at a time** (readers run concurrently under
+WAL). ALMa is a single backend process where foreground HTTP requests and
+background jobs share that one writer, so a burst of work can collide as
+`database is locked` if left unmanaged. Four mechanisms prevent it:
+
+* **One connection contract** — `alma.api.deps.open_db_connection` is the
+  single factory. Every connection sets `journal_mode=WAL`,
+  `busy_timeout=30000` (wait up to 30 s for the writer rather than failing
+  instantly), `synchronous=NORMAL` (safe under WAL; far fewer fsyncs, so a
+  write transaction is held briefly), and `foreign_keys=ON`. WAL is
+  re-asserted **and read back** on every open — if the filesystem refuses
+  WAL (some network / overlay mounts), a warning is logged instead of
+  silently degrading to a reader-blocking rollback journal. Background
+  runners that once rolled their own `sqlite3.connect` (preprint dedup,
+  fetcher, settings export, discovery engine) carry the same pragmas.
+* **Bounded background concurrency** — `scheduler.get_scheduler` pins
+  APScheduler to `ThreadPoolExecutor(max_workers=ALMA_SCHEDULER_WORKERS)`
+  (default 5, was the library default of 10) with `max_instances=1,
+  coalesce=True`. Without it, a burst of user actions — each follow chains
+  backfill → corpus rehydrate → s2 → embeddings — saturated the writer and
+  starved foreground clicks. The cap is the core fix; it's CPU-throttled
+  Docker hosts that surfaced it (a write held longer than on bare metal).
+* **Foreground lock-retry** — `core.db_retry.run_with_lock_retry` wraps the
+  write+commit of single-intent user actions (follow / unfollow /
+  dismiss-suggestion / create-author / author merge) and retries on a
+  transient lock with `rollback()` first, so a brief lock never silently
+  drops a click. The rollback-first matters: a retry must re-issue the
+  writes on a clean transaction, and nothing else may be staged on that
+  connection before the retried block (e.g. `create_author` commits its
+  column-ensure first; the merge runs as one atomic transaction).
+* **Why Feed/Discovery paper actions are *not* wrapped** — they funnel
+  through `library.add_to_library` **and** `signal_lab.record_feedback`,
+  which each `commit()` internally and **append** non-idempotent rows. One
+  action is therefore a *sequence* of separate commits, not a single atomic
+  unit, so a blind re-run would double-record a signal. They rely on the
+  busy_timeout + the worker cap instead. Giving them the same retry would
+  require making each action one transaction first (defer the inner
+  commits) — a refactor, not a drop-in.
+
+The activity/log connection (`scheduler._activity_conn`) intentionally uses
+a shorter `busy_timeout` (5 s) — status writes are best-effort and must stay
+snappy — but no longer the original 250 ms, which dropped status rows under
+load. Full rationale in `tasks/lessons.md` → "SQLite single-writer".
 
 ## Materialised views (cached read aggregates)
 

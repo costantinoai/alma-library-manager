@@ -90,8 +90,12 @@ stop before the next Activity write when possible.
 * **Same job, only one instance.** Author refresh, feed refresh,
   lens refresh, bulk backfill all enforce single-instance via a
   job-key lock. A second call returns `already_running`.
-* **Different jobs run concurrently.** Feed refresh and lens
-  refresh can run in parallel.
+* **Different jobs run concurrently — but the pool is bounded.** Up
+  to `ALMA_SCHEDULER_WORKERS` (default **5**) background jobs run at
+  once; the rest queue. This keeps a burst of heavy jobs from
+  starving the app's database writer. Lower it on a small host, raise
+  it if you have CPU to spare. (Why it matters:
+  [Architecture → Concurrency & write contention](../development/architecture.md#concurrency-write-contention).)
 * **Read endpoints don't block on jobs.** `/api/v1/library/saved`,
   `/api/v1/feed`, `/api/v1/authors` stay responsive even during a
   heavy refresh.
@@ -114,7 +118,7 @@ stop before the next Activity write when possible.
 | OpenAlex resolve | Library → Imports → Resolve. |
 | Enrich imports | Library → Imports → Enrich. |
 | Preprint dedup | Health → repair cards. |
-| Corpus metadata rehydration | Health → repair cards, **and auto-triggered after every paper insert** (Library save, Feed candidate, Discovery rec — `enqueue_pending_hydration` schedules an idempotent background sweep through the same Activity envelope, `trigger_source="auto:paper_insert"`). Default auto and manual runs pass `limit=None`, so they drain **all eligible papers**; API callers can still pass an explicit `limit` for bounded maintenance probes. Three phases per run: **(1) OpenAlex batched** (50 work IDs per call) repairs DOI / abstract / URL / publication date / authorships / topics / references via `merge_openalex_work_metadata`. **(1.5) Semantic Scholar batched** (100 lookup IDs per call) fills `tldr` and `influential_citation_count` (both surfaced downstream — PaperCard renders TLDR, Discovery's `citation_quality` ranker reads influential count) plus abstract fallback. **(2) Crossref per-paper** by DOI is the last-resort abstract fill for OpenAlex+S2 misses. Per-source ledger (`paper_enrichment_status` keyed `(paper_id, source, purpose)`) — `unchanged` rows get a 30-day TTL so OpenAlex's late abstract backfills are picked up without manual intervention. |
+| Corpus metadata rehydration | Health → repair cards, **and auto-triggered after every paper insert** — but with a single-vs-batch split. **Single inserts** (Library save, importer, engine, OpenAlex client) each auto-schedule their own idempotent sweep through the Activity envelope (`enqueue_pending_hydration`, `trigger_source="auto:paper_insert"`). The **batch paths** — Feed ingest and Discovery lens-refresh staging — instead pass `auto_schedule=False` while writing the per-paper hydration-ledger rows and fire **one** `schedule_pending_hydration_sweep` after their loop (scoped to the ids staged that run), avoiding an N+1 of one scheduled job per candidate. Default auto and manual runs pass `limit=None`, so they drain **all eligible papers**; API callers can still pass an explicit `limit` for bounded maintenance probes. Three phases per run: **(1) OpenAlex batched** (50 work IDs per call) repairs DOI / abstract / URL / publication date / authorships / topics / references via `merge_openalex_work_metadata`. **(1.5) Semantic Scholar batched** (100 lookup IDs per call) fills `tldr` and `influential_citation_count` (both surfaced downstream — PaperCard renders TLDR, Discovery's `citation_quality` ranker reads influential count) plus abstract fallback. **(2) Crossref per-paper** by DOI is the last-resort abstract fill for OpenAlex+S2 misses. Per-source ledger (`paper_enrichment_status` keyed `(paper_id, source, purpose)`) — `unchanged` rows get a 30-day TTL so OpenAlex's late abstract backfills are picked up without manual intervention. |
 | Author metadata rehydration | Health → repair cards, and auto-triggered at low priority when import-created authors first enter the corpus plus high priority on follow / merge. Runs through `POST /authors/rehydrate-metadata` and the Activity envelope. Default auto and manual runs pass `limit=None`, so they drain **all eligible authors**; explicit `limit` remains available for bounded probes. Four-source fan-out: OpenAlex profile/affiliation/ORCID aliases, ORCID profile + employment/education evidence, Semantic Scholar profile/aliases when an S2 id exists, and Crossref recent-authorship affiliations when ORCID exists. Per-source ledger (`author_enrichment_status` keyed `(author_id, source, purpose)`) makes reruns idempotent; `author_affiliation_evidence` is replaced per source on successful refresh and then recomputes `authors.affiliation` from weighted evidence. |
 | Author metadata deep refresh | Health → repair cards queues `POST /authors/deep-refresh-all?scope=needs_metadata&background=true`, which targets active authors with identity-resolution failures, followed authors missing OpenAlex IDs, and OpenAlex-backed profiles missing ORCID/profile fields. Full followed/library/corpus sweeps remain available through explicit API scopes. |
 | Alert evaluate-and-send | Per-alert manual + scheduler. |
@@ -135,6 +139,7 @@ Common failures and what to do:
 | `S2 timeout` | Transient. Retry. |
 | `network error` | Check connectivity. |
 | `UNIQUE constraint failed` | Internal bug. File an issue. |
+| `database is locked` | SQLite write contention. The retry model is **two-tier**: **foreground** user-facing commits retry via `core/db_retry.py` (`run_with_lock_retry` — a few attempts, exponential backoff from ~50 ms) so a brief lock never drops a click; **background** jobs deliberately do NOT retry — they're idempotent and self-heal on the next sweep, so a dropped background write is recovered rather than retried in place. If a background job surfaces this repeatedly, lower `ALMA_SCHEDULER_WORKERS` and confirm the DB is on a local disk, not a network share ([details](../development/architecture.md#concurrency-write-contention)). |
 | `KeyError: <field>` | Schema mismatch — likely a recent migration that hasn't run. Restart the backend. |
 
 Failures are **loud** — they appear in the Activity panel with
@@ -155,6 +160,11 @@ timestamps for each job and whether the scheduler is alive.
 
 Disable the scheduler entirely with `SCHEDULER_ENABLED=false` (no
 auto-runs; manual triggers still work). Useful in tests.
+
+Cap concurrent background jobs with `ALMA_SCHEDULER_WORKERS` (default
+`5`) — see [Concurrency rules](#concurrency-rules) above, or
+[Architecture → Concurrency & write contention](../development/architecture.md#concurrency-write-contention)
+for the design.
 
 ## Inspecting
 

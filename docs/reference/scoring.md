@@ -99,7 +99,7 @@ $$
 \max(0, 1 - \frac{\text{years\_since}(c)}{R})
 $$
 
-where $R$ is `discovery.limits.recency_window_years` (default 5).
+where $R$ is `discovery.limits.recency_window_years` (default 10).
 
 Range: 0…1.
 

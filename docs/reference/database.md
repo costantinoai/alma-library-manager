@@ -6,8 +6,17 @@ description: SQLite schema reference — every table in scholar.db, the columns 
 # Database schema
 
 ALMa stores everything in **one SQLite file**: `data/scholar.db`.
-WAL mode is enabled by default. The `scheme` is created and migrated
+WAL mode is enabled by default. The schema is created and migrated
 on startup; you do not run migrations manually.
+
+!!! note "Concurrency"
+    SQLite has a single writer, so ALMa keeps `scholar.db` on a **local
+    disk** (the Docker image uses a named volume — a network share like
+    NFS/SMB breaks WAL and causes `database is locked`). Background jobs
+    are throttled so they can't starve your clicks; tune that with
+    [`ALMA_SCHEDULER_WORKERS`](configuration.md#scheduler). The internals
+    — connection pragmas, the job-pool cap, and the write-retry — are in
+    [Architecture → Database layer](../development/architecture.md#concurrency-write-contention).
 
 ## Inspecting the live schema
 
@@ -53,7 +62,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | Table | Purpose |
 |---|---|
 | `authors` | Researcher profiles with OpenAlex / S2 / ORCID / Scholar IDs and `id_resolution_status`. |
-| `followed_authors` | Authors the user is actively monitoring. |
+| `followed_authors` | Authors the user is actively monitoring. `is_owner` (`INTEGER NOT NULL DEFAULT 0`) flags the single row that is the user's own author profile, marked during onboarding. The partial unique index `idx_followed_authors_one_owner ON followed_authors(is_owner) WHERE is_owner = 1` enforces at most one owner row at the DB level (used by `/onboarding` for has-owner detection). |
 | `author_centroids` | Per-author SPECTER2 centroid (mean of their papers' vectors). Materialised for the `semantic_similar` author suggestion source. |
 | `author_alt_identifiers` | Alias ledger for merged split profiles. Records alternate OpenAlex IDs and source author rows that now resolve to the canonical `authors.id`, so suggestion filters do not resurface merged duplicates and the dossier can show provenance. |
 | `author_merge_conflicts` | Unresolved hard-identifier disagreements found during author merge (`orcid`, `scholar_id`, `semantic_scholar_id`). Needs-attention reads these rows and the resolve endpoint records whether the primary value, alt value, or dismissal won. |
@@ -67,7 +76,7 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 
 | Table | Purpose |
 |---|---|
-| `discovery_settings` | Mirror of the Discovery section of `settings.json` (used by some hot paths). |
+| `discovery_settings` | Key/value store mirroring the Discovery section of `settings.json` (used by some hot paths). Also holds onboarding state under the keys `onboarding.completed` (flag), `onboarding.completed_at` (timestamp), and `user.name` (the user's display name captured during onboarding). |
 | `discovery_lenses` | Saved lens definitions. |
 | `lens_signals` | Per-lens positive / negative feedback counters. |
 | `recommendations` | Materialised recommendations from the last lens refresh. `user_action` is used for suggestion-resolution actions such as `save`, `read`, and `dismiss`; Discovery like / love / dislike are rating signals and do not resolve the row. |

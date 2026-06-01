@@ -53,6 +53,45 @@ through the same code path real alerts use. The toast reports the
 resolved target on success or a precise `channel_not_found` on
 failure.
 
+## Configure Email in ALMa (optional)
+
+Email is a second working delivery channel — pick it instead of, or
+alongside, Slack. Go to **Settings → Email digests** and fill:
+
+- **SMTP host** — your provider's mail server (e.g.
+  `smtp.gmail.com`, `smtp.fastmail.com`).
+- **Port** — `587` for STARTTLS (the default) or `465` for implicit
+  TLS. ALMa picks the right transport from the port: port 465 opens
+  an SSL connection directly; any other port issues `STARTTLS` when
+  the **Use STARTTLS** switch is on.
+- **Username** — the SMTP auth user (often your full email address).
+  Leave blank for an unauthenticated relay.
+- **Password** — your app password or SMTP key. ALMa stores it in the
+  unified secret store at `data/secrets.json` (gitignored, permission
+  `0o600`, key `smtp.password`) — **never** in `settings.json`. It is
+  masked everywhere except inside that file; leave the masked value
+  in place to keep the existing password.
+- **From address** — the sender address. Defaults to the username
+  when blank.
+- **Send digests to** — one or more recipient addresses, separated by
+  commas, semicolons, or newlines.
+- **Use STARTTLS** — recommended for port 587; ignored on port 465.
+
+Everything except the password is written to `data/settings.json`
+(`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`,
+`smtp_use_tls`). Each field also accepts an environment-variable
+override (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM`,
+`SMTP_TO`, `SMTP_PASSWORD`) for headless setups.
+
+Save the form, then click **Send test email**. ALMa runs the test on
+the scheduler pool (Activity op key `alerts.email.test`) using the
+same `EmailNotifier` real digests use; the toast reports the
+recipients on success or the SMTP error on failure.
+
+Email digests are capped at 50 papers per message; a larger fire is
+truncated with an "…and N more" line rather than split into multiple
+emails.
+
 ## 3. Make sure you have feed monitors
 
 Alerts read from the **Feed**. If you have no feed monitors yet,
@@ -75,7 +114,8 @@ A **rule** is the matching predicate for one source.
 - **Name** — anything human-readable; shown in history.
 - **Type** — pick `feed_monitor`.
 - **Monitor** — pick one of your feed monitors.
-- **Channels** — leave as `["slack"]` (today the only option).
+- **Channels** — `slack`, `email`, or both. Delivery is set on the
+  digest (step 5), so this can be left at the default.
 - **Enabled** — on.
 
 Save. Use **Test fire** on the rule row to dry-match: ALMa runs
@@ -93,8 +133,10 @@ monitor you care about.
 A **digest** (UI label) / **alert** (data-model label) is the
 delivery config. **Alerts → Digests tab → + Create Digest**:
 
-- **Name** — what shows up in the Slack message header and history.
-- **Channels** — `["slack"]`.
+- **Name** — what shows up in the message header and history.
+- **Channels** — tick **Slack**, **Email**, or both. Each ticked
+  channel gets the same matched-paper set; an unconfigured channel is
+  skipped (recorded as `skipped` in the digest's channel results).
 - **Schedule** — `manual`, `daily`, or `weekly`.
   - For daily: set the time of day (UTC).
   - For weekly: set the day and time of day (UTC).
@@ -202,11 +244,14 @@ When a digest fires (manually or on schedule), ALMa runs:
 3. Deduplicate the merged paper list by paper_id, joining each
    paper's "alert_source" strings with ", ".
 4. Filter against alerted_publications for this digest.
-5. For each channel (currently always "slack"):
-     a. Resolve the channel string -> Slack ID.
-     b. Render Block-Kit blocks; chunk into messages of <=15
-        papers each.
-     c. POST chat.postMessage; require ok=true on every chunk.
+5. For each channel on the digest ("slack" and/or "email"):
+     - slack: resolve the channel string -> Slack ID, render
+       Block-Kit blocks, chunk into messages of <=15 papers each,
+       and POST chat.postMessage requiring ok=true on every chunk.
+     - email: render one HTML+text digest (capped at 50 papers) and
+       send it over SMTP via EmailNotifier.
+     An unconfigured channel is recorded as "skipped" and does not
+     block the others.
 6. On full success: INSERT alerted_publications rows for every
    sent paper, INSERT an alert_history row, UPDATE
    alerts.last_evaluated_at.

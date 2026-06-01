@@ -155,6 +155,7 @@ Every Slack-touching call runs through the canonical
 |---|---|
 | `POST /alerts/{id}/evaluate` | `alerts.evaluate:<alert_id>` |
 | `POST /plugins/slack/test` | `alerts.slack.test` |
+| `POST /plugins/email/test` | `alerts.email.test` |
 | Periodic sweep | `alerts.evaluate_scheduled` |
 
 The HTTP request returns in ~100 ms with a `JobEnvelope`
@@ -170,19 +171,44 @@ call, with `status: "already_running"`.
 
 ## Delivery channels
 
-Today: **Slack only** via a Slack Bot User OAuth Token. The
-`MessagingPlugin` interface in `alma.plugins.base` was designed for
-email / Discord / webhook follow-ons, but only Slack has a working
-implementation. The "Test Connection" button in
-**Settings → Channels** runs through the same `SlackNotifier` path
-as real alert delivery — a green test proves the production path
-works.
+Two working channels: **Slack** and **Email**. An alert delivers to
+whichever channels are checked on its `channels` list (`slack`,
+`email`, or both); each channel sends the same matched-paper set
+independently. The `MessagingPlugin` interface in `alma.plugins.base`
+leaves room for Discord / webhook follow-ons, but Slack and Email are
+the implemented paths today. Each has a "Send test" button in
+Settings that runs through the same notifier as real delivery — a
+green test proves the production path works.
 
+### Slack
+
+Delivery via a Slack Bot User OAuth Token through `SlackNotifier`.
 The bot token is stored in the unified secret store
 (`data/secrets.json`, key `slack.bot_token`). The DM target lives
 in `data/settings.json` under `slack_channel`. Both are editable
 from **Settings → Channels**; no environment variable hand-edits
 needed.
+
+### Email
+
+Delivery via `EmailNotifier` (`alma.mailer.client`), a stdlib
+`smtplib` digest sender that mirrors `SlackNotifier`: an
+`is_configured` gate (host + from + recipients), an async
+`send_paper_alert`, a `send_test_message`, and a `test_connection`
+handshake. It renders the same paper-dict shape Slack does into a
+combined HTML + plaintext email, capped at **50 papers per email**.
+Transport is STARTTLS on port 587 (the default) or implicit TLS on
+port 465.
+
+SMTP host, port, username, from, recipient list, and the STARTTLS
+toggle are stored in `data/settings.json` (keys `smtp_host`,
+`smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`,
+`smtp_use_tls`). The SMTP **password** is held in the unified secret
+store (`data/secrets.json`, key `smtp.password`) — never in
+`settings.json`. All are editable from **Settings → Email digests**;
+each also has an env-var override (`SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USERNAME`, `SMTP_FROM`, `SMTP_TO`, `SMTP_PASSWORD`). See the
+[Configuration reference](../reference/configuration.md#email--smtp).
 
 `slack_channel` accepts:
 
@@ -202,10 +228,11 @@ generic "API failed."
   `slack_channel` is set in Settings.
 - Schedule times are timezone-naive (UTC). A daily 09:00 alert
   fires at 09:00 UTC, which is 11:00 in CET / 10:00 in CEST.
-- Only `feed_monitor` rules are exposed in the v1 dialog. Other
-  rule types (`author`, `keyword`, `topic`, `similarity`,
-  `discovery_lens`, `branch`, `library_workflow`) exist in code
-  and accept API calls, but the new-alert form centres on monitors.
+- Only `feed_monitor` rules are exposed in the v1 dialog. The other
+  rule types (`author`, `collection`, `keyword`, `topic`,
+  `similarity`, `discovery_lens`, `branch`, `library_workflow`) exist
+  in code (`VALID_RULE_TYPES`) and accept API calls, but the
+  new-alert form centres on monitors.
 
 ## Schema
 
@@ -221,6 +248,9 @@ alert_history             (id, alert_id, channel, sent_at, status,
 alerted_publications      (id, alert_id, paper_id, alerted_at)
                           -- UNIQUE(alert_id, paper_id)
 ```
+
+`channels` is a JSON array of channel names; the implemented values
+are `slack` and `email` (an alert may list either or both).
 
 `rule_config` is a JSON blob; for `feed_monitor` rules it must
 include `monitor_id` (or `monitor_name`). `max_age_days` (default
@@ -254,8 +284,9 @@ POST   /api/v1/alerts/{alert_id}/dry-run    # sync; returns matched papers
 GET    /api/v1/alerts/history
 GET    /api/v1/alerts/templates             # one-click suggestions
 
-# Slack channel test
+# Channel tests
 POST   /api/v1/plugins/slack/test           # returns JobEnvelope
+POST   /api/v1/plugins/email/test           # sends a test email (SMTP)
 ```
 
 For the request/response shapes see the [API reference](../reference/api.md).
