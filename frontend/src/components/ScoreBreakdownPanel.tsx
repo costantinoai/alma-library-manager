@@ -35,6 +35,11 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
   })
 
   const totalWeighted = signals.reduce((sum, s) => sum + Math.max(0, s.weighted), 0)
+  // Per-signal bars are normalized to the STRONGEST signal so the lead
+  // contributor reads as full and the rest scale proportionally. (The old
+  // `weighted * 100 * 10` multiplied a [0,1] contribution by 1000, so any
+  // signal above ~0.1 clamped to a full bar — every row looked maxed out.)
+  const maxWeighted = Math.max(...signals.map((s) => Math.max(0, s.weighted)), 1e-9)
 
   const sortedSignals = [...signals].sort(byWeightedDesc<typeof signals[number]>())
   const topSignalKey = sortedSignals[0]?.key
@@ -121,7 +126,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                   <div
                     className="h-1 rounded-full transition-all duration-300"
                     style={{
-                      width: `${Math.min(100, s.weighted * 100 * 10)}%`,
+                      width: `${s.weighted > 0 ? Math.min(100, (s.weighted / maxWeighted) * 100) : 0}%`,
                       backgroundColor: s.weighted > 0 ? s.color : '#CBD5E1',
                     }}
                   />
