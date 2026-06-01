@@ -47,15 +47,20 @@
            norm(a.db_fingerprint) === norm(b.db_fingerprint);
   }
 
-  // PURE decision (unit-tested): given a queued item and the LIVE identity
-  // from a fresh /ping of item.url (null if unreachable), what do we do?
+  // PURE decision (unit-tested): given a queued item, the LIVE identity from a
+  // fresh /ping of item.url, and whether that ping succeeded, what do we do?
   //   "wait"     server not reachable → leave queued, try later
-  //   "deliver"  live identity matches the snapshot → send it
-  //   "adopt"    we had no snapshot identity (URL never reached before) →
-  //              pin the first instance that answers, then send
-  //   "conflict" the URL now serves a DIFFERENT db → hold, never send
-  function decideDelivery(item, liveIdentity) {
-    if (!liveIdentity) return "wait";
+  //   "deliver"  reachable + identity matches the snapshot; OR reachable but
+  //              the server reports NO identity (a pre-0.16.0 ALMa) → fall
+  //              back to trusting the URL (the user's chosen target), exactly
+  //              as the connector did before identities existed
+  //   "adopt"    reachable + a live identity, but we had no snapshot (URL
+  //              never reached before) → pin the first instance, then send
+  //   "conflict" reachable + a live identity that DIFFERS from the snapshot →
+  //              the URL now serves a different db → hold, never send
+  function decideDelivery(item, liveIdentity, reachable) {
+    if (!reachable) return "wait";
+    if (!liveIdentity) return "deliver";       // older ALMa, no identity to verify → URL-trust
     if (!item || !item.identity) return "adopt";
     return identityEquals(item.identity, liveIdentity) ? "deliver" : "conflict";
   }
@@ -122,9 +127,10 @@
     if (!items.length) return { delivered: 0, conflicts: 0, waiting: 0, remaining: 0 };
 
     const keyFor = async (url) => (deps.apiKeyFor ? await deps.apiKeyFor(url) : "");
-    const live = {};
+    const live = {}, reachable = {};
     for (const url of Array.from(new Set(items.map((x) => x.url)))) {
       const r = await deps.ping(url, await keyFor(url));
+      reachable[url] = !!(r && r.ok);
       live[url] = r && r.ok && r.info ? (r.info.instance || null) : null;
       if (live[url]) await recordIdentity(url, live[url]);
     }
@@ -132,7 +138,7 @@
     let delivered = 0, conflicts = 0, waiting = 0;
     const keep = [];
     for (const it of items) {
-      const decision = decideDelivery(it, live[it.url]);
+      const decision = decideDelivery(it, live[it.url], reachable[it.url]);
       if (decision === "wait") { it.status = "queued"; waiting++; keep.push(it); continue; }
       if (decision === "conflict") { it.status = "conflict"; conflicts++; keep.push(it); continue; }
       let res = null;

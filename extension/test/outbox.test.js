@@ -54,11 +54,12 @@ const body = (doi) => ({ action: "add", destination: "library", doi, title: "T "
     assert.ok(!OB.identityEquals(DEV, null));
   });
 
-  await test("decideDelivery: wait / adopt / deliver / conflict", () => {
-    assert.strictEqual(OB.decideDelivery({ identity: DEV }, null), "wait");
-    assert.strictEqual(OB.decideDelivery({ identity: null }, PROD), "adopt");
-    assert.strictEqual(OB.decideDelivery({ identity: DEV }, DEV), "deliver");
-    assert.strictEqual(OB.decideDelivery({ identity: DEV }, PROD), "conflict");
+  await test("decideDelivery: wait / URL-trust / adopt / deliver / conflict", () => {
+    assert.strictEqual(OB.decideDelivery({ identity: DEV }, null, false), "wait");     // server down
+    assert.strictEqual(OB.decideDelivery({ identity: DEV }, null, true), "deliver");   // reachable, no identity (old ALMa) → URL-trust
+    assert.strictEqual(OB.decideDelivery({ identity: null }, PROD, true), "adopt");    // reachable, identity, none pinned
+    assert.strictEqual(OB.decideDelivery({ identity: DEV }, DEV, true), "deliver");    // identity matches
+    assert.strictEqual(OB.decideDelivery({ identity: DEV }, PROD, true), "conflict");  // identity differs
   });
 
   await test("enqueue binds last-known identity + dedups", async () => {
@@ -110,6 +111,19 @@ const body = (doi) => ({ action: "add", destination: "library", doi, title: "T "
     assert.strictEqual(res.delivered, 1);
     assert.strictEqual(await OB.count(), 0);
     assert.deepStrictEqual(await OB.getIdentity("http://localhost:8000"), PROD, "identity pinned on adopt");
+  });
+
+  await test("flush delivers to a reachable server that reports NO identity (pre-0.16.0 ALMa)", async () => {
+    reset();
+    await OB.enqueue("http://localhost:8000", body("10.1/old")); // no prior identity for this URL
+    let saved = 0;
+    const res = await OB.flush({
+      ping: async () => ({ ok: true, info: { ok: true } }), // reachable, but no `instance` field
+      save: async () => { saved++; return { ok: true, status: 200 }; },
+    });
+    assert.strictEqual(saved, 1, "URL-trust delivery against an identity-less server");
+    assert.strictEqual(res.delivered, 1);
+    assert.strictEqual(await OB.count(), 0);
   });
 
   await test("flush keeps the item (with attempt count) on a save error", async () => {
