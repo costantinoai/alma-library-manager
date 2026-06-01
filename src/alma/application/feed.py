@@ -1227,6 +1227,52 @@ def _monitor_search_plan(
     return monitor_query, search_query, settings, temperature
 
 
+def _read_monitor_refresh_settings(discovery_settings: dict):
+    """Resolve the monitor-defaults config shared by the full-inbox and
+    single-monitor feed refresh paths (was copy-pasted verbatim). Returns a
+    6-tuple unpacked into the legacy local names."""
+    author_per_refresh = _setting_int(discovery_settings, "monitor_defaults.author_per_refresh", 20, 1, 100)
+    search_limit = _setting_int(discovery_settings, "monitor_defaults.search_limit", 15, 1, 50)
+    search_temperature = _setting_float(discovery_settings, "monitor_defaults.search_temperature", 0.22, 0.0, 1.0)
+    include_preprints = _setting_bool(discovery_settings, "monitor_defaults.include_preprints", True)
+    semantic_scholar_bulk = _setting_bool(discovery_settings, "monitor_defaults.semantic_scholar_bulk", True)
+    monitor_search_settings = dict(discovery_settings)
+    if not include_preprints:
+        monitor_search_settings["sources.arxiv.enabled"] = "false"
+        monitor_search_settings["sources.biorxiv.enabled"] = "false"
+    return (
+        author_per_refresh,
+        search_limit,
+        search_temperature,
+        include_preprints,
+        semantic_scholar_bulk,
+        monitor_search_settings,
+    )
+
+
+def _normalize_author_work_to_candidate(work: dict) -> dict:
+    """Map a normalized OpenAlex work to a feed candidate dict (shared by the
+    author-monitor loops in refresh_feed_inbox + refresh_feed_monitor)."""
+    return {
+        "title": work.get("title"),
+        "authors": work.get("authors"),
+        "authorships": work.get("authorships") or [],
+        "year": work.get("year"),
+        "publication_date": work.get("publication_date"),
+        "journal": work.get("journal"),
+        "abstract": work.get("abstract"),
+        "url": work.get("pub_url"),
+        "doi": work.get("doi"),
+        "openalex_id": work.get("openalex_id"),
+        "cited_by_count": work.get("num_citations", 0),
+        "topics": work.get("topics") or [],
+        "keywords": work.get("keywords") or [],
+        "institutions": work.get("institutions") or [],
+        "referenced_works": work.get("referenced_works"),
+        "source_api": "openalex",
+    }
+
+
 def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     """Refresh the monitoring inbox from author and non-author monitors.
 
@@ -1297,15 +1343,14 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     ready_monitors = [m for m in monitors if m.get("health") == "ready"]
     degraded_monitors = [m for m in monitors if m.get("health") != "ready"]
     discovery_settings = read_discovery_settings(db)
-    author_per_refresh = _setting_int(discovery_settings, "monitor_defaults.author_per_refresh", 20, 1, 100)
-    search_limit = _setting_int(discovery_settings, "monitor_defaults.search_limit", 15, 1, 50)
-    search_temperature = _setting_float(discovery_settings, "monitor_defaults.search_temperature", 0.22, 0.0, 1.0)
-    include_preprints = _setting_bool(discovery_settings, "monitor_defaults.include_preprints", True)
-    semantic_scholar_bulk = _setting_bool(discovery_settings, "monitor_defaults.semantic_scholar_bulk", True)
-    monitor_search_settings = dict(discovery_settings)
-    if not include_preprints:
-        monitor_search_settings["sources.arxiv.enabled"] = "false"
-        monitor_search_settings["sources.biorxiv.enabled"] = "false"
+    (
+        author_per_refresh,
+        search_limit,
+        search_temperature,
+        include_preprints,
+        semantic_scholar_bulk,
+        monitor_search_settings,
+    ) = _read_monitor_refresh_settings(discovery_settings)
     from_year = _resolve_feed_from_year(discovery_settings)
     now = datetime.utcnow().isoformat()
 
@@ -1394,24 +1439,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                             continue
                         found += 1
                         papers_found += 1
-                        candidate = {
-                            "title": work.get("title"),
-                            "authors": work.get("authors"),
-                            "authorships": work.get("authorships") or [],
-                            "year": work.get("year"),
-                            "publication_date": work.get("publication_date"),
-                            "journal": work.get("journal"),
-                            "abstract": work.get("abstract"),
-                            "url": work.get("pub_url"),
-                            "doi": work.get("doi"),
-                            "openalex_id": work.get("openalex_id"),
-                            "cited_by_count": work.get("num_citations", 0),
-                            "topics": work.get("topics") or [],
-                            "keywords": work.get("keywords") or [],
-                            "institutions": work.get("institutions") or [],
-                            "referenced_works": work.get("referenced_works"),
-                            "source_api": "openalex",
-                        }
+                        candidate = _normalize_author_work_to_candidate(work)
                         paper_id = _upsert_candidate_paper(
                             db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
                         )
@@ -1758,15 +1786,14 @@ def refresh_feed_monitor(
     # S-4: collect hydration targets for one post-refresh sweep (see refresh_feed_inbox).
     pending_hydration_ids: set[str] = set()
     discovery_settings = read_discovery_settings(db)
-    author_per_refresh = _setting_int(discovery_settings, "monitor_defaults.author_per_refresh", 20, 1, 100)
-    search_limit = _setting_int(discovery_settings, "monitor_defaults.search_limit", 15, 1, 50)
-    search_temperature = _setting_float(discovery_settings, "monitor_defaults.search_temperature", 0.22, 0.0, 1.0)
-    include_preprints = _setting_bool(discovery_settings, "monitor_defaults.include_preprints", True)
-    semantic_scholar_bulk = _setting_bool(discovery_settings, "monitor_defaults.semantic_scholar_bulk", True)
-    monitor_search_settings = dict(discovery_settings)
-    if not include_preprints:
-        monitor_search_settings["sources.arxiv.enabled"] = "false"
-        monitor_search_settings["sources.biorxiv.enabled"] = "false"
+    (
+        author_per_refresh,
+        search_limit,
+        search_temperature,
+        include_preprints,
+        semantic_scholar_bulk,
+        monitor_search_settings,
+    ) = _read_monitor_refresh_settings(discovery_settings)
 
     if not monitor.get("enabled", True):
         diag = {
@@ -1828,24 +1855,7 @@ def refresh_feed_monitor(
                 except Exception:
                     continue
                 found += 1
-                candidate = {
-                    "title": work.get("title"),
-                    "authors": work.get("authors"),
-                    "authorships": work.get("authorships") or [],
-                    "year": work.get("year"),
-                    "publication_date": work.get("publication_date"),
-                    "journal": work.get("journal"),
-                    "abstract": work.get("abstract"),
-                    "url": work.get("pub_url"),
-                    "doi": work.get("doi"),
-                    "openalex_id": work.get("openalex_id"),
-                    "cited_by_count": work.get("num_citations", 0),
-                    "topics": work.get("topics") or [],
-                    "keywords": work.get("keywords") or [],
-                    "institutions": work.get("institutions") or [],
-                    "referenced_works": work.get("referenced_works"),
-                    "source_api": "openalex",
-                }
+                candidate = _normalize_author_work_to_candidate(work)
                 paper_id = _upsert_candidate_paper(
                     db, candidate, now=now, pending_hydration_ids=pending_hydration_ids
                 )
