@@ -18,6 +18,8 @@
 
   const api = globalThis.browser || globalThis.chrome;
   const A = globalThis.almaExtract;
+  const S = globalThis.almaSettings;
+  const OB = globalThis.almaOutbox;
   const DOT = "●";          // U+25CF — full round dot (rendered green on a transparent badge)
   // Brightened brand sage so the dot stays legible on light AND dark toolbars.
   const GREEN = "#4FA45E";
@@ -64,4 +66,38 @@
   api.tabs.query({ active: true, currentWindow: true })
     .then((tabs) => { if (tabs && tabs[0]) update(tabs[0]); })
     .catch(() => {});
+
+  // --- Offline outbox drainer ---------------------------------------------
+  // Deliver captures queued while a server was down (lib/outbox.js), each to
+  // the instance it was queued for — verified by /ping identity, so a capture
+  // can never land in the wrong database. Runs on load and on a periodic
+  // alarm, so the queue drains even if the popup is never opened (the browser
+  // just has to be running while the target ALMa is up).
+  async function flushOutbox() {
+    if (!S || !OB) return;
+    try {
+      if ((await OB.count()) === 0) return;
+      await OB.flush({
+        ping: (url, key) => S.pingUrl(url, key),
+        save: async (url, key, body) => {
+          const headers = { "Content-Type": "application/json" };
+          if (key) headers["X-API-Key"] = key;
+          try {
+            const res = await fetch(url + "/api/v1/extension/save", { method: "POST", headers, body: JSON.stringify(body) });
+            return { ok: res.ok, status: res.status };
+          } catch (e) { return { ok: false, status: 0 }; }
+        },
+        apiKeyFor: async (url) => { const st = await S.load(); const s = st.servers.find((x) => x.url === url); return (s && s.apiKey) || ""; },
+      });
+    } catch (e) { /* best effort */ }
+  }
+
+  const FLUSH_ALARM = "alma-outbox-flush";
+  try {
+    if (api.alarms) {
+      api.alarms.create(FLUSH_ALARM, { periodInMinutes: 5 });
+      api.alarms.onAlarm.addListener((a) => { if (a && a.name === FLUSH_ALARM) flushOutbox(); });
+    }
+  } catch (e) { /* alarms API unavailable */ }
+  flushOutbox();
 })();

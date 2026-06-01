@@ -5,6 +5,6 @@
   "description": "ALMa Firefox/Chrome browser connector — save the current paper to your library.",
   "type": "commonjs",
   "scripts": {
-    "test": "node test/extract.test.js"
+    "test": "node test/extract.test.js && node test/outbox.test.js"
   }
 }

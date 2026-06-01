@@ -20,6 +20,7 @@
   const A = globalThis.almaExtract;
   const S = globalThis.almaSettings;
   const SUI = globalThis.almaServersUI;
+  const OB = globalThis.almaOutbox;
   const NS = "http://www.w3.org/2000/svg";
   const STAR_PATH = "M12 2l3 6.5 7 .8-5.2 4.8L18.4 22 12 18.3 5.6 22l1.6-7.9L2 9.3l7-.8z";
 
@@ -104,6 +105,10 @@
       const r = await S.pingUrl(c.url, c.apiKey);
       c.online = r.ok;
       c.version = r.info && r.info.alma_version;
+      c.instance = (r.info && r.info.instance) || null;
+      // Remember which DB lives at this URL so an offline capture can be
+      // bound to the intended instance and verified at delivery time.
+      if (c.online && c.instance && OB) OB.recordIdentity(c.url, c.instance);
     }));
 
     let chosen = candidates.find((c) => c.url === activeUrl) || null;
@@ -359,8 +364,16 @@
   }
   function refreshActionState() {
     if (committed) return;
-    $saveBtn.disabled = !(connected() && saveable());
-    if (!connected()) {
+    // When the target server is down we still let the user Save — it goes to
+    // the offline queue (bound to that server's instance) rather than failing.
+    const offlineQueueable = !connected() && saveable() && !!OB && !!active;
+    $saveBtn.disabled = !((connected() && saveable()) || offlineQueueable);
+    if (offlineQueueable) $saveBtn.textContent = "Save for later";
+    else if ($saveBtn.textContent === "Save for later") $saveBtn.textContent = "Save to ALMa";
+    if (offlineQueueable) {
+      result("info", "ALMa at " + S.shortHost(active.url) + " is down — Save will queue this and sync when it's back.",
+        { link: { text: "Servers", action: showSettings } });
+    } else if (!connected()) {
       if (detected) result("error",
         active ? "Can't reach ALMa at " + S.shortHost(active.url) + ". Pick a running server in " : "No ALMa server reachable. Open ",
         { link: { text: "Servers", action: showSettings } });
@@ -368,6 +381,37 @@
       result("info", "No DOI, identifier, or title found — open the paper's article page and try again.");
     } else {
       hideResult();
+    }
+  }
+
+  // Drain the offline queue: deliver each capture to the instance it was
+  // queued for, verified by /ping identity (see lib/outbox.js). Best-effort;
+  // surfaces a brief result only when something actually changed.
+  async function flushOutbox() {
+    if (!OB) return;
+    if ((await OB.count()) === 0) return;
+    let summary;
+    try {
+      summary = await OB.flush({
+        ping: (url, key) => S.pingUrl(url, key),
+        save: async (url, key, body) => {
+          const headers = { "Content-Type": "application/json" };
+          if (key) headers["X-API-Key"] = key;
+          try {
+            const res = await fetch(url + "/api/v1/extension/save", { method: "POST", headers, body: JSON.stringify(body) });
+            return { ok: res.ok, status: res.status };
+          } catch (e) { return { ok: false, status: 0 }; }
+        },
+        apiKeyFor: async (url) => { const st = await S.load(); const s = st.servers.find((x) => x.url === url); return (s && s.apiKey) || ""; },
+      });
+    } catch (e) { return; }
+    if (committed) return;
+    if (summary.delivered > 0) {
+      result("success", "Synced " + summary.delivered + " queued " + (summary.delivered === 1 ? "paper" : "papers") +
+        (summary.remaining ? " · " + summary.remaining + " still waiting" : ""));
+    } else if (summary.conflicts > 0) {
+      result("info", summary.conflicts + (summary.conflicts === 1 ? " queued capture is" : " queued captures are") +
+        " for a different database than the one now at this address — held until the right one is back.");
     }
   }
 
@@ -386,17 +430,41 @@
     $saveBtn.disabled = !(connected() && saveable());
   }
 
-  async function save() {
-    if (!saveable() || !connected() || committed) return;
-    $saveBtn.disabled = true;
-    result("loading", "Saving to " + destLabel(destination) + " on " + S.shortHost(active.url) + "…");
-    const body = {
+  function buildBody() {
+    return {
       action: selectedRating, destination: destination,
       doi: detected.doi || null, openalex_id: detected.openalexId || null,
       title: detected.title || null, url: detected.url || null,
       authors: detected.authors || null, year: detected.year || null,
       journal: detected.journal || null, abstract: detected.abstract || null,
     };
+  }
+
+  // Queue a capture for delivery when the (down) target server returns. Bound
+  // to the active server URL + its last-known identity, so it can only ever be
+  // delivered to the database it was meant for — never another instance.
+  async function queueForLater(body, afterDrop) {
+    const targetUrl = active ? active.url : "";
+    if (!OB || !targetUrl) { result("error", "No target server selected to queue for."); $saveBtn.disabled = false; return; }
+    const r = await OB.enqueue(targetUrl, body);
+    if (r.full) { result("error", "Offline queue is full (" + OB.MAX_ITEMS + "). Open ALMa to sync first."); $saveBtn.disabled = false; return; }
+    const n = await OB.count();
+    undoToken = { __queued: { id: r.item.id, url: targetUrl } };
+    result("info",
+      (afterDrop ? "Connection lost — queued for " : "Queued for ") + S.shortHost(targetUrl) +
+      " · syncs when that ALMa is back" + (n > 1 ? " · " + n + " waiting" : ""),
+      { title: body.title || (detected && detected.title) || "" });
+    enterCommitted();
+  }
+
+  async function save() {
+    if (!saveable() || committed) return;
+    const body = buildBody();
+    // Server down → queue it (bound to the intended instance) instead of
+    // failing. The user clicked "Save for later".
+    if (!connected()) { return queueForLater(body, false); }
+    $saveBtn.disabled = true;
+    result("loading", "Saving to " + destLabel(destination) + " on " + S.shortHost(active.url) + "…");
     try {
       const res = await fetch(active.url + "/api/v1/extension/save", { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
       let data = {}; try { data = await res.json(); } catch (e) { /* ignore */ }
@@ -410,14 +478,22 @@
       else if (res.status === 400) { result("error", (data && data.detail) || "Invalid request."); $saveBtn.disabled = false; }
       else { result("error", "ALMa returned an error (" + res.status + "). Try again."); $saveBtn.disabled = false; }
     } catch (e) {
+      // Network dropped mid-save → don't lose it: queue, bound to this server.
       active.online = false; renderConn();
-      result("error", "Lost the connection to ALMa at " + S.shortHost(active.url) + ".");
-      $saveBtn.disabled = false;
+      await queueForLater(body, true);
     }
   }
 
   async function undo() {
     if (!undoToken) return;
+    // A just-queued (offline) capture — "Undo" pulls it back out of the queue.
+    if (undoToken.__queued) {
+      $undoBtn.disabled = true;
+      try { if (OB) await OB.remove(undoToken.__queued.id, undoToken.__queued.url); } catch (e) { /* ignore */ }
+      undoToken = null; exitCommitted();
+      result("info", "Removed from the offline queue.");
+      return;
+    }
     $undoBtn.disabled = true;
     result("loading", "Undoing…");
     try {
@@ -487,7 +563,11 @@
   async function init() {
     renderRatingStars();
     wire();
-    probeServers(true).then(refreshMembership);
+    // probe WITHOUT auto-fallback: the active target stays the server the user
+    // selected, even if it's down (so an offline Save queues for THAT instance
+    // instead of silently retargeting to another running ALMa). Then drain any
+    // queued captures for whatever's reachable.
+    probeServers(false).then(() => { refreshMembership(); flushOutbox(); });
 
     let tab;
     try { const tabs = await api.tabs.query({ active: true, currentWindow: true }); tab = tabs && tabs[0]; }

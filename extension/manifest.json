@@ -28,7 +28,7 @@
     "open_in_tab": true
   },
   "background": {
-    "scripts": ["lib/extract.js", "background.js"]
+    "scripts": ["lib/extract.js", "lib/settings.js", "lib/outbox.js", "background.js"]
   },
   "content_scripts": [
     {
@@ -44,7 +44,7 @@
       "run_at": "document_start"
     }
   ],
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "permissions": ["activeTab", "alarms", "scripting", "storage", "tabs"],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",

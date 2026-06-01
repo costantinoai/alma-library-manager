@@ -110,7 +110,40 @@ def ping(_user: dict = Depends(get_current_user)):
         "service": "alma",
         "alma_version": API_VERSION,
         "connector_version": CONNECTOR_API_VERSION,
+        # Stable identity of THIS ALMa instance so the connector can be sure
+        # an offline-queued capture is delivered to the database it was meant
+        # for (dev / bare-metal / docker may each be reachable at different
+        # times on the same localhost port). Deterministic + read-only — no
+        # write on this GET. See tasks/28_EXTENSION_OFFLINE_CAPTURE.md.
+        "instance": _instance_identity(),
     }
+
+
+def _instance_identity() -> dict:
+    """`{profile, db_fingerprint}` — which ALMa DB is behind this server.
+
+    ``profile`` is ``prod``/``dev`` (the ``ALMA_ENV`` namespace);
+    ``db_fingerprint`` is a short hash of the resolved DB path. Together they
+    distinguish dev (``alma-dev`` profile), bare-metal prod, and docker
+    (different container path) with no persisted state and no DB write — so
+    it's safe to compute on a pure-read ``/ping``.
+    """
+    import hashlib
+    import os
+
+    from alma.config import get_db_path, get_env_profile
+
+    try:
+        profile = get_env_profile()
+    except Exception:  # pragma: no cover - defensive only
+        profile = "prod"
+    fingerprint = ""
+    try:
+        real = os.path.realpath(str(get_db_path()))
+        fingerprint = hashlib.sha256(real.encode("utf-8")).hexdigest()[:12]
+    except Exception:  # pragma: no cover - defensive only
+        fingerprint = ""
+    return {"profile": profile, "db_fingerprint": fingerprint}
 
 
 @router.post(
