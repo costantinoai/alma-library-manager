@@ -1076,6 +1076,126 @@ def _existing_author_lookup(db: sqlite3.Connection) -> dict[str, dict]:
     return out
 
 
+def annotate_external_authors_with_local_identity(
+    db: sqlite3.Connection,
+    candidates: list[dict],
+) -> dict[str, dict]:
+    """Resolve external (OpenAlex) author candidates against the local library.
+
+    Used by the Find & Add author search so that surface is *integrated*
+    with the authors library rather than a raw upstream echo. It applies
+    the SAME dedup union the suggestion rail (`list_author_suggestions`)
+    uses, so the two surfaces agree on "do we already know this human":
+
+    * direct OpenAlex id match against followed authors,
+    * merged alt OpenAlex ids (``author_alt_identifiers``),
+    * ORCID match — the candidate's ORCID (from OpenAlex, or from our
+      stored row) vs the followed authors' ORCID set — which catches a
+      freshly-split OpenAlex profile of an already-followed person, and
+    * presence of ANY local ``authors`` row (followed or background),
+      surfaced as ``existing_author_id`` so the search card can open the
+      full local author detail instead of the OpenAlex-only fallback.
+      Resolution is by OpenAlex id first, then by ORCID — so a candidate
+      whose OpenAlex id is new to us but whose ORCID matches an existing
+      row (a split profile) still links to that local author.
+
+    ``candidates`` items carry ``openalex_id`` and optionally ``orcid``.
+    Returns ``{lower(openalex_id): {existing_author_id, existing_author_type,
+    already_followed}}`` for every candidate with a usable OpenAlex id.
+    """
+    out: dict[str, dict] = {}
+    if not candidates:
+        return out
+
+    existing_lookup = _existing_author_lookup(db)
+    # ORCID → local author, so a candidate whose OpenAlex id is new to us but
+    # whose ORCID matches an existing row resolves to that row. Keyed by the
+    # canonical ORCID form; mirrors the openalex lookup's value shape.
+    orcid_lookup: dict[str, dict] = {}
+    if _table_exists(db, "authors"):
+        try:
+            orcid_rows = db.execute(
+                """
+                SELECT id, name, author_type, orcid
+                FROM authors
+                WHERE orcid IS NOT NULL AND TRIM(orcid) <> ''
+                """
+            ).fetchall()
+            for row in orcid_rows:
+                canonical = normalize_orcid(
+                    row["orcid"] if isinstance(row, sqlite3.Row) else row[3]
+                )
+                if canonical:
+                    orcid_lookup[canonical] = {
+                        "id": row["id"] if isinstance(row, sqlite3.Row) else row[0],
+                        "name": row["name"] if isinstance(row, sqlite3.Row) else row[1],
+                        "author_type": row["author_type"] if isinstance(row, sqlite3.Row) else row[2],
+                        "orcid": row["orcid"] if isinstance(row, sqlite3.Row) else row[3],
+                    }
+        except sqlite3.OperationalError:
+            orcid_lookup = {}
+
+    # Followed-identity union — direct OpenAlex id + every followed
+    # author's ORCID, then extended with merged alt ids so a merged-away
+    # profile still reads as followed (mirrors `list_author_suggestions`).
+    followed_ids: set[str] = set()
+    followed_orcids: set[str] = set()
+    if _table_exists(db, "followed_authors") and _table_exists(db, "authors"):
+        rows = db.execute(
+            """
+            SELECT a.openalex_id, a.orcid
+            FROM followed_authors fa
+            JOIN authors a ON a.id = fa.author_id
+            """
+        ).fetchall()
+        for row in rows:
+            oid = _normalize_openalex_id(
+                row["openalex_id"] if isinstance(row, sqlite3.Row) else row[0]
+            )
+            if oid:
+                followed_ids.add(oid.lower())
+            canonical = normalize_orcid(row["orcid"] if isinstance(row, sqlite3.Row) else row[1])
+            if canonical:
+                followed_orcids.add(canonical)
+    try:
+        from alma.application.author_merge import list_all_alt_openalex_ids
+
+        followed_ids = followed_ids | list_all_alt_openalex_ids(db)
+    except Exception:
+        # Alias table missing on a fresh schema is fine — nothing merged yet.
+        pass
+
+    for cand in candidates:
+        oid = _normalize_openalex_id(str(cand.get("openalex_id") or ""))
+        if not oid:
+            continue
+        key = oid.lower()
+        cand_orcid = normalize_orcid(cand.get("orcid"))
+        # Resolve to a local row by OpenAlex id first, then by ORCID (catches
+        # a split profile whose OpenAlex id is new but ORCID is on file).
+        existing = existing_lookup.get(key)
+        if not existing and cand_orcid:
+            existing = orcid_lookup.get(cand_orcid)
+        existing_author_id = existing.get("id") if existing else None
+        existing_author_type = existing.get("author_type") if existing else None
+
+        row_orcid = normalize_orcid(existing.get("orcid")) if existing else None
+        followed_via_orcid = bool(
+            followed_orcids
+            and (
+                (cand_orcid and cand_orcid in followed_orcids)
+                or (row_orcid and row_orcid in followed_orcids)
+            )
+        )
+
+        out[key] = {
+            "existing_author_id": existing_author_id,
+            "existing_author_type": existing_author_type,
+            "already_followed": key in followed_ids or followed_via_orcid,
+        }
+    return out
+
+
 def _sample_titles_for_openalex_author(
     db: sqlite3.Connection,
     openalex_id: str,

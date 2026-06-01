@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -192,29 +193,6 @@ def search_authors_online(
         return []
     results = (resp.json() or {}).get("results") or []
 
-    # Bulk-check followed state via a single SELECT IN (...) query.
-    raw_oids: list[str] = []
-    for item in results:
-        rid = str(item.get("id") or "").strip().rstrip("/").split("/")[-1]
-        if rid:
-            raw_oids.append(rid)
-    followed_oids: set[str] = set()
-    if raw_oids:
-        placeholders = ",".join("?" for _ in raw_oids)
-        try:
-            rows = db.execute(
-                f"""
-                SELECT lower(a.openalex_id) AS oid
-                FROM followed_authors fa
-                JOIN authors a ON a.id = fa.author_id
-                WHERE lower(a.openalex_id) IN ({placeholders})
-                """,
-                [oid.lower() for oid in raw_oids],
-            ).fetchall()
-            followed_oids = {str(r["oid"]) for r in rows if r["oid"]}
-        except sqlite3.OperationalError:
-            followed_oids = set()
-
     out: list[dict] = []
     for item in results:
         oid = str(item.get("id") or "").strip().rstrip("/").split("/")[-1]
@@ -239,8 +217,94 @@ def search_authors_online(
             "h_index": int(stats.get("h_index") or 0),
             "i10_index": int(stats.get("i10_index") or 0),
             "top_topics": topics,
-            "already_followed": oid.lower() in followed_oids,
+            "already_followed": False,
+            "existing_author_id": None,
+            "existing_author_type": None,
+            "top_cited_titles": [],
         })
+
+    # Integrate the search with the authors library: resolve each candidate
+    # against local rows + the followed-identity union (direct id / merged
+    # alt / ORCID) — the SAME dedup the suggestion rail applies. This makes
+    # `already_followed` honest even across split/merged profiles and exposes
+    # `existing_author_id` so a clicked card can open the full local detail.
+    try:
+        from alma.application.authors import (
+            annotate_external_authors_with_local_identity,
+        )
+
+        annotations = annotate_external_authors_with_local_identity(db, out)
+        for row in out:
+            ann = annotations.get(str(row["openalex_id"]).strip().lower())
+            if ann:
+                row["already_followed"] = ann["already_followed"]
+                row["existing_author_id"] = ann["existing_author_id"]
+                row["existing_author_type"] = ann["existing_author_type"]
+    except Exception as exc:  # pragma: no cover - annotation is best-effort
+        logger.warning("Author search local-identity annotation failed: %s", exc)
+
+    # NB: the two most-cited papers per author are fetched SEPARATELY (one
+    # extra OpenAlex /works call per author) by `fetch_top_cited_titles` /
+    # the `/import/search/authors/top-works` endpoint, so they never gate the
+    # author list's time-to-display. OpenAlex's /authors search is already
+    # 1–6 s; folding the per-author work calls in here would roughly double
+    # that. The frontend renders cards immediately, then fills titles in.
+    return out
+
+
+def fetch_top_cited_titles_by_author(
+    openalex_ids: list[str],
+    *,
+    per_author: int = 2,
+) -> dict[str, list[str]]:
+    """Titles of each author's top-N most-cited works, keyed by lower openalex id.
+
+    One small citation-sorted ``/works`` list request per author, run
+    concurrently (the shared OpenAlex client is safe for concurrent GETs —
+    same pattern as the discovery lens lanes). Best-effort: any author whose
+    call fails or times out simply gets an empty list.
+
+    Called from its own endpoint (not from `search_authors_online`) so the
+    per-author work calls never gate the author list's time-to-display.
+    """
+    ids = [i for i in dict.fromkeys(openalex_ids or []) if i]
+    if not ids:
+        return {}
+    client = get_client()
+    n = max(1, per_author)
+
+    def _one(author_oid: str) -> tuple[str, list[str]]:
+        try:
+            resp = client.get(
+                "/works",
+                params={
+                    "filter": f"authorships.author.id:{author_oid}",
+                    "sort": "cited_by_count:desc",
+                    "per-page": n,
+                    "select": "title,cited_by_count",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                return author_oid.lower(), []
+            works = (resp.json() or {}).get("results") or []
+            titles: list[str] = []
+            for work in works:
+                title = str(work.get("title") or "").strip()
+                if title:
+                    titles.append(title)
+                if len(titles) >= n:
+                    break
+            return author_oid.lower(), titles
+        except Exception:
+            return author_oid.lower(), []
+
+    out: dict[str, list[str]] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(6, len(ids)), thread_name_prefix="author-works"
+    ) as pool:
+        for oid, titles in pool.map(_one, ids):
+            out[oid] = titles
     return out
 
 

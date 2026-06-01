@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Search, SearchX, SlidersHorizontal, UserPlus, Users, Check } from 'lucide-react'
+import { Search, SearchX, SlidersHorizontal, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,15 +48,21 @@ import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import {
+  fetchAuthorTopCitedWorks,
   followAuthor,
   onlineAuthorSearch,
   onlineImportSave,
   onlineImportSearchStream,
+  rejectAuthorSuggestion,
+  type Author,
+  type AuthorSuggestion,
   type OnlineAuthorSearchResult,
   type OnlineSearchItem,
   type ScoreBreakdown,
 } from '@/api/client'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
+import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { Loader2, CheckCircle2, AlertCircle, Clock } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
@@ -165,6 +171,19 @@ export function OnlineSearchTab({
   // cards. Mutually exclusive with `items` for a given query.
   const [authorResults, setAuthorResults] = useState<OnlineAuthorSearchResult[] | null>(null)
   const [authorPending, setAuthorPending] = useState<Record<string, boolean>>({})
+  const [authorRejectPending, setAuthorRejectPending] = useState<Record<string, boolean>>({})
+  // The two most-cited papers per author load in a SECOND (non-blocking)
+  // request so they never gate the author list's time-to-display.
+  const [authorTitlesLoading, setAuthorTitlesLoading] = useState(false)
+  // Author detail popup — clicking a search card opens the SAME
+  // AuthorDetailPanel the Authors page uses. When the author already has a
+  // local row we open full detail; otherwise we pass a synthetic suggestion
+  // so the dialog shows the OpenAlex-only view (Overview + live bibliography)
+  // without forcing a follow first.
+  const [selectedAuthor, setSelectedAuthor] = useState<Author | null>(null)
+  const [selectedAuthorSuggestion, setSelectedAuthorSuggestion] =
+    useState<AuthorSuggestion | null>(null)
+  const [authorDetailOpen, setAuthorDetailOpen] = useState(false)
   const queryClient = useQueryClient()
   const abortRef = useRef<AbortController | null>(null)
 
@@ -184,6 +203,8 @@ export function OnlineSearchTab({
     setItems(null)
     setAuthorResults(null)
     setAuthorPending({})
+    setAuthorRejectPending({})
+    setAuthorTitlesLoading(false)
     setVisibleCount(INITIAL_VISIBLE)
     setRowStates({})
     setSourceProgress({})
@@ -197,6 +218,32 @@ export function OnlineSearchTab({
         const results = await onlineAuthorSearch({ query: q, limit: 15 })
         if (controller.signal.aborted) return
         setAuthorResults(results)
+        // Non-blocking: fetch each author's two most-cited papers in a
+        // second round-trip and merge them in once they land. The cards are
+        // already on screen, so this never extends time-to-display.
+        const ids = results.map((r) => r.openalex_id).filter(Boolean)
+        if (ids.length > 0) {
+          setAuthorTitlesLoading(true)
+          fetchAuthorTopCitedWorks(ids)
+            .then((titlesByOid) => {
+              if (controller.signal.aborted) return
+              setAuthorResults((prev) =>
+                prev
+                  ? prev.map((a) => ({
+                      ...a,
+                      top_cited_titles:
+                        titlesByOid[a.openalex_id.toLowerCase()] ?? a.top_cited_titles ?? [],
+                    }))
+                  : prev,
+              )
+            })
+            .catch(() => {
+              // Best-effort enrichment — leave the title lists empty on failure.
+            })
+            .finally(() => {
+              if (!controller.signal.aborted) setAuthorTitlesLoading(false)
+            })
+        }
       } catch (err) {
         if ((err as { name?: string })?.name !== 'AbortError') {
           setError(err instanceof Error ? err.message : 'Author search failed')
@@ -375,11 +422,21 @@ export function OnlineSearchTab({
       if (author.already_followed) return
       setAuthorPending((prev) => ({ ...prev, [author.openalex_id]: true }))
       try {
-        await followAuthor(author.openalex_id, true)
+        // Follow goes through the canonical pipeline (resolve_canonical_author_id
+        // + apply_follow_state → dedup + hydration + monitor sync). The returned
+        // author_id is the local row we can now link the card to.
+        const followed = await followAuthor(author.openalex_id, true)
         setAuthorResults((prev) =>
           prev
             ? prev.map((a) =>
-                a.openalex_id === author.openalex_id ? { ...a, already_followed: true } : a,
+                a.openalex_id === author.openalex_id
+                  ? {
+                      ...a,
+                      already_followed: true,
+                      existing_author_id: followed.author_id,
+                      existing_author_type: 'followed',
+                    }
+                  : a,
               )
             : prev,
         )
@@ -399,6 +456,64 @@ export function OnlineSearchTab({
     },
     [queryClient],
   )
+
+  // Dismiss = reject the author (writes a negative signal so they stop being
+  // suggested), mirroring the suggestion rail's Dismiss. The card is removed
+  // optimistically.
+  const handleRejectAuthor = useCallback(
+    async (author: OnlineAuthorSearchResult) => {
+      // Never write a negative signal against an author you follow (the card
+      // disables Dismiss for them; this guards programmatic callers too).
+      if (author.already_followed || author.existing_author_type === 'followed') return
+      setAuthorRejectPending((prev) => ({ ...prev, [author.openalex_id]: true }))
+      try {
+        await rejectAuthorSuggestion(author.openalex_id, 'online_search')
+        setAuthorResults((prev) =>
+          prev ? prev.filter((a) => a.openalex_id !== author.openalex_id) : prev,
+        )
+        toast({ title: 'Dismissed', description: `${author.name} won't be suggested.` })
+        await invalidateQueries(queryClient, ['author-suggestions'])
+      } catch (err) {
+        errorToast(err instanceof Error ? err.message : 'Could not dismiss author')
+      } finally {
+        setAuthorRejectPending((prev) => ({ ...prev, [author.openalex_id]: false }))
+      }
+    },
+    [queryClient],
+  )
+
+  // Open the shared AuthorDetailPanel for a search result. Mirrors the
+  // Authors page `openSuggestionDetail`: when the human already has a local
+  // row (followed OR background — resolved by the backend's dedup union) we
+  // open full detail by its id; otherwise we pass the mapped suggestion so the
+  // dialog renders the OpenAlex-only view (topics + live bibliography) without
+  // 404ing on the local detail endpoints.
+  const openAuthorDetail = useCallback((author: OnlineAuthorSearchResult) => {
+    if (author.existing_author_id) {
+      setSelectedAuthorSuggestion(null)
+      setSelectedAuthor({
+        id: author.existing_author_id,
+        name: author.name,
+        openalex_id: author.openalex_id,
+        author_type: author.existing_author_type ?? 'background',
+      })
+      setAuthorDetailOpen(true)
+      return
+    }
+    setSelectedAuthorSuggestion(searchResultToSuggestion(author))
+    setSelectedAuthor({
+      id: author.openalex_id,
+      name: author.name,
+      openalex_id: author.openalex_id,
+      orcid: author.orcid ?? undefined,
+      affiliation: author.institution ?? undefined,
+      h_index: author.h_index || undefined,
+      citedby: author.cited_by_count || undefined,
+      works_count: author.works_count || undefined,
+      author_type: 'background',
+    })
+    setAuthorDetailOpen(true)
+  }, [])
 
   // ── Result count + filter echo ──
   const resultHeader = useMemo(() => {
@@ -603,13 +718,22 @@ export function OnlineSearchTab({
               description="Try a different spelling, or drop the author: prefix to search papers."
             />
           ) : (
-            <div className="grid gap-2.5 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {authorResults.map((author) => (
-                <AuthorSearchCard
+                <SuggestedAuthorCard
                   key={author.openalex_id}
-                  author={author}
-                  pending={!!authorPending[author.openalex_id]}
+                  suggestion={searchResultToSuggestion(author)}
+                  showScore={false}
+                  institution={author.institution}
+                  titlesLoading={authorTitlesLoading}
+                  alreadyFollowed={
+                    author.already_followed || author.existing_author_type === 'followed'
+                  }
+                  onClick={() => openAuthorDetail(author)}
                   onFollow={() => void handleFollowAuthor(author)}
+                  onReject={() => void handleRejectAuthor(author)}
+                  followPending={!!authorPending[author.openalex_id]}
+                  rejectPending={!!authorRejectPending[author.openalex_id]}
                 />
               ))}
             </div>
@@ -684,6 +808,28 @@ export function OnlineSearchTab({
           )}
         </div>
       )}
+
+      {/* Shared author detail popup — the SAME component the Authors page
+          opens on a card click. Works for not-yet-followed authors via the
+          suggestion-only fallback, and for authors already in the library
+          (followed/background) via full detail. */}
+      <AuthorDetailPanel
+        author={selectedAuthor}
+        suggestion={selectedAuthorSuggestion}
+        open={authorDetailOpen}
+        onOpenChange={(next) => {
+          setAuthorDetailOpen(next)
+          if (!next) setSelectedAuthorSuggestion(null)
+        }}
+        onDeleted={() => {
+          void invalidateQueries(
+            queryClient,
+            ['authors'],
+            ['library-followed-authors'],
+            ['author-suggestions'],
+          )
+        }}
+      />
     </div>
   )
 }
@@ -752,69 +898,30 @@ function WhyChips({ score, breakdown }: WhyChipsProps) {
 }
 
 /**
- * Compact OpenAlex author card shown in the Find & Add author scope.
- * Lighter than `SuggestedAuthorCard` (which expects the full T7
- * /authors/suggestions payload — signals chips, shared topics, sample
- * titles, etc.). Here we only have what /authors?search returns:
- * institution, h-index, works_count, top topics. One Follow button.
+ * Map an OpenAlex author search result into the `AuthorSuggestion` shape the
+ * Authors page uses, so the Discovery author search renders through the SAME
+ * primitives: `SuggestedAuthorCard` (Follow / Dismiss, topic chips, click to
+ * open) and, on click, the SAME `AuthorDetailPanel` popup. Search-specific
+ * tweaks live on the card props (`showScore={false}`, `institution`): the
+ * card hides the ranking bar and surfaces the author's two most-cited papers
+ * (carried here as `sample_titles`) instead.
  */
-interface AuthorSearchCardProps {
-  author: OnlineAuthorSearchResult
-  pending: boolean
-  onFollow: () => void
-}
-
-function AuthorSearchCard({ author, pending, onFollow }: AuthorSearchCardProps) {
-  return (
-    <article className="flex flex-col gap-2 rounded-sm border border-alma-100 bg-surface-2 p-3 shadow-paper-sm">
-      <header className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold text-alma-800">{author.name}</h3>
-          {author.institution && (
-            <p className="truncate text-[11px] text-slate-500">{author.institution}</p>
-          )}
-        </div>
-        <Button
-          size="sm"
-          variant={author.already_followed ? 'ghost' : 'outline'}
-          onClick={onFollow}
-          disabled={pending || author.already_followed}
-          className={
-            author.already_followed
-              ? 'text-alma-700'
-              : 'border-alma-200 bg-surface-4 text-alma-700 hover:border-alma-300 hover:bg-alma-50 hover:text-alma-800'
-          }
-        >
-          {author.already_followed ? (
-            <>
-              <Check className="h-3.5 w-3.5" /> Following
-            </>
-          ) : (
-            <>
-              <UserPlus className="h-3.5 w-3.5" /> Follow
-            </>
-          )}
-        </Button>
-      </header>
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
-        {author.h_index > 0 && <span>h-index {author.h_index}</span>}
-        {author.works_count > 0 && <span>{author.works_count.toLocaleString()} works</span>}
-        {author.cited_by_count > 0 && (
-          <span>{author.cited_by_count.toLocaleString()} citations</span>
-        )}
-      </div>
-      {author.top_topics.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {author.top_topics.slice(0, 4).map((topic) => (
-            <span
-              key={topic}
-              className="inline-flex items-center rounded-full bg-alma-folio/10 px-2 py-0.5 text-[10px] font-medium text-alma-folio"
-            >
-              {topic}
-            </span>
-          ))}
-        </div>
-      )}
-    </article>
-  )
+function searchResultToSuggestion(a: OnlineAuthorSearchResult): AuthorSuggestion {
+  return {
+    key: a.openalex_id,
+    name: a.name,
+    suggestion_type: 'online_search',
+    score: 0,
+    openalex_id: a.openalex_id,
+    existing_author_id: a.existing_author_id ?? null,
+    known_author_type: a.existing_author_type ?? null,
+    shared_paper_count: 0,
+    shared_followed_count: 0,
+    local_paper_count: 0,
+    recent_paper_count: 0,
+    shared_followed_authors: [],
+    shared_topics: a.top_topics ?? [],
+    shared_venues: [],
+    sample_titles: a.top_cited_titles ?? [],
+  }
 }

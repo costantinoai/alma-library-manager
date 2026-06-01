@@ -105,6 +105,17 @@ class OnlineAuthorSearchResult(BaseModel):
     i10_index: int = 0
     top_topics: list[str] = []
     already_followed: bool = False
+    # Local-library integration (dedup / identity resolution). Resolved
+    # against the same followed-identity union the suggestion rail uses
+    # (direct OpenAlex id / merged alt ids / ORCID). `existing_author_id`
+    # is the canonical local `authors.id` when this human already has a row
+    # (followed OR background) — it lets the search card open the full
+    # author detail popup instead of the OpenAlex-only fallback.
+    existing_author_id: Optional[str] = None
+    existing_author_type: Optional[str] = None
+    # Titles of the author's two most-cited works (from OpenAlex), shown on
+    # the search card so the user can recognise the right person at a glance.
+    top_cited_titles: list[str] = []
 
 
 class OnlineSearchSaveRequest(BaseModel):
@@ -1079,6 +1090,39 @@ def online_author_search(
             status_code=502,
             detail="Upstream author search failed.",
         ) from exc
+
+
+class AuthorTopWorksRequest(BaseModel):
+    """Resolve the two most-cited papers for a set of OpenAlex author ids."""
+    openalex_ids: list[str] = Field(default_factory=list, max_length=25)
+    per_author: int = Field(default=2, ge=1, le=5)
+
+
+@router.post(
+    "/import/search/authors/top-works",
+    summary="Top-cited paper titles for a set of OpenAlex authors",
+    description=(
+        "Returns `{openalex_id: [titles]}` — the N most-cited works per "
+        "author (one small OpenAlex /works call each, run concurrently). "
+        "Split from the author-search endpoint so it can be fetched "
+        "non-blocking: the search cards render immediately and the titles "
+        "fill in after. Pure read."
+    ),
+)
+def author_top_cited_works(
+    req: AuthorTopWorksRequest,
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application.openalex_manual import fetch_top_cited_titles_by_author
+
+    if not req.openalex_ids:
+        return {}
+    try:
+        return fetch_top_cited_titles_by_author(req.openalex_ids, per_author=req.per_author)
+    except Exception as exc:
+        logger.warning("Author top-works fetch failed: %s", exc)
+        # Best-effort enrichment — never fail the surface over missing titles.
+        return {}
 
 
 @router.post(

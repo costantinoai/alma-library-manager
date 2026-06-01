@@ -3334,6 +3334,16 @@ export interface OnlineAuthorSearchResult {
   i10_index: number
   top_topics: string[]
   already_followed: boolean
+  /** Canonical local `authors.id` when this human already has a row
+   *  (followed OR background), resolved via the same dedup union the
+   *  suggestion rail uses (direct OpenAlex id / merged alt ids / ORCID).
+   *  When set, the search card opens the FULL author detail; when null,
+   *  it opens the OpenAlex-only suggestion view. */
+  existing_author_id?: string | null
+  existing_author_type?: 'followed' | 'background' | string | null
+  /** Titles of the author's two most-cited works (from OpenAlex), shown on
+   *  the search card to help recognise the right person. */
+  top_cited_titles?: string[]
 }
 
 export function onlineAuthorSearch(body: {
@@ -3341,6 +3351,20 @@ export function onlineAuthorSearch(body: {
   limit?: number
 }): Promise<OnlineAuthorSearchResult[]> {
   return api.post('/library/import/search/authors', body)
+}
+
+/**
+ * The two most-cited paper titles per author, keyed by lowercased OpenAlex
+ * id. Split from `onlineAuthorSearch` so it can be fetched non-blocking
+ * (each author needs its own OpenAlex /works call, which would otherwise
+ * double the author search's time-to-display).
+ */
+export function fetchAuthorTopCitedWorks(
+  openalexIds: string[],
+): Promise<Record<string, string[]>> {
+  return api.post('/library/import/search/authors/top-works', {
+    openalex_ids: openalexIds,
+  })
 }
 
 /**

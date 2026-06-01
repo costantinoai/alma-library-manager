@@ -1,4 +1,4 @@
-import { Loader2, UserMinus, UserPlus } from 'lucide-react'
+import { Check, Loader2, UserMinus, UserPlus } from 'lucide-react'
 
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -13,6 +13,23 @@ interface SuggestedAuthorCardProps {
   onClick?: () => void
   followPending?: boolean
   rejectPending?: boolean
+  /** When the author is already followed, the Follow button becomes a
+   *  disabled "Following" state instead of re-triggering a follow. The
+   *  suggestion rail never passes this (it filters followed authors out);
+   *  the Discovery author search does, because it surfaces followed
+   *  authors alongside new ones. */
+  alreadyFollowed?: boolean
+  /** Hide the personal-fit ranking bar. The Discovery author search reuses
+   *  this card but doesn't rank results — it surfaces the author's notable
+   *  papers (`sample_titles`) instead. Defaults to shown (the rail). */
+  showScore?: boolean
+  /** Institution / affiliation line rendered under the name. The suggestion
+   *  rail doesn't carry it; the author search does. */
+  institution?: string | null
+  /** The author's notable papers (`sample_titles`) are still loading in a
+   *  background request — show a quiet placeholder instead of the
+   *  "no titles" empty state. */
+  titlesLoading?: boolean
 }
 
 /**
@@ -29,6 +46,7 @@ function kindLabel(kind: string): string {
   if (kind === 'semantic_similar') return 'Semantically similar'
   if (kind === 'openalex_related') return 'OpenAlex related'
   if (kind === 's2_related') return 'Semantic Scholar related'
+  if (kind === 'online_search') return 'Search result'
   return 'Adjacent'
 }
 
@@ -46,6 +64,7 @@ function kindTone(kind: string): StatusBadgeTone {
   if (kind === 'cited_by_high_signal') return 'positive'
   if (kind === 'collaborator' || kind === 'adjacent') return 'info'
   if (kind === 'openalex_related' || kind === 's2_related') return 'neutral'
+  if (kind === 'online_search') return 'neutral'
   return 'neutral'
 }
 
@@ -62,6 +81,10 @@ export function SuggestedAuthorCard({
   onClick,
   followPending,
   rejectPending,
+  alreadyFollowed,
+  showScore = true,
+  institution,
+  titlesLoading,
 }: SuggestedAuthorCardProps) {
   const pct = Math.max(0, Math.min(100, suggestion.score))
 
@@ -89,6 +112,9 @@ export function SuggestedAuthorCard({
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="truncate text-sm font-semibold text-alma-800">{suggestion.name}</h3>
+          {institution ? (
+            <p className="mt-0.5 truncate text-[11px] text-slate-500">{institution}</p>
+          ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {/* Provenance chip uses the Folio-blue translucent tone:
                 the card sits on warm off-white paper, so saturated
@@ -169,39 +195,43 @@ export function SuggestedAuthorCard({
             </li>
           ))}
         </ul>
+      ) : titlesLoading ? (
+        <p className="text-[11px] italic text-slate-400">Loading top papers…</p>
       ) : (
         <p className="text-[11px] italic text-slate-400">No sample titles yet.</p>
       )}
 
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <div className="relative h-1 w-full overflow-hidden rounded-full bg-parchment-200">
-            <div
-              className="absolute inset-y-0 left-0 rounded-full bg-alma-500 transition-all"
-              style={{ width: `${pct}%` }}
-            />
+      {showScore ? (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="relative h-1 w-full overflow-hidden rounded-full bg-parchment-200">
+              <div
+                className="absolute inset-y-0 left-0 rounded-full bg-alma-500 transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
+              {Math.round(pct)}
+            </span>
           </div>
-          <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
-            {Math.round(pct)}
-          </span>
+          {signals.length > 0 ? (
+            <div className="flex flex-wrap gap-1">
+              {signals.map((signal, idx) => (
+                <StatusBadge
+                  key={`${signal.kind}-${idx}`}
+                  tone="accent"
+                  size="sm"
+                  title={signal.subject || signal.label}
+                >
+                  {truncate(signal.label, 38)}
+                </StatusBadge>
+              ))}
+            </div>
+          ) : legacyCaption ? (
+            <p className="text-[11px] text-slate-500">shares {legacyCaption}</p>
+          ) : null}
         </div>
-        {signals.length > 0 ? (
-          <div className="flex flex-wrap gap-1">
-            {signals.map((signal, idx) => (
-              <StatusBadge
-                key={`${signal.kind}-${idx}`}
-                tone="accent"
-                size="sm"
-                title={signal.subject || signal.label}
-              >
-                {truncate(signal.label, 38)}
-              </StatusBadge>
-            ))}
-          </div>
-        ) : legacyCaption ? (
-          <p className="text-[11px] text-slate-500">shares {legacyCaption}</p>
-        ) : null}
-      </div>
+      ) : null}
 
       {/* Secondary row: shared topics as Folio-blue translucent
           chips. Hidden when the signal chips already cover topic
@@ -222,16 +252,22 @@ export function SuggestedAuthorCard({
       >
         <Button
           size="sm"
-          variant="accent"
+          variant={alreadyFollowed ? 'ghost' : 'accent'}
           className="flex-1"
           onClick={(e) => {
             e.stopPropagation()
-            onFollow()
+            if (!alreadyFollowed) onFollow()
           }}
-          disabled={followPending || rejectPending}
+          disabled={followPending || rejectPending || alreadyFollowed}
         >
-          {followPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
-          Follow
+          {followPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : alreadyFollowed ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <UserPlus className="h-3.5 w-3.5" />
+          )}
+          {alreadyFollowed ? 'Following' : 'Follow'}
         </Button>
         <Button
           size="sm"
@@ -239,9 +275,12 @@ export function SuggestedAuthorCard({
           className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
           onClick={(e) => {
             e.stopPropagation()
-            onReject()
+            if (!alreadyFollowed) onReject()
           }}
-          disabled={followPending || rejectPending}
+          // Dismiss writes a negative signal — never offer it for an author
+          // you already follow (the suggestion rail never shows followed
+          // authors, but the Discovery author search does).
+          disabled={followPending || rejectPending || alreadyFollowed}
         >
           {rejectPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserMinus className="h-3.5 w-3.5" />}
           Dismiss
