@@ -290,6 +290,9 @@ def test_plugin_connection(
     if plugin_name == "slack":
         return _slack_test_envelope(user)
 
+    if plugin_name == "email":
+        return _email_test_envelope(user)
+
     try:
         config = load_plugin_config(plugin_name)
         if not config:
@@ -436,6 +439,78 @@ def _slack_test_envelope(user: dict) -> dict:
         status="queued",
         operation_key=operation_key,
         message="Slack test queued",
+    )
+
+
+def _email_test_envelope(user: dict) -> dict:
+    """Queue an SMTP connectivity test through the Activity envelope.
+
+    Mirrors :func:`_slack_test_envelope`: validate config synchronously (fast
+    4xx when nothing is set up), then send a real test email on the scheduler
+    pool via the same :func:`alma.mailer.client.get_email_notifier` the digest
+    delivery path uses.
+    """
+    import asyncio
+    import uuid
+    from datetime import datetime as _dt
+
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
+    from alma.mailer.client import get_email_notifier
+
+    operation_key = "alerts.email.test"
+
+    notifier = get_email_notifier()
+    if not notifier.is_configured:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email not configured. Set SMTP host, from, and recipients in Settings -> Email digests.",
+        )
+
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            existing["job_id"],
+            status=str(existing.get("status") or "running"),
+            operation_key=operation_key,
+            message="Email test already in progress",
+            already_running=True,
+        )
+
+    job_id = f"alerts_email_test_{uuid.uuid4().hex[:10]}"
+    actor = str(user.get("username") or "api_user")
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        actor=actor,
+        started_at=_dt.utcnow().isoformat(),
+        message="Sending test email",
+    )
+
+    def _runner() -> dict:
+        # Fresh notifier inside the worker thread (don't share request-thread state).
+        local_notifier = get_email_notifier()
+        try:
+            ok = asyncio.run(local_notifier.send_test_message())
+        except Exception as exc:  # pragma: no cover - network failures
+            return {"ok": False, "error": str(exc), "message": f"Email test failed: {exc}"}
+        if ok:
+            recipients = ", ".join(local_notifier.resolve_recipients())
+            return {"ok": True, "target": recipients, "message": f"Test email sent to {recipients}"}
+        return {"ok": False, "message": "SMTP rejected the test email — check host, port, and credentials."}
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="Email test queued",
     )
 
 

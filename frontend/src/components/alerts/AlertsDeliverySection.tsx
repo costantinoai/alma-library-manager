@@ -266,6 +266,19 @@ export function AlertsDeliverySection() {
           />
           <span className="text-sm text-slate-700">Slack</span>
         </label>
+        <label className="flex items-center gap-2">
+          <Checkbox
+            checked={formChannels.includes('email')}
+            onCheckedChange={(checked) =>
+              setFormChannels(
+                checked === true
+                  ? [...formChannels, 'email']
+                  : formChannels.filter((c) => c !== 'email'),
+              )
+            }
+          />
+          <span className="text-sm text-slate-700">Email</span>
+        </label>
       </div>
       <div className="space-y-2">
         <label className="text-sm font-medium text-slate-700">Schedule</label>

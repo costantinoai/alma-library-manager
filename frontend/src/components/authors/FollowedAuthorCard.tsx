@@ -12,6 +12,8 @@ interface FollowedAuthorCardProps {
   author: Author
   signal?: AuthorSignal | null
   onClick: () => void
+  /** Marks the user's own author profile (set during onboarding). */
+  isOwner?: boolean
   /** Set when the author currently appears in the
    *  `/authors/needs-attention` list. Drives the orange-reddish
    *  warning triangle in the header. */
@@ -34,6 +36,7 @@ export function FollowedAuthorCard({
   author,
   signal,
   onClick,
+  isOwner,
   attentionRow,
   onAttentionClick,
 }: FollowedAuthorCardProps) {
@@ -53,6 +56,11 @@ export function FollowedAuthorCard({
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <h3 className="truncate text-sm font-semibold text-alma-800">{author.name}</h3>
+            {isOwner ? (
+              <StatusBadge tone="accent" size="sm" className="shrink-0">
+                This is you
+              </StatusBadge>
+            ) : null}
             <AuthorResolvedBadge author={author} size="sm" />
           </div>
           {author.affiliation ? (

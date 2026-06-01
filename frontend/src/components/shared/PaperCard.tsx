@@ -76,6 +76,9 @@ interface PaperCardProps {
   onLike?: () => void
   onLove?: () => void
   onDislike?: () => void
+  /** Per-aspect toggle-off: re-clicking an applied action undoes only its own
+   *  effect (Save→'membership', Queue→'reading', active reaction→'rating'). */
+  onUndo?: (aspect: 'membership' | 'rating' | 'reading') => void
   /** "Discover similar" pivot — re-seeds the Discovery lens with this
    *  paper as the anchor. Rendered as a small neutral chip above the
    *  triage action bar. Library + Discovery surfaces pass this; Feed
@@ -338,6 +341,7 @@ export function PaperCard({
   onLike,
   onLove,
   onDislike,
+  onUndo,
   onPivot,
   actionDisabled = false,
   onRate,
@@ -859,6 +863,7 @@ export function PaperCard({
               onLike={onLike}
               onLove={onLove}
               onDislike={onDislike}
+              onUndo={onUndo}
               disabled={actionDisabled}
               compact={isCompact || compactActions}
               dismissLabel={dismissLabel}

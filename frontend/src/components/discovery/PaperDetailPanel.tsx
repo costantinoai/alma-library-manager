@@ -55,6 +55,7 @@ import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { PaperCard, type PaperCardPaper } from '@/components/shared'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn, formatPublicationDate } from '@/lib/utils'
@@ -917,6 +918,8 @@ function RelatedWorkRow({
     onError: () => errorToast('Error', 'Action failed'),
   })
 
+  const undoMutation = usePaperUndo()
+
   const readingMutation = useMutation({
     mutationFn: (status: string) =>
       updateReadingStatus(
@@ -964,6 +967,16 @@ function RelatedWorkRow({
       onLike={() => actionMutation.mutate('like')}
       onLove={() => actionMutation.mutate('love')}
       onDislike={() => actionMutation.mutate('dislike')}
+      onUndo={(aspect) => {
+        if (!work.paper_id) return
+        undoMutation.mutate({ paperId: work.paper_id, aspect })
+        if (aspect === 'membership') {
+          setIsSaved(false)
+          setReaction(null)
+        } else if (aspect === 'rating') {
+          setReaction(null)
+        }
+      }}
       readingStatusSlot={readingStatusSlot}
       // Click-to-open re-seeds the parent dialog with this paper
       // (only when the row is in the local corpus — non-local

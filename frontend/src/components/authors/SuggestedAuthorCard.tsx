@@ -115,20 +115,22 @@ export function SuggestedAuthorCard({
           {institution ? (
             <p className="mt-0.5 truncate text-[11px] text-slate-500">{institution}</p>
           ) : null}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
             {/* Provenance chip uses the Folio-blue translucent tone:
                 the card sits on warm off-white paper, so saturated
                 semantic tones (emerald / amber) fight the surface;
                 the brand accent at low alpha reads as "metadata
                 stamp" rather than "alarm" while still being clearly
-                a chip and not body text. */}
+                a chip and not body text. `max-w-full` + an inner
+                truncate keep a long label (e.g. "Cited by your ★4+
+                papers") inside the card when it's narrow. */}
             <StatusBadge
               tone="accent"
               size="sm"
-              className="uppercase tracking-wide"
-              title={kindTone(suggestion.suggestion_type)}
+              className="max-w-full uppercase tracking-wide"
+              title={kindLabel(suggestion.suggestion_type)}
             >
-              {kindLabel(suggestion.suggestion_type)}
+              <span className="min-w-0 truncate">{kindLabel(suggestion.suggestion_type)}</span>
             </StatusBadge>
             {/* Consensus chip — only when ≥2 independent buckets agree.
                 The bonus is band-relative (+12 / +17 / +21 / +24 for
@@ -221,9 +223,10 @@ export function SuggestedAuthorCard({
                   key={`${signal.kind}-${idx}`}
                   tone="accent"
                   size="sm"
+                  className="max-w-full"
                   title={signal.subject || signal.label}
                 >
-                  {truncate(signal.label, 38)}
+                  <span className="min-w-0 truncate">{truncate(signal.label, 28)}</span>
                 </StatusBadge>
               ))}
             </div>
@@ -247,13 +250,13 @@ export function SuggestedAuthorCard({
       ) : null}
 
       <footer
-        className="mt-auto flex items-center gap-1"
+        className="mt-auto flex flex-wrap items-center gap-1.5"
         onClick={(e) => e.stopPropagation()}
       >
         <Button
           size="sm"
           variant={alreadyFollowed ? 'ghost' : 'accent'}
-          className="flex-1"
+          className="min-w-0 flex-1"
           onClick={(e) => {
             e.stopPropagation()
             if (!alreadyFollowed) onFollow()
@@ -272,7 +275,7 @@ export function SuggestedAuthorCard({
         <Button
           size="sm"
           variant="ghost"
-          className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
+          className="shrink-0 text-critical-600 hover:bg-critical-50 hover:text-critical-700"
           onClick={(e) => {
             e.stopPropagation()
             if (!alreadyFollowed) onReject()

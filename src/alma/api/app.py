@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 
 from alma.api.models import HealthResponse, VersionResponse, ErrorResponse, StatisticsResponse
+from alma.version import get_app_version
 from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.settings import router as settings_router
 from alma.api.routes.operations import router as operations_router
@@ -43,14 +44,17 @@ from alma.api.routes.backup import router as backup_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.bootstrap import router as bootstrap_router
 from alma.api.routes.extension import router as extension_router
+from alma.api.routes.onboarding import router as onboarding_router
 from alma.api.deps import get_db, get_plugin_registry, open_db_connection
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 
 logger = logging.getLogger(__name__)
 
-# Application metadata
+# Application metadata. API_VERSION is the HTTP contract version (hand-bumped on
+# breaking API changes); APP_VERSION tracks the release and derives from the
+# single source of truth in pyproject.toml — see alma.version.
 API_VERSION = "1.0.0"
-APP_VERSION = "1.0.0"
+APP_VERSION = get_app_version()
 START_TIME = time.time()
 
 
@@ -442,6 +446,7 @@ app.include_router(backup_router, prefix="/api/v1", tags=["backup"])
 app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
 app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
+app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
 
 # ============================================================================
 # React Frontend (Production Build)

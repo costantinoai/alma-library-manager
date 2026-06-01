@@ -54,6 +54,7 @@ import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
@@ -302,6 +303,8 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     },
   })
 
+  const undoMutation = usePaperUndo()
+
   const updateLikeMutation = useMutation({
     mutationFn: ({ pubKey, notes, rating }: { pubKey: string; notes?: string; rating?: number }) =>
       updateSavedPaper(pubKey, { notes, rating }),
@@ -531,6 +534,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             <RevealItem key={like.id} index={i}>
             <div
               className="relative rounded-sm"
+              data-tour={i === 0 ? 'library-card' : undefined}
             >
               <PaperCard
                 selection={{
@@ -546,6 +550,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 onDismiss={() => setDeleteKey(like.id)}
                 onLike={() => updateLikeMutation.mutate({ pubKey: like.id, rating: 4 })}
                 onLove={() => updateLikeMutation.mutate({ pubKey: like.id, rating: 5 })}
+                onUndo={(aspect) => undoMutation.mutate({ paperId: like.id, aspect })}
                 onPivot={() => navigateTo('discovery', { seed: like.id, seedTitle: like.title })}
                 dismissLabel="Remove"
                 dismissTitle="Remove from library"

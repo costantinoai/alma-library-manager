@@ -4,6 +4,7 @@ import { AppShell, type Page } from '@/components/layout/AppShell'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PageReveal } from '@/components/ui/reveal'
+import { OnboardingGate } from '@/components/onboarding'
 import { parseHashRoute, navigateTo } from '@/lib/hashRoute'
 
 const FeedPage = lazy(() => import('@/pages/FeedPage').then((m) => ({ default: m.FeedPage })))
@@ -106,6 +107,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={200}>
         <AppContent />
+        <OnboardingGate />
       </TooltipProvider>
     </QueryClientProvider>
   )

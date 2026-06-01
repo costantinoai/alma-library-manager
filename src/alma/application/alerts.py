@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from alma.slack.client import get_slack_notifier
+from alma.mailer.client import get_email_notifier
 
 VALID_RULE_TYPES = {
     "author",
@@ -662,6 +663,28 @@ async def evaluate_digest(
                 else:
                     papers_failed = len(new_papers)
                     channel_results[channel_name] = {"status": "failed", "error": "Slack API returned failure"}
+            except Exception as exc:
+                papers_failed = len(new_papers)
+                channel_results[channel_name] = {"status": "failed", "error": str(exc)}
+        elif channel_name == "email":
+            # Sibling of the Slack branch — same payload, same dedup/history
+            # machinery; only the delivery client differs.
+            notifier = get_email_notifier()
+            if not notifier.is_configured:
+                channel_results[channel_name] = {"status": "skipped", "error": "Email/SMTP not configured"}
+                continue
+            if not new_papers:
+                channel_results[channel_name] = {"status": "empty", "error": None}
+                continue
+            payload = [paper for _, paper in new_papers]
+            try:
+                ok = await notifier.send_paper_alert(recipients=None, papers=payload, alert_name=alert["name"])
+                if ok:
+                    papers_sent = len(new_papers)
+                    channel_results[channel_name] = {"status": "sent", "error": None}
+                else:
+                    papers_failed = len(new_papers)
+                    channel_results[channel_name] = {"status": "failed", "error": "Email send returned failure"}
             except Exception as exc:
                 papers_failed = len(new_papers)
                 channel_results[channel_name] = {"status": "failed", "error": str(exc)}

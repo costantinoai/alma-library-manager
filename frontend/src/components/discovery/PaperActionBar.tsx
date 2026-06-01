@@ -15,6 +15,11 @@ interface PaperActionBarProps {
   onLike?: () => void
   onLove?: () => void
   onDislike?: () => void
+  /** Per-aspect toggle-off. When supplied, re-clicking an already-applied
+   *  action undoes only that button's effect: Save → 'membership', Queue →
+   *  'reading', the active reaction → 'rating'. Each removes the interaction
+   *  AND the matching signal. */
+  onUndo?: (aspect: 'membership' | 'rating' | 'reading') => void
   disabled?: boolean
   compact?: boolean
   dismissLabel?: string
@@ -164,6 +169,7 @@ export function PaperActionBar({
   onLike,
   onLove,
   onDislike,
+  onUndo,
   disabled = false,
   compact = false,
   dismissLabel = 'Skip',
@@ -179,6 +185,14 @@ export function PaperActionBar({
   const showLabel = showLabels ?? !compact
   const hasRemove = !!onDismiss
   const hasReactions = !!(onQueue || onAdd || onDislike || onLike || onLove)
+  // Re-clicking an applied action toggles off only that button's effect via
+  // `onUndo(aspect)` when a surface supplies it; otherwise it re-fires the
+  // original handler.
+  const click =
+    (active: boolean, aspect: 'membership' | 'rating' | 'reading', handler?: () => void) =>
+    () =>
+      active && onUndo ? onUndo(aspect) : handler?.()
+  const canUndo = !!onUndo
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -206,7 +220,7 @@ export function PaperActionBar({
           disabled={disabled}
           showLabel={showLabel}
           title={isQueued ? 'Remove from reading list' : 'Add to reading list — decide later'}
-          onClick={onQueue}
+          onClick={click(isQueued, 'reading', onQueue)}
           active={isQueued}
         />
       )}
@@ -219,8 +233,8 @@ export function PaperActionBar({
           compact={compact}
           disabled={disabled}
           showLabel={showLabel}
-          title={isSaved ? (savedClickRemoves ? 'Remove from library' : 'Already saved to library') : 'Save to library'}
-          onClick={onAdd}
+          title={isSaved ? (savedClickRemoves || canUndo ? 'Remove from library' : 'Already saved to library') : 'Save to library'}
+          onClick={click(isSaved, 'membership', onAdd)}
           iconFilled={isSaved}
           active={isSaved}
         />
@@ -235,7 +249,7 @@ export function PaperActionBar({
           disabled={disabled}
           showLabel={showLabel}
           title={dislikeTitle}
-          onClick={onDislike}
+          onClick={click(reaction === 'dislike', 'rating', onDislike)}
           active={reaction === 'dislike'}
         />
       )}
@@ -249,7 +263,7 @@ export function PaperActionBar({
           disabled={disabled}
           showLabel={showLabel}
           title="Like — save to library with a positive signal"
-          onClick={onLike}
+          onClick={click(reaction === 'like', 'rating', onLike)}
           active={reaction === 'like'}
         />
       )}
@@ -263,7 +277,7 @@ export function PaperActionBar({
           disabled={disabled}
           showLabel={showLabel}
           title="Love — save to library with a strong positive signal"
-          onClick={onLove}
+          onClick={click(reaction === 'love', 'rating', onLove)}
           // Heart fills only when actively loved; empty outline at rest.
           active={reaction === 'love'}
         />

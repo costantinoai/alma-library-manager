@@ -43,6 +43,7 @@ import {
   PaperDetailPanel,
 } from '@/components/discovery'
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
+import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
@@ -54,6 +55,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
@@ -245,6 +247,8 @@ export function DiscoveryPage() {
   const markActioned = (recId: string) => {
     setActionedIds((prev) => new Set([...prev, recId]))
   }
+
+  const undoMutation = usePaperUndo(selectedLensId)
 
   const dismissMutation = useMutation({
     mutationFn: dismissRecommendation,
@@ -571,6 +575,9 @@ export function DiscoveryPage() {
             </div>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex items-center gap-1 self-end">
+              <PageTour pageKey="discovery" steps={DISCOVERY_TOUR} />
+            </div>
             <Button
               type="button"
               variant="default"
@@ -680,13 +687,15 @@ export function DiscoveryPage() {
           Switching lenses respawns the recommendations + branch
           settings + lens diagnostics queries via their lens-keyed
           React Query keys. */}
-      <LensManager
-        lenses={lensesQuery.data ?? []}
-        selectedLensId={selectedLensId}
-        onSelectLens={setSelectedLensId}
-        onCreate={(payload) => createLensMutation.mutate(payload)}
-        onDelete={(lensId) => deleteLensMutation.mutate(lensId)}
-      />
+      <div data-tour="discovery-lenses">
+        <LensManager
+          lenses={lensesQuery.data ?? []}
+          selectedLensId={selectedLensId}
+          onSelectLens={setSelectedLensId}
+          onCreate={(payload) => createLensMutation.mutate(payload)}
+          onDelete={(lensId) => deleteLensMutation.mutate(lensId)}
+        />
+      </div>
 
       <div className="space-y-4">
         {/* Branch Studio — collapsed by default. Sits above the
@@ -694,7 +703,10 @@ export function DiscoveryPage() {
             results) so the affordance to tune branches is visible
             in the same vertical scan as "which lens am I on".
             Summary line carries the at-a-glance counts. */}
-        <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
+        <details
+          data-tour="discovery-branches"
+          className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+        >
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
             <div className="flex flex-col gap-0.5">
               <span className="font-brand text-sm font-semibold text-alma-800">Branch Studio</span>
@@ -930,7 +942,7 @@ export function DiscoveryPage() {
           }}
         />
 
-        <div className="space-y-3">
+        <div className="space-y-3" data-tour="discovery-card">
           {lensRecommendationsQuery.isLoading ? (
             <SkeletonList count={5} />
           ) : recommendations.length === 0 ? (
@@ -1028,6 +1040,7 @@ export function DiscoveryPage() {
                   onLove={() => loveMutation.mutate(rec.id)}
                   onDislike={() => dislikeMutation.mutate(rec.id)}
                   onQueue={() => queueMutation.mutate(rec.id)}
+                  onUndo={(aspect) => rec.paper_id && undoMutation.mutate({ paperId: rec.paper_id, aspect })}
                   onPivot={() => navigateTo('discovery', {
                     seed: cardPaper.id,
                     seedTitle: cardPaper.title,

@@ -56,6 +56,7 @@ from alma.core.secrets import (
     SECRET_OPENALEX_API_KEY,
     SECRET_SEMANTIC_SCHOLAR_API_KEY,
     SECRET_SLACK_BOT_TOKEN,
+    SECRET_SMTP_PASSWORD,
     delete_secret,
     get_secret,
     mask_secret,
@@ -207,6 +208,15 @@ class SettingsModel(BaseModel):
     # Slack notification settings
     slack_token: Optional[str] = Field(None, description="Slack Bot User OAuth Token")
     slack_channel: Optional[str] = Field(None, description="Default Slack channel for notifications")
+    # Email / SMTP digest channel (sibling of Slack). Add "email" to an alert's
+    # channels to receive digests here. Password lives in the secret store.
+    smtp_host: Optional[str] = Field(None, description="SMTP server host for email digests")
+    smtp_port: Optional[int] = Field(587, description="SMTP port (587 = STARTTLS, 465 = implicit TLS)")
+    smtp_username: Optional[str] = Field(None, description="SMTP auth username")
+    smtp_password: Optional[str] = Field(None, description="SMTP auth password (stored in the secret store)")
+    smtp_from: Optional[str] = Field(None, description="From address for digest emails")
+    smtp_to: Optional[str] = Field(None, description="Recipient list (comma / newline separated)")
+    smtp_use_tls: Optional[bool] = Field(True, description="Use STARTTLS (ignored on port 465)")
     # OpenAlex API key — REQUIRED since 2026-02-13 (the email "polite pool"
     # was discontinued; keyless requests get 100 credits/day then HTTP 409).
     openalex_api_key: Optional[str] = Field(None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)")
@@ -309,6 +319,7 @@ def get_settings():
     slack_token_masked = mask_secret(get_secret(SECRET_SLACK_BOT_TOKEN), prefix=10, suffix=4)
     openalex_api_key_masked = mask_secret(get_openalex_api_key(), suffix=4)
     semantic_scholar_api_key_masked = mask_secret(get_semantic_scholar_api_key(), suffix=4)
+    smtp_password_masked = mask_secret(get_secret(SECRET_SMTP_PASSWORD), suffix=4)
 
     return SettingsModel(
         backend=raw.get("backend", "openalex"),
@@ -320,6 +331,13 @@ def get_settings():
         slack_config_path=raw.get("slack_config_path"),
         slack_token=slack_token_masked,
         slack_channel=raw.get("slack_channel"),
+        smtp_host=raw.get("smtp_host"),
+        smtp_port=int(raw.get("smtp_port", 587) or 587),
+        smtp_username=raw.get("smtp_username"),
+        smtp_password=smtp_password_masked,
+        smtp_from=raw.get("smtp_from"),
+        smtp_to=raw.get("smtp_to"),
+        smtp_use_tls=bool(raw.get("smtp_use_tls", True)),
         openalex_api_key=openalex_api_key_masked,
         semantic_scholar_api_key=semantic_scholar_api_key_masked,
         id_resolution_semantic_scholar_enabled=bool(
@@ -364,8 +382,9 @@ def export_data_snapshot():
 
     dump: dict[str, list[dict]] = {}
     try:
-        conn = sqlite3.connect(str(get_db_path()), check_same_thread=False)
+        conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
             for table in data_tables:
                 try:
@@ -408,6 +427,7 @@ def update_settings(payload: SettingsModel):
         incoming_openalex_key = data.pop("openalex_api_key", None)
         incoming_s2_key = data.pop("semantic_scholar_api_key", None)
         incoming_slack_token = data.pop("slack_token", None)
+        incoming_smtp_password = data.pop("smtp_password", None)
 
         if incoming_openalex_key is not None and not _is_masked_secret_value(incoming_openalex_key):
             clean_openalex_key = str(incoming_openalex_key).strip()
@@ -435,10 +455,19 @@ def update_settings(payload: SettingsModel):
             else:
                 delete_secret(SECRET_SLACK_BOT_TOKEN)
 
+        if incoming_smtp_password is not None and not _is_masked_secret_value(incoming_smtp_password):
+            clean_smtp_password = str(incoming_smtp_password).strip()
+            if clean_smtp_password:
+                set_secret(SECRET_SMTP_PASSWORD, clean_smtp_password)
+            else:
+                delete_secret(SECRET_SMTP_PASSWORD)
+
         # Write settings first (this validates that paths are relative)
         _write_settings(data)
         # Ensure plaintext credential keys are absent from settings.json.
-        config_delete_settings_keys(["slack_token", "openalex_api_key", "semantic_scholar_api_key"])
+        config_delete_settings_keys(
+            ["slack_token", "openalex_api_key", "semantic_scholar_api_key", "smtp_password"]
+        )
 
         # Validate DB path can be accessed using the resolved absolute path
         from alma.config import get_db_path
@@ -446,8 +475,9 @@ def update_settings(payload: SettingsModel):
         def _ensure_db(resolved_path: Path):
             try:
                 resolved_path.parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(str(resolved_path))
+                conn = sqlite3.connect(str(resolved_path), timeout=30.0)
                 try:
+                    conn.execute("PRAGMA busy_timeout=30000")
                     conn.execute("SELECT 1").fetchone()
                 finally:
                     conn.close()

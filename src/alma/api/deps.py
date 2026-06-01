@@ -574,6 +574,20 @@ def init_db_schema() -> None:
                     notify_new_papers INTEGER DEFAULT 1
                 )"""
             )
+            # Onboarding marks the user's own author profile as the "owner".
+            # Single-user app, so the partial unique index enforces at most
+            # one owner row at the DB level. Used by /onboarding for
+            # has_owner detection and (future) a "this is you" badge.
+            _ensure_columns(
+                conn,
+                "followed_authors",
+                {"is_owner": "INTEGER NOT NULL DEFAULT 0"},
+            )
+            _safe_execute(
+                conn,
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_followed_authors_one_owner "
+                "ON followed_authors(is_owner) WHERE is_owner = 1",
+            )
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS author_enrichment_status (
@@ -1871,7 +1885,24 @@ def init_db_schema() -> None:
 # ============================================================================
 
 def open_db_connection() -> sqlite3.Connection:
-    """Open one configured SQLite connection for app code."""
+    """Open one configured SQLite connection for app code.
+
+    This is the ONE connection contract for every foreground request and
+    background runner. SQLite is single-writer; these pragmas are what keep
+    concurrent writers from failing with "database is locked":
+
+    - ``journal_mode=WAL``  — readers never block the single writer. It is
+      persisted in the DB header (set once at ``init_db_schema``), but we
+      re-assert and *read it back* on every connection so a filesystem that
+      silently refuses WAL (some network/overlay mounts) surfaces loudly
+      instead of degrading to rollback-journal (which serialises readers
+      against writers and is the classic Docker lock trap).
+    - ``busy_timeout=30000`` — wait up to 30s for the writer instead of
+      erroring immediately. Belt-and-suspenders foreground retry lives in
+      ``alma.core.db_retry`` for the rare lock that outlives even this.
+    - ``synchronous=NORMAL`` — safe under WAL and cuts fsyncs sharply, so
+      each write transaction is held for less wall-clock time.
+    """
     conn = sqlite3.connect(
         _db_path(),
         check_same_thread=False,
@@ -1879,6 +1910,17 @@ def open_db_connection() -> sqlite3.Connection:
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
+    mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+    resolved = (mode[0] if mode else "") or ""
+    if resolved.lower() != "wal":
+        # The DB file's filesystem refused WAL. Everything still works, but
+        # writer/reader contention will be far worse — make it visible.
+        logger.warning(
+            "SQLite journal_mode is %r, not WAL — expect heavier lock "
+            "contention. Check the data volume's filesystem.",
+            resolved,
+        )
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 

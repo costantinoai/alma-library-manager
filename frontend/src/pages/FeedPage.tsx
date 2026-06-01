@@ -34,6 +34,7 @@ import {
   type Publication,
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
+import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
@@ -48,6 +49,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateAfterFeedRefresh, invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
@@ -257,6 +259,8 @@ export function FeedPage() {
     onError: (err) => errorToast('Undo failed', getApiErrorMessage(err)),
   })
 
+  const undoMutation = usePaperUndo()
+
   const actionMutation = useMutation({
     mutationFn: async ({ id, action }: { id: string; action: FeedAction }) => {
       if (action === 'add') return feedAdd(id)
@@ -407,7 +411,10 @@ export function FeedPage() {
           carries the description, a live monitor pulse, a one-tap link to
           Settings, and the primary Refresh action.
       ──────────────────────────────────────────────────────────────────── */}
-      <section className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
+      <section
+        data-tour="feed-hero"
+        className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+      >
         {/* Flat chrome paper. The gradient was a v2 holdover that read as
             SaaS-y on the bookish bg — paper is honest, no decoration. */}
         <div className="relative flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:gap-8">
@@ -469,6 +476,7 @@ export function FeedPage() {
               )}
               <button
                 type="button"
+                data-tour="feed-monitors"
                 onClick={() => {
                   window.location.hash = buildHashRoute('settings')
                 }}
@@ -483,6 +491,9 @@ export function FeedPage() {
             )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex items-center gap-1 self-end">
+              <PageTour pageKey="feed" steps={FEED_TOUR} />
+            </div>
             <Button
               type="button"
               variant="default"
@@ -699,6 +710,7 @@ export function FeedPage() {
               <RevealItem key={item.id} index={i}>
               <div
                 className="relative rounded-sm"
+                data-tour={i === 0 ? 'feed-card' : undefined}
               >
                 <PaperCard
                   selection={{
@@ -729,6 +741,7 @@ export function FeedPage() {
                   onLove={() => actionMutation.mutate({ id: item.id, action: 'love' })}
                   onDislike={() => actionMutation.mutate({ id: item.id, action: 'dislike' })}
                   onDismiss={() => actionMutation.mutate({ id: item.id, action: 'dismiss' })}
+                  onUndo={(aspect) => item.paper_id && undoMutation.mutate({ paperId: item.paper_id, aspect })}
                   dismissLabel="Dismiss"
                   dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"

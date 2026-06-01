@@ -1431,7 +1431,7 @@ def list_followed_authors(
     ensure_followed_author_contract(db)
     rows = db.execute(
         """
-        SELECT fa.author_id, fa.followed_at, fa.notify_new_papers, a.name
+        SELECT fa.author_id, fa.followed_at, fa.notify_new_papers, fa.is_owner, a.name
         FROM followed_authors fa
         LEFT JOIN authors a ON a.id = fa.author_id
         ORDER BY fa.followed_at DESC
@@ -1442,6 +1442,7 @@ def list_followed_authors(
             author_id=r["author_id"],
             followed_at=r["followed_at"],
             notify_new_papers=bool(r["notify_new_papers"]),
+            is_owner=bool(r["is_owner"]) if "is_owner" in r.keys() else False,
             name=r["name"],
         )
         for r in rows
@@ -1491,43 +1492,56 @@ def follow_author(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Start following an author."""
-    ensure_followed_author_contract(db)
-    canonical_author_id = resolve_canonical_author_id(
-        db,
-        req.author_id,
-        create_if_missing=True,
-        fallback_name=req.author_id,
-    )
-    if not canonical_author_id:
-        raise HTTPException(status_code=404, detail="Author could not be resolved")
+    from alma.core.db_retry import run_with_lock_retry
+
     now = datetime.utcnow().isoformat()
-    already_followed = db.execute(
-        "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
-        (canonical_author_id,),
-    ).fetchone() is not None
-    if already_followed:
-        raise HTTPException(status_code=409, detail="Already following this author")
 
-    # One canonical entry point — keeps followed_authors / author_type /
-    # feed_monitors synchronized in the same transaction.
-    apply_follow_state(db, canonical_author_id, followed=True)
-    # Respect the user's notify_new_papers override (default is 1, which
-    # apply_follow_state already sets — only override when explicitly false).
-    if not req.notify_new_papers:
-        db.execute(
-            "UPDATE followed_authors SET notify_new_papers = 0 WHERE author_id = ?",
-            (canonical_author_id,),
+    def _persist_follow() -> str:
+        # Whole follow write unit, retried as one on a transient SQLite lock
+        # so a burst of follows never silently drops one. rollback() first
+        # clears any aborted state from a prior locked attempt; the create /
+        # follow helpers are idempotent so re-running is safe. HTTP 404/409
+        # are control flow (non-lock) and propagate without retry.
+        db.rollback()
+        ensure_followed_author_contract(db)
+        canonical_id = resolve_canonical_author_id(
+            db,
+            req.author_id,
+            create_if_missing=True,
+            fallback_name=req.author_id,
         )
-    row = db.execute(
-        "SELECT openalex_id FROM authors WHERE id = ?",
-        (canonical_author_id,),
-    ).fetchone()
-    feedback_author_id = str((row["openalex_id"] if row else "") or req.author_id or "").strip()
-    if feedback_author_id:
-        from alma.application.gap_radar import clear_missing_author_feedback
+        if not canonical_id:
+            raise HTTPException(status_code=404, detail="Author could not be resolved")
+        already_followed = db.execute(
+            "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
+            (canonical_id,),
+        ).fetchone() is not None
+        if already_followed:
+            raise HTTPException(status_code=409, detail="Already following this author")
 
-        clear_missing_author_feedback(db, feedback_author_id)
-    db.commit()
+        # One canonical entry point — keeps followed_authors / author_type /
+        # feed_monitors synchronized in the same transaction.
+        apply_follow_state(db, canonical_id, followed=True)
+        # Respect the user's notify_new_papers override (default is 1, which
+        # apply_follow_state already sets — only override when explicitly false).
+        if not req.notify_new_papers:
+            db.execute(
+                "UPDATE followed_authors SET notify_new_papers = 0 WHERE author_id = ?",
+                (canonical_id,),
+            )
+        row = db.execute(
+            "SELECT openalex_id FROM authors WHERE id = ?",
+            (canonical_id,),
+        ).fetchone()
+        feedback_author_id = str((row["openalex_id"] if row else "") or req.author_id or "").strip()
+        if feedback_author_id:
+            from alma.application.gap_radar import clear_missing_author_feedback
+
+            clear_missing_author_feedback(db, feedback_author_id)
+        db.commit()
+        return canonical_id
+
+    canonical_author_id = run_with_lock_retry(_persist_follow, label="follow_author")
 
     try:
         schedule_followed_author_historical_backfill(canonical_author_id, trigger="library_follow")
@@ -1559,19 +1573,28 @@ def unfollow_author(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Stop following an author."""
-    ensure_followed_author_contract(db)
-    canonical_author_id = resolve_canonical_author_id(db, author_id, create_if_missing=False) or author_id
-    existed = db.execute(
-        "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
-        (canonical_author_id,),
-    ).fetchone() is not None
-    if not existed:
-        raise HTTPException(status_code=404, detail="Followed author not found")
+    from alma.core.db_retry import run_with_lock_retry
 
-    # Single entry point — deletes from followed_authors, demotes
-    # authors.author_type, and tears down the mirrored feed_monitors row.
-    apply_follow_state(db, canonical_author_id, followed=False)
-    db.commit()
+    def _persist_unfollow() -> None:
+        # Retried as one unit on a transient SQLite lock (rollback() first so
+        # a retry re-runs cleanly). 404 is control flow and propagates without
+        # retry; the contract-ensure and resolve are idempotent reads.
+        db.rollback()
+        ensure_followed_author_contract(db)
+        canonical_author_id = resolve_canonical_author_id(db, author_id, create_if_missing=False) or author_id
+        existed = db.execute(
+            "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
+            (canonical_author_id,),
+        ).fetchone() is not None
+        if not existed:
+            raise HTTPException(status_code=404, detail="Followed author not found")
+
+        # Single entry point — deletes from followed_authors, demotes
+        # authors.author_type, and tears down the mirrored feed_monitors row.
+        apply_follow_state(db, canonical_author_id, followed=False)
+        db.commit()
+
+    run_with_lock_retry(_persist_unfollow, label="unfollow_author")
 
 
 # ===================================================================

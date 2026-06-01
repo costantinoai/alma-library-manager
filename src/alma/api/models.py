@@ -772,6 +772,7 @@ class FollowedAuthorResponse(BaseModel):
     author_id: str
     followed_at: str
     notify_new_papers: bool
+    is_owner: bool = False
     name: Optional[str] = None
 
 

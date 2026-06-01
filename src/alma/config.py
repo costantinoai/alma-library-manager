@@ -21,6 +21,7 @@ Key principles:
 import os
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Dict, Any
 from functools import lru_cache
@@ -675,6 +676,66 @@ def get_slack_channel() -> Optional[str]:
         return channel
 
     return None
+
+
+# ── Email / SMTP (the email-digest channel, sibling of Slack) ──────────────
+def get_smtp_host() -> Optional[str]:
+    """SMTP server host. Env ``SMTP_HOST`` → ``smtp_host`` setting."""
+    return os.getenv("SMTP_HOST") or get_setting("smtp_host") or None
+
+
+def get_smtp_port() -> int:
+    """SMTP port (default 587 = STARTTLS). Env ``SMTP_PORT`` → setting."""
+    raw = os.getenv("SMTP_PORT") or get_setting("smtp_port") or 587
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 587
+
+
+def get_smtp_username() -> Optional[str]:
+    """SMTP auth username. Env ``SMTP_USERNAME`` → ``smtp_username`` setting."""
+    return os.getenv("SMTP_USERNAME") or get_setting("smtp_username") or None
+
+
+def get_smtp_from() -> Optional[str]:
+    """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
+    return (
+        os.getenv("SMTP_FROM")
+        or get_setting("smtp_from")
+        or get_smtp_username()
+        or None
+    )
+
+
+def get_smtp_recipients() -> list[str]:
+    """Digest recipients, parsed from a comma/semicolon/newline list.
+
+    Env ``SMTP_TO`` → ``smtp_to`` setting.
+    """
+    raw = os.getenv("SMTP_TO") or get_setting("smtp_to") or ""
+    parts = re.split(r"[,;\n]+", str(raw))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def get_smtp_use_tls() -> bool:
+    """Whether to use STARTTLS (default True). ``smtp_use_tls`` setting."""
+    val = get_setting("smtp_use_tls", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in ("0", "false", "no", "")
+    return bool(val)
+
+
+def get_smtp_password() -> Optional[str]:
+    """SMTP password. Env ``SMTP_PASSWORD`` → unified secret store."""
+    env_pw = os.getenv("SMTP_PASSWORD")
+    if env_pw:
+        return env_pw
+    try:
+        from alma.core.secrets import get_secret, SECRET_SMTP_PASSWORD
+        return get_secret(SECRET_SMTP_PASSWORD)
+    except Exception:
+        return None
 
 
 def get_openai_api_key() -> Optional[str]:

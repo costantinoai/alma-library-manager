@@ -608,6 +608,13 @@ export interface Settings {
   slack_config_path?: string
   slack_token?: string
   slack_channel?: string
+  smtp_host?: string
+  smtp_port?: number
+  smtp_username?: string
+  smtp_password?: string
+  smtp_from?: string
+  smtp_to?: string
+  smtp_use_tls?: boolean
   check_interval_hours?: number
   id_resolution_semantic_scholar_enabled?: boolean
   id_resolution_orcid_enabled?: boolean
@@ -696,6 +703,7 @@ export interface FollowedAuthor {
   author_id: string
   followed_at: string
   notify_new_papers: boolean
+  is_owner?: boolean
   name?: string
 }
 
@@ -3861,8 +3869,130 @@ export interface BootstrapData {
   feed: { unread: number }
   discovery: { active_lenses: number; pending_recommendations: number }
   alerts: { active: number }
+  app: { version: string }
+  onboarding: { completed: boolean; has_owner: boolean }
 }
 
 export function getBootstrap(): Promise<BootstrapData> {
   return api.get<BootstrapData>('/bootstrap')
+}
+
+// ── Onboarding (first-run flow) ──
+// Thin wrappers over /api/v1/onboarding/*. Everything else the flow needs
+// (follow, suggestions, monitors, lenses, recommendations, key settings,
+// search-to-save) reuses the existing client functions above.
+
+export interface OnboardingStatus {
+  completed: boolean
+  has_owner: boolean
+  library_count: number
+  followed_count: number
+  user_name: string | null
+}
+
+export interface OwnerProfile {
+  openalex_id: string
+  name: string | null
+  institution: string | null
+  works_count: number
+  cited_by_count: number
+  orcid: string | null
+}
+
+export interface IngestOwnerResult {
+  author_id: string
+  openalex_id: string
+  job_id: string | null
+}
+
+export type OnboardingPaperAction = 'add' | 'like' | 'love' | 'dislike' | 'dismiss' | 'undo'
+
+export interface OnboardingPaperFeedbackResult {
+  paper_id: string
+  action: OnboardingPaperAction
+  status: string | null
+  rating: number | null
+}
+
+export function getOnboardingStatus(): Promise<OnboardingStatus> {
+  return api.get<OnboardingStatus>('/onboarding/status')
+}
+
+export function setOnboardingProfile(name: string): Promise<void> {
+  return api.post<void>('/onboarding/profile', { name })
+}
+
+export function resolveOwnerIdentity(body: {
+  orcid?: string
+  openalex_id?: string
+}): Promise<OwnerProfile> {
+  return api.post<OwnerProfile>('/onboarding/resolve-owner', body)
+}
+
+export function ingestOwner(body: {
+  openalex_id: string
+  name?: string
+}): Promise<IngestOwnerResult> {
+  return api.post<IngestOwnerResult>('/onboarding/ingest-owner', body)
+}
+
+export function promoteOwnerPapers(): Promise<{ promoted: number }> {
+  return api.post<{ promoted: number }>('/onboarding/promote-owner-papers')
+}
+
+export function onboardingPaperFeedback(
+  paperId: string,
+  action: OnboardingPaperAction,
+): Promise<OnboardingPaperFeedbackResult> {
+  return api.post<OnboardingPaperFeedbackResult>('/onboarding/paper-feedback', {
+    paper_id: paperId,
+    action,
+  })
+}
+
+export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all'
+
+/**
+ * Per-aspect toggle-off: each PaperCard action button undoes only its own
+ * effect. `membership` removes from library, `rating` clears the
+ * like/love/dislike rating, `reading` clears the reading-list state, `all` is a
+ * full neutral reset. Each deletes the matching signal events (the paper signal
+ * is one store across surfaces, so this clears it everywhere).
+ */
+export function undoPaperFeedback(
+  paperId: string,
+  aspect: UndoAspect = 'all',
+): Promise<{
+  paper_id: string
+  aspect: UndoAspect
+  status: string | null
+  rating: number | null
+  reading_status: string
+}> {
+  return api.post(
+    `/papers/${encodeURIComponent(paperId)}/undo-feedback?aspect=${aspect}`,
+  )
+}
+
+export function completeOnboarding(): Promise<void> {
+  return api.post<void>('/onboarding/complete')
+}
+
+export function resetOnboarding(): Promise<void> {
+  return api.post<void>('/onboarding/reset')
+}
+
+/**
+ * Create an author row from any identifier (OpenAlex / ORCID / Scholar / name).
+ * The backend resolves identity, inserts as `author_type='followed'`, follows,
+ * and schedules the historical backfill. Used by onboarding's identity step and
+ * the suggestion-follow path (OpenAlex-only suggestions have no local id yet).
+ */
+export function createAuthor(body: {
+  openalex_id?: string
+  orcid?: string
+  scholar_id?: string
+  name?: string
+}): Promise<Author> {
+  return api.post<Author>('/authors', body)
 }

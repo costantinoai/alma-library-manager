@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 
 from alma.api.deps import get_db, get_current_user
 from alma.application import feed as feed_app
+from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,32 @@ def get_bootstrap(
     except Exception:
         pass
 
+    # Onboarding gate. The frontend shows the first-run flow whenever
+    # `onboarding.completed` is not set, so it fires on every fresh DB and
+    # can be re-triggered from Settings → Restart onboarding. Reuses this
+    # single bootstrap fetch — no extra request on boot.
+    onboarding_completed = False
+    try:
+        row = db.execute(
+            "SELECT value FROM discovery_settings WHERE key = 'onboarding.completed'"
+        ).fetchone()
+        onboarding_completed = bool(
+            row and str(row["value"]).strip().lower() in ("1", "true", "yes")
+        )
+    except Exception:
+        pass
+
+    has_owner = False
+    try:
+        has_owner = (
+            db.execute(
+                "SELECT COUNT(*) AS c FROM followed_authors WHERE is_owner = 1"
+            ).fetchone()["c"]
+            > 0
+        )
+    except Exception:
+        pass
+
     return {
         "library": {
             "papers": total_papers,
@@ -117,5 +144,12 @@ def get_bootstrap(
         },
         "alerts": {
             "active": active_alerts,
+        },
+        "app": {
+            "version": get_app_version(),
+        },
+        "onboarding": {
+            "completed": onboarding_completed,
+            "has_owner": has_owner,
         },
     }

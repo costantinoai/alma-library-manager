@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, Save, Sparkles } from 'lucide-react'
 
-import { api, type Settings } from '@/api/client'
+import { api, resetOnboarding, type Settings } from '@/api/client'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { Button } from '@/components/ui/button'
 import { navigateTo } from '@/lib/hashRoute'
@@ -13,6 +13,7 @@ import { BackendCard } from '@/components/settings/BackendCard'
 import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { ChannelsCard } from '@/components/settings/ChannelsCard'
+import { EmailCard } from '@/components/settings/EmailCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
 import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
@@ -49,6 +50,7 @@ type AnchorId =
   | 'external-apis'
   | 'id-resolution'
   | 'channels'
+  | 'email-digests'
   | 'discovery-weights'
   | 'feed-monitors'
   | 'ai-config'
@@ -74,6 +76,7 @@ const TOC: TocEntry[] = [
   { id: 'external-apis', label: 'External APIs', section: 'connections' },
   { id: 'id-resolution', label: 'Identifier resolution', section: 'connections' },
   { id: 'channels', label: 'Delivery channels', section: 'connections' },
+  { id: 'email-digests', label: 'Email digests', section: 'connections' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
@@ -253,6 +256,9 @@ export function SettingsPage() {
             <Anchor id="channels">
               <ChannelsCard formData={formData} onFormDataChange={setFormData} />
             </Anchor>
+            <Anchor id="email-digests">
+              <EmailCard formData={formData} onFormDataChange={setFormData} />
+            </Anchor>
 
             {/* Connection-settings save footer.
                 The legacy global "Save Settings" button only ever persisted
@@ -313,6 +319,31 @@ export function SettingsPage() {
               <p className="text-sm text-slate-500">
                 Health is the single place to see what's degraded and act on it. Settings is now just
                 configuration.
+              </p>
+            </SettingsCard>
+            <SettingsCard
+              icon={Sparkles}
+              title="First-run setup"
+              description="Replay the guided welcome — re-introduce ALMa and revisit your identity, monitors, and lens. Nothing is deleted; your existing data is kept."
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await resetOnboarding()
+                    } catch {
+                      /* non-fatal */
+                    }
+                    invalidateQueries(queryClient, ['bootstrap'])
+                  }}
+                >
+                  Restart onboarding
+                </Button>
+              }
+            >
+              <p className="text-sm text-slate-500">
+                This just replays the setup so you can adjust anything you skipped the first time.
               </p>
             </SettingsCard>
             <Anchor id="data-management"><DataManagementCard /></Anchor>

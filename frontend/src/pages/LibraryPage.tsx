@@ -11,6 +11,7 @@ import {
 
 import { getLibraryWorkflowSummary, type Publication, updateReadingStatus } from '@/api/client'
 import { PaperCard } from '@/components/shared'
+import { PageTour, LIBRARY_TOUR } from '@/components/onboarding'
 import { PaperDetailPanel } from '@/components/discovery'
 import { SavedTab } from '@/components/library/SavedTab'
 import { ReadingListTab } from '@/components/library/ReadingListTab'
@@ -184,13 +185,18 @@ export function LibraryPage() {
             </span>
           </p>
         </div>
-        {/* Right-side header slot reserved for future Library-wide actions. */}
+        <div className="flex items-center gap-2">
+          <PageTour pageKey="library" steps={LIBRARY_TOUR} />
+        </div>
       </header>
 
       {/* Needs Attention — collapsed by default. Each row carries an
           inline reasons strip explaining WHY the paper is flagged + a
           suggested action verb so the user can act without thinking. */}
-      <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
+      <details
+        data-tour="library-workflow"
+        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+      >
         <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
           <div className="flex flex-col gap-0.5">
             <div className="flex items-center gap-2">
@@ -261,6 +267,7 @@ export function LibraryPage() {
             <button
               key={tab.id}
               role="tab"
+              data-tour={tab.id === 'saved' ? 'library-saved' : tab.id === 'imports' ? 'library-imports' : undefined}
               aria-selected={isActive}
               onClick={() => {
                 setActiveTab(tab.id)

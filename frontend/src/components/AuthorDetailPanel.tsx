@@ -61,6 +61,7 @@ import { NeighbourhoodDialog } from '@/components/authors/NeighbourhoodDialog'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
@@ -82,6 +83,8 @@ interface AuthorDetailPanelProps {
    * expected to close the dialog and invalidate its author queries.
    */
   onDeleted?: (author: Author) => void
+  /** Marks the user's own author profile (set during onboarding). */
+  isOwner?: boolean
 }
 
 type Scope = 'all' | 'library' | 'background' | 'openalex'
@@ -128,10 +131,12 @@ function PublicationRow({
   publication,
   onRate,
   onReading,
+  onUndo,
 }: {
   publication: Publication
   onRate: (paperId: string, rating: number) => void
   onReading: (paperId: string, status: 'reading' | 'done' | 'excluded' | null) => void
+  onUndo: (paperId: string, aspect: 'membership' | 'rating' | 'reading') => void
 }) {
   const isSaved = publication.status === 'library'
   const reaction = ratingToReaction(publication.rating)
@@ -182,6 +187,7 @@ function PublicationRow({
       onAdd={() => onRate(publication.id, 3)}
       onLike={() => onRate(publication.id, 4)}
       onLove={() => onRate(publication.id, 5)}
+      onUndo={(aspect) => onUndo(publication.id, aspect)}
     />
   )
 }
@@ -290,8 +296,10 @@ export function AuthorDetailPanel({
   onOpenChange,
   suggestion,
   onDeleted,
+  isOwner,
 }: AuthorDetailPanelProps) {
   const queryClient = useQueryClient()
+  const undoMutation = usePaperUndo()
   const { toast } = useToast()
 
   // If this dialog was opened from a Suggested card, the `author` object is
@@ -518,7 +526,14 @@ export function AuthorDetailPanel({
               — without it the Follow / Unfollow chip overlaps the X. */}
           <div className="flex items-start justify-between gap-4 pr-12">
             <div className="min-w-0 flex-1">
-              <DialogTitle className="text-lg leading-tight">{resolved.name}</DialogTitle>
+              <div className="flex items-center gap-2">
+                <DialogTitle className="text-lg leading-tight">{resolved.name}</DialogTitle>
+                {isOwner ? (
+                  <StatusBadge tone="accent" size="sm" className="shrink-0">
+                    This is you
+                  </StatusBadge>
+                ) : null}
+              </div>
               <p className="mt-1 text-sm text-slate-500">
                 {resolved.affiliation ?? 'No affiliation on record'}
               </p>
@@ -820,6 +835,7 @@ export function AuthorDetailPanel({
                     publication={pub}
                     onRate={(paperId, rating) => rateMutation.mutate({ paperId, rating })}
                     onReading={(paperId, status) => readingMutation.mutate({ paperId, status })}
+                    onUndo={(paperId, aspect) => undoMutation.mutate({ paperId, aspect })}
                   />
                 ))}
               </div>

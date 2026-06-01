@@ -16,6 +16,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 SECRET_SLACK_BOT_TOKEN = "slack.bot_token"
+SECRET_SMTP_PASSWORD = "smtp.password"
 SECRET_SEMANTIC_SCHOLAR_API_KEY = "semantic_scholar.api_key"
 SECRET_OPENAI_API_KEY = "openai.api_key"
 SECRET_ZOTERO_API_KEY = "zotero.api_key"
@@ -32,6 +33,7 @@ SECRET_OPENALEX_API_KEY = "openalex.api_key"
 
 _SECRET_KEYS = {
     SECRET_SLACK_BOT_TOKEN,
+    SECRET_SMTP_PASSWORD,
     SECRET_SEMANTIC_SCHOLAR_API_KEY,
     SECRET_OPENAI_API_KEY,
     SECRET_ZOTERO_API_KEY,

@@ -270,6 +270,9 @@ export function Sidebar({
             <>
               <div className="font-brand text-[11px] uppercase tracking-[0.18em] text-alma-300">
                 <span className="text-alma-100">A</span>·<span className="text-alma-100">L</span>·<span className="text-alma-100">Ma</span>
+                {bootstrap?.app?.version && (
+                  <span className="ml-1.5 text-alma-400 normal-case tracking-normal">v{bootstrap.app.version}</span>
+                )}
               </div>
               <div className="mt-0.5 text-[10px] text-alma-400">Another Library Manager</div>
               <a

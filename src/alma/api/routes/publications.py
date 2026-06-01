@@ -755,6 +755,30 @@ def rate_publication(
     }
 
 
+@router.post(
+    "/{paper_id}/undo-feedback",
+    summary="Undo one dimension of a paper's user feedback",
+    description=(
+        "Per-aspect toggle-off: each action button undoes only its own effect. "
+        "`aspect=membership` removes from library; `rating` clears the "
+        "like/love/dislike rating; `reading` clears the reading-list state; "
+        "`all` is a full neutral reset. Each deletes the matching signal events."
+    ),
+)
+def undo_paper_feedback_endpoint(
+    paper_id: str,
+    aspect: str = Query("all", description="membership | rating | reading | all"),
+    pub_db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    target = pub_db.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    result = library_app.undo_paper_feedback(pub_db, paper_id, aspect)
+    pub_db.commit()
+    return result
+
+
 @router.get(
     "/{paper_id}/details",
     summary="Get full paper details",

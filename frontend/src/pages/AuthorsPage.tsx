@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
+import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
@@ -95,6 +96,11 @@ export function AuthorsPage() {
   const authors = authorsQuery.data ?? []
   const followedIds = useMemo(
     () => new Set((followedAuthorsQuery.data ?? []).map((item) => item.author_id)),
+    [followedAuthorsQuery.data],
+  )
+  // The single owner row (set during onboarding) → "This is you" badge.
+  const ownerId = useMemo(
+    () => (followedAuthorsQuery.data ?? []).find((item) => item.is_owner)?.author_id ?? null,
     [followedAuthorsQuery.data],
   )
 
@@ -200,6 +206,7 @@ export function AuthorsPage() {
             <Plus className="h-4 w-4" />
             Add author
           </Button>
+          <PageTour pageKey="authors" steps={AUTHORS_TOUR} />
         </div>
       </header>
 
@@ -209,9 +216,11 @@ export function AuthorsPage() {
         </Alert>
       ) : null}
 
-      <SuggestedAuthorsRail onOpenDetail={openSuggestionDetail} />
+      <div data-tour="authors-suggestions">
+        <SuggestedAuthorsRail onOpenDetail={openSuggestionDetail} />
+      </div>
 
-      <section className="space-y-3">
+      <section className="space-y-3" data-tour="authors-followed">
         <header className="flex items-center gap-2">
           <Users className="h-4 w-4 text-alma-600" />
           <h2 className="text-sm font-semibold text-alma-800">Followed authors</h2>
@@ -243,6 +252,7 @@ export function AuthorsPage() {
                 <FollowedAuthorCard
                   author={author}
                   signal={signalByAuthorId.get(author.id) ?? null}
+                  isOwner={author.id === ownerId}
                   onClick={() => openDetail(author)}
                   attentionRow={attentionByAuthor.get(author.id) ?? null}
                   onAttentionClick={() => {
@@ -258,18 +268,21 @@ export function AuthorsPage() {
 
       <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />
 
-      <AuthorsNeedsAttentionSection
-        rows={attentionRows}
-        isLoading={needsAttentionQuery.isLoading}
-        isError={needsAttentionQuery.isError}
-        router={attentionRouter}
-      />
+      <div data-tour="authors-attention">
+        <AuthorsNeedsAttentionSection
+          rows={attentionRows}
+          isLoading={needsAttentionQuery.isLoading}
+          isError={needsAttentionQuery.isError}
+          router={attentionRouter}
+        />
+      </div>
 
       {attentionRouter.dialogs}
 
       <AuthorDetailPanel
         author={selectedAuthor}
         suggestion={selectedSuggestion}
+        isOwner={!!selectedAuthor && selectedAuthor.id === ownerId}
         open={detailOpen}
         onOpenChange={(next) => {
           setDetailOpen(next)

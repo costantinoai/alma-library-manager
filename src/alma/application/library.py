@@ -680,6 +680,112 @@ def sync_surface_resolution(
                     pass
 
 
+# Which feedback actions belong to which toggle dimension. Used so an undo
+# deletes only the signal events for the aspect being toggled off.
+_MEMBERSHIP_ACTIONS = ("add", "save", "remove", "dismiss")
+_RATING_ACTIONS = ("like", "love", "dislike", "rate")
+UNDO_ASPECTS = ("membership", "rating", "reading", "all")
+
+
+def _delete_feedback_actions(
+    db: sqlite3.Connection, paper_id: str, actions: tuple[str, ...]
+) -> None:
+    """Delete the paper's feedback events whose recorded action is in *actions*."""
+    if not _table_exists(db, "feedback_events"):
+        return
+    placeholders = ", ".join("?" for _ in actions)
+    db.execute(
+        f"""
+        DELETE FROM feedback_events
+        WHERE entity_type IN ('publication', 'paper') AND entity_id = ?
+          AND lower(COALESCE(json_extract(value, '$.action'), '')) IN ({placeholders})
+        """,
+        (paper_id, *actions),
+    )
+
+
+def undo_paper_feedback(
+    db: sqlite3.Connection, paper_id: str, aspect: str = "all"
+) -> dict:
+    """Reverse ONE dimension of a paper's user feedback — interaction + signal.
+
+    Each action button is an independent toggle, so undo is scoped to the
+    *aspect* being toggled off (the user's rule: "each button press must undo
+    only what that button did"):
+
+    - ``membership`` — Save/Saved: row back to ``tracked`` + delete the
+      save/dismiss signal events + reset feed/recommendation resolution. Rating
+      and reading state are left untouched.
+    - ``rating`` — Like / Love / Dislike: clear ``papers.rating`` + delete the
+      like/love/dislike/rate signal events. Membership and reading are kept.
+    - ``reading`` — Queue/Queued: clear ``papers.reading_status`` only.
+    - ``all`` — full neutral (used by onboarding's full-clear path).
+
+    A paper has ONE signal (Feed / Discovery / Library / onboarding all write
+    ``feedback_events``, read back with no surface filter), so deleting the
+    relevant events here clears it everywhere. ``preference_profiles`` is a
+    recomputed aggregate, rebuilt on the next lens refresh. Idempotent.
+    """
+    aspect = aspect if aspect in UNDO_ASPECTS else "all"
+    now = datetime.utcnow().isoformat()
+
+    if aspect in ("membership", "all"):
+        db.execute(
+            f"UPDATE papers SET status = '{TRACKED_STATUS}', updated_at = ? "
+            f"WHERE id = ? AND status IN (?, ?, ?)",
+            (now, paper_id, LIBRARY_STATUS, DISMISSED_STATUS, REMOVED_STATUS),
+        )
+        _delete_feedback_actions(db, paper_id, _MEMBERSHIP_ACTIONS)
+        # The save/dismiss resolved feed + recommendation rows; make them
+        # actionable again now that the paper is no longer a member.
+        if _table_exists(db, "feed_items"):
+            db.execute("UPDATE feed_items SET status = 'new' WHERE paper_id = ?", (paper_id,))
+        if _table_exists(db, "recommendations"):
+            db.execute(
+                "UPDATE recommendations SET user_action = NULL, action_at = NULL WHERE paper_id = ?",
+                (paper_id,),
+            )
+
+    if aspect in ("rating", "all"):
+        db.execute(
+            "UPDATE papers SET rating = 0, updated_at = ? WHERE id = ?",
+            (now, paper_id),
+        )
+        _delete_feedback_actions(db, paper_id, _RATING_ACTIONS)
+
+    if aspect in ("reading", "all"):
+        db.execute(
+            "UPDATE papers SET reading_status = '', updated_at = ? WHERE id = ?",
+            (now, paper_id),
+        )
+
+    if aspect == "all":
+        # Full clear: nuke any remaining events + lens signals.
+        if _table_exists(db, "feedback_events"):
+            db.execute(
+                "DELETE FROM feedback_events WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
+                (paper_id,),
+            )
+        if _table_exists(db, "lens_signals"):
+            try:
+                db.execute("DELETE FROM lens_signals WHERE paper_id = ?", (paper_id,))
+            except sqlite3.OperationalError:
+                pass
+
+    row = db.execute(
+        "SELECT status, rating, reading_status FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    return {
+        "paper_id": paper_id,
+        "aspect": aspect,
+        "status": str(row["status"]) if row and row["status"] is not None else None,
+        "rating": int(row["rating"]) if row and row["rating"] is not None else None,
+        "reading_status": (
+            str(row["reading_status"]) if row and row["reading_status"] is not None else ""
+        ),
+    }
+
+
 def list_papers(
     db: sqlite3.Connection,
     *,

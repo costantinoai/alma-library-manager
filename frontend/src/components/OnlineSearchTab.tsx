@@ -46,6 +46,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { PaperCard, type PaperCardPaper, SkeletonPaperCard } from '@/components/shared'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
+import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import {
   fetchAuthorTopCitedWorks,
@@ -87,6 +88,8 @@ interface RowState {
   reaction: PaperReaction
   isSaved: boolean
   pending: boolean
+  /** Resolved local paper id after a save — needed to undo. */
+  paperId?: string
 }
 
 const IDLE: RowState = { reaction: null, isSaved: false, pending: false }
@@ -99,12 +102,14 @@ const IDLE: RowState = { reaction: null, isSaved: false, pending: false }
 function rowStateFromResponse(
   status: string,
   action: 'add' | 'like' | 'love' | 'dislike',
+  paperId?: string,
 ): RowState {
   const isSaved = status === 'library'
-  if (action === 'add') return { reaction: null, isSaved, pending: false }
-  if (action === 'like') return { reaction: 'like', isSaved, pending: false }
-  if (action === 'love') return { reaction: 'love', isSaved, pending: false }
-  return { reaction: 'dislike', isSaved, pending: false }
+  const base = { isSaved, pending: false, paperId }
+  if (action === 'add') return { reaction: null, ...base }
+  if (action === 'like') return { reaction: 'like', ...base }
+  if (action === 'love') return { reaction: 'love', ...base }
+  return { reaction: 'dislike', ...base }
 }
 
 function initialRowState(item: OnlineSearchItem): RowState {
@@ -386,7 +391,7 @@ export function OnlineSearchTab({
         })
         setRowStates((prev) => ({
           ...prev,
-          [key]: rowStateFromResponse(resp.status, action),
+          [key]: rowStateFromResponse(resp.status, action, resp.paper_id),
         }))
         toast({
           title:
@@ -415,6 +420,29 @@ export function OnlineSearchTab({
       }
     },
     [onImportComplete, queryClient],
+  )
+
+  const undoMutation = usePaperUndo()
+
+  const handleUndo = useCallback(
+    (item: OnlineSearchItem, aspect: 'membership' | 'rating' | 'reading') => {
+      const key = rowKey(item)
+      if (!key) return
+      const paperId = rowStates[key]?.paperId || item.paper_id
+      if (!paperId) return
+      undoMutation.mutate({ paperId, aspect })
+      setRowStates((prev) => {
+        const cur = prev[key] ?? IDLE
+        const next =
+          aspect === 'membership'
+            ? { ...cur, isSaved: false, reaction: null }
+            : aspect === 'rating'
+              ? { ...cur, reaction: null }
+              : cur
+        return { ...prev, [key]: next }
+      })
+    },
+    [rowStates, undoMutation],
   )
 
   const handleFollowAuthor = useCallback(
@@ -781,6 +809,7 @@ export function OnlineSearchTab({
                     onLike={() => void handleAction(item, 'like')}
                     onLove={() => void handleAction(item, 'love')}
                     onDislike={() => void handleAction(item, 'dislike')}
+                    onUndo={(aspect) => handleUndo(item, aspect)}
                   />
                   <WhyChips score={item.like_score} breakdown={item.score_breakdown} />
                 </div>

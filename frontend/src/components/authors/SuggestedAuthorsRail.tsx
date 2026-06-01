@@ -28,11 +28,25 @@ const EXPANDED_COUNT = 25
 // rows. Server route enforces its own ceiling (limit ≤ 30).
 const FETCH_COUNT = EXPANDED_COUNT + 5
 
+// Default grid: 3-up from md, 5-up on xl (the wide Authors page). Callers in
+// narrow containers (the onboarding modal) override this — breakpoints key off
+// the viewport, so a fixed-width modal must opt out of the 5-up escalation or
+// the cards squish and their content spills out.
+const DEFAULT_GRID = 'grid gap-3 md:grid-cols-3 xl:grid-cols-5'
+
 interface SuggestedAuthorsRailProps {
   onOpenDetail?: (suggestion: AuthorSuggestion) => void
+  /** Override the grid template (e.g. a 3-up grid inside the onboarding modal). */
+  gridClassName?: string
+  /** How many cards to show before the "see more" toggle. Default 5. */
+  collapsedCount?: number
 }
 
-export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps) {
+export function SuggestedAuthorsRail({
+  onOpenDetail,
+  gridClassName = DEFAULT_GRID,
+  collapsedCount = COLLAPSED_COUNT,
+}: SuggestedAuthorsRailProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
@@ -225,12 +239,12 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
     })
   }, [suggestionsQuery.data, actedOn])
 
-  const visibleCap = expanded ? EXPANDED_COUNT : COLLAPSED_COUNT
+  const visibleCap = expanded ? EXPANDED_COUNT : collapsedCount
   const visible = useMemo(() => filtered.slice(0, visibleCap), [filtered, visibleCap])
   // Show the toggle when the filtered pool actually has more rows than
   // the current cap — collapsing always works, expanding only matters
   // when there's something extra to reveal.
-  const canToggle = expanded ? visible.length > COLLAPSED_COUNT : filtered.length > COLLAPSED_COUNT
+  const canToggle = expanded ? visible.length > collapsedCount : filtered.length > collapsedCount
 
   const isLoading = suggestionsQuery.isLoading
   const hasError = suggestionsQuery.isError
@@ -249,8 +263,8 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
       </header>
 
       {isLoading ? (
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-          {Array.from({ length: COLLAPSED_COUNT }).map((_, i) => (
+        <div className={gridClassName}>
+          {Array.from({ length: collapsedCount }).map((_, i) => (
             <Skeleton key={i} className="h-52 rounded-lg" />
           ))}
         </div>
@@ -265,7 +279,7 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
           description="Save more papers to your Library and their authors will surface here."
         />
       ) : (
-        <RevealList className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <RevealList className={gridClassName}>
           {visible.map((s, i) => {
             const keyId = s.openalex_id || s.key
             return (
@@ -312,12 +326,12 @@ export function SuggestedAuthorsRail({ onOpenDetail }: SuggestedAuthorsRailProps
             {expanded ? (
               <>
                 <ChevronUp className="h-3.5 w-3.5" />
-                Show top {COLLAPSED_COUNT}
+                Show top {collapsedCount}
               </>
             ) : (
               <>
                 <ChevronDown className="h-3.5 w-3.5" />
-                See more ({Math.min(filtered.length, EXPANDED_COUNT) - COLLAPSED_COUNT})
+                See more ({Math.min(filtered.length, EXPANDED_COUNT) - collapsedCount})
               </>
             )}
           </Button>
