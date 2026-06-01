@@ -793,6 +793,11 @@ def init_db_schema() -> None:
                 conn.execute("ALTER TABLE recommendations ADD COLUMN explanation TEXT")
             except Exception:
                 pass  # column already exists
+            # Provenance columns — this migrator block is the SINGLE source of
+            # truth for their existence (D-10). The discovery refresh hot path
+            # is forward-only and assumes they exist; it no longer patches the
+            # schema per-refresh. Keep this list in sync with
+            # `_derive_recommendation_provenance` in application/discovery.py.
             for ddl in (
                 "ALTER TABLE recommendations ADD COLUMN source_type TEXT",
                 "ALTER TABLE recommendations ADD COLUMN source_api TEXT",

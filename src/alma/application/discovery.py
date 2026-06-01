@@ -238,14 +238,6 @@ _PAPER_DISMISS_DECAY_HALF_LIFE_DAYS = 180.0
 _PAPER_DISMISS_HARD_HALF_LIFE_DAYS = 365.0
 _PAPER_DISMISS_HARD_THRESHOLD = 3
 _PAPER_DISMISS_SUPPRESSION_THRESHOLD = -0.18
-RECOMMENDATION_PROVENANCE_COLUMNS: dict[str, str] = {
-    "source_type": "TEXT",
-    "source_api": "TEXT",
-    "source_key": "TEXT",
-    "branch_id": "TEXT",
-    "branch_label": "TEXT",
-    "branch_mode": "TEXT",
-}
 DEFAULT_BRANCH_CONTROLS: dict[str, Any] = {
     "temperature": None,
     "pinned": [],
@@ -262,27 +254,8 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.OperationalError:
-        return set()
-    return {str(r[1]) for r in rows}
-
-
 def _chunked(items: list[str], size: int) -> list[list[str]]:
     return [items[idx:idx + size] for idx in range(0, len(items), size)]
-
-
-def _ensure_recommendation_provenance_columns(db: sqlite3.Connection) -> None:
-    columns = _table_columns(db, "recommendations")
-    for column, ddl in RECOMMENDATION_PROVENANCE_COLUMNS.items():
-        if column in columns:
-            continue
-        try:
-            db.execute(f"ALTER TABLE recommendations ADD COLUMN {column} {ddl}")
-        except Exception:
-            continue
 
 
 def _derive_recommendation_provenance(candidate: dict, lens_id: str) -> dict[str, Any]:
@@ -2143,7 +2116,11 @@ def refresh_lens_recommendations(
             data=cold_start_summary,
         )
 
-    _ensure_recommendation_provenance_columns(db)
+    # NOTE: the recommendations provenance columns (source_type/source_api/
+    # source_key/branch_id/branch_label/branch_mode) are guaranteed by the
+    # schema/migrator layer (`api.deps.init_db_schema`), not patched in here —
+    # this hot path is forward-only and assumes the current shape (D-10).
+    #
     # NOTE: old recommendations are deleted atomically with the insert below,
     # NOT here — so a crash during scoring doesn't wipe existing recommendations.
 
