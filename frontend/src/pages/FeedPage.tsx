@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDownWideNarrow,
   CalendarClock,
   ExternalLink,
   LayoutGrid,
@@ -36,7 +35,7 @@ import {
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -544,89 +543,59 @@ export function FeedPage() {
           button for sort. Nothing here mutates data — all controls are
           local view state.
       ──────────────────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
-        {/* Filter segmented control — only "All" / "New". */}
-        <ToggleGroup
-          type="single"
-          value={filter}
-          onValueChange={(value) => {
-            // Radix allows deselecting the active item; we require one always active.
-            if (value) setFilter(value as FeedFilter)
-          }}
-          aria-label="Feed filter"
-          className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
-        >
-          {FEED_FILTERS.map((value) => (
-            <ToggleGroupItem
-              key={value}
-              value={value}
-              className="h-7 min-w-0 rounded-sm px-3 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+      <ListControlBar
+        leading={
+          <>
+            {/* Filter segmented control — only "All" / "New". */}
+            <ToggleGroup
+              type="single"
+              value={filter}
+              onValueChange={(value) => {
+                // Radix allows deselecting the active item; we require one always active.
+                if (value) setFilter(value as FeedFilter)
+              }}
+              aria-label="Feed filter"
+              className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
             >
-              {FEED_FILTER_LABELS[value]}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-
-        <div className="h-5 w-px bg-slate-200" aria-hidden />
-
-        {/* Sort toggle — pill button, binary state. */}
-        <button
-          type="button"
-          onClick={() => setSort(sort === 'chronological' ? 'relevance' : 'chronological')}
-          title={sort === 'chronological' ? 'Currently sorted chronologically — switch to relevance' : 'Currently sorted by relevance — switch to chronological'}
-          aria-label={`Sort by ${sort === 'chronological' ? 'relevance' : 'recent'}`}
-          className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-surface-2"
-        >
-          <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
-          {sort === 'relevance' ? 'Relevance' : 'Recent'}
-        </button>
-
-        {/* Right cluster: counter with inline select-all, then view mode. */}
-        <div className="ml-auto flex items-center gap-3">
-          <div className="hidden items-center gap-1.5 text-xs text-slate-500 sm:inline-flex">
-            <span className="tabular-nums font-medium text-slate-700">{total}</span>
-            <span>in view</span>
-            {items.length > 0 && (
-              <>
-                <span className="text-slate-300" aria-hidden>·</span>
-                <button
-                  type="button"
-                  onClick={toggleSelectAllVisible}
-                  className="text-alma-700 underline-offset-2 transition-colors hover:text-alma-800 hover:underline"
+              {FEED_FILTERS.map((value) => (
+                <ToggleGroupItem
+                  key={value}
+                  value={value}
+                  className="h-7 min-w-0 rounded-sm px-3 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
                 >
-                  {allVisibleSelected ? 'Clear selection' : 'Select all'}
-                </button>
-              </>
-            )}
-          </div>
-
-          <ToggleGroup
-            type="single"
-            value={viewMode}
-            onValueChange={(value) => {
-              if (value) setViewMode(value as FeedViewMode)
-            }}
-            aria-label="Feed view mode"
-            className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
-          >
-            {[
-              { value: 'compact' as FeedViewMode, label: 'Compact', icon: Rows3, title: 'Compact table view' },
-              { value: 'normal' as FeedViewMode, label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
-              { value: 'extended' as FeedViewMode, label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
-            ].map(({ value, label, icon: Icon, title }) => (
-              <ToggleGroupItem
-                key={value}
-                value={value}
-                title={title}
-                className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
-              >
-                <Icon className="h-3.5 w-3.5" />
-                <span className="hidden md:inline">{label}</span>
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </div>
-      </div>
+                  {FEED_FILTER_LABELS[value]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <div className="h-5 w-px bg-slate-200" aria-hidden />
+          </>
+        }
+        sort={{
+          label: sort === 'relevance' ? 'Relevance' : 'Recent',
+          title:
+            sort === 'chronological'
+              ? 'Currently sorted chronologically — switch to relevance'
+              : 'Currently sorted by relevance — switch to chronological',
+          ariaLabel: `Sort by ${sort === 'chronological' ? 'relevance' : 'recent'}`,
+          onToggle: () => setSort(sort === 'chronological' ? 'relevance' : 'chronological'),
+        }}
+        count={total}
+        selectAll={{
+          allSelected: allVisibleSelected,
+          onToggle: toggleSelectAllVisible,
+          show: items.length > 0,
+        }}
+        view={{
+          value: viewMode,
+          ariaLabel: 'Feed view mode',
+          onChange: (value) => setViewMode(value as FeedViewMode),
+          options: [
+            { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact table view' },
+            { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
+            { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
+          ],
+        }}
+      />
 
       {/* ── Bulk workflow bar ──────────────────────────────────────────────
           Appears only when at least one card is selected. Visually

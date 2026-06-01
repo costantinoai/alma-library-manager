@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowDownWideNarrow,
   ExternalLink,
   Globe,
   LayoutGrid,
@@ -13,7 +12,6 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 
 import { DataTable } from '@/components/ui/data-table'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 import {
   createLens,
@@ -47,7 +45,7 @@ import {
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
+import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
@@ -904,73 +902,33 @@ export function DiscoveryPage() {
             select-all] · [view mode]. Nothing here mutates data — all
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 shadow-sm">
-          {/* Sort toggle — pill button, binary state. */}
-          <button
-            type="button"
-            onClick={() => setSort(sort === 'relevance' ? 'recent' : 'relevance')}
-            title={
+        <ListControlBar
+          sort={{
+            label: sort === 'relevance' ? 'Ranking' : 'Recent',
+            title:
               sort === 'relevance'
                 ? 'Currently sorted by lens ranking — switch to recent'
-                : 'Currently sorted by recent — switch to lens ranking'
-            }
-            aria-label={`Sort by ${sort === 'relevance' ? 'recent' : 'relevance'}`}
-            className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-surface-2"
-          >
-            <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
-            {sort === 'relevance' ? 'Ranking' : 'Recent'}
-          </button>
-
-          {/* Right cluster: counter with inline select-all, then view mode. */}
-          <div className="ml-auto flex items-center gap-3">
-            <div className="hidden items-center gap-1.5 text-xs text-slate-500 sm:inline-flex">
-              <span className="tabular-nums font-medium text-slate-700">
-                {recommendations.length}
-              </span>
-              <span>in view</span>
-              {recommendations.length > 0 && (
-                <>
-                  <span className="text-slate-300" aria-hidden>·</span>
-                  <button
-                    type="button"
-                    onClick={toggleSelectAllVisible}
-                    className="text-alma-700 underline-offset-2 transition-colors hover:text-alma-800 hover:underline"
-                  >
-                    {allVisibleSelected ? 'Clear selection' : 'Select all'}
-                  </button>
-                </>
-              )}
-            </div>
-
-            <ToggleGroup
-              type="single"
-              value={viewMode}
-              onValueChange={(value) => {
-                // Radix lets the user deselect the active item; we
-                // require one always-active so the list always renders.
-                if (value) setViewMode(value as DiscoveryViewMode)
-              }}
-              aria-label="Discovery view mode"
-              className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
-            >
-              {[
-                { value: 'compact' as DiscoveryViewMode, label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
-                { value: 'normal' as DiscoveryViewMode, label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
-                { value: 'extended' as DiscoveryViewMode, label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
-              ].map(({ value, label, icon: Icon, title }) => (
-                <ToggleGroupItem
-                  key={value}
-                  value={value}
-                  title={title}
-                  className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span className="hidden md:inline">{label}</span>
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
-        </div>
+                : 'Currently sorted by recent — switch to lens ranking',
+            ariaLabel: `Sort by ${sort === 'relevance' ? 'recent' : 'relevance'}`,
+            onToggle: () => setSort(sort === 'relevance' ? 'recent' : 'relevance'),
+          }}
+          count={recommendations.length}
+          selectAll={{
+            allSelected: allVisibleSelected,
+            onToggle: toggleSelectAllVisible,
+            show: recommendations.length > 0,
+          }}
+          view={{
+            value: viewMode,
+            ariaLabel: 'Discovery view mode',
+            onChange: (value) => setViewMode(value as DiscoveryViewMode),
+            options: [
+              { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
+              { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
+              { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
+            ],
+          }}
+        />
 
         <div className="space-y-3">
           {lensRecommendationsQuery.isLoading ? (

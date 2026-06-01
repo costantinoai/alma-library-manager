@@ -1,6 +1,7 @@
 export { ActionCardHeader, type ActionCardHeaderProps } from './ActionCardHeader'
 export { EtaHint } from './EtaHint'
 export { JargonHint } from './JargonHint'
+export { ListControlBar, type ListControlBarProps, type ListViewOption } from './ListControlBar'
 export { MetricTile, type MetricTileTone, type MetricTileProps } from './MetricTile'
 export { PaperCard, type PaperCardPaper, type ScoreSignal } from './PaperCard'
 export { PaperHoverCard } from './PaperHoverCard'
