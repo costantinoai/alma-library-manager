@@ -189,16 +189,17 @@ export function FeedPage() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [viewMode, setViewMode] = useState<FeedViewMode>('normal')
+  // U-12: grows by a page on "Load more" so the inbox isn't hard-capped at 60.
+  const [feedLimit, setFeedLimit] = useState(60)
 
   const feedQuery = useQuery({
-    queryKey: ['feed-inbox', filter, sort],
+    queryKey: ['feed-inbox', filter, sort, feedLimit],
     queryFn: () =>
       listFeedInbox({
         status: filter === 'all' ? undefined : filter,
         sort,
-        // 60 keeps the first fold responsive; users can still page through via
-        // the Load more affordance (not yet wired) or by jumping into Library.
-        limit: 60,
+        // First fold is 60; "Load more" grows feedLimit by a page (U-12).
+        limit: feedLimit,
         offset: 0,
         since_days: 60,
       }),
@@ -863,6 +864,24 @@ export function FeedPage() {
             )
           })}
         </RevealList>
+      )}
+
+      {/* U-12: page beyond the first 60 (within the 60-day window). Hidden when
+          an author filter is active (that view is already the full filtered set). */}
+      {!authorFilter && items.length > 0 && items.length < total && (
+        <div className="mt-4 flex justify-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setFeedLimit((n) => n + 60)}
+            disabled={feedQuery.isFetching}
+          >
+            {feedQuery.isFetching ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : null}
+            Load more · {items.length} of {total}
+          </Button>
+        </div>
       )}
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
