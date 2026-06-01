@@ -385,6 +385,18 @@ class SourceHttpClient:
             if new_until > self._adaptive_floor_until:
                 self._adaptive_floor_until = new_until
 
+    def is_in_adaptive_cooldown(self) -> bool:
+        """True while a 429-armed cooldown window is still open.
+
+        Lets callers (e.g. the discovery/feed lane fan-out) skip this source
+        for the rest of a refresh pass instead of each lane queuing behind the
+        30 s adaptive floor and waiting out its lane deadline. Read-only — does
+        not reset the window (that happens lazily in `_current_min_interval`)."""
+        if float(self._policy.adaptive_cooldown_seconds or 0.0) <= 0.0:
+            return False
+        with self._rate_lock:
+            return self._adaptive_floor_until > time.monotonic()
+
     def _current_max_concurrency(self) -> int:
         if self._policy.max_concurrency_factory is not None:
             try:

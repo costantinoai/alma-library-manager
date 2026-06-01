@@ -7,7 +7,7 @@ import logging
 from time import perf_counter
 from typing import Any, Dict, Optional
 
-from alma.core.http_sources import bind_source_diagnostics
+from alma.core.http_sources import bind_source_diagnostics, get_source_http_client
 from alma.core.scoring_math import clamp as _clamp
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
@@ -196,7 +196,16 @@ def _build_source_calls(query, *, per_source_limit, from_year, settings, semanti
         source_calls.append(
             ("openalex", lambda: openalex_related.search_works_hybrid(query, limit=per_source_limit, from_year=from_year))
         )
-    if enabled["semantic_scholar"]:
+    # S-10: if S2 just 429'd (its adaptive cooldown is armed process-wide), skip
+    # it for the rest of this refresh pass instead of queuing every remaining
+    # lane behind the 30 s floor + waiting out each lane deadline. Strictly
+    # reduces calls — never adds any. The cooldown self-clears after 60 s.
+    s2_cooling = enabled["semantic_scholar"] and get_source_http_client(
+        "semantic_scholar"
+    ).is_in_adaptive_cooldown()
+    if s2_cooling:
+        logger.debug("Skipping Semantic Scholar lane: adaptive 429 cooldown active")
+    if enabled["semantic_scholar"] and not s2_cooling:
         source_calls.append(
             (
                 "semantic_scholar",
