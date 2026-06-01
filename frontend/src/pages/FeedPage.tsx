@@ -370,7 +370,8 @@ export function FeedPage() {
   const filteredAuthorLabel = items[0]?.author_name || authorFilter
   const monitors = monitorQueryState.data ?? []
   const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
-  const degradedMonitors = monitors.filter((monitor) => monitor.health === 'degraded').length
+  const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
+  const degradedMonitors = degradedMonitorList.length
   const allVisibleSelected = items.length > 0 && items.every((item) => selectedIds.has(item.id))
 
   const toggleSelection = (feedItemId: string) => {
@@ -438,7 +439,32 @@ export function FeedPage() {
               {degradedMonitors > 0 && (
                 <>
                   <span className="text-slate-300" aria-hidden>·</span>
-                  <span className="tabular-nums text-warning-700">{degradedMonitors} degraded</span>
+                  {/* U-4: surface WHICH monitors are degraded + why, not just a count. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="cursor-help tabular-nums text-warning-700 underline decoration-dotted underline-offset-2">
+                        {degradedMonitors} degraded
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="start" className="max-w-xs">
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Degraded monitors
+                      </p>
+                      <ul className="space-y-1 text-xs">
+                        {degradedMonitorList.slice(0, 8).map((monitor) => (
+                          <li key={monitor.id} className="leading-snug">
+                            <span className="font-medium text-slate-700">{monitor.label}</span>
+                            {(monitor.health_reason || monitor.last_error) && (
+                              <span className="text-slate-500"> — {monitor.health_reason || monitor.last_error}</span>
+                            )}
+                          </li>
+                        ))}
+                        {degradedMonitorList.length > 8 && (
+                          <li className="text-slate-400">+{degradedMonitorList.length - 8} more — see Settings</li>
+                        )}
+                      </ul>
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               )}
               <button
