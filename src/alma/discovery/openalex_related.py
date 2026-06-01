@@ -100,6 +100,8 @@ def _work_to_result(work: dict, score: float) -> Optional[Dict]:
 def fetch_related_works(
     doi_or_openalex_id: str,
     limit: int = 10,
+    *,
+    resolved_id: Optional[str] = None,
 ) -> List[Dict]:
     """Fetch related works for a given publication from OpenAlex.
 
@@ -109,6 +111,9 @@ def fetch_related_works(
     Args:
         doi_or_openalex_id: DOI (bare or URL) or OpenAlex Work ID.
         limit: Maximum number of related works to return.
+        resolved_id: Pre-resolved OpenAlex work ID (W...) for this DOI, when the
+            caller has already batch-resolved it (S-5). Skips the per-DOI
+            ``GET /works/{doi}`` resolution round-trip.
 
     Returns:
         List of dicts with keys: title, authors, url, doi, score.
@@ -121,7 +126,7 @@ def fetch_related_works(
     work_id = _normalize_id(doi_or_openalex_id)
     client = get_client()
 
-    resolved_work_id = work_id
+    resolved_work_id = (resolved_id or "").strip() or work_id
     # Resolve to a canonical OpenAlex work ID (W...) only when needed.
     if not resolved_work_id.upper().startswith("W"):
         try:
@@ -401,6 +406,8 @@ def search_works_hybrid(
 def fetch_citing_works(
     doi_or_openalex_id: str,
     limit: int = 10,
+    *,
+    resolved_id: Optional[str] = None,
 ) -> List[Dict]:
     """Fetch works that cite a given publication from OpenAlex.
 
@@ -411,6 +418,9 @@ def fetch_citing_works(
     Args:
         doi_or_openalex_id: DOI (bare or URL) or OpenAlex Work ID.
         limit: Maximum number of citing works to return.
+        resolved_id: Pre-resolved OpenAlex work ID (W...) for this DOI, when the
+            caller has already batch-resolved it (S-5). Skips the per-DOI
+            ``GET /works/{doi}`` resolution round-trip.
 
     Returns:
         List of dicts with keys: title, authors, url, doi, score, year.
@@ -423,7 +433,7 @@ def fetch_citing_works(
     client = get_client()
 
     # Step 1: Resolve to an OpenAlex work ID (e.g. W1234567890) only when needed.
-    openalex_id = work_id
+    openalex_id = (resolved_id or "").strip() or work_id
     if not openalex_id.upper().startswith("W"):
         try:
             resp = client.get(

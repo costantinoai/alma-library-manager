@@ -675,7 +675,10 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
             if not doi or doi in dois_tried:
                 continue
             dois_tried.add(doi)
-            for work in openalex_related.fetch_related_works(doi, limit=per_strategy):
+            _nd = normalize_doi(doi)
+            for work in openalex_related.fetch_related_works(
+                doi, limit=per_strategy, resolved_id=resolved_doi_map.get((_nd or "").lower())
+            ):
                 merge_candidate(
                     local_merged,
                     skip_titles,
@@ -841,7 +844,10 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
                 if doi:
                     five_star_dois.add(doi)
         for doi in list(five_star_dois)[:5]:
-            for work in openalex_related.fetch_citing_works(doi, limit=per_strategy):
+            _nd = normalize_doi(doi)
+            for work in openalex_related.fetch_citing_works(
+                doi, limit=per_strategy, resolved_id=resolved_doi_map.get((_nd or "").lower())
+            ):
                 merge_candidate(
                     local_merged,
                     skip_titles,
@@ -880,6 +886,30 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
         except Exception as exc:
             logger.debug("Semantic Scholar strategy failed: %s", exc)
         return local_merged
+
+    # S-5: batch-resolve the DOIs the related + citation strategies will hit
+    # (each otherwise does its own GET /works/{doi} resolve) into ONE OR-filter
+    # call, then hand each strategy its pre-resolved W-id. Best-effort: DOIs
+    # absent from the batch fall back to the per-call resolve in the fetch helpers.
+    resolved_doi_map: Dict[str, str] = {}
+    if strat_related or strat_citation:
+        seed_dois: List[str] = []
+        _seen_doi: Set[str] = set()
+        for pub in positive:
+            _nd = normalize_doi((pub.get("doi") or "").strip())
+            if _nd and _nd.lower() not in _seen_doi:
+                _seen_doi.add(_nd.lower())
+                seed_dois.append(_nd)
+        if seed_dois:
+            try:
+                from alma.openalex.client import batch_fetch_works_by_dois
+
+                for _nd, _work in batch_fetch_works_by_dois(seed_dois[:100]).items():
+                    _wid = str((_work or {}).get("id") or "").rstrip("/").split("/")[-1]
+                    if _wid:
+                        resolved_doi_map[_nd.lower()] = _wid
+            except Exception as exc:
+                logger.debug("S-5 DOI pre-resolve failed: %s", exc)
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
