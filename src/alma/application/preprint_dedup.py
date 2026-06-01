@@ -458,8 +458,15 @@ def run_preprint_dedup(
         except Exception:
             logger.debug("log_step failed on %s", step, exc_info=True)
 
-    conn = _sqlite3.connect(db_path, check_same_thread=False)
+    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
     conn.row_factory = _sqlite3.Row
+    # This runner merges/deletes rows; it must wait for the single SQLite
+    # writer like every other lane instead of failing instantly on a lock.
+    # Mirrors the contract in alma.api.deps.open_db_connection.
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     summary: dict[str, Any] = {"candidates": 0, "merged": 0, "skipped": 0, "errors": 0, "scope": scope}
     try:
         candidates = find_preprint_twin_candidates(conn, limit=limit, scope=scope)

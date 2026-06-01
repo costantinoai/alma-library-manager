@@ -470,6 +470,10 @@ def merge_author_profiles(
 
     choices_by_alt = field_choices or {}
     now = datetime.utcnow().isoformat()
+    # Audit-log payloads collected during the loop and flushed AFTER commit
+    # (each add_job_log opens its own connection — keep it out of our open
+    # write transaction). Tuples of (message, data).
+    pending_audit_logs: list[tuple[str, dict]] = []
     for alt_id in alt_ids_clean:
         # Pull the FULL alt row so the field-union step has every
         # column to draw from. SELECT * keeps this resilient to
@@ -582,16 +586,16 @@ def merge_author_profiles(
             (uuid.uuid4().hex, primary_id, alt_oid, alt_id, now),
         )
 
-        # 5. Audit log entry — best effort.
-        try:
-            from alma.api.scheduler import add_job_log
-
-            add_job_log(
-                job_id or "author_merge",
+        # 5. Audit log entry — DEFERRED to after commit. add_job_log opens
+        #    its OWN connection (operation_logs); emitting it here, while
+        #    this merge still holds the write lock, makes that connection
+        #    contend with us — wasted busy_timeout + "database is locked"
+        #    noise. Collect the payload and flush once we've committed.
+        pending_audit_logs.append(
+            (
                 f"Merged author {alt_row['name'] or alt_id} ({alt_oid}) "
                 f"→ {primary_row['name'] or primary_id} ({primary_oid})",
-                step="author_merged",
-                data={
+                {
                     "primary_author_id": primary_id,
                     "primary_openalex_id": primary_oid,
                     "alt_author_id": alt_id,
@@ -600,15 +604,16 @@ def merge_author_profiles(
                     "papers_dropped_as_dup": drop_cur.rowcount or 0,
                 },
             )
-        except Exception:
-            logger.debug("Audit log failed for merge of %s", alt_id, exc_info=True)
+        )
 
         summary["alts_processed"] += 1
         summary["alt_openalex_ids"].append(alt_oid)
         summary["alt_author_ids"].append(alt_id)
 
     # Mirror the followed_authors deletes into feed_monitors in one
-    # sync at the end (cheaper than calling per-alt).
+    # sync at the end (cheaper than calling per-alt). All of the below run
+    # on `db` (our connection) so they're part of the same transaction.
+    should_schedule_sweep = False
     if summary["alts_processed"] > 0:
         from alma.application.feed_monitors import sync_author_monitors
 
@@ -625,25 +630,48 @@ def merge_author_profiles(
             # Table may not exist on older schemas — non-fatal.
             pass
         try:
-            from alma.services.author_hydrate import (
-                enqueue_pending_author_hydration,
-                schedule_pending_author_hydration_sweep,
-            )
+            from alma.services.author_hydrate import enqueue_pending_author_hydration
 
-            if enqueue_pending_author_hydration(
-                db,
-                primary_id,
-                priority="high",
-                reason="author_merge",
-            ):
-                schedule_pending_author_hydration_sweep(
+            # Enqueue on `db` (same transaction); the sweep that PROCESSES
+            # this row is scheduled AFTER commit so its background worker
+            # can't start contending for the writer while we still hold it.
+            should_schedule_sweep = bool(
+                enqueue_pending_author_hydration(
+                    db,
+                    primary_id,
+                    priority="high",
                     reason="author_merge",
-                    target_author_ids=[primary_id],
                 )
+            )
         except Exception as exc:
             logger.debug("author hydration enqueue skipped after merge %s: %s", primary_id, exc)
 
     db.commit()
+
+    # ---- Post-commit, best-effort side effects (no longer hold the writer) ----
+    # Flush the deferred audit log now that operation_logs writes won't
+    # collide with our own (now-released) write lock.
+    if pending_audit_logs:
+        try:
+            from alma.api.scheduler import add_job_log
+
+            for message, data in pending_audit_logs:
+                add_job_log(job_id or "author_merge", message, step="author_merged", data=data)
+        except Exception:
+            logger.debug("Audit log flush failed after merge", exc_info=True)
+
+    # Kick the hydration sweep that processes the row enqueued above.
+    if should_schedule_sweep:
+        try:
+            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+
+            schedule_pending_author_hydration_sweep(
+                reason="author_merge",
+                target_author_ids=[primary_id],
+            )
+        except Exception as exc:
+            logger.debug("author hydration sweep skip after merge %s: %s", primary_id, exc)
+
     return summary
 
 

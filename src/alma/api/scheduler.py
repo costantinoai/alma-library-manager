@@ -138,9 +138,14 @@ def _activity_conn() -> sqlite3.Connection:
     """Open a connection to the unified DB for durable activity persistence."""
     from alma.config import get_db_path
 
-    conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=0.25)
+    # Activity status/log writes are lightweight but must not vanish under
+    # write contention: a 250ms timeout (the old value) dropped job-status
+    # rows whenever a foreground transaction held the writer, leaving stuck
+    # "in progress" pills AND emitting "database is locked" log noise. 5s is
+    # still short enough to stay responsive but rides out a normal burst.
+    conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=250")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -583,13 +588,45 @@ def _discovery_schedule_interval_hours(key: str, default: int = 0) -> int:
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
 
+def _scheduler_max_workers() -> int:
+    """Concurrent background-job cap, env-overridable, clamped to [1, 16].
+
+    SQLite is single-writer: APScheduler's default ThreadPoolExecutor of 10
+    let a burst of user actions (each follow chains backfill → corpus
+    rehydrate → s2 → embeddings) run ~10 write-heavy jobs at once, which
+    monopolised the writer and made foreground writes (dismiss/follow/merge)
+    fail with "database is locked". Capping the pool keeps the writer
+    available for the user; background work just queues and catches up.
+    """
+    raw = os.getenv("ALMA_SCHEDULER_WORKERS", "").strip()
+    if not raw:
+        return 5
+    try:
+        return max(1, min(16, int(raw)))
+    except ValueError:
+        return 5
+
+
 def get_scheduler() -> BackgroundScheduler:
     """Return the global scheduler, creating and starting it if needed."""
     global _scheduler
     if _scheduler is None:
-        _scheduler = BackgroundScheduler()
+        from apscheduler.executors.pool import ThreadPoolExecutor as APThreadPoolExecutor
+
+        workers = _scheduler_max_workers()
+        _scheduler = BackgroundScheduler(
+            executors={"default": APThreadPoolExecutor(max_workers=workers)},
+            # max_instances=1 + coalesce stop periodic sweeps from piling up
+            # multiple concurrent copies of themselves (another writer-lane
+            # multiplier); misfire_grace_time keeps a delayed run valid.
+            job_defaults={
+                "max_instances": 1,
+                "coalesce": True,
+                "misfire_grace_time": 3600,
+            },
+        )
         _scheduler.start()
-        logger.info("Background scheduler started")
+        logger.info("Background scheduler started (max_workers=%d)", workers)
     return _scheduler
 
 

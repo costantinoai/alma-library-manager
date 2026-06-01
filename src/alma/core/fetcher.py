@@ -98,7 +98,10 @@ def _init_db(db_path: str) -> sqlite3.Connection:
         sqlite3.Connection: Open connection to the database.
     """
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    # Wait for the single SQLite writer rather than erroring instantly under
+    # contention (mirrors alma.api.deps.open_db_connection).
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute(
         """CREATE TABLE IF NOT EXISTS papers (
                 id TEXT PRIMARY KEY,

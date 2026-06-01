@@ -1753,12 +1753,19 @@ def reject_author_suggestion(
     user: dict = Depends(get_current_user),
 ):
     from alma.application.gap_radar import record_missing_author_remove
+    from alma.core.db_retry import run_with_lock_retry
 
-    try:
+    def _persist() -> None:
+        # rollback() resets any aborted state from a prior locked attempt so
+        # the retry re-issues the INSERT on a clean transaction (no dup row).
+        db.rollback()
         record_missing_author_remove(
             db, req.openalex_id, suggestion_bucket=req.suggestion_bucket
         )
         db.commit()
+
+    try:
+        run_with_lock_retry(_persist, label="reject_author_suggestion")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
@@ -1791,12 +1798,15 @@ def track_followed_suggestion(
     user: dict = Depends(get_current_user),
 ):
     from alma.application.gap_radar import record_followed_from_suggestion
+    from alma.core.db_retry import run_with_lock_retry
+
+    def _persist() -> None:
+        db.rollback()
+        record_followed_from_suggestion(db, req.openalex_id, req.suggestion_bucket)
+        db.commit()
 
     try:
-        record_followed_from_suggestion(
-            db, req.openalex_id, req.suggestion_bucket
-        )
-        db.commit()
+        run_with_lock_retry(_persist, label="track_followed_suggestion")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
@@ -2352,6 +2362,11 @@ def create_author(
     try:
         from alma.openalex.client import get_author_name_by_id
         _ensure_author_resolution_columns(db)
+        # Commit any column migration now so it's durable and independent of
+        # the retried write block below — whose rollback()-first reset must
+        # only ever discard a failed INSERT attempt, never schema work.
+        # No-op in the common case (columns already exist → no pending DDL).
+        db.commit()
 
         scholar_id = (author.scholar_id or "").strip() or None
         openalex_id = normalize_author_id((author.openalex_id or "").strip()) or None
@@ -2404,30 +2419,39 @@ def create_author(
         status_value = resolution.status if resolution.status != "no_match" else "resolved_manual"
         reason_value = summarize_author_resolution(resolution) or "Author created"
 
-        db.execute(
-            """
-            INSERT INTO authors (
-                name, id, openalex_id, scholar_id, orcid,
-                id_resolution_status, id_resolution_reason, id_resolution_updated_at,
-                author_type, added_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followed', ?)
-            """,
-            (
-                name,
-                primary_id,
-                _norm_oaid(resolved_openalex) if resolved_openalex else None,
-                resolved_scholar,
-                normalize_orcid(resolved_orcid),
-                status_value,
-                reason_value[:1000],
-                now_iso,
-                now_iso,
-            ),
-        )
+        # Wrap only the write+commit (NOT the network resolution above) in the
+        # lock retry, so a burst of suggestion-follows that each create an
+        # author never drops one to a transient SQLite lock. rollback() first
+        # so a retry re-issues the INSERT cleanly (no half-applied row).
+        from alma.core.db_retry import run_with_lock_retry
 
-        _sync_follow_state(db, primary_id, followed=True)
-        db.commit()
+        def _persist_create() -> None:
+            db.rollback()
+            db.execute(
+                """
+                INSERT INTO authors (
+                    name, id, openalex_id, scholar_id, orcid,
+                    id_resolution_status, id_resolution_reason, id_resolution_updated_at,
+                    author_type, added_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followed', ?)
+                """,
+                (
+                    name,
+                    primary_id,
+                    _norm_oaid(resolved_openalex) if resolved_openalex else None,
+                    resolved_scholar,
+                    normalize_orcid(resolved_orcid),
+                    status_value,
+                    reason_value[:1000],
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            _sync_follow_state(db, primary_id, followed=True)
+            db.commit()
+
+        run_with_lock_retry(_persist_create, label="create_author")
         try:
             schedule_followed_author_historical_backfill(primary_id, trigger="author_create")
         except Exception as exc:
@@ -2917,14 +2941,22 @@ def merge_author_profiles_route(
     _user: dict = Depends(get_current_user),
 ):
     from alma.application.author_merge import merge_author_profiles
+    from alma.core.db_retry import run_with_lock_retry
 
-    try:
+    def _do_merge() -> dict:
+        # The merge is one atomic transaction (single commit at the end), so
+        # on a transient lock we can safely rollback and re-run the whole
+        # thing. ValueError (validation) is non-lock and propagates at once.
+        db.rollback()
         return merge_author_profiles(
             db,
             author_id,
             body.alt_author_ids,
             field_choices=body.field_choices,
         )
+
+    try:
+        return run_with_lock_retry(_do_merge, label="merge_author_profiles")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

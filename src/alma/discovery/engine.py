@@ -56,6 +56,11 @@ def connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
+    # Re-assert WAL (persisted in the header, but cheap to confirm) so this
+    # lane matches the canonical contract in alma.api.deps.open_db_connection
+    # and never silently runs against a rollback-journal DB.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
