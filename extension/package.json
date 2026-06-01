@@ -1,6 +1,6 @@
 {
   "name": "alma-browser-connector",
-  "version": "0.1.0",
+  "version": "0.17.0",
   "private": true,
   "description": "ALMa Firefox/Chrome browser connector — save the current paper to your library.",
   "type": "commonjs",
