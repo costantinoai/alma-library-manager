@@ -47,6 +47,18 @@ interface Chip {
   key: string
   label: string
   tone: StatusBadgeTone
+  /** Exact underlying figure, surfaced on hover so the humanized label stays
+   *  inspectable/truthful (the full per-signal breakdown lives in the panel). */
+  title?: string
+}
+
+/** Map a [0,1] similarity to a plain-language band (U-11). The raw cosine is
+ *  kept in the chip's hover title; the full numeric breakdown is in the panel. */
+function similarityBand(v: number): string {
+  if (v >= 0.8) return 'very close'
+  if (v >= 0.6) return 'close'
+  if (v >= 0.4) return 'related'
+  return 'loosely related'
 }
 
 function buildChips(signals: ProvenanceSignals): Chip[] {
@@ -70,15 +82,17 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
   if (typeof signals.specterCosine === 'number' && signals.specterCosine > 0) {
     chips.push({
       key: 'specter',
-      label: `SPECTER ${signals.specterCosine.toFixed(2)}`,
+      label: `${similarityBand(signals.specterCosine)} topic`,
       tone: 'neutral',
+      title: `SPECTER2 embedding cosine ${signals.specterCosine.toFixed(2)}`,
     })
   }
   if (typeof signals.lexicalSimilarity === 'number' && signals.lexicalSimilarity > 0.05) {
     chips.push({
       key: 'lexical',
-      label: `Lexical ${signals.lexicalSimilarity.toFixed(2)}`,
+      label: `${similarityBand(signals.lexicalSimilarity)} wording`,
       tone: 'neutral',
+      title: `lexical (keyword) similarity ${signals.lexicalSimilarity.toFixed(2)}`,
     })
   }
   if (
@@ -95,8 +109,9 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
   if (typeof signals.negativeHit === 'number' && signals.negativeHit >= 0.35) {
     chips.push({
       key: 'neg-hit',
-      label: `Near a disliked paper (${signals.negativeHit.toFixed(2)})`,
+      label: 'Near a disliked paper',
       tone: 'warning',
+      title: `negative-neighbour proximity ${signals.negativeHit.toFixed(2)}`,
     })
   }
   // (Consensus chip moved to lead position above.)
@@ -111,10 +126,9 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     const positive = signals.projectedFeedbackRaw > 0
     chips.push({
       key: 'projected',
-      label: positive
-        ? `+${signals.projectedFeedbackRaw.toFixed(2)} from your saves`
-        : `${signals.projectedFeedbackRaw.toFixed(2)} from past rejects`,
+      label: positive ? 'Matches what you save' : 'Near things you pass on',
       tone: positive ? 'positive' : 'warning',
+      title: `projected-feedback pull ${positive ? '+' : ''}${signals.projectedFeedbackRaw.toFixed(2)}`,
     })
   }
 
@@ -270,7 +284,7 @@ export function RecommendationProvenance({
         className={cn('mt-2 flex flex-wrap items-center gap-1.5', className)}
       >
         {chips.map((chip) => (
-          <StatusBadge key={chip.key} tone={chip.tone} size="sm">
+          <StatusBadge key={chip.key} tone={chip.tone} size="sm" title={chip.title}>
             {chip.label}
           </StatusBadge>
         ))}
@@ -296,7 +310,7 @@ export function RecommendationProvenance({
       {chips.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {chips.map((chip) => (
-            <StatusBadge key={chip.key} tone={chip.tone} size="sm">
+            <StatusBadge key={chip.key} tone={chip.tone} size="sm" title={chip.title}>
               {chip.label}
             </StatusBadge>
           ))}
