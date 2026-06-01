@@ -47,7 +47,7 @@ import {
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { PaperCard, SkeletonList } from '@/components/shared'
+import { PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
@@ -887,6 +887,12 @@ export function DiscoveryPage() {
           </details>
           </div>
         </details>
+
+        {/* U-1: visible while a lens refresh is still running in the APS pool
+            (the POST returns instantly). Self-clears when the job goes
+            terminal — useOperationToasts then raises the outcome toast +
+            swaps in the fresh recs. */}
+        <RefreshRunningBanner domain="discovery" label="Refreshing recommendations…" />
 
         {/* ── Control bar ──────────────────────────────────────────────
             Mirrors the Feed control bar so the two surfaces feel like

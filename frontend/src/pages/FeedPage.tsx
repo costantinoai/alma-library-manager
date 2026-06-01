@@ -36,7 +36,7 @@ import {
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { PaperCard } from '@/components/shared'
+import { PaperCard, RefreshRunningBanner } from '@/components/shared'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -46,6 +46,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SkeletonList } from '@/components/shared'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { ConceptCallout } from '@/components/ui/concept-callout'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
@@ -487,6 +488,27 @@ export function FeedPage() {
           </div>
         </div>
       </section>
+
+      {/* U-9: the four feed actions read very differently to Discovery's, and
+          the dislike-vs-dismiss split (D6) is the easy one to get wrong. One
+          quiet, collapsed explainer near the top — not per-button tooltips. */}
+      <ConceptCallout
+        eyebrow="How do the Feed actions work?"
+        summary="Save keeps a paper; Dislike keeps it visible but down-weights Discovery; Dismiss hides it for good."
+      >
+        <p className="mb-2">
+          The Feed is a chronological inbox of new papers from your monitors (last 60 days).
+          Each action sends a different signal:
+        </p>
+        <ul className="ml-4 list-disc space-y-1">
+          <li><span className="font-medium text-alma-900">Add / Like / Love</span> — saves the paper to your Library (Love rates it 5★).</li>
+          <li><span className="font-medium text-alma-900">Dislike</span> — a negative signal to Discovery, but the paper <span className="font-medium">stays in the Feed</span> so the inbox keeps its chronological record.</li>
+          <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> and sends a small negative signal. You can undo a dismiss right after.</li>
+        </ul>
+      </ConceptCallout>
+
+      {/* U-1: visible while a feed refresh runs in the background. */}
+      <RefreshRunningBanner domain="feed" label="Refreshing feed inbox…" />
 
       {/* ── Control bar ────────────────────────────────────────────────────
           Single horizontal strip with three zones separated by dividers:
