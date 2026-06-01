@@ -253,23 +253,30 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
     return paper_id
 
 
-def _schedule_pending_hydration(db: sqlite3.Connection, paper_id: str) -> None:
+def _schedule_pending_hydration(
+    db: sqlite3.Connection, paper_id: str, *, auto_schedule: bool = True
+) -> None:
     """Enqueue a paper for cross-source metadata hydration.
 
     Cheap, no HTTP — writes a `pending` ledger row that the rehydration
     runner picks up on its next sweep. Wired into every canonical paper
     insert/upsert so the rehydration job never goes "stale": an added
     paper missing an abstract enters the candidate pool immediately.
+
+    ``auto_schedule=False`` writes the ledger row WITHOUT spawning/checking a
+    background sweep — for bulk callers (e.g. a discovery lens refresh staging
+    110 papers) that fire ONE sweep after their loop instead of paying an
+    ``operation_status`` scan per paper (the N+1 the feed path also avoids).
     """
     try:
         from alma.services.corpus_rehydrate import enqueue_pending_hydration
 
-        enqueue_pending_hydration(db, paper_id)
+        enqueue_pending_hydration(db, paper_id, auto_schedule=auto_schedule)
     except Exception as exc:
         logger.debug("enqueue_pending_hydration skipped for %s: %s", paper_id, exc)
 
 
-def upsert_paper(db: sqlite3.Connection, **kwargs) -> str:
+def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True, **kwargs) -> str:
     """Insert or update a paper. Deduplicates via the canonical triple
     (openalex_id → doi → year+normalized_title) plus a semantic_scholar_id
     side-channel and a year-less title fallback.
@@ -328,11 +335,11 @@ def upsert_paper(db: sqlite3.Connection, **kwargs) -> str:
                 f"UPDATE papers SET {set_clause} WHERE id = ?",
                 list(updates.values()) + [paper_id],
             )
-        _schedule_pending_hydration(db, paper_id)
+        _schedule_pending_hydration(db, paper_id, auto_schedule=auto_schedule_hydration)
         return paper_id
     else:
         new_id = create_paper(db, **kwargs)
-        _schedule_pending_hydration(db, new_id)
+        _schedule_pending_hydration(db, new_id, auto_schedule=auto_schedule_hydration)
         return new_id
 
 

@@ -2153,6 +2153,10 @@ def refresh_lens_recommendations(
     for idx, candidate in enumerate(ranked, start=1):
         paper_id = library_app.upsert_paper(
             db,
+            # S-4/S-9: defer hydration scheduling — staging up to ~110 papers
+            # auto-scheduled (and re-scanned operation_status for) a sweep PER
+            # paper. Write the ledger rows here, fire ONE sweep after the loop.
+            auto_schedule_hydration=False,
             title=candidate["title"],
             authors=candidate.get("authors"),
             abstract=candidate.get("abstract"),
@@ -2183,6 +2187,18 @@ def refresh_lens_recommendations(
         staged_candidates.append((idx, candidate, paper_id))
         staged_paper_ids.append(paper_id)
     timings_ms["paper_upsert"] = int(round((perf_counter() - phase_started) * 1000))
+    # S-4/S-9: one bounded hydration sweep for everything staged this refresh,
+    # instead of an auto-scheduled job + operation_status scan per paper.
+    if staged_paper_ids:
+        try:
+            from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
+
+            schedule_pending_hydration_sweep(
+                reason="lens_refresh",
+                target_paper_ids=list(dict.fromkeys(staged_paper_ids)),
+            )
+        except Exception as exc:
+            logger.debug("Lens refresh hydration sweep skipped: %s", exc)
     # Commit the tracked-paper upserts independently of the rec swap below.
     # Per `lessons.md` → "Background jobs must release the writer lock ...
     # AND between phases" + "commit per unit of work": the paper rows are
