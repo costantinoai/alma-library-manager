@@ -196,68 +196,6 @@ router = APIRouter(
 )
 
 
-def _ensure_author_resolution_columns(db: sqlite3.Connection) -> None:
-    """Ensure author identifier resolution columns exist."""
-    try:
-        cols = [row[1] for row in db.execute("PRAGMA table_info(authors)").fetchall()]
-        if "openalex_id" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN openalex_id TEXT")
-        if "orcid" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN orcid TEXT")
-        if "scholar_id" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN scholar_id TEXT")
-        if "affiliation" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN affiliation TEXT")
-        if "email_domain" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN email_domain TEXT")
-        if "citedby" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN citedby INTEGER DEFAULT 0")
-        if "h_index" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN h_index INTEGER DEFAULT 0")
-        if "interests" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN interests TEXT")
-        if "url_picture" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN url_picture TEXT")
-        if "works_count" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN works_count INTEGER DEFAULT 0")
-        if "last_fetched_at" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN last_fetched_at TEXT")
-        if "cited_by_year" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN cited_by_year TEXT")
-        if "institutions" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN institutions TEXT")
-        if "added_at" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN added_at TEXT")
-        if "author_type" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN author_type TEXT DEFAULT 'background'")
-        if "id_resolution_status" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_status TEXT")
-        if "id_resolution_reason" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_reason TEXT")
-        if "id_resolution_updated_at" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_updated_at TEXT")
-        # Phase D (2026-04-24) hierarchical resolver columns. These let the
-        # UI surface "resolved via ORCID" vs "needs manual review" with a
-        # calibrated confidence score instead of a boolean flag.
-        if "id_resolution_method" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_method TEXT")
-        if "id_resolution_confidence" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_confidence REAL")
-        if "id_resolution_evidence" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN id_resolution_evidence TEXT")
-        # Soft-removal lifecycle (2026-04-26) — mirrors papers.status
-        # (D3): 'active' rows are visible to refresh / scope queries;
-        # 'removed' rows stay in the table so Discovery can read them
-        # as a negative signal but are filtered out of bulk refresh and
-        # the canonical author list. Default 'active' so all pre-
-        # existing rows keep their old behaviour.
-        if "status" not in cols:
-            db.execute("ALTER TABLE authors ADD COLUMN status TEXT DEFAULT 'active'")
-            db.execute("UPDATE authors SET status = 'active' WHERE status IS NULL")
-    except Exception:
-        pass
-
-
 def _get_author_sample_titles(db: sqlite3.Connection, author_id: str, limit: int = 3) -> list[str]:
     """Return representative titles for an author from the shared resolver layer."""
     return _shared_get_author_sample_titles(db, author_id, limit=limit)
@@ -937,8 +875,6 @@ def _refresh_author_cache_impl(
     """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
 
-    _ensure_author_resolution_columns(db)
-
     if job_id and is_cancellation_requested(job_id):
         set_job_status(
             job_id,
@@ -1188,8 +1124,6 @@ def _refresh_author_identity_profile_impl(
     """Refresh author identity/profile only; no works, vectors, or broad rebuild."""
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.application.author_profile import refresh_author_centroid_safe
-
-    _ensure_author_resolution_columns(db)
 
     if job_id and is_cancellation_requested(job_id):
         set_job_status(
@@ -1666,7 +1600,6 @@ def list_authors(
         ```
     """
     try:
-        _ensure_author_resolution_columns(db)
         # ALMa is single-user; the Authors page renders the full corpus
         # (Suggested rail + Followed grid + Corpus table). A default 100-row
         # cap silently truncated the list and in particular dropped followed
@@ -1699,7 +1632,6 @@ def lookup_author(
     user: dict = Depends(get_current_user),
 ):
     try:
-        _ensure_author_resolution_columns(db)
         data = authors_app.lookup_author_by_name(db, name)
         if not data:
             raise HTTPException(status_code=404, detail="Author not found")
@@ -1721,7 +1653,6 @@ def list_author_suggestions(
     user: dict = Depends(get_current_user),
 ):
     try:
-        _ensure_author_resolution_columns(db)
         suggestions = authors_app.list_author_suggestions(db, limit=limit)
         return [AuthorSuggestionResponse(**item) for item in suggestions]
     except Exception as e:
@@ -2123,8 +2054,6 @@ def follow_author_from_paper(
 ):
     try:
         from alma.openalex.client import upsert_work_sidecars
-
-        _ensure_author_resolution_columns(db)
         ensure_followed_author_contract(db)
 
         paper_row = db.execute(
@@ -2361,12 +2290,6 @@ def create_author(
     """
     try:
         from alma.openalex.client import get_author_name_by_id
-        _ensure_author_resolution_columns(db)
-        # Commit any column migration now so it's durable and independent of
-        # the retried write block below — whose rollback()-first reset must
-        # only ever discard a failed INSERT attempt, never schema work.
-        # No-op in the common case (columns already exist → no pending DDL).
-        db.commit()
 
         scholar_id = (author.scholar_id or "").strip() or None
         openalex_id = normalize_author_id((author.openalex_id or "").strip()) or None
@@ -2517,8 +2440,6 @@ def list_authors_needs_attention(
     then no_match, then needs_manual_review, then missing-openalex-on-
     followed), within each bucket by most-recently-seen.
     """
-    _ensure_author_resolution_columns(db)
-
     # Severity ordering: error > no_match > needs_manual_review >
     # unresolved/followed-but-no-openalex. Lower number = surface first.
     # The severity CASE and the WHERE predicate come from the canonical
@@ -2850,7 +2771,6 @@ def set_author_identifiers(
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    _ensure_author_resolution_columns(db)
     row = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Author not found")
@@ -3094,7 +3014,6 @@ def get_author(
         ```
     """
     try:
-        _ensure_author_resolution_columns(db)
         d = authors_app.get_author(db, author_id)
         if d is None:
             raise HTTPException(
@@ -3214,8 +3133,6 @@ def update_author_type(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="author_type must be 'followed' or 'background'",
         )
-
-    _ensure_author_resolution_columns(db)
     cursor = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,))
     existing = cursor.fetchone()
     if existing is None:
@@ -3536,15 +3453,6 @@ def confirm_openalex_for_author(
         oid = _norm_oaid(payload.openalex_id)
         det = _get_oa_det(oid) or {}
         orcid = (det.get("orcid") or "").strip() or None
-        # Ensure columns exist
-        try:
-            db.execute("ALTER TABLE authors ADD COLUMN openalex_id TEXT")
-        except Exception:
-            pass
-        try:
-            db.execute("ALTER TABLE authors ADD COLUMN orcid TEXT")
-        except Exception:
-            pass
         # Update
         db.execute(
             "UPDATE authors SET openalex_id=?, orcid=COALESCE(?, orcid) WHERE id=?",
@@ -3573,7 +3481,6 @@ def author_id_candidates(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    _ensure_author_resolution_columns(db)
     row = db.execute("SELECT id, name, openalex_id, orcid FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
@@ -3624,7 +3531,6 @@ def author_search_scholar_manual(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    _ensure_author_resolution_columns(db)
     settings = _id_resolution_settings()
     if not settings["scholar_scrape_manual_enabled"]:
         raise HTTPException(
@@ -3666,7 +3572,6 @@ def confirm_identifiers_for_author(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    _ensure_author_resolution_columns(db)
     row = db.execute("SELECT id FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
@@ -3701,7 +3606,6 @@ def resolve_identifiers_bulk(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    _ensure_author_resolution_columns(db)
     limit = max(1, min(int(req.limit or 200), 5000))
 
     scope = (req.scope or "corpus").strip().lower()
@@ -3842,7 +3746,6 @@ def get_author_publications(
         ```
     """
     try:
-        _ensure_author_resolution_columns(db)
         publications = authors_app.list_author_publications(
             db,
             author_id,
@@ -4000,7 +3903,6 @@ def get_author_detail(
     user: dict = Depends(get_current_user),
 ):
     try:
-        _ensure_author_resolution_columns(db)
         detail = authors_app.get_author_detail(db, author_id)
         if detail is None:
             raise HTTPException(
@@ -4059,7 +3961,6 @@ def get_author_dossier(
     user: dict = Depends(get_current_user),
 ):
     try:
-        _ensure_author_resolution_columns(db)
         dossier = authors_app.get_author_dossier(db, author_id)
         if dossier is None:
             raise HTTPException(
@@ -4083,7 +3984,6 @@ def history_backfill_author(
     user: dict = Depends(get_current_user),
 ):
     try:
-        _ensure_author_resolution_columns(db)
         row = db.execute(
             "SELECT id, name, author_type FROM authors WHERE id = ?",
             (author_id,),
@@ -4117,7 +4017,6 @@ def repair_author(
 ):
     def _run_repair(conn: sqlite3.Connection) -> dict[str, Any]:
         db = conn
-        _ensure_author_resolution_columns(db)
         row = db.execute(
             """
             SELECT id, name, openalex_id, scholar_id, orcid, author_type

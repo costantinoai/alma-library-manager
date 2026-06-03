@@ -593,15 +593,5 @@ def _ensure_topic_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_topic_aliases_normalized ON topic_aliases(normalized_term)"
     )
-
-    # Ensure publication_topics has topic_id column
-    try:
-        pt_cols = [r[1] for r in conn.execute("PRAGMA table_info(publication_topics)").fetchall()]
-        if "topic_id" in pt_cols:
-            return
-        conn.execute("ALTER TABLE publication_topics ADD COLUMN topic_id TEXT")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pub_topics_topic_id ON publication_topics(topic_id)"
-        )
-    except sqlite3.OperationalError:
-        pass
+    # `publication_topics.topic_id` (+ its index) is guaranteed by the
+    # startup schema (bootstrap DDL + core.migrations).

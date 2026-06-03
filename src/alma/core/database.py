@@ -198,20 +198,16 @@ def _init_authors_db(authors_path: str) -> sqlite3.Connection:
     """Ensure the authors database exists and return a connection."""
 
     conn = sqlite3.connect(authors_path)
+    # On the app DB the full-shape `authors` table already exists
+    # (init_db_schema); this minimal CREATE only fires for a standalone
+    # CLI-created file and is a no-op everywhere else.
     conn.execute(
         """CREATE TABLE IF NOT EXISTS authors (
                 name TEXT,
-                id TEXT PRIMARY KEY
+                id TEXT PRIMARY KEY,
+                openalex_id TEXT
             )"""
     )
-    # Add optional columns if missing (e.g., openalex_id)
-    try:
-        cols = [row[1] for row in conn.execute("PRAGMA table_info(authors)").fetchall()]
-        if 'openalex_id' not in cols:
-            conn.execute("ALTER TABLE authors ADD COLUMN openalex_id TEXT")
-    except sqlite3.OperationalError as e:
-        if "duplicate column" not in str(e).lower():
-            logger.warning("Failed to add openalex_id column to authors: %s", e)
     return conn
 
 

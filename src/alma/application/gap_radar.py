@@ -49,13 +49,17 @@ def _decayed_signal(signal_value: float, age_days: float, half_life_days: float)
 
 def ensure_gap_feedback_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
+        # `suggestion_bucket`: bucket attribution for outcome calibration
+        # (Phase 4 #3); NULL on rows from before attribution shipped.
+        # Pre-existing tables get the column via core.migrations.
         """
         CREATE TABLE IF NOT EXISTS missing_author_feedback (
             id TEXT PRIMARY KEY,
             openalex_id TEXT NOT NULL,
             action TEXT NOT NULL,
             signal_value REAL NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            suggestion_bucket TEXT
         )
         """
     )
@@ -65,15 +69,6 @@ def ensure_gap_feedback_tables(conn: sqlite3.Connection) -> None:
         ON missing_author_feedback(openalex_id, created_at DESC)
         """
     )
-    # Bucket attribution for outcome calibration (Phase 4 #3). Added
-    # post-launch — guarded by try/except so existing DBs migrate
-    # silently. NULL on rows from before bucket attribution shipped.
-    try:
-        conn.execute(
-            "ALTER TABLE missing_author_feedback ADD COLUMN suggestion_bucket TEXT"
-        )
-    except sqlite3.OperationalError:
-        pass
     # Follow-side attribution. Symmetric to `missing_author_feedback`
     # for the reject side: one row per "user followed an author from
     # the suggestion rail", carrying the originating bucket label so

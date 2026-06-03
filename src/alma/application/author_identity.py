@@ -385,9 +385,9 @@ def persist_identity_result(
 ) -> None:
     """Write the tier + confidence + evidence onto the ``authors`` row.
 
-    Assumes :func:`_ensure_identity_resolution_columns` already ran at
-    startup so the three columns exist. Evidence is serialised as JSON
-    so the UI can re-hydrate it without shipping a second join.
+    The three ``id_resolution_*`` columns are guaranteed by the startup
+    schema (bootstrap DDL + ``core.migrations``). Evidence is serialised
+    as JSON so the UI can re-hydrate it without shipping a second join.
     """
     timestamp = now or datetime.utcnow().isoformat()
     evidence_blob = json.dumps(result.to_dict(), ensure_ascii=False)
@@ -454,22 +454,3 @@ def persist_identity_result(
         logger.warning("persist_identity_result failed for %s: %s", author_id, exc)
 
 
-def ensure_identity_resolution_columns(db: sqlite3.Connection) -> None:
-    """One-shot migration: add the three identity columns if missing."""
-    try:
-        cols = {r[1] for r in db.execute("PRAGMA table_info(authors)").fetchall()}
-    except sqlite3.OperationalError:
-        return
-    additions = {
-        "id_resolution_method": "TEXT",
-        "id_resolution_confidence": "REAL",
-        "id_resolution_evidence": "TEXT",
-    }
-    for col, typ in additions.items():
-        if col not in cols:
-            try:
-                db.execute(f"ALTER TABLE authors ADD COLUMN {col} {typ}")
-            except sqlite3.OperationalError as exc:
-                logger.debug("add column %s failed: %s", col, exc)
-    if db.in_transaction:
-        db.commit()

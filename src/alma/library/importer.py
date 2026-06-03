@@ -1320,12 +1320,8 @@ def _trigger_background_enrichment(
         Uses the optimized bulk resolver: publication-first (DB lookup) then
         concurrent fallback title search for remaining unresolved authors.
         """
-        from alma.api.routes.authors import (
-            _ensure_author_resolution_columns,
-            _resolve_identifiers_bulk_optimized,
-        )
+        from alma.api.routes.authors import _resolve_identifiers_bulk_optimized
 
-        _ensure_author_resolution_columns(conn)
         unresolved_no_publications = int(
             conn.execute(
                 """

@@ -108,13 +108,8 @@ def ensure_stable_ids(conn: sqlite3.Connection) -> dict:
     """
     changed_authors = 0
 
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(authors)").fetchall()]
-        if "author_uid" not in cols:
-            conn.execute("ALTER TABLE authors ADD COLUMN author_uid TEXT")
-    except sqlite3.OperationalError:
-        pass
-
+    # `authors.author_uid` is guaranteed by the startup schema
+    # (bootstrap DDL + core.migrations); this pass only recomputes values.
     for row in conn.execute("SELECT rowid, * FROM authors").fetchall():
         uid = _author_uid(row)
         if row["author_uid"] != uid:

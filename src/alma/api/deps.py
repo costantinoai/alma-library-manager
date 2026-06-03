@@ -33,9 +33,8 @@ from alma.config import (
     get_data_dir,
     get_db_path,
 )
-from alma.ai.embedding_sources import EMBEDDING_SOURCE_UNKNOWN
+from alma.core.migrations import apply_pending_migrations, stamp_schema_version
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
-from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
 logger = logging.getLogger(__name__)
 _schema_init_lock = threading.Lock()
@@ -123,159 +122,11 @@ _DEFAULT_DISCOVERY_SETTINGS.update(
 )
 
 
-def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.OperationalError:
-        return set()
-    return {str(row[1]) for row in rows}
-
-
-def _ensure_columns(
-    conn: sqlite3.Connection,
-    table: str,
-    columns: dict[str, str],
-) -> None:
-    existing = _table_columns(conn, table)
-    for name, ddl in columns.items():
-        if name in existing:
-            continue
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-        except sqlite3.OperationalError:
-            continue
-
-
 def _safe_execute(conn: sqlite3.Connection, sql: str) -> None:
     try:
         conn.execute(sql)
     except sqlite3.OperationalError:
         logger.debug("Skipping schema statement: %s", sql, exc_info=True)
-
-
-def _heal_papers_openalex_id_url_form(conn: sqlite3.Connection) -> None:
-    """One-shot heal: fold URL-form ``papers.openalex_id`` to bare form.
-
-    Must run BEFORE the partial UNIQUE index on ``openalex_id`` is
-    (re-)asserted, otherwise ``CREATE UNIQUE INDEX`` raises
-    ``IntegrityError`` on any URL-form / bare-form duplicate pair.
-
-    Three-step twin-safe normalization:
-      (1) null the URL-form value on rows whose bare-form twin already
-          exists (keeps the bare canonical — preprint_dedup can later
-          collapse the preprint side),
-      (2) de-duplicate URL-form rows that share the same bare id among
-          themselves (no pre-existing bare twin): keep the lowest rowid,
-          null the rest,
-      (3) normalize the remaining (now-unique) URL-form rows to bare.
-
-    Idempotent: a second call is a no-op because step (3) eliminates
-    every URL-form row.
-    """
-    try:
-        nulled_twin = conn.execute(
-            """
-            UPDATE papers SET openalex_id = NULL
-            WHERE openalex_id LIKE 'https://openalex.org/%'
-              AND EXISTS (
-                SELECT 1 FROM papers p2
-                WHERE p2.id != papers.id
-                  AND p2.openalex_id = SUBSTR(papers.openalex_id, 22)
-              )
-            """
-        ).rowcount
-        nulled_intra = conn.execute(
-            """
-            UPDATE papers SET openalex_id = NULL
-            WHERE id IN (
-              SELECT id FROM papers WHERE openalex_id LIKE 'https://openalex.org/%'
-              EXCEPT
-              SELECT MIN(id) FROM papers
-               WHERE openalex_id LIKE 'https://openalex.org/%'
-               GROUP BY SUBSTR(openalex_id, 22)
-            )
-            """
-        ).rowcount
-        normalized = conn.execute(
-            "UPDATE papers "
-            "SET openalex_id = SUBSTR(openalex_id, 22) "
-            "WHERE openalex_id LIKE 'https://openalex.org/%'"
-        ).rowcount
-        total = nulled_twin + nulled_intra + normalized
-        if total:
-            logger.info(
-                "papers.openalex_id URL heal: nulled_twin=%d, nulled_intra=%d, normalized=%d",
-                nulled_twin,
-                nulled_intra,
-                normalized,
-            )
-    except Exception:
-        logger.debug("papers.openalex_id URL heal skipped", exc_info=True)
-
-
-def _heal_papers_blank_identifiers(conn: sqlite3.Connection) -> None:
-    """One-shot heal: coerce blank identifiers (``''`` / whitespace) on
-    ``papers.openalex_id`` / ``papers.doi`` / ``papers.semantic_scholar_id``
-    to ``NULL`` so the partial UNIQUE indexes can't collide on the empty
-    string (which is NOT NULL under the index predicate).
-
-    Must run BEFORE the partial UNIQUE index creation for the same
-    reason as the URL heal.  Idempotent.
-    """
-    try:
-        for col in ("openalex_id", "doi", "semantic_scholar_id"):
-            conn.execute(
-                f"UPDATE papers SET {col} = NULL "
-                f"WHERE {col} IS NOT NULL AND TRIM({col}) = ''"
-            )
-    except Exception:
-        logger.debug("papers blank-identifier heal skipped", exc_info=True)
-
-
-def _migrate_vector_blobs_to_float16(conn: sqlite3.Connection) -> None:
-    """Re-encode any legacy float32 vector blobs across all vector tables.
-
-    Both ``publication_embeddings.embedding`` and
-    ``author_centroids.centroid_blob`` are float16-encoded by
-    :func:`alma.core.vector_blob.encode_vector` since commit 918e5fc.
-    Rows written before that commit (or by any straggler ``.tobytes()``
-    call site) are float32 — twice the byte length of the canonical
-    encoding. The reader decodes them as float16 and gets a phantom
-    1536-dim vector that crashes downstream ``np.dot`` /
-    ``np.stack`` calls with shape mismatch errors.
-
-    The shared helper detects and rewrites those rows. Idempotent —
-    safe to run on every startup.
-    """
-    from alma.core.vector_blob import migrate_blob_column_to_float16
-
-    try:
-        migrate_blob_column_to_float16(
-            conn,
-            table="publication_embeddings",
-            blob_col="embedding",
-            key_cols=("paper_id",),
-            model_col="model",
-        )
-    except Exception:
-        logger.warning(
-            "publication_embeddings dtype migration skipped",
-            exc_info=True,
-        )
-
-    try:
-        migrate_blob_column_to_float16(
-            conn,
-            table="author_centroids",
-            blob_col="centroid_blob",
-            key_cols=("author_openalex_id", "model"),
-            model_col="model",
-        )
-    except Exception:
-        logger.warning(
-            "author_centroids dtype migration skipped",
-            exc_info=True,
-        )
 
 
 def init_db_schema() -> None:
@@ -311,6 +162,15 @@ def init_db_schema() -> None:
             conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA foreign_keys=ON")
 
+            # Versioned migrations bring any pre-existing older DB to the
+            # current shape BEFORE the bootstrap DDL below asserts indexes
+            # (legacy identifier heals must precede the partial UNIQUE
+            # indexes). Fresh DBs skip this entirely — the bootstrap DDL
+            # creates the current shape and `stamp_schema_version` pins
+            # PRAGMA user_version at the end. Every schema mutation lives
+            # in alma.core.migrations; the DDL below is current-shape only.
+            apply_pending_migrations(conn)
+
             # ==============================================================
             # CORE: Papers
             # ==============================================================
@@ -330,6 +190,9 @@ def init_db_schema() -> None:
 
                     -- OpenAlex metadata
                     openalex_id TEXT,
+                    -- Semantic Scholar identifiers
+                    semantic_scholar_id TEXT,
+                    semantic_scholar_corpus_id TEXT,
                     work_type TEXT,
                     language TEXT,
                     is_oa INTEGER DEFAULT 0,
@@ -358,6 +221,22 @@ def init_db_schema() -> None:
                     -- Status lifecycle: tracked | library | dismissed | removed
                     status TEXT NOT NULL DEFAULT 'tracked',
 
+                    -- Reading lifecycle (D2: orthogonal to membership)
+                    reading_status TEXT DEFAULT NULL,
+
+                    -- S2 enrichments: tldr is a 1-2 sentence AI summary
+                    -- (dense in CS + biomedicine); influential_citation_count
+                    -- supplements raw cited_by_count in citation_quality.
+                    tldr TEXT,
+                    influential_citation_count INTEGER DEFAULT 0,
+
+                    -- Preprint↔journal dedup (2026-04-24): the preprint row
+                    -- points at its published journal twin and is filtered
+                    -- out of Library + Discovery lists. NULL = canonical.
+                    -- See alma.application.preprint_dedup.
+                    canonical_paper_id TEXT,
+                    preprint_source TEXT, -- arxiv / biorxiv / psyrxiv / osf / chemrxiv
+
                     -- Library metadata (populated when status = 'library')
                     rating INTEGER DEFAULT 0,
                     notes TEXT,
@@ -380,76 +259,6 @@ def init_db_schema() -> None:
                     updated_at TEXT DEFAULT (datetime('now'))
                 )"""
             )
-            _ensure_columns(
-                conn,
-                "papers",
-                {
-                    "authors": "TEXT",
-                    "year": "INTEGER",
-                    "journal": "TEXT",
-                    "abstract": "TEXT",
-                    "url": "TEXT",
-                    "doi": "TEXT",
-                    "publication_date": "TEXT",
-                    "openalex_id": "TEXT",
-                    "semantic_scholar_id": "TEXT",
-                    "semantic_scholar_corpus_id": "TEXT",
-                    "work_type": "TEXT",
-                    "language": "TEXT",
-                    "is_oa": "INTEGER DEFAULT 0",
-                    "oa_status": "TEXT",
-                    "oa_url": "TEXT",
-                    "is_retracted": "INTEGER DEFAULT 0",
-                    "fwci": "REAL",
-                    "cited_by_count": "INTEGER DEFAULT 0",
-                    "cited_by_percentile_min": "REAL",
-                    "cited_by_percentile_max": "REAL",
-                    "referenced_works_count": "INTEGER DEFAULT 0",
-                    "volume": "TEXT",
-                    "issue": "TEXT",
-                    "first_page": "TEXT",
-                    "last_page": "TEXT",
-                    "institutions_count": "INTEGER DEFAULT 0",
-                    "countries_count": "INTEGER DEFAULT 0",
-                    "keywords": "TEXT",
-                    "sdgs": "TEXT",
-                    "counts_by_year": "TEXT",
-                    "status": "TEXT NOT NULL DEFAULT 'tracked'",
-                    "rating": "INTEGER DEFAULT 0",
-                    "notes": "TEXT",
-                    "added_at": "TEXT",
-                    "added_from": "TEXT",
-                    "global_signal_score": "REAL DEFAULT 0.0",
-                    "openalex_resolution_status": "TEXT",
-                    "openalex_resolution_reason": "TEXT",
-                    "openalex_resolution_updated_at": "TEXT",
-                    "author_id": "TEXT DEFAULT ''",
-                    "source_id": "TEXT DEFAULT ''",
-                    "fetched_at": "TEXT",
-                    "created_at": "TEXT DEFAULT (datetime('now'))",
-                    "updated_at": "TEXT DEFAULT (datetime('now'))",
-                    # Preprint↔journal dedup (2026-04-24): when the same
-                    # work exists as both a preprint and a published journal
-                    # row, the preprint points to the journal row here and
-                    # gets filtered out of Library + Discovery lists. NULL
-                    # = canonical. See alma.application.preprint_dedup.
-                    "canonical_paper_id": "TEXT",
-                    "preprint_source": "TEXT",  # arxiv / biorxiv / psyrxiv / osf / chemrxiv
-                },
-            )
-            # Identifier heals must run BEFORE the partial UNIQUE indexes
-            # are asserted — otherwise `CREATE UNIQUE INDEX` raises
-            # `IntegrityError: UNIQUE constraint failed` on any legacy
-            # duplicate and init_db_schema crashes hard (swallowed
-            # `OperationalError` in `_safe_execute` does NOT cover
-            # IntegrityError).  Pre-2026-04-25 these heals lived far
-            # below the index-create block, so a DB with legacy
-            # URL-form / blank identifier duplicates would never boot
-            # past schema init.  Running them here is safe because:
-            # the `papers` table exists (just created), any legacy rows
-            # predate this init call, and the heals are idempotent.
-            _heal_papers_openalex_id_url_form(conn)
-            _heal_papers_blank_identifiers(conn)
             for idx_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_openalex_id ON papers(openalex_id) WHERE openalex_id IS NOT NULL",
@@ -463,48 +272,6 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_papers_canonical ON papers(canonical_paper_id) WHERE canonical_paper_id IS NOT NULL",
             ]:
                 _safe_execute(conn, idx_sql)
-
-            _ensure_columns(
-                conn,
-                "papers",
-                {
-                    "reading_status": "TEXT DEFAULT NULL",
-                    # T5: S2 tldr is a 1-2 sentence AI summary of the
-                    # paper; dense coverage in CS + biomedicine, sparse
-                    # elsewhere. PaperCard renders it italic under the
-                    # abstract when present.
-                    "tldr": "TEXT",
-                    # T5: S2's learned "this citation mattered" count.
-                    # Supplements raw `cited_by_count` in the
-                    # `citation_quality` scoring signal.
-                    "influential_citation_count": "INTEGER DEFAULT 0",
-                },
-            )
-            conn.execute("UPDATE papers SET status = 'tracked' WHERE status = 'candidate'")
-            conn.execute(
-                """
-                UPDATE papers
-                SET status = 'library',
-                    added_from = COALESCE(NULLIF(TRIM(added_from), ''), 'import'),
-                    added_at = COALESCE(added_at, fetched_at, datetime('now'))
-                WHERE status = 'tracked'
-                  AND (
-                    added_from = 'import'
-                    OR notes LIKE 'Imported from %'
-                  )
-                """
-            )
-            conn.execute("UPDATE papers SET status = 'tracked' WHERE status = 'disliked'")
-
-            # D2 lifecycle change (2026-04-26): collapse the `queued`
-            # reading-state into `reading`. The queue/reading split was
-            # a v1 distinction; v3 treats reading-list membership as
-            # the reading state — anything on the list is `reading`.
-            # Idempotent: rows already at `reading` are unaffected.
-            conn.execute(
-                "UPDATE papers SET reading_status = 'reading' "
-                "WHERE reading_status = 'queued'"
-            )
 
             # ==============================================================
             # CORE: Authors
@@ -531,57 +298,39 @@ def init_db_schema() -> None:
                     -- Author classification
                     author_type TEXT DEFAULT 'followed',
 
-                    -- Identity resolution
+                    -- Identity resolution (+ Phase D hierarchical-resolver
+                    -- columns, 2026-04-24: method / confidence / evidence)
                     id_resolution_status TEXT,
                     id_resolution_reason TEXT,
-                    id_resolution_updated_at TEXT
+                    id_resolution_updated_at TEXT,
+                    id_resolution_method TEXT,
+                    id_resolution_confidence REAL,
+                    id_resolution_evidence TEXT,
+                    semantic_scholar_id TEXT,
+
+                    -- Soft-removal lifecycle (2026-04-26) — mirrors
+                    -- papers.status (D3): 'removed' rows stay readable as
+                    -- a negative signal but leave bulk refresh + the
+                    -- canonical author list.
+                    status TEXT DEFAULT 'active',
+
+                    -- Stable dedup identity; values recomputed by
+                    -- library/deduplication.ensure_stable_ids.
+                    author_uid TEXT
                 )"""
             )
-            _ensure_columns(
-                conn,
-                "authors",
-                {
-                    "openalex_id": "TEXT",
-                    "orcid": "TEXT",
-                    "scholar_id": "TEXT",
-                    "affiliation": "TEXT",
-                    "citedby": "INTEGER DEFAULT 0",
-                    "h_index": "INTEGER DEFAULT 0",
-                    "interests": "TEXT",
-                    "url_picture": "TEXT",
-                    "works_count": "INTEGER DEFAULT 0",
-                    "last_fetched_at": "TEXT",
-                    "cited_by_year": "TEXT",
-                    "institutions": "TEXT",
-                    "email_domain": "TEXT",
-                    "added_at": "TEXT",
-                    "author_type": "TEXT DEFAULT 'followed'",
-                    "id_resolution_status": "TEXT",
-                    "id_resolution_reason": "TEXT",
-                    "id_resolution_updated_at": "TEXT",
-                    # Phase D hierarchical-resolver columns (2026-04-24).
-                    "id_resolution_method": "TEXT",
-                    "id_resolution_confidence": "REAL",
-                    "id_resolution_evidence": "TEXT",
-                    "semantic_scholar_id": "TEXT",
-                },
-            )
 
+            # `is_owner`: onboarding marks the user's own author profile as
+            # the "owner". Single-user app, so the partial unique index
+            # enforces at most one owner row at the DB level. Used by
+            # /onboarding for has_owner detection and the "this is you" badge.
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS followed_authors (
                     author_id TEXT PRIMARY KEY,
                     followed_at TEXT NOT NULL,
-                    notify_new_papers INTEGER DEFAULT 1
+                    notify_new_papers INTEGER DEFAULT 1,
+                    is_owner INTEGER NOT NULL DEFAULT 0
                 )"""
-            )
-            # Onboarding marks the user's own author profile as the "owner".
-            # Single-user app, so the partial unique index enforces at most
-            # one owner row at the DB level. Used by /onboarding for
-            # has_owner detection and (future) a "this is you" badge.
-            _ensure_columns(
-                conn,
-                "followed_authors",
-                {"is_owner": "INTEGER NOT NULL DEFAULT 0"},
             )
             _safe_execute(
                 conn,
@@ -606,21 +355,6 @@ def init_db_schema() -> None:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (author_id, source, purpose)
                 )"""
-            )
-            _ensure_columns(
-                conn,
-                "author_enrichment_status",
-                {
-                    "lookup_key": "TEXT NOT NULL DEFAULT ''",
-                    "fields_key": "TEXT NOT NULL DEFAULT ''",
-                    "reason": "TEXT",
-                    "fields_requested_json": "TEXT",
-                    "fields_filled_json": "TEXT",
-                    "attempts": "INTEGER NOT NULL DEFAULT 0",
-                    "last_attempt_at": "TEXT",
-                    "next_retry_at": "TEXT",
-                    "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
-                },
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_author_enrichment_status_lookup "
@@ -648,21 +382,6 @@ def init_db_schema() -> None:
                     UNIQUE (author_id, source, institution_name, role, start_date)
                 )"""
             )
-            _ensure_columns(
-                conn,
-                "author_affiliation_evidence",
-                {
-                    "institution_openalex_id": "TEXT",
-                    "institution_ror": "TEXT",
-                    "role": "TEXT",
-                    "start_date": "TEXT NOT NULL DEFAULT ''",
-                    "end_date": "TEXT",
-                    "is_current": "INTEGER DEFAULT 0",
-                    "evidence_url": "TEXT",
-                    "confidence": "REAL",
-                    "observed_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
-                },
-            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_author_affiliation_evidence_author "
                 "ON author_affiliation_evidence(author_id, is_current DESC, observed_at DESC)"
@@ -685,27 +404,6 @@ def init_db_schema() -> None:
                     score_breakdown TEXT DEFAULT NULL,
                     UNIQUE(paper_id, author_id)
                 )"""
-            )
-            # Migration: add score_breakdown column if missing (existing DBs)
-            try:
-                conn.execute("ALTER TABLE feed_items ADD COLUMN score_breakdown TEXT DEFAULT NULL")
-            except Exception:
-                pass  # column already exists
-            for alter_sql in [
-                "ALTER TABLE feed_items ADD COLUMN monitor_id TEXT",
-                "ALTER TABLE feed_items ADD COLUMN monitor_type TEXT",
-                "ALTER TABLE feed_items ADD COLUMN monitor_label TEXT",
-            ]:
-                try:
-                    conn.execute(alter_sql)
-                except Exception:
-                    pass
-            conn.execute(
-                """
-                UPDATE feed_items
-                SET status = 'new'
-                WHERE status IN ('deferred', 'discovery', 'signal_lab')
-                """
             )
             for idx_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_feed_status ON feed_items(status)",
@@ -756,10 +454,6 @@ def init_db_schema() -> None:
                     is_active INTEGER DEFAULT 1
                 )"""
             )
-            try:
-                conn.execute("ALTER TABLE discovery_lenses ADD COLUMN branch_controls TEXT")
-            except Exception:
-                pass
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_lenses_type ON discovery_lenses(context_type)"
             )
@@ -780,6 +474,10 @@ def init_db_schema() -> None:
             )
 
             conn.execute(
+                # Provenance columns (source_* / branch_*) — keep in sync
+                # with `_derive_recommendation_provenance` in
+                # application/discovery (D-10); the legacy add-column path
+                # lives in core/migrations.
                 """CREATE TABLE IF NOT EXISTS recommendations (
                     id TEXT PRIMARY KEY,
                     suggestion_set_id TEXT REFERENCES suggestion_sets(id) ON DELETE CASCADE,
@@ -791,7 +489,13 @@ def init_db_schema() -> None:
                     user_action TEXT,
                     action_at TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
-                    explanation TEXT
+                    explanation TEXT,
+                    source_type TEXT,
+                    source_api TEXT,
+                    source_key TEXT,
+                    branch_id TEXT,
+                    branch_label TEXT,
+                    branch_mode TEXT
                 )"""
             )
             for idx_sql in [
@@ -799,54 +503,19 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_recs_lens ON recommendations(lens_id)",
                 "CREATE INDEX IF NOT EXISTS idx_recs_paper ON recommendations(paper_id)",
                 "CREATE INDEX IF NOT EXISTS idx_recs_action ON recommendations(user_action)",
-            ]:
-                conn.execute(idx_sql)
-
-            # Migration: add explanation column if missing (existing DBs)
-            try:
-                conn.execute("ALTER TABLE recommendations ADD COLUMN explanation TEXT")
-            except Exception:
-                pass  # column already exists
-            # Provenance columns — this migrator block is the SINGLE source of
-            # truth for their existence (D-10). The discovery refresh hot path
-            # is forward-only and assumes they exist; it no longer patches the
-            # schema per-refresh. Keep this list in sync with
-            # `_derive_recommendation_provenance` in application/discovery.py.
-            for ddl in (
-                "ALTER TABLE recommendations ADD COLUMN source_type TEXT",
-                "ALTER TABLE recommendations ADD COLUMN source_api TEXT",
-                "ALTER TABLE recommendations ADD COLUMN source_key TEXT",
-                "ALTER TABLE recommendations ADD COLUMN branch_id TEXT",
-                "ALTER TABLE recommendations ADD COLUMN branch_label TEXT",
-                "ALTER TABLE recommendations ADD COLUMN branch_mode TEXT",
-            ):
-                try:
-                    conn.execute(ddl)
-                except Exception:
-                    pass
-            for idx_sql in [
                 # Diagnostics aggregations: branch_quality groups by
                 # (branch_id, source_type) to compute the source_mix in a
                 # single query instead of N+1 per-branch sub-selects, and
                 # source_quality groups by (source_type, source_api).
                 "CREATE INDEX IF NOT EXISTS idx_recs_branch_source ON recommendations(branch_id, source_type)",
                 "CREATE INDEX IF NOT EXISTS idx_recs_source_api ON recommendations(source_type, source_api)",
+                # D-AUDIT-6: blocks duplicate (lens, paper, set) rows going
+                # forward; legacy duplicates are removed by the
+                # recommendations_hygiene migration before this asserts.
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_recs_lens_paper_set_unique "
+                "ON recommendations(lens_id, paper_id, suggestion_set_id)",
             ]:
                 conn.execute(idx_sql)
-
-            # Migration: drop the legacy `query_plan_used_ai` column from
-            # `recommendations`. The LLM-backed branch query planner was
-            # removed in 2026-04 (see tasks/01_LLM_PRODUCTION_EXIT.md), so
-            # the column no longer carries meaning. SQLite >= 3.35 supports
-            # DROP COLUMN directly; we ignore failures because (a) older
-            # SQLite versions raise OperationalError and (b) fresh DBs
-            # never had the column in the first place.
-            try:
-                cols = _table_columns(conn, "recommendations")
-                if "query_plan_used_ai" in cols:
-                    conn.execute("ALTER TABLE recommendations DROP COLUMN query_plan_used_ai")
-            except Exception:
-                pass
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS lens_signals (
@@ -961,16 +630,6 @@ def init_db_schema() -> None:
                     PRIMARY KEY (paper_id, term)
                 )"""
             )
-            _ensure_columns(
-                conn,
-                "publication_topics",
-                {
-                    "domain": "TEXT DEFAULT ''",
-                    "field": "TEXT DEFAULT ''",
-                    "subfield": "TEXT DEFAULT ''",
-                    "topic_id": "TEXT",
-                },
-            )
             _safe_execute(
                 conn,
                 "CREATE INDEX IF NOT EXISTS idx_pub_topics_topic_id ON publication_topics(topic_id)"
@@ -1064,53 +723,6 @@ def init_db_schema() -> None:
                     PRIMARY KEY (paper_id, model)
                 )"""
             )
-            _ensure_columns(
-                conn,
-                "publication_embeddings",
-                {
-                    "source": "TEXT NOT NULL DEFAULT 'unknown'",
-                },
-            )
-
-            # Legacy PK migration: old schema used PRIMARY KEY (paper_id)
-            # with a column-level model default. Detect via PRAGMA
-            # table_info and rebuild in place, preserving each legacy row
-            # under the model name already recorded against it.
-            pk_cols = [
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(publication_embeddings)")
-                if row["pk"] > 0
-            ]
-            if pk_cols == ["paper_id"]:
-                logger.info(
-                    "Migrating publication_embeddings PK from (paper_id) to (paper_id, model)"
-                )
-                conn.execute("ALTER TABLE publication_embeddings RENAME TO publication_embeddings_legacy")
-                conn.execute(
-                    """CREATE TABLE publication_embeddings (
-                        paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-                        embedding BLOB NOT NULL,
-                        model TEXT NOT NULL,
-                        source TEXT NOT NULL DEFAULT 'unknown',
-                        created_at TEXT NOT NULL,
-                        PRIMARY KEY (paper_id, model)
-                    )"""
-                )
-                conn.execute(
-                    """
-                    INSERT INTO publication_embeddings (paper_id, embedding, model, source, created_at)
-                    SELECT paper_id,
-                           embedding,
-                           NULLIF(TRIM(model), ''),
-                           ?,
-                           created_at
-                    FROM publication_embeddings_legacy
-                    WHERE NULLIF(TRIM(model), '') IS NOT NULL
-                    """
-                    ,
-                    (EMBEDDING_SOURCE_UNKNOWN,),
-                )
-                conn.execute("DROP TABLE publication_embeddings_legacy")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_publication_embeddings_model ON publication_embeddings(model)"
             )
@@ -1118,19 +730,6 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_publication_embeddings_model_source "
                 "ON publication_embeddings(model, source)"
             )
-
-            # One-shot dtype migration: prior writers (notably
-            # ``services/s2_vectors``, ``application/discovery``, and
-            # an earlier ``application/author_backfill``) packed
-            # vectors as float32 instead of going through
-            # ``core.vector_blob.encode_vector`` (float16). The reader
-            # decodes as float16 — so a 768-dim float32 row (3072 bytes)
-            # came back looking like a 1536-dim vector and broke any
-            # ``np.stack`` / ``np.dot`` over a mixed-encoding pool with
-            # ``shapes (768,) and (1536,) not aligned`` errors during
-            # author network refresh. Detection is per-model and runs
-            # for every vector-blob table; idempotent.
-            _migrate_vector_blobs_to_float16(conn)
 
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS publication_embedding_fetch_status (
@@ -1200,21 +799,6 @@ def init_db_schema() -> None:
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (paper_id, source, purpose)
                 )"""
-            )
-            _ensure_columns(
-                conn,
-                "paper_enrichment_status",
-                {
-                    "lookup_key": "TEXT NOT NULL DEFAULT ''",
-                    "fields_key": "TEXT NOT NULL DEFAULT ''",
-                    "reason": "TEXT",
-                    "fields_requested_json": "TEXT",
-                    "fields_filled_json": "TEXT",
-                    "attempts": "INTEGER NOT NULL DEFAULT 0",
-                    "last_attempt_at": "TEXT",
-                    "next_retry_at": "TEXT",
-                    "updated_at": "TEXT NOT NULL DEFAULT (datetime('now'))",
-                },
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_paper_enrichment_status_lookup "
@@ -1382,68 +966,6 @@ def init_db_schema() -> None:
                     """,
                     (_default_env_type, _default_env_path),
                 )
-            # One-way cleanup of removed local embedding options. Runtime code
-            # only knows the canonical `local`/SPECTER2 provider.
-            conn.execute(
-                """
-                UPDATE discovery_settings
-                SET value = 'local'
-                WHERE key = 'ai.provider' AND value = 'minilm'
-                """
-            )
-            conn.execute(
-                """
-                UPDATE discovery_settings
-                SET value = 'specter2-base'
-                WHERE key = 'ai.local_model'
-                  AND value IN ('minilm-l6', 'bge-base', 'bge-large')
-                """
-            )
-            conn.execute(
-                """
-                UPDATE discovery_settings
-                SET value = ?
-                WHERE key = 'embedding_model'
-                  AND value IN (
-                    'all-MiniLM-L6-v2',
-                    'BAAI/bge-base-en-v1.5',
-                    'BAAI/bge-large-en-v1.5'
-                  )
-                """,
-                (S2_SPECTER2_MODEL,),
-            )
-            # LLM settings were removed in 2026-04 (see
-            # tasks/01_LLM_PRODUCTION_EXIT.md) — drop every leftover
-            # ai.llm_* / ai.openai_llm_* / ai.anthropic_* /
-            # strategies.ai_query_planner key from existing DBs in one
-            # pass. Ollama (both LLM and embedding) was removed in the
-            # same wave: drop ai.ollama_* and migrate any rows where
-            # ai.provider = 'ollama' to 'none'. Keep the embedding-side
-            # keys (ai.provider, ai.local_model, ai.python_env_*) untouched.
-            for legacy_key in (
-                "ai.llm_provider",
-                "ai.llm_model",
-                "ai.hf_llm_model",
-                "ai.openai_llm_model",
-                "ai.anthropic_model",
-                "ai.auto_compute",
-                "ai.ollama_url",
-                "ai.ollama_model",
-                "strategies.ai_query_planner",
-            ):
-                conn.execute(
-                    "DELETE FROM discovery_settings WHERE key = ?",
-                    (legacy_key,),
-                )
-            conn.execute(
-                """
-                UPDATE discovery_settings
-                SET value = 'none'
-                WHERE key = 'ai.provider'
-                  AND value NOT IN ('none', 'local', 'openai')
-                """
-            )
-
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS graph_cache (
                     graph_type TEXT PRIMARY KEY,
@@ -1630,243 +1152,11 @@ def init_db_schema() -> None:
             except Exception:
                 logger.debug("followed_authors canonicalization skipped during init", exc_info=True)
 
-            # URL-form heal: moved to the pre-index block (see
-            # `_heal_papers_openalex_id_url_form`).  This slot is kept
-            # intentionally empty so the authors-heal below still lands
-            # in a predictable location relative to its comments; the
-            # new call site ahead of the partial UNIQUE index creation
-            # is the authoritative one.
-
-            # One-shot heal: normalize `authors.openalex_id` to the
-            # canonical `A...` bare form. Three legacy drifts seen in
-            # real DBs as of 2026-04-24: (a) lowercase `a...` prefix,
-            # (b) `3A...` residue from a buggy `%3A` URL-decode pass
-            # that persisted the URL-encoded colon, (c) URL-form
-            # `https://openalex.org/A...`. Any of these makes
-            # `fetch_author_profile` return 404 because OpenAlex only
-            # accepts the canonical form, which silently fails every
-            # deep refresh for that author.
-            #
-            # The partial UNIQUE index `ux_authors_openalex_norm` on
-            # `lower(openalex_id)` means a naive bulk UPDATE can
-            # collide with a twin row that holds the canonical form.
-            # In that case we null out the corrupt value so the row
-            # stays eligible for re-resolution instead of losing the
-            # canonical twin. Each heal is wrapped individually so a
-            # single bad row can't block the rest.
-            try:
-                author_heals = {"url_form": 0, "triple_a": 0, "lower_a": 0, "collisions_nulled": 0}
-
-                author_heals["url_form"] = conn.execute(
-                    "UPDATE authors SET openalex_id = SUBSTR(openalex_id, 22) "
-                    "WHERE openalex_id LIKE 'https://openalex.org/%' "
-                    "AND NOT EXISTS ("
-                    "  SELECT 1 FROM authors twin "
-                    "  WHERE lower(twin.openalex_id) = lower(SUBSTR(authors.openalex_id, 22)) "
-                    "  AND twin.id != authors.id"
-                    ")"
-                ).rowcount
-                # `3A<x>` case: stripping gives `<x>`; if a twin already
-                # has `<x>` or its uppercase sibling, null out this row's
-                # corrupt id instead of colliding.
-                author_heals["triple_a"] = conn.execute(
-                    "UPDATE authors SET openalex_id = SUBSTR(openalex_id, 3) "
-                    "WHERE openalex_id GLOB '3[Aa]*' "
-                    "AND NOT EXISTS ("
-                    "  SELECT 1 FROM authors twin "
-                    "  WHERE lower(twin.openalex_id) = lower(SUBSTR(authors.openalex_id, 3)) "
-                    "  AND twin.id != authors.id"
-                    ")"
-                ).rowcount
-                author_heals["collisions_nulled"] = conn.execute(
-                    "UPDATE authors SET openalex_id = NULL "
-                    "WHERE openalex_id GLOB '3[Aa]*'"
-                ).rowcount
-                # Uppercase leading `a` → `A`. Again twin-safe.
-                author_heals["lower_a"] = conn.execute(
-                    "UPDATE authors SET openalex_id = 'A' || SUBSTR(openalex_id, 2) "
-                    "WHERE openalex_id LIKE 'a%' "
-                    "AND NOT EXISTS ("
-                    "  SELECT 1 FROM authors twin "
-                    "  WHERE lower(twin.openalex_id) = lower('A' || SUBSTR(authors.openalex_id, 2)) "
-                    "  AND twin.id != authors.id"
-                    ")"
-                ).rowcount
-                total = sum(author_heals.values())
-                if total:
-                    logger.info(
-                        "authors.openalex_id heal: %s (total %d rows touched)",
-                        author_heals,
-                        total,
-                    )
-            except Exception:
-                logger.debug("authors.openalex_id heal skipped during init", exc_info=True)
-
-            # Blank-identifier heal: moved to the pre-index block (see
-            # `_heal_papers_blank_identifiers`). Kept empty here for
-            # layout stability.
-
-            # Signal Lab consolidation heal (2026-04-24): unify legacy
-            # mode_breakdown keys onto the consolidated surface (swipe /
-            # authors / topics / tier_sort / feed / library). Stamps
-            # `context.mode` on `(none)` rows and re-labels stale mode
-            # values from retired modes so the UI breakdown is legible.
-            try:
-                mode_heals = 0
-                # (1) Stamp missing `context.mode` based on event_type.
-                missing_mode_map = {
-                    "swipe": "swipe",
-                    "triage_pick": "swipe",
-                    "author_pref": "authors",
-                    "topic_pref": "topics",
-                    "source_pref": "tier_sort",
-                    "method_match": "swipe",
-                    "abstract_highlight": "swipe",
-                    "feed_action": "feed",
-                    "rating": "library",
-                    "paper_action": "library",
-                    "tier_sort": "tier_sort",
-                }
-                for etype, mode in missing_mode_map.items():
-                    mode_heals += conn.execute(
-                        """
-                        UPDATE feedback_events
-                        SET context_json = json_set(
-                            COALESCE(context_json, '{}'),
-                            '$.mode', ?
-                        )
-                        WHERE event_type = ?
-                          AND (
-                                context_json IS NULL
-                             OR COALESCE(json_extract(context_json, '$.mode'), '') = ''
-                          )
-                        """,
-                        (mode, etype),
-                    ).rowcount
-                # (2) Rename legacy mode values to the consolidated surface.
-                legacy_mode_rename = {
-                    "triage": "swipe",        # absorbed by Swipe (count>=2)
-                    "author_duel": "authors",  # renamed for clarity
-                    "method_match": "swipe",   # retired; counted as swipe
-                    "source_sprint": "tier_sort",
-                    "abstract_highlight": "swipe",
-                }
-                for old, new in legacy_mode_rename.items():
-                    mode_heals += conn.execute(
-                        """
-                        UPDATE feedback_events
-                        SET context_json = json_set(context_json, '$.mode', ?)
-                        WHERE json_extract(context_json, '$.mode') = ?
-                        """,
-                        (new, old),
-                    ).rowcount
-                if mode_heals:
-                    logger.info(
-                        "feedback_events.mode heal: consolidated %d rows to the 3-mode surface",
-                        mode_heals,
-                    )
-            except Exception:
-                logger.debug("feedback_events.mode heal skipped during init", exc_info=True)
-
-            # One-shot heal for drift between authors.author_type='followed' and
-            # followed_authors. Legacy import pipelines used to stamp rows as
-            # 'followed' without inserting into the followed_authors table,
-            # leaving ~1k phantom-followed authors that have no Feed monitor and
-            # can't be unfollowed from the UI. The canonical source of truth is
-            # followed_authors — rows outside it get demoted to 'background'.
-            # Also mirror feed_monitors one last time so any followed_authors
-            # row that lacks a monitor picks one up.
-            try:
-                demoted = conn.execute(
-                    """
-                    UPDATE authors
-                    SET author_type = 'background'
-                    WHERE author_type = 'followed'
-                      AND id NOT IN (SELECT author_id FROM followed_authors)
-                    """
-                ).rowcount
-                if demoted:
-                    logger.info(
-                        "follow-state heal: demoted %d authors with author_type='followed' "
-                        "but missing from followed_authors",
-                        demoted,
-                    )
-                from alma.application.feed_monitors import sync_author_monitors
-
-                sync_author_monitors(conn)
-            except Exception:
-                logger.debug("follow-state heal skipped during init", exc_info=True)
-
-            # D-AUDIT-6 heal: recommendations.paper_id foreign-key drift.
-            # The schema declares
-            #   paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE
-            # and every write connection runs PRAGMA foreign_keys=ON, but a
-            # live probe found 151 / 201 rec rows whose paper_id was not in
-            # papers.id. The drift is explained by refresh pipelines writing
-            # rec rows from a stale connection or with foreign_keys temporarily
-            # off during bulk inserts (sqlite silently accepts the row; ON
-            # DELETE CASCADE never fires because the paper was never committed
-            # under the FK-enabled connection). This heal deletes orphans and
-            # also dedupes any rows that share the same
-            # (lens_id, paper_id, suggestion_set_id) triple — refresh cycles
-            # inserted duplicates when the same paper surfaced repeatedly. A
-            # subsequent UNIQUE index blocks the duplicate path going forward.
-            try:
-                # Inline table-check (helpers.table_exists would add a
-                # circular import — deps.py is imported by helpers.py).
-                rec_table = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='recommendations'"
-                ).fetchone()
-                if rec_table:
-                    orphans = conn.execute(
-                        "DELETE FROM recommendations "
-                        "WHERE paper_id NOT IN (SELECT id FROM papers)"
-                    ).rowcount
-                    if orphans:
-                        logger.info(
-                            "recommendations heal: deleted %d orphan rows "
-                            "with paper_id not in papers",
-                            orphans,
-                        )
-                    # Dedupe by (lens_id, paper_id, COALESCE(suggestion_set_id,''))
-                    # keeping the row with the most recent created_at. NULL
-                    # suggestion_set_id gets treated as '' for the grouping so
-                    # pre-lens recommendations don't all collapse.
-                    dupes = conn.execute(
-                        """
-                        DELETE FROM recommendations
-                        WHERE id NOT IN (
-                            SELECT id FROM (
-                                SELECT id,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY COALESCE(lens_id, ''),
-                                                        paper_id,
-                                                        COALESCE(suggestion_set_id, '')
-                                           ORDER BY COALESCE(action_at, created_at, '') DESC,
-                                                    created_at DESC,
-                                                    id
-                                       ) AS rn
-                                FROM recommendations
-                            )
-                            WHERE rn = 1
-                        )
-                        """
-                    ).rowcount
-                    if dupes:
-                        logger.info(
-                            "recommendations heal: removed %d duplicate rows "
-                            "(same lens_id, paper_id, suggestion_set_id)",
-                            dupes,
-                        )
-                    # Add the unique index after dedupe. ``IF NOT EXISTS`` keeps
-                    # repeated init_db_schema calls cheap.
-                    conn.execute(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS "
-                        "idx_recs_lens_paper_set_unique "
-                        "ON recommendations(lens_id, paper_id, suggestion_set_id)"
-                    )
-            except Exception:
-                logger.debug("recommendations heal skipped during init", exc_info=True)
+            # Pin PRAGMA user_version for fresh databases — the bootstrap
+            # DDL above just created the current shape, so the legacy
+            # migrations must never replay against it. No-op on DBs that
+            # `apply_pending_migrations` already brought to HEAD.
+            stamp_schema_version(conn)
 
             conn.commit()
             _schema_initialized = True
