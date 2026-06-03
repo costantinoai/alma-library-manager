@@ -106,18 +106,19 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
           <p>
             A monitor is a standing query over new papers' titles and abstracts. You can use plain
             phrases, or boolean expressions with{' '}
-            <JargonHint
-              title="Boolean operators"
-              description={
-                <span>
-                  Combine terms with <code>AND</code>, <code>OR</code>, <code>NOT</code> and group with
-                  parentheses. Quotes match an exact phrase. Example:{' '}
-                  <code>(manifold OR topology) AND representations NOT images</code>.
-                </span>
-              }
-            >
+            <span className="inline-flex items-center gap-1">
               AND / OR / NOT and parentheses
-            </JargonHint>
+              <JargonHint
+                title="Boolean operators"
+                description={
+                  <span>
+                    Combine terms with <code>AND</code>, <code>OR</code>, <code>NOT</code> and group with
+                    parentheses. Quotes match an exact phrase. Example:{' '}
+                    <code>(manifold OR topology) AND representations NOT images</code>.
+                  </span>
+                }
+              />
+            </span>
             . Monitors live in Settings → Feed Monitor Controls, where you can edit or remove them anytime.
           </p>
         </ConceptCallout>

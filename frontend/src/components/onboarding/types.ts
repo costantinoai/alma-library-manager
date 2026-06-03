@@ -1,3 +1,5 @@
+import type * as React from 'react'
+
 /**
  * Onboarding shared types.
  *
@@ -51,11 +53,13 @@ export interface StepContext {
   back: () => void
   /** Mark onboarding complete on the server and close the flow. */
   finish: () => void
+  /** True while the completion / skip write is in flight. */
+  finishing: boolean
   /** Total number of steps (for "Step n of N"). */
   total: number
 }
 
-export type StepComponent = (ctx: StepContext) => JSX.Element
+export type StepComponent = (ctx: StepContext) => React.ReactElement
 
 export interface StepDef {
   id: string

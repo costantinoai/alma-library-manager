@@ -12,11 +12,14 @@ import {
   likeRecommendation,
   listLensRecommendations,
   saveRecommendation,
+  undoPaperFeedback,
+  type LensRecommendation,
 } from '@/api/client'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
 
 type Reaction = 'like' | 'love' | 'dislike' | null
+type Kind = 'add' | 'like' | 'love' | 'dislike' | 'dismiss'
 
 export function StepTriage({ state, next, back }: StepContext) {
   const qc = useQueryClient()
@@ -34,14 +37,71 @@ export function StepTriage({ state, next, back }: StepContext) {
   // would otherwise leave them greyed with no feedback).
   const inFlight = useRef<Set<string>>(new Set())
 
-  const run = async (recId: string, fn: () => Promise<unknown>, after: () => void) => {
+  const setSaved = (recId: string, on: boolean) =>
+    setSavedIds((s) => {
+      const n = new Set(s)
+      if (on) n.add(recId)
+      else n.delete(recId)
+      return n
+    })
+
+  const react = async (rec: LensRecommendation, kind: Kind) => {
+    const recId = rec.id
     if (inFlight.current.has(recId)) return
+
+    const paperId = rec.paper_id || rec.paper?.id
+    if (!paperId) {
+      errorToast('Could not save that', 'This recommendation is missing a paper id.')
+      return
+    }
+
+    const wasSaved = savedIds.has(recId)
+    const wasReaction = reactions[recId] ?? null
+
+    let undoAspect: 'membership' | 'rating' | null = null
+    if (kind === 'add') undoAspect = wasSaved && wasReaction === null ? 'membership' : null
+    else if (kind === 'like') undoAspect = wasReaction === 'like' ? 'rating' : null
+    else if (kind === 'love') undoAspect = wasReaction === 'love' ? 'rating' : null
+    else if (kind === 'dislike') undoAspect = wasReaction === 'dislike' ? 'rating' : null
+
+    if (kind === 'dismiss') {
+      setDismissed((s) => new Set(s).add(recId))
+    } else if (undoAspect === 'membership') {
+      setSaved(recId, false)
+      setReactions((r) => ({ ...r, [recId]: null }))
+    } else if (undoAspect === 'rating') {
+      setReactions((r) => ({ ...r, [recId]: null }))
+    } else if (kind === 'add') {
+      setSaved(recId, true)
+      setReactions((r) => ({ ...r, [recId]: null }))
+    } else if (kind === 'like' || kind === 'love') {
+      setSaved(recId, true)
+      setReactions((r) => ({ ...r, [recId]: kind }))
+    } else if (kind === 'dislike') {
+      setReactions((r) => ({ ...r, [recId]: 'dislike' }))
+    }
+
     inFlight.current.add(recId)
     try {
-      await fn()
-      after()
-      invalidateAfterPaperMutation(qc, state.lensId ?? undefined)
+      if (undoAspect) await undoPaperFeedback(paperId, undoAspect)
+      else if (kind === 'add') await saveRecommendation(recId)
+      else if (kind === 'like') await likeRecommendation(recId, 4)
+      else if (kind === 'love') await likeRecommendation(recId, 5)
+      else if (kind === 'dislike') await dislikeRecommendation(recId)
+      else await dismissRecommendation(recId)
+
+      void invalidateAfterPaperMutation(qc, state.lensId ?? undefined)
     } catch {
+      if (kind === 'dismiss') {
+        setDismissed((s) => {
+          const n = new Set(s)
+          n.delete(recId)
+          return n
+        })
+      } else {
+        setSaved(recId, wasSaved)
+        setReactions((r) => ({ ...r, [recId]: wasReaction }))
+      }
       errorToast('Could not save that', 'The database was busy — give it a moment and try again.')
     } finally {
       inFlight.current.delete(recId)
@@ -90,33 +150,12 @@ export function StepTriage({ state, next, back }: StepContext) {
                   compactActions
                   isSaved={savedIds.has(rec.id)}
                   reaction={reactions[rec.id] ?? null}
-                  onAdd={() =>
-                    run(rec.id, () => saveRecommendation(rec.id), () =>
-                      setSavedIds((s) => new Set(s).add(rec.id)),
-                    )
-                  }
-                  onLike={() =>
-                    run(rec.id, () => likeRecommendation(rec.id, 4), () => {
-                      setSavedIds((s) => new Set(s).add(rec.id))
-                      setReactions((r) => ({ ...r, [rec.id]: 'like' }))
-                    })
-                  }
-                  onLove={() =>
-                    run(rec.id, () => likeRecommendation(rec.id, 5), () => {
-                      setSavedIds((s) => new Set(s).add(rec.id))
-                      setReactions((r) => ({ ...r, [rec.id]: 'love' }))
-                    })
-                  }
-                  onDislike={() =>
-                    run(rec.id, () => dislikeRecommendation(rec.id), () =>
-                      setReactions((r) => ({ ...r, [rec.id]: 'dislike' })),
-                    )
-                  }
-                  onDismiss={() =>
-                    run(rec.id, () => dismissRecommendation(rec.id), () =>
-                      setDismissed((s) => new Set(s).add(rec.id)),
-                    )
-                  }
+                  savedClickRemoves
+                  onAdd={() => react(rec, 'add')}
+                  onLike={() => react(rec, 'like')}
+                  onLove={() => react(rec, 'love')}
+                  onDislike={() => react(rec, 'dislike')}
+                  onDismiss={() => react(rec, 'dismiss')}
                 />
               </RevealItem>
             ))}

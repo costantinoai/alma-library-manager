@@ -27,7 +27,7 @@ export function StepFollow({ state, next, back }: StepContext) {
         <StepNav
           onBack={back}
           onSkip={count >= TARGET ? undefined : next}
-          skipLabel="I have enough"
+          skipLabel="Skip for now"
           onContinue={next}
           continueLabel="Continue"
           hint={count >= TARGET ? undefined : `Try to follow at least ${TARGET} — it gives the suggestion engine room to work.`}

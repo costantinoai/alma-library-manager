@@ -1,8 +1,14 @@
-import { useCallback } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { completeOnboarding } from '@/api/client'
+import { errorToast } from '@/hooks/useToast'
+import {
+  completeOnboarding,
+  getApiErrorMessage,
+  type BootstrapData,
+  type OnboardingStatus,
+} from '@/api/client'
 import { OnboardingShell } from './OnboardingShell'
 import { useOnboardingState } from './useOnboardingState'
 import type { StepComponent, StepContext } from './types'
@@ -45,6 +51,8 @@ const STEPS: StepComponent[] = [
 export function OnboardingFlow() {
   const qc = useQueryClient()
   const { state, patch, reset } = useOnboardingState()
+  const [finishing, setFinishing] = useState(false)
+  const finishingRef = useRef(false)
 
   const step = Math.min(Math.max(state.step, 0), STEPS.length - 1)
 
@@ -55,21 +63,37 @@ export function OnboardingFlow() {
   const back = useCallback(() => patch({ step: Math.max(step - 1, 0) }), [patch, step])
 
   const finish = useCallback(async () => {
+    if (finishingRef.current) return
+    finishingRef.current = true
+    setFinishing(true)
     try {
       await completeOnboarding()
-    } catch {
-      /* non-fatal — the gate will still re-check on next boot */
+      qc.setQueryData<BootstrapData>(['bootstrap'], (prev) =>
+        prev
+          ? {
+              ...prev,
+              onboarding: { ...prev.onboarding, completed: true },
+            }
+          : prev,
+      )
+      qc.setQueryData<OnboardingStatus>(['onboarding-status'], (prev) =>
+        prev ? { ...prev, completed: true } : prev,
+      )
+      reset()
+      void invalidateQueries(qc, ['bootstrap'], ['onboarding-status'])
+      navigateTo('discovery')
+    } catch (err) {
+      finishingRef.current = false
+      setFinishing(false)
+      errorToast('Could not finish onboarding', getApiErrorMessage(err))
     }
-    reset()
-    invalidateQueries(qc, ['bootstrap'])
-    navigateTo('discovery')
   }, [qc, reset])
 
-  const ctx: StepContext = { state, patch, next, back, finish, total: STEPS.length }
+  const ctx: StepContext = { state, patch, next, back, finish, finishing, total: STEPS.length }
   const Active = STEPS[step]
 
   return (
-    <OnboardingShell step={step} total={STEPS.length}>
+    <OnboardingShell step={step} total={STEPS.length} onClose={finish} closeDisabled={finishing}>
       <Active {...ctx} />
     </OnboardingShell>
   )

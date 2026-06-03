@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, Save, Sparkles } from 'lucide-react'
 
-import { api, resetOnboarding, type Settings } from '@/api/client'
+import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { Button } from '@/components/ui/button'
 import { navigateTo } from '@/lib/hashRoute'
@@ -21,6 +21,8 @@ import { DataManagementCard } from '@/components/settings/DataManagementCard'
 import { LibraryManagementCard } from '@/components/settings/LibraryManagementCard'
 import { CorpusExplorerCard } from '@/components/settings/CorpusExplorerCard'
 import { AboutCard } from '@/components/settings/AboutCard'
+import { clearPersistedOnboardingState } from '@/components/onboarding/useOnboardingState'
+import { errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 
@@ -330,12 +332,13 @@ export function SettingsPage() {
                   variant="outline"
                   size="sm"
                   onClick={async () => {
+                    clearPersistedOnboardingState()
                     try {
                       await resetOnboarding()
-                    } catch {
-                      /* non-fatal */
+                      invalidateQueries(queryClient, ['bootstrap'])
+                    } catch (err) {
+                      errorToast('Could not restart onboarding', getApiErrorMessage(err))
                     }
-                    invalidateQueries(queryClient, ['bootstrap'])
                   }}
                 >
                   Restart onboarding

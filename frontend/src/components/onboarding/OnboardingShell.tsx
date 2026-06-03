@@ -1,5 +1,7 @@
 import * as React from 'react'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { BrandRule } from '@/components/ui/brand-rule'
@@ -18,10 +20,14 @@ const EASE = [0.22, 0.61, 0.36, 1] as const
 export function OnboardingShell({
   step,
   total,
+  onClose,
+  closeDisabled,
   children,
 }: {
   step: number
   total: number
+  onClose?: () => void
+  closeDisabled?: boolean
   children: React.ReactNode
 }) {
   const reduced = useReducedMotion()
@@ -64,10 +70,26 @@ export function OnboardingShell({
                   <span className="text-alma-800">Ma</span>nager
                 </span>
               </div>
-              <div className="ml-auto text-right">
-                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                  Step {Math.min(step + 1, total)} of {total}
-                </span>
+              <div className="ml-auto flex items-center gap-2">
+                <div className="text-right">
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                    Step {Math.min(step + 1, total)} of {total}
+                  </span>
+                </div>
+                {onClose ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={onClose}
+                    disabled={closeDisabled}
+                    aria-label="Close onboarding"
+                    title="Close onboarding"
+                    className="shrink-0 text-slate-500 hover:text-alma-900"
+                  >
+                    <X className="h-4 w-4" aria-hidden />
+                  </Button>
+                ) : null}
               </div>
             </div>
 

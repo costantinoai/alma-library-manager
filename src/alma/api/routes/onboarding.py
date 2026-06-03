@@ -32,6 +32,7 @@ from alma.application.followed_authors import (
     resolve_canonical_author_id,
     schedule_followed_author_historical_backfill,
 )
+from alma.core.db_retry import run_with_lock_retry
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import (
     _normalize_openalex_author_id,
@@ -171,8 +172,14 @@ def set_onboarding_profile(
     user: dict = Depends(get_current_user),
 ):
     """Store the user's display name (local greeting; no external call)."""
-    upsert_setting(db, _USER_NAME_KEY, payload.name.strip())
-    db.commit()
+    name = payload.name.strip()
+
+    def _persist() -> None:
+        db.rollback()
+        upsert_setting(db, _USER_NAME_KEY, name)
+        db.commit()
+
+    run_with_lock_retry(_persist, label="onboarding_profile")
 
 
 @router.post("/complete", status_code=204)
@@ -181,9 +188,15 @@ def complete_onboarding(
     user: dict = Depends(get_current_user),
 ):
     """Mark onboarding done so the gate stops showing."""
-    upsert_setting(db, _COMPLETED_KEY, "true")
-    upsert_setting(db, _COMPLETED_AT_KEY, datetime.utcnow().isoformat())
-    db.commit()
+    completed_at = datetime.utcnow().isoformat()
+
+    def _persist() -> None:
+        db.rollback()
+        upsert_setting(db, _COMPLETED_KEY, "true")
+        upsert_setting(db, _COMPLETED_AT_KEY, completed_at)
+        db.commit()
+
+    run_with_lock_retry(_persist, label="onboarding_complete")
 
 
 @router.post("/reset", status_code=204)
@@ -193,11 +206,15 @@ def reset_onboarding(
 ):
     """Clear the completed flag so Settings → Restart re-shows the flow."""
     try:
-        db.execute(
-            "DELETE FROM discovery_settings WHERE key IN (?, ?)",
-            (_COMPLETED_KEY, _COMPLETED_AT_KEY),
-        )
-        db.commit()
+        def _persist() -> None:
+            db.rollback()
+            db.execute(
+                "DELETE FROM discovery_settings WHERE key IN (?, ?)",
+                (_COMPLETED_KEY, _COMPLETED_AT_KEY),
+            )
+            db.commit()
+
+        run_with_lock_retry(_persist, label="onboarding_reset")
     except sqlite3.OperationalError:
         pass
 

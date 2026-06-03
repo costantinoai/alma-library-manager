@@ -119,7 +119,7 @@ export function StepDiscovery({ state, patch, next, back }: StepContext) {
 
         {state.discoveryRun ? (
           <SubPanel variant="accent" className="space-y-3">
-            <RefreshRunningBanner domain="discovery" />
+            <RefreshRunningBanner domain="discovery" label="Refreshing recommendations…" />
             <div className="flex items-center gap-2 text-sm text-slate-600">
               {recsReady ? (
                 <span className="font-medium text-alma-800">

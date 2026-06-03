@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Building2, Check, IdCard, Loader2, RotateCcw, Search, UserRoundCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,7 @@ import { formatNumber } from '@/lib/utils'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { errorToast } from '@/hooks/useToast'
 import {
+  getOnboardingStatus,
   ingestOwner,
   onlineAuthorSearch,
   promoteOwnerPapers,
@@ -59,12 +60,18 @@ function fromSearch(r: OnlineAuthorSearchResult): Candidate {
 
 export function StepIdentity({ state, patch, next, back }: StepContext) {
   const qc = useQueryClient()
+  const { data: status } = useQuery({
+    queryKey: ['onboarding-status'],
+    queryFn: getOnboardingStatus,
+    staleTime: 5_000,
+  })
   const [mode, setMode] = useState<Mode>('id')
   const [idValue, setIdValue] = useState('')
   const [nameValue, setNameValue] = useState(state.name)
   const [candidate, setCandidate] = useState<Candidate | null>(null)
   const [results, setResults] = useState<Candidate[]>([])
   const [searched, setSearched] = useState(false)
+  const [replacingExistingOwner, setReplacingExistingOwner] = useState(false)
 
   const owner = state.owner
 
@@ -86,6 +93,7 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
   const ingestMut = useMutation({
     mutationFn: (c: Candidate) => ingestOwner({ openalex_id: c.openalex_id, name: c.name }),
     onSuccess: (res, c) => {
+      setReplacingExistingOwner(false)
       patch({
         owner: { author_id: res.author_id, openalex_id: res.openalex_id, name: c.name },
         ownerJobId: res.job_id,
@@ -143,6 +151,35 @@ export function StepIdentity({ state, patch, next, back }: StepContext) {
     patch({ owner: null, ownerJobId: null })
     setCandidate(null)
     setPromoted(0)
+    setReplacingExistingOwner(true)
+  }
+
+  if (!owner && status?.has_owner && !replacingExistingOwner) {
+    return (
+      <StepShell
+        eyebrow="Your identity"
+        title="You're already at the centre."
+        lead="This library already has an owner profile. You can keep it and continue, or start over if it points to the wrong author."
+        footer={<StepNav onBack={back} onContinue={next} continueLabel="Continue" />}
+      >
+        <SubPanel variant="accent" className="space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-alma-folio text-alma-cream">
+              <UserRoundCheck className="h-5 w-5" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <p className="font-brand text-lg font-semibold text-alma-800">Owner profile is set</p>
+              <p className="text-sm text-slate-600">
+                ALMa will keep using the owner profile already saved for this library.
+              </p>
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={startOver}>
+            <RotateCcw className="h-4 w-4" /> That's not me — start over
+          </Button>
+        </SubPanel>
+      </StepShell>
+    )
   }
 
   // ---- Confirmed owner view -------------------------------------------------

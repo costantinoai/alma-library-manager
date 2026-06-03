@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -6,8 +6,10 @@ import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { errorToast } from '@/hooks/useToast'
 import {
   api,
+  getApiErrorMessage,
   type OpenAlexStatus,
   type SemanticScholarStatus,
   type Settings,
@@ -63,9 +65,16 @@ export function StepConnect({ next, back }: StepContext) {
   const [email, setEmail] = useState('')
   const [openalexKey, setOpenalexKey] = useState('')
   const [s2Key, setS2Key] = useState('')
-  // Seed email once from the loaded settings (only if the user hasn't typed).
-  const seededEmail = current.data?.openalex_email ?? ''
-  const emailValue = email || seededEmail
+  const emailSeeded = useRef(false)
+  const emailDirty = useRef(false)
+
+  // Seed email once from loaded settings, without preventing the user from
+  // intentionally clearing an existing value.
+  useEffect(() => {
+    if (emailSeeded.current || emailDirty.current || !current.data) return
+    emailSeeded.current = true
+    setEmail(current.data.openalex_email ?? '')
+  }, [current.data])
 
   const openalexStatus = useQuery({
     queryKey: ['openalex-status'],
@@ -86,7 +95,7 @@ export function StepConnect({ next, back }: StepContext) {
     mutationFn: async () => {
       const payload: Partial<Settings> = {
         backend: 'openalex',
-        openalex_email: emailValue.trim(),
+        openalex_email: email.trim(),
       }
       if (openalexKey.trim()) payload.openalex_api_key = openalexKey.trim()
       if (s2Key.trim()) payload.semantic_scholar_api_key = s2Key.trim()
@@ -106,8 +115,8 @@ export function StepConnect({ next, back }: StepContext) {
   const saveAndContinue = async () => {
     try {
       await save.mutateAsync()
-    } catch {
-      /* surfaced by the dots; don't block the flow */
+    } catch (err) {
+      errorToast('Could not save API settings', getApiErrorMessage(err))
     }
     next()
   }
@@ -164,8 +173,11 @@ export function StepConnect({ next, back }: StepContext) {
             id="ob-email"
             type="email"
             placeholder="you@university.edu"
-            value={emailValue}
-            onChange={(e) => setEmail(e.target.value)}
+            value={email}
+            onChange={(e) => {
+              emailDirty.current = true
+              setEmail(e.target.value)
+            }}
           />
         </div>
 

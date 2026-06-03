@@ -3,7 +3,7 @@ import { Check, Loader2, UserMinus, UserPlus } from 'lucide-react'
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { truncate } from '@/lib/utils'
 
 interface SuggestedAuthorCardProps {
@@ -48,24 +48,6 @@ function kindLabel(kind: string): string {
   if (kind === 's2_related') return 'Semantic Scholar related'
   if (kind === 'online_search') return 'Search result'
   return 'Adjacent'
-}
-
-/**
- * Tone for the provenance chip. Colours encode signal character:
- *  - `accent` = signal you curated (library_core, semantic_similar
- *     derived from your library centroid)
- *  - `positive` = strong endorsement (your high-rating papers cite them)
- *  - `info` = network / graph adjacency
- *  - `neutral` = external source you haven't curated yet
- */
-function kindTone(kind: string): StatusBadgeTone {
-  if (kind === 'library_core') return 'accent'
-  if (kind === 'semantic_similar') return 'accent'
-  if (kind === 'cited_by_high_signal') return 'positive'
-  if (kind === 'collaborator' || kind === 'adjacent') return 'info'
-  if (kind === 'openalex_related' || kind === 's2_related') return 'neutral'
-  if (kind === 'online_search') return 'neutral'
-  return 'neutral'
 }
 
 /**

@@ -7,7 +7,7 @@ import { getOnboardingStatus } from '@/api/client'
 import { StepShell, StepNav } from '../StepShell'
 import type { StepContext } from '../types'
 
-export function StepDone({ state, back, finish }: StepContext) {
+export function StepDone({ state, back, finish, finishing }: StepContext) {
   const { data } = useQuery({
     queryKey: ['onboarding-status'],
     queryFn: getOnboardingStatus,
@@ -24,7 +24,13 @@ export function StepDone({ state, back, finish }: StepContext) {
       title={firstName ? `You're ready, ${firstName}.` : "You're ready."}
       lead="ALMa now has a sense of who you are and what you care about. It keeps working in the background — the more you save, like, and dismiss, the sharper it gets."
       footer={
-        <StepNav onBack={back} primary={undefined} onContinue={finish} continueLabel="Take me in" />
+        <StepNav
+          onBack={back}
+          primary={undefined}
+          onContinue={finish}
+          continueLabel="Take me in"
+          continueLoading={finishing}
+        />
       }
     >
       <div className="space-y-6">

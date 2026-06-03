@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { INITIAL_STATE, type OnboardingState } from './types'
 
-const STORAGE_KEY = 'alma.onboarding.state'
+export const ONBOARDING_STORAGE_KEY = 'alma.onboarding.state'
+
+export function clearPersistedOnboardingState() {
+  try {
+    localStorage.removeItem(ONBOARDING_STORAGE_KEY)
+  } catch {
+    /* ignore blocked storage */
+  }
+}
 
 /**
  * Onboarding state + localStorage persistence so a half-finished first run
@@ -11,7 +19,7 @@ const STORAGE_KEY = 'alma.onboarding.state'
 export function useOnboardingState() {
   const [state, setState] = useState<OnboardingState>(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY)
+      const raw = localStorage.getItem(ONBOARDING_STORAGE_KEY)
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<OnboardingState>
         return { ...INITIAL_STATE, ...parsed }
@@ -24,12 +32,17 @@ export function useOnboardingState() {
 
   // Debounced-ish write: persist whenever state changes.
   const firstRun = useRef(true)
+  const skipNextPersist = useRef(false)
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false
     }
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false
+      return
+    }
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(state))
     } catch {
       /* storage blocked — non-fatal */
     }
@@ -40,11 +53,8 @@ export function useOnboardingState() {
   }, [])
 
   const reset = useCallback(() => {
-    try {
-      localStorage.removeItem(STORAGE_KEY)
-    } catch {
-      /* ignore */
-    }
+    skipNextPersist.current = true
+    clearPersistedOnboardingState()
     setState(INITIAL_STATE)
   }, [])
 
