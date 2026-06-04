@@ -311,7 +311,13 @@ def _s2_to_candidate(paper: dict, score: float = 0.5) -> Optional[dict]:
 # ------------------------------------------------------------------
 
 
-def search_papers(query: str, limit: int = 20, *, raise_on_rate_limit: bool = False) -> List[dict]:
+def search_papers(
+    query: str,
+    limit: int = 20,
+    *,
+    raise_on_rate_limit: bool = False,
+    max_retries: Optional[int] = None,
+) -> List[dict]:
     """Search Semantic Scholar by free-text query.
 
     Args:
@@ -324,6 +330,10 @@ def search_papers(query: str, limit: int = 20, *, raise_on_rate_limit: bool = Fa
             for non-critical callers (e.g. interactive search). The
             hydration / vector-rescue paths pass True so a 429 marks
             the work `retryable_error`, not `terminal_no_match`.
+        max_retries: Per-call override of the shared client's retry
+            budget. Interactive surfaces racing a lane deadline (Find &
+            Add) pass a small value so congestion fails fast instead of
+            sitting in the background-job backoff chain.
 
     Returns:
         List of candidate dicts ready for ``_merge_candidate``. Empty
@@ -342,6 +352,7 @@ def search_papers(query: str, limit: int = 20, *, raise_on_rate_limit: bool = Fa
                 "fields": FIELDS,
             },
             timeout=15,
+            max_retries=max_retries,
         )
         if resp.status_code != 200:
             if resp.status_code == 429 and raise_on_rate_limit:

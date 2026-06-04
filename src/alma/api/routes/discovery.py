@@ -850,8 +850,9 @@ def manual_discovery_search(
     """Queue a multi-source online search as an Activity job and return its envelope.
 
     Fans out across OpenAlex, Semantic Scholar, Crossref, arXiv, and bioRxiv
-    via the shared ``search_across_sources`` stack and returns deduplicated
-    results ranked by personal fit. Runs on the APS scheduler pool so the
+    via the shared ``search_online_sources`` stack and returns deduplicated
+    results ranked by query relevance (cross-source RRF + query-text match;
+    personal fit rides along as chip data). Runs on the APS scheduler pool so the
     request thread is released before the remote round-trips. Frontend
     callers poll ``GET /activity/{job_id}`` and read the ``result`` payload
     once the status turns ``completed``.

@@ -13,7 +13,11 @@ from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
     setting_float as _setting_float,
 )
-from alma.core.utils import candidate_dedup_key as _candidate_key, normalize_doi
+from alma.core.utils import (
+    candidate_dedup_key as _candidate_key,
+    normalize_doi,
+    normalize_text as _normalize_text,
+)
 from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,30 @@ logger = logging.getLogger(__name__)
 # used to wait for.  `openalex` (<1 s) and `crossref` (~1 s) never hit the
 # deadline.
 DEFAULT_LANE_DEADLINE_S: float = 8.0
+
+# Lane deadline for the *streaming* Find & Add surface.  Unlike the
+# Discovery/Feed lens fan-out (where every lane blocks the refresh and
+# the 8 s cap above is the floor on total wall-clock), the stream
+# renders each source's cards the moment its lane returns — a slow lane
+# only delays its own chip.  15 s lets arXiv (3.1 s courtesy pacing +
+# routinely slow export.arxiv.org responses) and a once-throttled S2
+# finish instead of showing "timeout" on most searches.
+FINDADD_LANE_DEADLINE_S: float = 15.0
+
+# Reciprocal-rank-fusion constant (Cormack et al.) for the Find & Add
+# query-relevance ranking.  60 is the standard value: it compresses the
+# difference between rank 1 and rank 10 enough that cross-source
+# consensus (the same paper returned by several engines) outweighs a
+# single engine's top slot.
+RRF_K: int = 60
+
+# Tokens too common to discriminate results for the query-text match.
+# Deliberately tiny — only glue words that appear in almost every
+# academic title.  Dropping them stops "the role of X in Y" queries
+# from scoring every paper containing "the/of/in".
+_QUERY_STOPWORDS = frozenset(
+    {"a", "an", "and", "are", "at", "by", "for", "from", "in", "is", "of", "on", "or", "the", "to", "with"}
+)
 
 SOURCE_KEYS = ("openalex", "semantic_scholar", "crossref", "arxiv", "biorxiv")
 PREPRINT_SOURCE_KEYS = frozenset({"arxiv", "biorxiv"})
@@ -110,10 +138,19 @@ def _merge_candidate_metadata(best: dict, other: dict) -> dict:
         int(merged.get("cited_by_count") or 0),
         int(other.get("cited_by_count") or 0),
     )
-    source_names = _merge_unique_list(
-        [str(merged.get("source_api") or "").strip()] if str(merged.get("source_api") or "").strip() else [],
-        [str(other.get("source_api") or "").strip()] if str(other.get("source_api") or "").strip() else [],
-    )
+
+    # Accumulate provenance across ALL merges: prefer the already-built
+    # `source_apis` list when present, falling back to the scalar
+    # `source_api`. (Building from the scalars alone dropped earlier
+    # sources once a paper was returned by 3+ engines.)
+    def _provenance(item: dict) -> list:
+        existing = item.get("source_apis")
+        if isinstance(existing, list) and existing:
+            return existing
+        single = str(item.get("source_api") or "").strip()
+        return [single] if single else []
+
+    source_names = _merge_unique_list(_provenance(merged), _provenance(other))
     if source_names:
         merged["source_apis"] = source_names
     return merged
@@ -170,10 +207,17 @@ def resolve_source_policy(
     return enabled, normalized
 
 
-def _build_source_calls(query, *, per_source_limit, from_year, settings, semantic_scholar_mode, enabled):
+def _build_source_calls(
+    query, *, per_source_limit, from_year, settings, semantic_scholar_mode, enabled, s2_fail_fast=False
+):
     """Assemble the ``(source_name, thunk)`` list for the enabled discovery
     sources. Shared by ``search_across_sources`` + ``stream_across_sources`` so
-    the call shape and the S2 bulk-filter pass-throughs live in one place."""
+    the call shape and the S2 bulk-filter pass-throughs live in one place.
+
+    ``s2_fail_fast`` (Find & Add stream only): the interactive S2 search call
+    gets a 1-retry budget and raises on 429 instead of sitting in the shared
+    client's background backoff chain (5 retries, up to 60 s) — the lane
+    surfaces a truthful "rate-limited" error instead of a generic timeout."""
     s2_fields_of_study = _split_csv_setting(settings, "sources.semantic_scholar.fields_of_study")
     s2_publication_types = _split_csv_setting(settings, "sources.semantic_scholar.publication_types")
     s2_open_access_pdf = _setting_bool(settings or {}, "sources.semantic_scholar.open_access_pdf", False)
@@ -205,7 +249,12 @@ def _build_source_calls(query, *, per_source_limit, from_year, settings, semanti
                         open_access_pdf=s2_open_access_pdf,
                     )
                     if semantic_scholar_mode == "bulk"
-                    else semantic_scholar.search_papers(query, limit=per_source_limit)
+                    else semantic_scholar.search_papers(
+                        query,
+                        limit=per_source_limit,
+                        raise_on_rate_limit=s2_fail_fast,
+                        max_retries=1 if s2_fail_fast else None,
+                    )
                 ),
             )
         )
@@ -222,6 +271,21 @@ def _build_source_calls(query, *, per_source_limit, from_year, settings, semanti
             ("biorxiv", lambda: biorxiv.search_works(query, limit=per_source_limit, from_year=from_year))
         )
     return source_calls
+
+
+def _stamp_candidate_provenance(candidate: dict, source_name: str, query: str) -> None:
+    """Stamp the provenance fields every merge layer sets on a candidate.
+
+    Shared by the Discovery lens merge (`_merge_candidates_from_sources`)
+    and the Find & Add ranking (`rank_by_query_relevance`) so the two
+    scoring strategies can't drift on what a candidate carries."""
+    candidate["source_api"] = source_name
+    candidate["source_key"] = str(candidate.get("source_key") or query)
+    candidate["source_type"] = (
+        str(candidate.get("source_type") or "").strip()
+        or ("preprint_lane" if source_name in PREPRINT_SOURCE_KEYS else "external_search")
+    )
+    candidate["query"] = query
 
 
 def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weights, mode, temperature, enabled=None):
@@ -258,13 +322,7 @@ def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weig
                 1.0,
             )
             candidate["score"] = round(weighted, 4)
-            candidate["source_api"] = source_name
-            candidate["source_key"] = str(candidate.get("source_key") or query)
-            candidate["source_type"] = (
-                str(candidate.get("source_type") or "").strip()
-                or ("preprint_lane" if source_name in PREPRINT_SOURCE_KEYS else "external_search")
-            )
-            candidate["query"] = query
+            _stamp_candidate_provenance(candidate, source_name, query)
 
             prev = merged.get(key)
             if prev is None:
@@ -274,6 +332,89 @@ def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weig
                 merged[key] = _merge_candidate_metadata(candidate, prev)
             else:
                 merged[key] = _merge_candidate_metadata(prev, candidate)
+
+    ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+    return ranked[: max(1, limit)]
+
+
+def _query_match_score(query_norm: str, query_tokens: list[str], candidate: dict) -> float:
+    """Lexical closeness of one candidate to the search query, in [0, 1].
+
+    Two ingredients, both over `normalize_text` output:
+    - token coverage: fraction of query tokens found in the title/authors
+      (full weight) or the abstract (half weight — a token buried in the
+      abstract is weaker evidence than one in the title);
+    - exact phrase: the whole normalized query appearing inside the title
+      (or, weaker, the abstract) — the strongest "this is the paper I
+      typed" signal, e.g. pasting a full title.
+    """
+    if not query_tokens:
+        return 0.0
+    title_norm = _normalize_text(str(candidate.get("title") or ""))
+    authors_norm = _normalize_text(str(candidate.get("authors") or ""))
+    abstract_norm = _normalize_text(str(candidate.get("abstract") or ""))
+    strong_tokens = set(title_norm.split()) | set(authors_norm.split())
+    abstract_tokens = set(abstract_norm.split())
+
+    covered = sum(
+        1.0 if token in strong_tokens else (0.5 if token in abstract_tokens else 0.0)
+        for token in query_tokens
+    )
+    coverage = covered / len(query_tokens)
+    phrase = 1.0 if query_norm in title_norm else (0.5 if query_norm in abstract_norm else 0.0)
+    return _clamp((0.8 * coverage) + (0.2 * phrase), 0.0, 1.0)
+
+
+def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
+    """Search-engine ranking for the Find & Add surface (D-FA ranking contract).
+
+    Dedup + rank candidates from ``(source_name, items)`` pairs by closeness
+    to the *query*, not personal fit:
+
+    - **Reciprocal Rank Fusion** over each source's own relevance order
+      (every engine sorts by relevance; arXiv/Crossref are asked to
+      explicitly). A paper returned by several engines accumulates
+      ``1/(RRF_K + rank)`` per appearance, so cross-source consensus rises.
+    - **Query-text match** (`_query_match_score`): exact/near title, author
+      and abstract matches dominate — pasting a title puts that paper first.
+
+    Final score = 0.7 · text match + 0.3 · normalized RRF. Deliberately
+    profile-free: no source weights, no explore/temperature bias, no
+    personal-fit scoring — those belong to the Discovery lens merge
+    (`_merge_candidates_from_sources`). Personal fit is computed *after*
+    ranking, for the per-result chip only.
+
+    ``enabled`` filters sources when provided (the streamed path passes it).
+    """
+    query = (query or "").strip()
+    query_norm = _normalize_text(query)
+    all_tokens = query_norm.split()
+    # Drop glue words unless the query is nothing but glue words.
+    query_tokens = [t for t in all_tokens if t not in _QUERY_STOPWORDS] or all_tokens
+
+    merged: Dict[str, dict] = {}
+    rrf_by_key: Dict[str, float] = {}
+    for source_name, items in items_by_source:
+        if enabled is not None and not enabled.get(source_name):
+            continue
+        for idx, item in enumerate(items or []):
+            candidate = dict(item)
+            key = _candidate_key(candidate)
+            if key in ("url:", "title:"):
+                continue
+            rrf_by_key[key] = rrf_by_key.get(key, 0.0) + 1.0 / (RRF_K + idx + 1)
+            _stamp_candidate_provenance(candidate, source_name, query)
+            prev = merged.get(key)
+            merged[key] = candidate if prev is None else _merge_candidate_metadata(prev, candidate)
+
+    if not merged:
+        return []
+
+    max_rrf = max(rrf_by_key.values())
+    for key, candidate in merged.items():
+        text_match = _query_match_score(query_norm, query_tokens, candidate)
+        consensus = (rrf_by_key[key] / max_rrf) if max_rrf > 0 else 0.0
+        candidate["score"] = round(_clamp((0.7 * text_match) + (0.3 * consensus), 0.0, 1.0), 4)
 
     ranked = sorted(merged.values(), key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     return ranked[: max(1, limit)]
@@ -416,10 +557,9 @@ def stream_across_sources(
     limit: int,
     from_year: Optional[int],
     settings: Optional[dict[str, str]] = None,
-    mode: str = "core",
-    temperature: float = 0.28,
     semantic_scholar_mode: str = "interactive",
     lane_deadline_s: Optional[float] = None,
+    s2_fail_fast: bool = False,
 ):
     """Yield per-source results as each lane completes.
 
@@ -431,10 +571,10 @@ def stream_across_sources(
         {"type": "source_timeout",  "source": <name>, "ms": <int>}
         {"type": "source_error",    "source": <name>, "error": <str>, "ms": <int>}
 
-    The caller is responsible for the candidate-merge / dedup / personal
-    scoring layer; this function only fans out and yields raw items so
-    the UI can render skeletons → per-source results → final ranked
-    list as they arrive.
+    The caller is responsible for the candidate-merge / dedup / ranking
+    layer; this function only fans out and yields raw items so the UI
+    can render skeletons → per-source results → final ranked list as
+    they arrive.
     """
     query = (query or "").strip()
     if not query:
@@ -452,6 +592,7 @@ def stream_across_sources(
         settings=settings,
         semantic_scholar_mode=semantic_scholar_mode,
         enabled=enabled,
+        s2_fail_fast=s2_fail_fast,
     )
 
     deadline = lane_deadline_s if lane_deadline_s is not None else DEFAULT_LANE_DEADLINE_S
@@ -513,23 +654,22 @@ def merge_streamed_results(
     *,
     limit: int,
     settings: Optional[dict[str, str]] = None,
-    mode: str = "core",
-    temperature: float = 0.28,
 ) -> list[dict]:
-    """Apply the same dedup + scoring that `search_across_sources` does
-    to a set of per-source raw items already collected via
-    `stream_across_sources`. Returns the ranked, dedup'd list."""
+    """Dedup + rank per-source raw items collected via
+    `stream_across_sources` by query relevance (RRF + query-text match).
+
+    This is the Find & Add ranking: closeness to what the user *typed*
+    decides the order, search-engine style. The Discovery lens merge
+    (`_merge_candidates_from_sources`, with source weights and
+    explore/temperature bias) is intentionally not used here."""
     query = (query or "").strip()
     if not query or not raw_by_source:
         return []
 
-    enabled, source_weights = resolve_source_policy(settings)
-    return _merge_candidates_from_sources(
+    enabled, _source_weights = resolve_source_policy(settings)
+    return rank_by_query_relevance(
         raw_by_source.items(),
         query,
         limit=limit,
-        source_weights=source_weights,
-        mode=mode,
-        temperature=temperature,
         enabled=enabled,
     )

@@ -1021,11 +1021,13 @@ def resolve_imported_publications_openalex(
     "/import/search",
     summary="Search online sources (OpenAlex + S2 + Crossref + arXiv + bioRxiv)",
     description=(
-        "Return a ranked list of papers matching the query across all "
-        "enabled discovery sources. Results are cross-source deduplicated "
-        "(canonical triple) and each is decorated with `in_library`, "
-        "`paper_id`, `sources` (provenance chip), and a personal "
-        "`like_score` computed against the user's library profile. No writes."
+        "Return a list of papers matching the query across all enabled "
+        "discovery sources, ranked by query relevance (cross-source RRF + "
+        "query-text match — search-engine semantics). Results are "
+        "cross-source deduplicated (canonical triple) and each is decorated "
+        "with `in_library`, `paper_id`, `sources` (provenance chip), "
+        "`relevance`, and a personal `like_score` for the why-chips. "
+        "No writes."
     ),
 )
 def online_source_search(
@@ -1131,8 +1133,8 @@ def author_top_cited_works(
     description=(
         "Same fan-out as `/import/search` but yields per-source events as "
         "each lane returns so the UI can render skeletons → partial results "
-        "→ final ranked list incrementally. Each newline-delimited JSON "
-        "object carries a `type` field — `scorer_ready`, `source_pending`, "
+        "→ final query-relevance-ranked list incrementally. Each newline-"
+        "delimited JSON object carries a `type` field — `source_pending`, "
         "`source_partial`, `source_timeout`, `source_error`, or `final`."
     ),
 )

@@ -17,8 +17,8 @@ from alma.application.feed import _upsert_candidate_paper
 from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.source_search import (
+    FINDADD_LANE_DEADLINE_S,
     merge_streamed_results,
-    search_across_sources,
     stream_across_sources,
 )
 from alma.discovery.engine import (
@@ -638,9 +638,10 @@ def _decorate_candidate(db: sqlite3.Connection, candidate: dict) -> dict:
     """Attach library-state fields to a multi-source search candidate.
 
     Mirrors ``_decorate_result`` but accepts the candidate shape emitted
-    by ``search_across_sources`` (which carries ``pub_url``/``url``,
+    by the multi-source merge (``rank_by_query_relevance`` /
+    ``search_across_sources``), which carries ``pub_url``/``url``,
     ``num_citations``/``cited_by_count``, and an already-merged
-    ``source_apis`` list from all sources that returned the paper).
+    ``source_apis`` list from all sources that returned the paper.
     """
     openalex_id = str(candidate.get("openalex_id") or "").strip()
     doi = normalize_doi(str(candidate.get("doi") or "").strip()) or ""
@@ -693,111 +694,21 @@ def search_online_sources(
     limit: int = 20,
     from_year: Optional[int] = None,
 ) -> list[dict]:
-    """Run a multi-source online search and rank by personal fit.
+    """Run a multi-source online search, ranked by query relevance.
 
-    Fans out across OpenAlex / Semantic Scholar / Crossref / arXiv /
-    bioRxiv via ``search_across_sources``, which already dedupes cross-
-    source duplicates by canonical DOI/title. Each surviving candidate
-    is decorated with ``in_library`` / ``paper_id`` state and scored
-    against the user's library profile for the ``like_score`` ranking.
-    The returned list preserves the ``sources`` provenance chip so the
-    UI can show which source(s) returned each result.
+    Blocking variant of ``stream_online_sources`` — consumes the stream
+    and returns the ``final`` event's items, so both the streaming Find &
+    Add surface and the synchronous routes (`/import/search`,
+    `/discovery/manual-search`) share one retrieval + ranking path.
+    Items are ordered by closeness to the query (RRF + query-text match,
+    see ``rank_by_query_relevance``); each carries the personal-fit
+    ``like_score`` / ``score_breakdown`` for the "why" chips and the
+    ``sources`` provenance chip.
     """
-    raw_query = (query or "").strip()
-    if not raw_query:
-        return []
-
-    max_items = max(1, min(int(limit or 20), 100))
-
-    # Pull any settings rows the source policy cares about (enable flags,
-    # per-source weights). `settings` table is a simple key/value store;
-    # fall through to defaults when the schema predates it.
-    source_settings: dict[str, str] = {}
-    try:
-        settings_rows = db.execute(
-            "SELECT key, value FROM settings "
-            "WHERE key LIKE 'sources.%' OR key LIKE 'strategies.%'"
-        ).fetchall()
-        source_settings = {
-            str(row["key"]): str(row["value"] if row["value"] is not None else "")
-            for row in settings_rows
-        }
-    except sqlite3.OperationalError:
-        source_settings = {}
-
-    candidates = search_across_sources(
-        raw_query,
-        limit=max_items,
-        from_year=from_year,
-        settings=source_settings,
-    )
-    if not candidates:
-        return []
-
-    (
-        scorer_settings,
-        preference_profile,
-        positive_centroid,
-        negative_centroid,
-        positive_texts,
-        negative_texts,
-        lexical_profile,
-    ) = _build_personal_scorer(db)
-
-    # Decorate first so we can derive a stable per-candidate text once,
-    # then batch the lexical similarity transform across all candidates
-    # (one `vectorizer.transform` + one cosine matrix vs N rebuilds).
-    decorated_items: list[tuple[int, dict, dict]] = []
-    candidate_texts: dict[str, str] = {}
-    for idx, candidate in enumerate(candidates):
-        decorated = _decorate_candidate(db, candidate)
-        text = sim_module.build_similarity_text(
-            {**decorated, "topics": candidate.get("topics") or []},
-            conn=db,
-            paper_topics=candidate.get("topics") or [],
-        ) or ""
-        decorated_items.append((idx, candidate, decorated))
-        candidate_texts[str(idx)] = text
-
-    lexical_details_by_idx: dict[str, dict] = {}
-    if lexical_profile is not None and candidate_texts:
-        try:
-            lexical_details_by_idx = sim_module.batch_compute_lexical_similarity(
-                candidate_texts, lexical_profile
-            )
-        except Exception:
-            lexical_details_by_idx = {}
-
-    scored_items: list[dict] = []
-    total = max(1, len(decorated_items))
-    for idx, candidate, decorated in decorated_items:
-        source_relevance = float(candidate.get("score") or 0.0) or max(
-            0.0, 1.0 - (idx / total)
-        )
-        like_score, score_breakdown = _score_search_result(
-            db=db,
-            settings=scorer_settings,
-            preference_profile=preference_profile,
-            positive_centroid=positive_centroid,
-            negative_centroid=negative_centroid,
-            positive_texts=positive_texts,
-            negative_texts=negative_texts,
-            item={**decorated, "topics": candidate.get("topics") or []},
-            source_relevance=source_relevance,
-            source_key=raw_query,
-            lexical_profile=lexical_profile,
-            precomputed_lexical_details=lexical_details_by_idx.get(str(idx)),
-        )
-        scored_items.append(
-            {
-                **decorated,
-                "like_score": round(float(like_score), 2),
-                "score_breakdown": score_breakdown,
-            }
-        )
-
-    scored_items.sort(key=lambda x: float(x.get("like_score") or 0.0), reverse=True)
-    return scored_items[:max_items]
+    for event in stream_online_sources(db, query, limit=limit, from_year=from_year):
+        if event.get("type") == "final":
+            return event.get("items") or []
+    return []
 
 
 def stream_online_sources(
@@ -807,7 +718,7 @@ def stream_online_sources(
     limit: int = 20,
     from_year: Optional[int] = None,
 ):
-    """Streaming variant of `search_online_sources`.
+    """Streaming multi-source search for the Find & Add surface.
 
     Yields NDJSON-friendly events:
 
@@ -820,11 +731,14 @@ def stream_online_sources(
         {"type": "source_error",   "source": <name>, "error": <str>, "ms": <int>}
         {"type": "final", "items": [...ranked, dedup'd, scored...], "total": <int>}
 
-    Design choice: per-source events stay cheap (no scoring) so the
-    user sees results within a few hundred milliseconds. The expensive
-    personal-fit scoring runs once at the end on the deduped union and
-    is delivered via the `final` event. The frontend swaps the
-    "preview" rows for the ranked list when `final` arrives.
+    Ranking contract (2026-06-04): `final` items are ordered by **query
+    relevance** (`rank_by_query_relevance`: cross-source RRF + query-text
+    match) — search-engine semantics, what you typed decides the order.
+    Personal fit (`like_score` + `score_breakdown`) is still computed on
+    the ranked union, but only feeds the per-result "why" chips and the
+    optional client-side "Personal fit" sort; it does not reorder the
+    default list. Per-source events stay cheap (no scoring) so the user
+    sees results within a few hundred milliseconds.
     """
     raw_query = (query or "").strip()
     if not raw_query:
@@ -853,6 +767,12 @@ def stream_online_sources(
         limit=max_items,
         from_year=from_year,
         settings=source_settings,
+        # Find & Add is a streaming surface: a slow lane only delays its
+        # own chip, so it gets a longer deadline than the blocking lens
+        # fan-out, plus fail-fast S2 (1 retry, raise on 429) so shared-
+        # pool congestion reads "rate-limited", not "timeout".
+        lane_deadline_s=FINDADD_LANE_DEADLINE_S,
+        s2_fail_fast=True,
     ):
         ev_type = event.get("type")
         if ev_type == "source_pending":
@@ -873,9 +793,11 @@ def stream_online_sources(
         elif ev_type in ("source_timeout", "source_error"):
             yield event
 
-    # Final pass: dedup across sources, run full personal-fit scoring
-    # once on the union, emit the ranked list. The frontend replaces
-    # its preview rows with this when `final` arrives.
+    # Final pass: dedup across sources and rank by query relevance
+    # (RRF + query-text match). Personal-fit scoring then runs once on
+    # the ranked union — chip data only, the order is NOT re-sorted.
+    # The frontend replaces its preview rows with this when `final`
+    # arrives.
     ranked_raw = merge_streamed_results(
         raw_by_source, raw_query, limit=max_items, settings=source_settings
     )
@@ -937,11 +859,16 @@ def stream_online_sources(
         scored.append(
             {
                 **decorated,
+                # Query-relevance score (0–1) from `rank_by_query_relevance`
+                # — the rank driver, surfaced so the client can restore
+                # "Best match" order after sorting by another key.
+                "relevance": round(float(candidate.get("score") or 0.0), 4),
                 "like_score": round(float(like_score), 2),
                 "score_breakdown": score_breakdown,
             }
         )
-    scored.sort(key=lambda x: float(x.get("like_score") or 0.0), reverse=True)
+    # `scored` already carries rank_by_query_relevance order — do NOT
+    # re-sort by like_score; personal fit is chip data, not the ranking.
     yield {"type": "final", "items": scored, "total": len(scored)}
 
 

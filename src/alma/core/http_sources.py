@@ -452,17 +452,28 @@ class SourceHttpClient:
         headers: Optional[dict[str, str]] = None,
         json: Optional[dict[str, Any]] = None,
         timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ) -> requests.Response:
+        """Issue one rate-limited, retried request.
+
+        ``max_retries`` overrides the policy's retry budget for this call
+        only. Interactive surfaces (e.g. Find & Add search lanes racing a
+        lane deadline) pass a small value so a 429/5xx fails fast instead
+        of burning the policy's full background-job backoff chain.
+        """
         url = self._prepare_url(path_or_url)
         request_params = self._apply_auth_params(params)
         request_headers = self._apply_auth_headers(headers)
         timeout_value = float(timeout or self._policy.default_timeout)
+        retry_budget = (
+            max(0, int(max_retries)) if max_retries is not None else max(0, self._policy.max_retries)
+        )
         diagnostics = get_active_source_diagnostics()
         path_label = path_or_url if path_or_url.startswith("/") else url.replace(self._policy.base_url, "", 1) or "/"
 
         last_exc: Optional[Exception] = None
         last_resp: Optional[requests.Response] = None
-        for attempt in range(max(0, self._policy.max_retries) + 1):
+        for attempt in range(retry_budget + 1):
             with self._concurrency_slot():
                 self._wait_for_slot()
                 started_at = time.monotonic()
@@ -499,7 +510,7 @@ class SourceHttpClient:
                             duration_ms=elapsed_ms,
                             error=str(exc),
                         )
-                    if attempt >= self._policy.max_retries:
+                    if attempt >= retry_budget:
                         raise
                     wait = self._retry_wait(None, attempt)
                     logger.debug(
@@ -507,7 +518,7 @@ class SourceHttpClient:
                         self._policy.name,
                         url,
                         attempt + 1,
-                        self._policy.max_retries + 1,
+                        retry_budget + 1,
                         exc,
                         wait,
                     )
@@ -523,7 +534,7 @@ class SourceHttpClient:
             if response.status_code == 429:
                 self._arm_adaptive_throttle()
 
-            if attempt >= self._policy.max_retries:
+            if attempt >= retry_budget:
                 return response
 
             wait = self._retry_wait(response, attempt)
@@ -532,7 +543,7 @@ class SourceHttpClient:
                 self._policy.name,
                 url,
                 attempt + 1,
-                self._policy.max_retries + 1,
+                retry_budget + 1,
                 response.status_code,
                 wait,
             )
@@ -551,8 +562,16 @@ class SourceHttpClient:
         params: Optional[dict[str, Any]] = None,
         headers: Optional[dict[str, str]] = None,
         timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
     ) -> requests.Response:
-        return self.request("GET", path_or_url, params=params, headers=headers, timeout=timeout)
+        return self.request(
+            "GET",
+            path_or_url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
 
     def post(
         self,
