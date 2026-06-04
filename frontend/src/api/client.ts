@@ -3286,12 +3286,18 @@ export interface OnlineSearchItem {
   paper_id: string | null
   paper_status: string | null
   in_library: boolean
+  /** Query-relevance score (0–1): cross-source RRF + query-text match.
+   *  This is what orders the default ("Best match") result list —
+   *  search-engine semantics. */
+  relevance?: number
+  /** Personal-fit score (0–100) against the user's library profile.
+   *  Chip data + the optional "Personal fit" sort; it does NOT drive
+   *  the default ranking. */
   like_score?: number
   /** Per-signal contributions to `like_score`, computed by the same
    *  `score_candidate` path Discovery uses. Same shape as
    *  `ScoreBreakdown`. Used by the Find & Add results to render the
-   *  per-result inline "why" chip row (no sort dropdown — ranking is
-   *  always personal-fit; the chips explain it). */
+   *  per-result inline "why" chip row. */
   score_breakdown?: ScoreBreakdown | null
   /** External sources that returned this paper (e.g. ["openalex", "semantic_scholar"]). */
   sources?: string[]
@@ -3383,9 +3389,10 @@ export function fetchAuthorTopCitedWorks(
  * 2. `source_partial` per source as its lane returns → swap that
  *    skeleton for cheap library-state-decorated cards.
  * 3. `source_timeout` / `source_error` for lanes that didn't make
- *    the 8 s deadline.
+ *    the 15 s Find & Add deadline (errors include fail-fast S2
+ *    rate-limiting).
  * 4. `final` once all lanes resolved → swap the union of partials
- *    for the personal-fit ranked + dedup'd list.
+ *    for the query-relevance-ranked + dedup'd list.
  */
 export type FindAndAddStreamEvent =
   | { type: 'source_pending'; source: string }

@@ -4,10 +4,12 @@
  * Used by the Import dialog ("Online" tab) and the Discovery surface
  * ("Find & add"). User types a query (title / DOI / author:<name> /
  * OpenAlex URL or Semantic Scholar id). The backend fans out across
- * OpenAlex, Semantic Scholar, Crossref, arXiv, and bioRxiv via the
- * shared `search_across_sources` stack, deduplicates results across
- * sources, and returns them decorated with `in_library`, `paper_id`,
- * `sources` (provenance), and a personal `like_score`.
+ * OpenAlex, Semantic Scholar, Crossref, arXiv, and bioRxiv, deduplicates
+ * results across sources, and ranks them by QUERY RELEVANCE (cross-source
+ * RRF + query-text match — search-engine semantics). Each item is
+ * decorated with `in_library`, `paper_id`, `sources` (provenance),
+ * `relevance`, and a personal `like_score` (chip data + optional
+ * client-side sort, never the default order).
  *
  * Each result can be triaged with the shared Add / Like / Love /
  * Dislike contract (3/4/5/1). Save lands the paper in Library with
@@ -43,6 +45,14 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { Kbd } from '@/components/ui/kbd'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { byWeightedDesc } from '@/lib/sort'
 import { PaperCard, type PaperCardPaper, SkeletonPaperCard } from '@/components/shared'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
@@ -125,6 +135,39 @@ function rowKey(item: OnlineSearchItem): string {
 }
 
 // ---------------------------------------------------------------------------
+// Result sorting. "Best match" is the backend's query-relevance order
+// (cross-source RRF + query-text match) — the default, search-engine
+// semantics. "Personal fit" / "Newest" are client-side re-sorts of the
+// same final list.
+// ---------------------------------------------------------------------------
+
+type ResultSort = 'relevance' | 'fit' | 'newest'
+
+const RESULT_SORT_LABELS: Record<ResultSort, string> = {
+  relevance: 'Best match',
+  fit: 'Personal fit',
+  newest: 'Newest',
+}
+
+/** Sortable publication timestamp: full date when known, else Jan 1 of
+ *  `year` as a coarse fallback (display still shows only what we know). */
+function publicationSortValue(item: OnlineSearchItem): number {
+  if (item.publication_date) {
+    const t = Date.parse(item.publication_date)
+    if (!Number.isNaN(t)) return t
+  }
+  if (item.year) return Date.UTC(item.year, 0, 1)
+  return 0
+}
+
+function sortResults(items: OnlineSearchItem[], sort: ResultSort): OnlineSearchItem[] {
+  if (sort === 'relevance') return items // backend order IS best-match
+  const sorted = [...items]
+  if (sort === 'fit') return sorted.sort(byWeightedDesc((it) => it.like_score ?? 0))
+  return sorted.sort(byWeightedDesc(publicationSortValue))
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -167,6 +210,8 @@ export function OnlineSearchTab({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [items, setItems] = useState<OnlineSearchItem[] | null>(null)
+  // Sticky within the session: switching sort shouldn't reset per query.
+  const [resultSort, setResultSort] = useState<ResultSort>('relevance')
   const [resolvedQuery, setResolvedQuery] = useState<string | null>(null)
   const [rowStates, setRowStates] = useState<Record<string, RowState>>({})
   const [sourceProgress, setSourceProgress] = useState<Record<string, SourceProgress>>({})
@@ -543,6 +588,13 @@ export function OnlineSearchTab({
     setAuthorDetailOpen(true)
   }, [])
 
+  // Display order — identity for "Best match" (backend query-relevance
+  // order), client-side re-sort for "Personal fit" / "Newest".
+  const sortedItems = useMemo(
+    () => (items ? sortResults(items, resultSort) : null),
+    [items, resultSort],
+  )
+
   // ── Result count + filter echo ──
   const resultHeader = useMemo(() => {
     if (!items || !resolvedQuery || error) return null
@@ -695,7 +747,13 @@ export function OnlineSearchTab({
                   <span className="text-slate-400">· {progress.count}{progress.ms != null ? ` · ${(progress.ms / 1000).toFixed(1)}s` : ''}</span>
                 )}
                 {progress.status === 'timeout' && <span className="text-warning-500">· timeout</span>}
-                {progress.status === 'error' && <span className="text-critical-500">· error</span>}
+                {progress.status === 'error' && (
+                  <span className="text-critical-500">
+                    {/* Fail-fast S2 lanes raise on HTTP 429 — name the
+                        condition instead of a generic "error". */}
+                    · {/429|rate.?limit/i.test(progress.error ?? '') ? 'rate-limited' : 'error'}
+                  </span>
+                )}
               </span>
             )
           })}
@@ -777,11 +835,36 @@ export function OnlineSearchTab({
         />
       )}
 
-      {!error && authorResults === null && items && items.length > 0 && (
+      {!error && authorResults === null && sortedItems && sortedItems.length > 0 && (
         <div className="space-y-3" data-testid="online-search-results">
-          {resultHeader}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {resultHeader}
+            {/* Sort switch — "Best match" is the backend's query-relevance
+                order; the other two re-sort the same final list locally. */}
+            {sortedItems.length > 1 && (
+              <Select
+                value={resultSort}
+                onValueChange={(v) => setResultSort(v as ResultSort)}
+              >
+                <SelectTrigger
+                  className="h-7 w-auto gap-1 text-xs"
+                  aria-label="Sort results"
+                >
+                  <span className="text-slate-400">Sort:</span>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {(Object.keys(RESULT_SORT_LABELS) as ResultSort[]).map((key) => (
+                    <SelectItem key={key} value={key}>
+                      {RESULT_SORT_LABELS[key]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="space-y-2.5">
-            {items.slice(0, visibleCount).map((item) => {
+            {sortedItems.slice(0, visibleCount).map((item) => {
               const key = rowKey(item)
               const state = rowStates[key] ?? initialRowState(item)
               const paper: PaperCardPaper = {
@@ -818,7 +901,7 @@ export function OnlineSearchTab({
           </div>
           {/* Reveal in PAGE_SIZE chunks. Footer disappears once every
               ranked result is on screen. */}
-          {visibleCount < items.length && (
+          {visibleCount < sortedItems.length && (
             <div className="flex justify-center pt-1">
               <Button
                 type="button"
@@ -826,12 +909,12 @@ export function OnlineSearchTab({
                 variant="ghost"
                 onClick={() =>
                   setVisibleCount((prev) =>
-                    Math.min(prev + PAGE_SIZE, items.length),
+                    Math.min(prev + PAGE_SIZE, sortedItems.length),
                   )
                 }
                 className="text-xs text-alma-700 hover:text-alma-800"
               >
-                + {Math.min(PAGE_SIZE, items.length - visibleCount)} more
+                + {Math.min(PAGE_SIZE, sortedItems.length - visibleCount)} more
               </Button>
             </div>
           )}
@@ -865,12 +948,12 @@ export function OnlineSearchTab({
 
 /**
  * Per-result "why" chip row rendered under each PaperCard in the Find
- * & Add results list. Replaces the planned-but-dropped sort dropdown
- * (we always rank by personal-fit; chips explain the rank). Shows the
- * top 3 contributing signals from `score_breakdown` ranked by
- * |weighted| magnitude — keeps the card dense while making the rank
- * legible. Hidden when no breakdown is available (older cached
- * candidates pre-T4).
+ * & Add results list. The default ranking is query relevance (backend
+ * RRF + text match); these chips surface the PERSONAL-FIT signal for
+ * each result — the "Fit" badge plus the top 3 contributing signals
+ * from `score_breakdown` ranked by |weighted| magnitude. They explain
+ * the optional "Personal fit" sort, not the default order. Hidden when
+ * no breakdown is available (older cached candidates pre-T4).
  */
 const SIGNAL_LABELS: Record<string, string> = {
   text_similarity: 'Text',
