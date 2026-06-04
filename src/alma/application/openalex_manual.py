@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 from alma.application import library as library_app
 from alma.application.feed import _upsert_candidate_paper
-from alma.core.utils import normalize_doi, resolve_existing_paper_id
+from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.source_search import (
     merge_streamed_results,
@@ -32,10 +32,9 @@ from alma.discovery.engine import (
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
     _ensure_schema,
+    _normalize_openalex_work_id,
     _normalize_work,
-    _upsert_referenced_works,
     _upsert_single_paper,
-    batch_fetch_referenced_works_for_openalex_ids,
 )
 from alma.openalex.http import get_client
 
@@ -67,22 +66,24 @@ def _extract_doi(text: str) -> Optional[str]:
     except Exception:
         parsed = None
 
+    # Every branch gates on `is_doi_shaped`: `normalize_doi` is a cleaner,
+    # not a validator, so without the shape check any non-empty string
+    # ("title:…", "?id=42") would be returned as a "DOI" and cost a
+    # guaranteed-404 `/works/doi:` round-trip downstream.
     if parsed and parsed.scheme and parsed.netloc:
         host = parsed.netloc.lower()
         path = parsed.path or ""
-        if host.endswith("doi.org") and path:
+        if host.endswith("doi.org") and path and is_doi_shaped(path.lstrip("/")):
             return normalize_doi(path.lstrip("/"))
         qs = parse_qs(parsed.query or "")
         for key in ("doi", "article_doi", "id"):
             vals = qs.get(key) or []
             for v in vals:
-                doi = normalize_doi(v)
-                if doi:
-                    return doi
+                if is_doi_shaped(v):
+                    return normalize_doi(v)
 
-    norm = normalize_doi(raw)
-    if norm:
-        return norm
+    if is_doi_shaped(raw):
+        return normalize_doi(raw)
     m = _DOI_RE.search(raw)
     if m:
         return normalize_doi(m.group(1))
@@ -102,8 +103,37 @@ def _extract_arxiv_doi(text: str) -> Optional[str]:
     return f"10.48550/arXiv.{arxiv_id}"
 
 
+def _seed_sibling_resolve_cache(work: dict, resp) -> None:
+    """Make a resolved work's response servable by BOTH its identifiers.
+
+    The connector popup's ``/lookup`` preview resolves a PDF by DOI, learns
+    the openalex id from the result, and the follow-up ``/save`` then
+    resolves by THAT id — a different URL, so a guaranteed http-cache miss
+    for a work fetched seconds earlier. Seeding the same response under the
+    sibling identifier's URL turns the save's resolve into a cache hit (no
+    second upstream round-trip). Honors the client cache's normal TTL and
+    eviction; best-effort, never blocks the resolve itself.
+    """
+    try:
+        client = get_client()
+        params = {"select": _WORKS_SELECT_FIELDS}
+        wid = str(work.get("id") or "").strip().rstrip("/").split("/")[-1].upper()
+        if wid.startswith("W") and wid[1:].isdigit():
+            client.seed_cache(f"/works/{wid}", params, resp)
+        doi = normalize_doi(str(work.get("doi") or ""))
+        if doi:
+            client.seed_cache(f"/works/doi:{doi}", params, resp)
+    except Exception as exc:  # pragma: no cover - cache seeding is best-effort
+        logger.debug("Sibling resolve-cache seed failed: %s", exc)
+
+
 def _fetch_work_by_openalex_id(openalex_work_id: str) -> Optional[dict]:
-    wid = (openalex_work_id or "").strip().upper()
+    # Canonicalize to the bare `W…` form: callers hold the id in whatever
+    # shape they learned it (the /lookup preview returns the full
+    # `https://openalex.org/W…` URL), and the canonical path is also what
+    # `_seed_sibling_resolve_cache` keys, so a preview-resolved work is a
+    # guaranteed cache hit here.
+    wid = _normalize_openalex_work_id((openalex_work_id or "").strip()).upper()
     if not wid:
         return None
     client = get_client()
@@ -124,6 +154,7 @@ def _fetch_work_by_openalex_id(openalex_work_id: str) -> Optional[dict]:
     data = resp.json() or {}
     if not data.get("display_name"):
         return None
+    _seed_sibling_resolve_cache(data, resp)
     return data
 
 
@@ -145,6 +176,7 @@ def _fetch_work_by_doi(doi: str) -> Optional[dict]:
     data = resp.json() or {}
     if not data.get("display_name"):
         return None
+    _seed_sibling_resolve_cache(data, resp)
     return data
 
 
@@ -415,6 +447,19 @@ def _resolve_raw_work_for_query(query: str) -> tuple[Optional[dict], str]:
         work = _fetch_work_by_doi(arxiv_doi)
         if work:
             return work, "arxiv"
+
+    # URL-shaped input that yielded no identifier above (OpenAlex id / DOI /
+    # arXiv id) stops here: full-text-searching a raw URL string is the
+    # slowest call on this path (a /works search with a 30s budget) and
+    # `results[0]` of a URL query is more likely to be a WRONG paper than
+    # the right one. Callers fall back to candidate metadata (connector
+    # saves) or report not-found honestly.
+    try:
+        parsed = urlparse(q)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            return None, "not_found"
+    except Exception:
+        pass
 
     results = _search_works_raw(q, limit=1)
     if results:
@@ -1094,24 +1139,11 @@ def save_online_search_result(
         source_surface=added_from,
     )
 
-    normalized_openalex_id = str(normalized.get("openalex_id") or "").strip()
-    if normalized_openalex_id:
-        try:
-            reference_map = batch_fetch_referenced_works_for_openalex_ids(
-                [normalized_openalex_id]
-            )
-            _upsert_referenced_works(
-                db,
-                paper_id,
-                reference_map.get(normalized_openalex_id) or [],
-            )
-        except Exception as exc:
-            logger.warning(
-                "OpenAlex reference upsert failed for %s during %s save: %s",
-                normalized_openalex_id,
-                added_from,
-                exc,
-            )
+    # NB: `publication_references` rows were already written by
+    # `_upsert_single_paper` → `upsert_work_sidecars`: every resolve path
+    # selects `referenced_works` (`_WORKS_SELECT_FIELDS`), so a separate
+    # referenced-works fetch here would be a redundant upstream round-trip
+    # on the user-facing save path.
 
     db.execute(
         """
@@ -1181,21 +1213,9 @@ def add_work_to_library(
     if not paper_id:
         raise ValueError("Resolved work is missing required title metadata")
 
-    normalized_openalex_id = str(normalized.get("openalex_id") or "").strip()
-    if normalized_openalex_id:
-        try:
-            reference_map = batch_fetch_referenced_works_for_openalex_ids([normalized_openalex_id])
-            _upsert_referenced_works(
-                db,
-                paper_id,
-                reference_map.get(normalized_openalex_id) or [],
-            )
-        except Exception as exc:
-            logger.warning(
-                "OpenAlex reference upsert failed for %s during manual add: %s",
-                normalized_openalex_id,
-                exc,
-            )
+    # `publication_references` already written by `_upsert_single_paper` →
+    # `upsert_work_sidecars` (the resolve selects `referenced_works`) — no
+    # separate referenced-works fetch needed.
 
     now = datetime.utcnow().isoformat()
     library_app.add_to_library(

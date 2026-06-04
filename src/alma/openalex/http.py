@@ -298,6 +298,26 @@ class OpenAlexClient:
         """
         return self.get(path, params=params, timeout=timeout)
 
+    def seed_cache(
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]],
+        resp: requests.Response,
+    ) -> None:
+        """Store *resp* in the response cache as if fetched via ``get(path, params)``.
+
+        Lets a caller that resolved a resource by ONE identifier make the same
+        response servable under the resource's OTHER identifier (e.g. a work
+        fetched by DOI seeded under its ``/works/W…`` URL), so an immediately
+        following resolve by the sibling id is a cache hit instead of a second
+        upstream round-trip. Honors the cache's normal TTL, eviction, and
+        cacheable-status rules.
+        """
+        url = f"{BASE_URL}{path}" if path.startswith("/") else f"{BASE_URL}/{path}"
+        key = self._cache_key(url, self._inject_auth(params))
+        self._store_cached_response(key, resp, fallback_url=url)
+        self._op_cache_put(key, resp, fallback_url=url)
+
     def get_rate_limit_status(self, timeout: float = 10) -> Optional[Dict[str, Any]]:
         """Return authoritative rate-limit status from OpenAlex ``/rate-limit``.
 

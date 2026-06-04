@@ -101,7 +101,7 @@
       .map((u) => ({ url: u, apiKey: "", configured: false }));
     candidates = configured.concat(extras);
 
-    await Promise.all(candidates.map(async (c) => {
+    const probes = candidates.map(async (c) => {
       const r = await S.pingUrl(c.url, c.apiKey);
       c.online = r.ok;
       c.version = r.info && r.info.alma_version;
@@ -109,7 +109,15 @@
       // Remember which DB lives at this URL so an offline capture can be
       // bound to the intended instance and verified at delivery time.
       if (c.online && c.instance && OB) OB.recordIdentity(c.url, c.instance);
-    }));
+    });
+
+    // Activate on the ACTIVE server's probe alone — don't hold the popup
+    // hostage to another configured-but-down server's 1.5s ping timeout.
+    // autoFallback is the exception: picking a substitute needs the full
+    // online picture, so it waits for every probe.
+    const activeIdx = candidates.findIndex((c) => c.url === activeUrl);
+    if (autoFallback || activeIdx < 0) await Promise.all(probes);
+    else await probes[activeIdx];
 
     let chosen = candidates.find((c) => c.url === activeUrl) || null;
     if (autoFallback && (!chosen || !chosen.online)) {
@@ -121,6 +129,9 @@
     active = chosen;
     renderConn();
     refreshActionState();
+
+    // Late-landing probes refresh the dropdown dots when they complete.
+    Promise.all(probes).then(() => { renderConn(); refreshActionState(); }).catch(() => {});
   }
 
   function visibleCandidates() {
@@ -218,7 +229,35 @@
     try {
       const out = await api.scripting.executeScript({
         target: { tabId },
-        func: async () => { try { const r = await fetch(location.href); const buf = await r.arrayBuffer(); return globalThis.almaExtract.extractDoiFromPdfBytes(buf); } catch (e) { return ""; } },
+        func: async () => {
+          try {
+            const A = globalThis.almaExtract;
+            const grab = async (range) => {
+              try {
+                const r = await fetch(location.href, range ? { headers: { Range: range } } : undefined);
+                if (!r.ok && r.status !== 206) return null;
+                return { buf: await r.arrayBuffer(), partial: r.status === 206 };
+              } catch (e) { return null; }
+            };
+            // DOIs live in the Info dict / XMP packet near the head or in the
+            // trailer at the tail — slice those instead of pulling a multi-MB
+            // document through the popup. A server that ignores Range just
+            // answers 200 with the whole file, which the head pass then covers
+            // (partial=false → skip the tail fetch).
+            const head = await grab("bytes=0-524287");
+            let doi = head ? A.extractDoiFromPdfBytes(head.buf) : "";
+            if (!doi && head && head.partial) {
+              const tail = await grab("bytes=-262144");
+              if (tail) doi = A.extractDoiFromPdfBytes(tail.buf);
+            }
+            if (!doi && !head) {
+              // Range request itself failed — fall back to the full download.
+              const full = await grab(null);
+              if (full) doi = A.extractDoiFromPdfBytes(full.buf);
+            }
+            return doi || "";
+          } catch (e) { return ""; }
+        },
       });
       return (out && out[0] && out[0].result) || "";
     } catch (e) { return ""; }

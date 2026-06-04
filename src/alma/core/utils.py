@@ -202,6 +202,19 @@ def normalize_doi(doi_val: Optional[str]) -> Optional[str]:
 # real-world implementations sometimes treat them case-sensitively, which
 # is the fault we're protecting against in `canonical_lookup_doi`.
 _DOI_SHAPE_RE = re.compile(r"^10\.\d{4,9}/.+$")
+
+
+def is_doi_shaped(value: Optional[str]) -> bool:
+    """True when *value* (after `normalize_doi`) is registry-shaped.
+
+    `normalize_doi` deliberately does NOT validate shape (it's a cleaner,
+    not a gate). Callers that treat free-form input as a *maybe*-DOI —
+    e.g. query parsers deciding whether to hit a `/works/doi:` endpoint —
+    use this to avoid spending an upstream round-trip on strings that
+    cannot possibly resolve (`title:…`, bare words, junk query params).
+    """
+    norm = normalize_doi(value)
+    return bool(norm and _DOI_SHAPE_RE.match(norm))
 # Trailing publisher fragments observed in the wild on bibtex / RIS imports.
 # Stripped only when at the end of the suffix; never inside the suffix.
 _DOI_TRAILING_FRAGMENTS = ("/abstract", "/full", "/pdf", "/epdf", "/meta")
