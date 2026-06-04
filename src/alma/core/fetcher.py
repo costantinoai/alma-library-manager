@@ -432,15 +432,6 @@ def save_updated_cache(
             except Exception:
                 pass
 
-        # Detect extended schema columns if available
-        try:
-            cols = [row[1] for row in conn.execute("PRAGMA table_info(papers)").fetchall()]
-        except Exception:
-            cols = []
-        has_doi = 'doi' in cols
-        has_pubdate = 'publication_date' in cols
-        has_fetched = 'fetched_at' in cols
-
         from datetime import datetime as _dt
 
         from alma.core.utils import resolve_existing_paper_id
@@ -468,16 +459,15 @@ def save_updated_cache(
                 cited_by_count = 0
 
             pub_date_val = None
-            if has_pubdate:
-                try:
-                    import re
-                    pd = pub["bib"].get("pub_date") or pub["bib"].get("date")
-                    if pd:
-                        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(pd))
-                        if m:
-                            pub_date_val = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-                except Exception:
-                    pub_date_val = None
+            try:
+                import re
+                pd = pub["bib"].get("pub_date") or pub["bib"].get("date")
+                if pd:
+                    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", str(pd))
+                    if m:
+                        pub_date_val = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            except Exception:
+                pub_date_val = None
 
             # Canonical-triple dedup — not title-only. Scholar returns no
             # openalex_id / doi, so year is the disambiguator when two
@@ -507,17 +497,14 @@ def save_updated_cache(
                 )
             else:
                 paper_id = generate_paper_id()
-                fields = ["id", "title", "year", "abstract", "url", "cited_by_count"]
-                values = [paper_id, title, year_val, abstract, url, cited_by_count]
-                if has_doi:
-                    fields.append("doi")
-                    values.append(None)
-                if has_pubdate:
-                    fields.append("publication_date")
-                    values.append(pub_date_val)
-                if has_fetched:
-                    fields.append("fetched_at")
-                    values.append(fetched_iso)
+                fields = [
+                    "id", "title", "year", "abstract", "url",
+                    "cited_by_count", "doi", "publication_date", "fetched_at",
+                ]
+                values = [
+                    paper_id, title, year_val, abstract, url,
+                    cited_by_count, None, pub_date_val, fetched_iso,
+                ]
                 placeholders = ", ".join(["?"] * len(fields))
                 # `INSERT OR IGNORE` so a parallel writer that won the race
                 # on this exact row doesn't raise — we'll silently skip and

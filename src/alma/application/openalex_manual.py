@@ -1026,8 +1026,8 @@ def save_online_search_result(
     paper_id: Optional[str] = None
     if raw_work is not None:
         normalized = _normalize_work(raw_work)
-        flags = _ensure_schema(db)
-        paper_id = _upsert_single_paper(db, normalized, flags)
+        _ensure_schema(db)
+        paper_id = _upsert_single_paper(db, normalized)
 
     if not paper_id:
         # Fall back to the multi-source candidate when OpenAlex can't
@@ -1176,8 +1176,8 @@ def add_work_to_library(
         raise ValueError("No OpenAlex work found for the provided input")
 
     normalized = _normalize_work(raw_work)
-    flags = _ensure_schema(db)
-    paper_id = _upsert_single_paper(db, normalized, flags)
+    _ensure_schema(db)
+    paper_id = _upsert_single_paper(db, normalized)
     if not paper_id:
         raise ValueError("Resolved work is missing required title metadata")
 

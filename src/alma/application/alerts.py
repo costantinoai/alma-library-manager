@@ -32,14 +32,6 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.OperationalError:
-        return set()
-    return {str(r[1]) for r in rows}
-
-
 def list_rules(db: sqlite3.Connection) -> list[dict]:
     """List alert rules in newest-first order."""
     rows = db.execute("SELECT * FROM alert_rules ORDER BY created_at DESC").fetchall()
@@ -972,74 +964,47 @@ def _evaluate_rule(
         author_name = ""
         openalex_id = author_ref
         if _table_exists(db, "authors"):
-            author_columns = _table_columns(db, "authors")
-            select_fields = ["id", "name"]
-            if "openalex_id" in author_columns:
-                select_fields.append("openalex_id")
-            where_clauses = ["id = ?"]
-            params: list[object] = [author_ref]
-            if "openalex_id" in author_columns:
-                where_clauses.append("openalex_id = ?")
-                params.append(author_ref)
             resolved = db.execute(
-                f"""
-                SELECT {", ".join(select_fields)}
+                """
+                SELECT id, name, openalex_id
                 FROM authors
-                WHERE {" OR ".join(where_clauses)}
+                WHERE id = ? OR openalex_id = ?
                 LIMIT 1
                 """,
-                params,
+                (author_ref, author_ref),
             ).fetchone()
             if resolved:
                 author_name = str(resolved["name"] or "").strip()
-                if "openalex_id" in author_columns:
-                    openalex_id = str(resolved["openalex_id"] or openalex_id).strip()
+                openalex_id = str(resolved["openalex_id"] or openalex_id).strip()
 
         if _table_exists(db, "publication_authors") and openalex_id:
-            pa_columns = _table_columns(db, "publication_authors")
-            where_clauses: list[str] = []
-            params = []
-            if "openalex_id" in pa_columns:
-                where_clauses.append("pa.openalex_id = ?")
-                params.append(openalex_id)
-            if author_name and "display_name" in pa_columns:
+            where_clauses: list[str] = ["pa.openalex_id = ?"]
+            params: list[object] = [openalex_id]
+            if author_name:
                 where_clauses.append("lower(trim(pa.display_name)) = lower(trim(?))")
                 params.append(author_name)
-            if where_clauses:
-                rows = db.execute(
-                    f"""
-                    SELECT DISTINCT p.*
-                    FROM papers p
-                    JOIN publication_authors pa ON pa.paper_id = p.id
-                    WHERE {" OR ".join(where_clauses)}
-                    ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
-                    LIMIT 500
-                    """,
-                    params,
-                ).fetchall()
-                matches = [dict(r) for r in rows]
-                if matches:
-                    return matches
+            rows = db.execute(
+                f"""
+                SELECT DISTINCT p.*
+                FROM papers p
+                JOIN publication_authors pa ON pa.paper_id = p.id
+                WHERE {" OR ".join(where_clauses)}
+                ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
+                LIMIT 500
+                """,
+                params,
+            ).fetchall()
+            matches = [dict(r) for r in rows]
+            if matches:
+                return matches
 
         if not _table_exists(db, "papers"):
             return []
-        paper_columns = _table_columns(db, "papers")
-        where_clauses = []
-        params = []
-        if "author_id" in paper_columns:
-            where_clauses.append("p.author_id = ?")
-            params.append(author_ref)
-        if "added_from" in paper_columns:
-            where_clauses.append("p.added_from = ?")
-            params.append(author_ref)
-        if author_name and "authors" in paper_columns:
+        where_clauses = ["p.author_id = ?", "p.added_from = ?"]
+        params = [author_ref, author_ref]
+        if author_name:
             where_clauses.append("lower(COALESCE(p.authors, '')) LIKE lower(?)")
             params.append(f"%{author_name}%")
-        if author_name and "author" in paper_columns:
-            where_clauses.append("lower(COALESCE(p.author, '')) LIKE lower(?)")
-            params.append(f"%{author_name}%")
-        if not where_clauses:
-            return []
         rows = db.execute(
             f"""
             SELECT DISTINCT p.*

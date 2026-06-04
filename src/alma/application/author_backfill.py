@@ -708,7 +708,8 @@ def _upsert_work(
     pre_existing = resolve_existing_paper_id(
         conn, openalex_id=oa_norm, doi=doi_norm, title=title, year=year
     )
-    paper_id = _upsert_single_paper(conn, work, _ensure_schema(conn))
+    _ensure_schema(conn)
+    paper_id = _upsert_single_paper(conn, work)
     if paper_id is None:
         return None, False
     return str(paper_id), pre_existing is None

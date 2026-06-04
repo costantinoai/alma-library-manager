@@ -616,27 +616,20 @@ def _looks_like_file_title(title: str) -> bool:
     return False
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> dict:
-    """Verify papers table exists (v3 schema). Returns column capability flags.
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Validator: assert the papers table exists (current schema).
 
-    Note: v3 schema is created by deps.py at startup. This function just verifies
-    the table exists and returns capability flags for backward compatibility.
+    The schema is created by ``init_db_schema()`` at startup (bootstrap
+    DDL + ``core.migrations``); writers call this to fail loudly when
+    handed an uninitialised connection. No capability flags — the column
+    set is startup-guaranteed.
     """
-    # Verify papers table exists
     try:
         cols_info = conn.execute("PRAGMA table_info(papers)").fetchall()
         if not cols_info:
             raise RuntimeError(
                 "papers table does not exist. Ensure init_db_schema() was called at startup."
             )
-        cols = [row[1] for row in cols_info]
-
-        # Return capability flags (all v3 columns are guaranteed to exist)
-        return {
-            'has_pubdate': 'publication_date' in cols,
-            'has_fetched': 'fetched_at' in cols,
-            'has_source_id': 'source_id' in cols,
-        }
     except sqlite3.OperationalError as e:
         logger.error("Failed to verify papers table schema: %s", e)
         raise RuntimeError(
@@ -826,7 +819,7 @@ def upsert_work_sidecars(
     return summary
 
 
-def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Optional[str]:
+def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     """Upsert a single paper (v3 schema). Returns paper_id (UUID) if successful.
 
     Collision-safe since 2026-04-24: resolves existing rows via the canonical
@@ -1014,8 +1007,8 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict, flags: dict) -> Opti
 
 def upsert_one_normalized_work(conn: sqlite3.Connection, work: Dict) -> Optional[str]:
     """Upsert one already-normalized work into an open SQLite connection."""
-    flags = _ensure_schema(conn)
-    return _upsert_single_paper(conn, work, flags)
+    _ensure_schema(conn)
+    return _upsert_single_paper(conn, work)
 
 
 def upsert_papers(works: Iterable[Dict], db_path: Path = Path("./data/scholar.db")) -> int:
@@ -1029,10 +1022,10 @@ def upsert_papers(works: Iterable[Dict], db_path: Path = Path("./data/scholar.db
         Number of papers successfully upserted.
     """
     with sqlite3.connect(db_path) as conn:
-        flags = _ensure_schema(conn)
+        _ensure_schema(conn)
         count = 0
         for w in works:
-            if _upsert_single_paper(conn, w, flags):
+            if _upsert_single_paper(conn, w):
                 count += 1
         conn.commit()
         return count
@@ -1838,14 +1831,14 @@ def materialize_missing_referenced_works(
         batch_size=batch_size,
         max_workers=max_workers,
     )
-    flags = _ensure_schema(conn)
+    _ensure_schema(conn)
     materialized = 0
     for work_id in target_ids:
         raw_work = raw_works.get(work_id)
         if not raw_work:
             continue
         normalized = _normalize_work(raw_work)
-        if _upsert_single_paper(conn, normalized, flags):
+        if _upsert_single_paper(conn, normalized):
             materialized += 1
     conn.commit()
     return {

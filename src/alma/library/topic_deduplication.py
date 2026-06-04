@@ -244,9 +244,6 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
             ).rowcount
             links_updated += updated or 0
 
-    # Also migrate the legacy topic_aliases table data if it has the old schema
-    _migrate_legacy_aliases(conn)
-
     conn.commit()
     return {
         "topics_created": topics_created,
@@ -255,45 +252,8 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
     }
 
 
-def _migrate_legacy_aliases(conn: sqlite3.Connection) -> int:
-    """Migrate data from old-format topic_aliases (alias_term, canonical_term)
-    into the new schema if it exists alongside the new table."""
-    migrated = 0
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(topic_aliases)").fetchall()]
-        if "alias_term" in cols and "topic_id" not in cols:
-            # Old schema -- read and migrate
-            old_rows = conn.execute(
-                "SELECT alias_term, canonical_term FROM topic_aliases"
-            ).fetchall()
-            # Drop and recreate
-            conn.execute("DROP TABLE topic_aliases")
-            _ensure_topic_tables(conn)
-            for row in old_rows:
-                raw = (row["alias_term"] or "").strip()
-                canonical = (row["canonical_term"] or "").strip()
-                if not raw or not canonical:
-                    continue
-                normalized = normalize_topic(raw)
-                canonical_normalized = normalize_topic(canonical)
-                topic_id = _topic_id_from_normalized(canonical_normalized)
-                # Ensure the canonical topic exists
-                conn.execute(
-                    """INSERT OR IGNORE INTO topics
-                       (topic_id, canonical_name, normalized_name, source, created_at)
-                       VALUES (?, ?, ?, 'auto', ?)""",
-                    (topic_id, canonical, canonical_normalized, datetime.utcnow().isoformat()),
-                )
-                conn.execute(
-                    """INSERT OR IGNORE INTO topic_aliases
-                       (topic_id, raw_term, normalized_term, source, confidence, created_at)
-                       VALUES (?, ?, ?, 'auto', 1.0, ?)""",
-                    (topic_id, raw, normalized, datetime.utcnow().isoformat()),
-                )
-                migrated += 1
-    except sqlite3.OperationalError:
-        pass
-    return migrated
+# Legacy two-column topic_aliases rebuild: moved to
+# `core.migrations._m_0020_topic_aliases_legacy_shape`.
 
 
 # ============================================================================
@@ -565,15 +525,6 @@ def _ensure_topic_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_topics_normalized ON topics(normalized_name)"
     )
-
-    # Check if topic_aliases has the new schema
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(topic_aliases)").fetchall()]
-        if cols and "topic_id" not in cols:
-            # Old schema -- will be migrated by _migrate_legacy_aliases
-            return
-    except sqlite3.OperationalError:
-        pass
 
     conn.execute(
         """CREATE TABLE IF NOT EXISTS topic_aliases (

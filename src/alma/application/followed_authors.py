@@ -36,14 +36,6 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.OperationalError:
-        return set()
-    return {str(r[1]) for r in rows}
-
-
 def _parse_iso_datetime(value: object) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -61,26 +53,17 @@ def _insert_author_row(
     name: str,
     openalex_id: Optional[str] = None,
 ) -> None:
-    columns = _table_columns(db, "authors")
-    if "id" not in columns or "name" not in columns:
-        return
-
     payload: dict[str, object] = {
         "id": author_id,
         "name": name,
+        "author_type": "followed",
+        "added_at": datetime.utcnow().isoformat(),
+        "id_resolution_status": "resolved_manual" if openalex_id else "unresolved",
+        "id_resolution_reason": "Created from followed_authors canonicalization",
+        "id_resolution_updated_at": datetime.utcnow().isoformat(),
     }
-    if "openalex_id" in columns and openalex_id:
+    if openalex_id:
         payload["openalex_id"] = openalex_id
-    if "author_type" in columns:
-        payload["author_type"] = "followed"
-    if "added_at" in columns:
-        payload["added_at"] = datetime.utcnow().isoformat()
-    if "id_resolution_status" in columns:
-        payload["id_resolution_status"] = "resolved_manual" if openalex_id else "unresolved"
-    if "id_resolution_reason" in columns:
-        payload["id_resolution_reason"] = "Created from followed_authors canonicalization"
-    if "id_resolution_updated_at" in columns:
-        payload["id_resolution_updated_at"] = datetime.utcnow().isoformat()
 
     col_sql = ", ".join(payload.keys())
     placeholder_sql = ", ".join("?" for _ in payload)
@@ -115,9 +98,8 @@ def resolve_canonical_author_id(
     except sqlite3.OperationalError:
         return raw
 
-    columns = _table_columns(db, "authors")
     normalized_oa = normalize_openalex_author_id(raw)
-    if "openalex_id" in columns and normalized_oa:
+    if normalized_oa:
         row = db.execute(
             "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
             (normalized_oa,),

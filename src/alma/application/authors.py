@@ -67,14 +67,6 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _table_columns(db: sqlite3.Connection, table: str) -> set[str]:
-    try:
-        rows = db.execute(f"PRAGMA table_info({table})").fetchall()
-    except sqlite3.OperationalError:
-        return set()
-    return {str(r[1]) for r in rows}
-
-
 def _followed_author_ids(db: sqlite3.Connection) -> set[str]:
     try:
         ensure_followed_author_contract(db)
@@ -210,11 +202,8 @@ def _count_publications_via_publication_authors(
 ) -> int:
     if not _table_exists(db, "publication_authors"):
         return 0
-    pa_columns = _table_columns(db, "publication_authors")
-    if "paper_id" not in pa_columns:
-        return 0
 
-    if openalex_id and "openalex_id" in pa_columns:
+    if openalex_id:
         row = db.execute(
             """
             SELECT COUNT(DISTINCT pa.paper_id) AS count
@@ -226,7 +215,7 @@ def _count_publications_via_publication_authors(
         if row:
             return int((row["count"] if isinstance(row, sqlite3.Row) else row[0]) or 0)
 
-    if author_name and "display_name" in pa_columns:
+    if author_name:
         row = db.execute(
             """
             SELECT COUNT(DISTINCT pa.paper_id) AS count
@@ -248,21 +237,16 @@ def _legacy_papers_where_clause(
 ) -> tuple[str, list[object]]:
     if not _table_exists(db, "papers"):
         return "", []
-    paper_columns = _table_columns(db, "papers")
     where: list[str] = []
     params: list[object] = []
 
-    if author_id and "author_id" in paper_columns:
+    if author_id:
         where.append("p.author_id = ?")
         params.append(author_id)
-    if author_id and "added_from" in paper_columns:
         where.append("p.added_from = ?")
         params.append(author_id)
-    if author_name and "authors" in paper_columns:
+    if author_name:
         where.append("lower(COALESCE(p.authors, '')) LIKE lower(?)")
-        params.append(f"%{author_name}%")
-    if author_name and "author" in paper_columns:
-        where.append("lower(COALESCE(p.author, '')) LIKE lower(?)")
         params.append(f"%{author_name}%")
 
     return (" OR ".join(where), params) if where else ("", [])
@@ -330,8 +314,7 @@ def _publication_counts_for_author_rows(
     oa_counts: dict[str, int] = {}
     name_counts: dict[str, int] = {}
     if _table_exists(db, "publication_authors"):
-        pa_columns = _table_columns(db, "publication_authors")
-        if "paper_id" in pa_columns and "openalex_id" in pa_columns and openalex_ids:
+        if openalex_ids:
             for chunk in _sql_chunks(openalex_ids):
                 placeholders = ",".join("?" for _ in chunk)
                 for row in db.execute(
@@ -347,7 +330,7 @@ def _publication_counts_for_author_rows(
                     key = str(row["openalex_id"] or "").strip()
                     if key:
                         oa_counts[key] = int(row["count"] or 0)
-        if "paper_id" in pa_columns and "display_name" in pa_columns and name_keys:
+        if name_keys:
             for chunk in _sql_chunks(name_keys):
                 placeholders = ",".join("?" for _ in chunk)
                 for row in db.execute(
@@ -385,7 +368,6 @@ def _publication_counts_for_author_rows(
     if not unresolved or not _table_exists(db, "papers"):
         return counts
 
-    paper_columns = _table_columns(db, "papers")
     paper_sets: dict[str, set[str]] = {
         str(row.get("id") or "").strip(): set()
         for row in unresolved
@@ -394,7 +376,7 @@ def _publication_counts_for_author_rows(
     unresolved_ids = sorted(paper_sets)
 
     def _add_paper_ids_for_column(column: str) -> None:
-        if column not in paper_columns or not unresolved_ids:
+        if not unresolved_ids:
             return
         for chunk in _sql_chunks(unresolved_ids):
             placeholders = ",".join("?" for _ in chunk)
@@ -422,23 +404,15 @@ def _publication_counts_for_author_rows(
         for row in unresolved
         if str(row.get("id") or "").strip() and str(row.get("name") or "").strip()
     ]
-    text_columns = [column for column in ("authors", "author") if column in paper_columns]
-    if name_authors and text_columns:
-        select_cols = ", ".join(["id", *text_columns])
-        nonempty_clause = " OR ".join(
-            f"COALESCE(NULLIF(TRIM({column}), ''), '') != ''"
-            for column in text_columns
-        )
+    if name_authors:
         for paper_row in db.execute(
-            f"SELECT {select_cols} FROM papers WHERE {nonempty_clause}"
+            "SELECT id, authors FROM papers "
+            "WHERE COALESCE(NULLIF(TRIM(authors), ''), '') != ''"
         ).fetchall():
             paper_id = str(paper_row["id"] or "").strip()
             if not paper_id:
                 continue
-            haystack = " ".join(
-                str(paper_row[column] or "").lower()
-                for column in text_columns
-            )
+            haystack = str(paper_row["authors"] or "").lower()
             if not haystack:
                 continue
             for author_id, name_key in name_authors:
@@ -466,8 +440,7 @@ def _author_paper_clause(
     clauses: list[str] = []
     params: list[object] = []
     if _table_exists(db, "publication_authors"):
-        pa_columns = _table_columns(db, "publication_authors")
-        if openalex_id and "openalex_id" in pa_columns:
+        if openalex_id:
             clauses.append(
                 """
                 EXISTS (
@@ -479,7 +452,7 @@ def _author_paper_clause(
                 """
             )
             params.append(openalex_id)
-        if author_name and "display_name" in pa_columns:
+        if author_name:
             clauses.append(
                 """
                 EXISTS (

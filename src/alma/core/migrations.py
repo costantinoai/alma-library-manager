@@ -678,6 +678,65 @@ def _m_0019_follow_state_heal(conn: sqlite3.Connection) -> None:
         logger.warning("follow-state heal: monitor mirror sync skipped", exc_info=True)
 
 
+def _m_0020_topic_aliases_legacy_shape(conn: sqlite3.Connection) -> None:
+    """Rebuild a legacy two-column ``topic_aliases`` (alias_term,
+    canonical_term) into the current topic_id-keyed shape, preserving the
+    alias mappings. Ported from the old lazy
+    ``topic_deduplication._migrate_legacy_aliases``."""
+    if not _table_exists(conn, "topic_aliases"):
+        return
+    cols = _table_columns(conn, "topic_aliases")
+    if "alias_term" not in cols or "topic_id" in cols:
+        return
+    from datetime import datetime
+
+    from alma.library.topic_deduplication import (
+        _topic_id_from_normalized,
+        normalize_topic,
+    )
+
+    old_rows = conn.execute(
+        "SELECT alias_term, canonical_term FROM topic_aliases"
+    ).fetchall()
+    conn.execute("DROP TABLE topic_aliases")
+    conn.execute(
+        """CREATE TABLE topic_aliases (
+            alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id TEXT NOT NULL REFERENCES topics(topic_id),
+            raw_term TEXT NOT NULL,
+            normalized_term TEXT NOT NULL,
+            source TEXT DEFAULT 'auto',
+            confidence REAL DEFAULT 1.0,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(normalized_term)
+        )"""
+    )
+    migrated = 0
+    for row in old_rows:
+        raw = (row[0] or "").strip()
+        canonical = (row[1] or "").strip()
+        if not raw or not canonical:
+            continue
+        normalized = normalize_topic(raw)
+        canonical_normalized = normalize_topic(canonical)
+        topic_id = _topic_id_from_normalized(canonical_normalized)
+        conn.execute(
+            """INSERT OR IGNORE INTO topics
+               (topic_id, canonical_name, normalized_name, source, created_at)
+               VALUES (?, ?, ?, 'auto', ?)""",
+            (topic_id, canonical, canonical_normalized, datetime.utcnow().isoformat()),
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO topic_aliases
+               (topic_id, raw_term, normalized_term, source, confidence, created_at)
+               VALUES (?, ?, ?, 'auto', 1.0, ?)""",
+            (topic_id, raw, normalized, datetime.utcnow().isoformat()),
+        )
+        migrated += 1
+    if migrated:
+        logger.info("topic_aliases legacy-shape rebuild: migrated %d aliases", migrated)
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -698,6 +757,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (17, "settings_legacy_cleanup", _m_0017_settings_legacy_cleanup),
     (18, "gap_feedback_suggestion_bucket", _m_0018_gap_feedback_suggestion_bucket),
     (19, "follow_state_heal", _m_0019_follow_state_heal),
+    (20, "topic_aliases_legacy_shape", _m_0020_topic_aliases_legacy_shape),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
