@@ -760,10 +760,18 @@ class PaperTagRequest(BaseModel):
 
 
 class FollowAuthorRequest(BaseModel):
-    """Request model for following an author."""
+    """Request model for following an author.
+
+    ``author_id`` accepts any author reference the canonical resolver
+    understands (local ``authors.id`` or an OpenAlex author id — the row is
+    created when missing). ``name`` is the display name to stamp on a row
+    created this way; without it the row would be named after the raw id
+    until the historical backfill hydrates it.
+    """
 
     author_id: str
     notify_new_papers: bool = True
+    name: Optional[str] = None
 
 
 class FollowedAuthorResponse(BaseModel):

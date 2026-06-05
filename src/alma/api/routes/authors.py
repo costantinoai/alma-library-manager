@@ -132,14 +132,17 @@ def _immediate_job_response(
     return payload
 
 
-def _sync_follow_state(db: sqlite3.Connection, author_id: str, *, followed: bool) -> None:
+def _sync_follow_state(db: sqlite3.Connection, author_id: str, *, followed: bool) -> bool:
     """Keep followed_authors, authors.author_type, and feed_monitors in sync.
 
     Thin wrapper around the canonical ``apply_follow_state`` helper so every
     follow/unfollow flow funnels through one place and no surface sees
-    drift between the three tables.
+    drift between the three tables. Returns True when a hydration row was
+    enqueued — the caller must schedule the hydration sweep AFTER its
+    transaction commits (in-transaction scheduling self-deadlocks against
+    the scheduler's own connection; see ``apply_follow_state``).
     """
-    apply_follow_state(db, author_id, followed=followed)
+    return apply_follow_state(db, author_id, followed=followed)
 
 
 def _id_resolution_settings() -> dict[str, bool]:
@@ -1684,19 +1687,17 @@ def reject_author_suggestion(
     user: dict = Depends(get_current_user),
 ):
     from alma.application.gap_radar import record_missing_author_remove
-    from alma.core.db_retry import run_with_lock_retry
+    from alma.core.db_write import run_write_unit
 
     def _persist() -> None:
-        # rollback() resets any aborted state from a prior locked attempt so
-        # the retry re-issues the INSERT on a clean transaction (no dup row).
-        db.rollback()
+        # Serialized write unit (writer gate + BEGIN IMMEDIATE + lock retry);
+        # a retry re-issues the INSERT on a clean transaction (no dup row).
         record_missing_author_remove(
             db, req.openalex_id, suggestion_bucket=req.suggestion_bucket
         )
-        db.commit()
 
     try:
-        run_with_lock_retry(_persist, label="reject_author_suggestion")
+        run_write_unit(db, _persist, label="reject_author_suggestion")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
@@ -1729,15 +1730,13 @@ def track_followed_suggestion(
     user: dict = Depends(get_current_user),
 ):
     from alma.application.gap_radar import record_followed_from_suggestion
-    from alma.core.db_retry import run_with_lock_retry
+    from alma.core.db_write import run_write_unit
 
     def _persist() -> None:
-        db.rollback()
         record_followed_from_suggestion(db, req.openalex_id, req.suggestion_bucket)
-        db.commit()
 
     try:
-        run_with_lock_retry(_persist, label="track_followed_suggestion")
+        run_write_unit(db, _persist, label="track_followed_suggestion")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
@@ -2222,7 +2221,7 @@ def follow_author_from_paper(
             "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
             (author_id,),
         ).fetchone() is not None
-        _sync_follow_state(db, author_id, followed=True)
+        needs_hydration_sweep = _sync_follow_state(db, author_id, followed=True)
 
         try:
             feedback_author_id = _norm_oaid(resolved_openalex) if resolved_openalex else author_id
@@ -2234,6 +2233,20 @@ def follow_author_from_paper(
             pass
 
         db.commit()
+        # Post-commit: scheduler-connection writes can't contend with us now
+        # (see apply_follow_state on the in-transaction self-deadlock).
+        if needs_hydration_sweep:
+            try:
+                from alma.services.author_hydrate import (
+                    schedule_pending_author_hydration_sweep,
+                )
+
+                schedule_pending_author_hydration_sweep(
+                    reason="author_follow",
+                    target_author_ids=[author_id],
+                )
+            except Exception as exc:
+                logger.debug("author hydration sweep skipped for %s: %s", author_id, exc)
         if not already_followed:
             try:
                 schedule_followed_author_historical_backfill(author_id, trigger="paper_author_follow")
@@ -2298,39 +2311,48 @@ def create_author(
         if not scholar_id and not openalex_id and not orcid:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Provide one of: scholar_id, openalex_id, or orcid")
 
+        # Human-readable handle for error details — failures must name WHO
+        # could not be added, not just that "an author" failed.
+        author_label = provided_name or openalex_id or orcid or scholar_id
+
+        # Network identity resolution stays OUTSIDE the write transaction
+        # below (SQLite write locks must never be held across network I/O).
+        # Upstream outages surface as a clear 502 naming the author, not as
+        # an opaque 500.
         settings = _id_resolution_settings()
-        resolution = resolve_author_identity(
-            db,
-            author_name=provided_name,
-            openalex_id=openalex_id,
-            scholar_id=scholar_id,
-            orcid=orcid,
-            use_semantic_scholar=settings["semantic_scholar_enabled"],
-            use_orcid=settings["orcid_enabled"],
-            use_scholar_scrape_auto=settings["scholar_scrape_auto_enabled"],
-        )
+        try:
+            resolution = resolve_author_identity(
+                db,
+                author_name=provided_name,
+                openalex_id=openalex_id,
+                scholar_id=scholar_id,
+                orcid=orcid,
+                use_semantic_scholar=settings["semantic_scholar_enabled"],
+                use_orcid=settings["orcid_enabled"],
+                use_scholar_scrape_auto=settings["scholar_scrape_auto_enabled"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "Identity resolution failed for %s: %s", author_label, exc, exc_info=exc
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Identity lookup for '{author_label}' failed — an upstream "
+                    "service (OpenAlex / ORCID / Semantic Scholar) did not "
+                    "respond. Try again in a moment."
+                ),
+            )
 
         resolved_openalex = resolution.openalex_id or (_norm_oaid(openalex_id) if openalex_id else None)
         resolved_scholar = resolution.scholar_id or scholar_id
         resolved_orcid = resolution.orcid or orcid
         primary_id = resolved_scholar or resolved_openalex or resolved_orcid
         if not primary_id:
-            raise HTTPException(status_code=404, detail="Could not resolve a stable author identity")
-
-        existing = db.execute("SELECT name FROM authors WHERE id = ?", (primary_id,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Author with ID {primary_id} already exists")
-        if resolved_openalex:
-            existing_oa = db.execute(
-                "SELECT id, name FROM authors WHERE lower(openalex_id) = lower(?)",
-                (_norm_oaid(resolved_openalex),),
-            ).fetchone()
-            if existing_oa and (existing_oa["id"] if isinstance(existing_oa, sqlite3.Row) else existing_oa[0]) != primary_id:
-                existing_id = existing_oa["id"] if isinstance(existing_oa, sqlite3.Row) else existing_oa[0]
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Author with OpenAlex ID {_norm_oaid(resolved_openalex)} already exists (id={existing_id})",
-                )
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not resolve a stable identity for '{author_label}' — check the identifier",
+            )
 
         name = (
             provided_name
@@ -2342,14 +2364,42 @@ def create_author(
         status_value = resolution.status if resolution.status != "no_match" else "resolved_manual"
         reason_value = summarize_author_resolution(resolution) or "Author created"
 
-        # Wrap only the write+commit (NOT the network resolution above) in the
-        # lock retry, so a burst of suggestion-follows that each create an
-        # author never drops one to a transient SQLite lock. rollback() first
-        # so a retry re-issues the INSERT cleanly (no half-applied row).
-        from alma.core.db_retry import run_with_lock_retry
+        # One serialized write unit (process writer gate + BEGIN IMMEDIATE +
+        # lock retry via run_write_unit). The existence checks live INSIDE
+        # the unit so two concurrent adds of the same person can't race past
+        # each other into a UNIQUE violation. Re-adding an author who already
+        # has a row PROMOTES that row to followed instead of erroring — the
+        # user's intent ("monitor this person") is satisfiable, and rejecting
+        # duplicates only produced confusing failures (D4 "promote, don't
+        # reject" spirit). Only "already followed" remains a 409, and it
+        # names the author.
+        from alma.core.db_write import run_write_unit
 
-        def _persist_create() -> None:
-            db.rollback()
+        def _persist_create() -> tuple[str, bool, bool]:
+            """Insert or promote; returns (author_id, was_promoted, needs_sweep)."""
+            existing_row = db.execute(
+                "SELECT id, name FROM authors WHERE id = ?", (primary_id,)
+            ).fetchone()
+            if existing_row is None and resolved_openalex:
+                existing_row = db.execute(
+                    "SELECT id, name FROM authors WHERE lower(openalex_id) = lower(?)",
+                    (_norm_oaid(resolved_openalex),),
+                ).fetchone()
+            if existing_row is not None:
+                existing_id = str(existing_row["id"] if isinstance(existing_row, sqlite3.Row) else existing_row[0])
+                existing_name = str((existing_row["name"] if isinstance(existing_row, sqlite3.Row) else existing_row[1]) or existing_id)
+                already_followed = db.execute(
+                    "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
+                    (existing_id,),
+                ).fetchone() is not None
+                if already_followed:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"You already follow {existing_name}",
+                    )
+                needs_sweep = _sync_follow_state(db, existing_id, followed=True)
+                return existing_id, True, needs_sweep
+
             db.execute(
                 """
                 INSERT INTO authors (
@@ -2371,23 +2421,64 @@ def create_author(
                     now_iso,
                 ),
             )
-            _sync_follow_state(db, primary_id, followed=True)
-            db.commit()
+            needs_sweep = _sync_follow_state(db, primary_id, followed=True)
+            return primary_id, False, needs_sweep
 
-        run_with_lock_retry(_persist_create, label="create_author")
+        primary_id, was_promoted, needs_hydration_sweep = run_write_unit(
+            db, _persist_create, label="create_author"
+        )
+        # Post-commit: schedule the hydration sweep for the row enqueued by
+        # apply_follow_state, now that the writer lock is released
+        # (in-transaction scheduling self-deadlocks — see apply_follow_state).
+        if needs_hydration_sweep:
+            try:
+                from alma.services.author_hydrate import (
+                    schedule_pending_author_hydration_sweep,
+                )
+
+                schedule_pending_author_hydration_sweep(
+                    reason="author_follow",
+                    target_author_ids=[primary_id],
+                )
+            except Exception as exc:
+                logger.debug("author hydration sweep skipped for %s: %s", primary_id, exc)
+        if was_promoted:
+            # Promotion keeps the existing row (its id + identifiers win);
+            # refresh the response fields from that row.
+            row = db.execute(
+                """
+                SELECT name, openalex_id, scholar_id, orcid,
+                       id_resolution_status, id_resolution_reason
+                FROM authors WHERE id = ?
+                """,
+                (primary_id,),
+            ).fetchone()
+            if row is not None:
+                name = str(row["name"] or name)
+                resolved_openalex = row["openalex_id"] or resolved_openalex
+                resolved_scholar = row["scholar_id"] or resolved_scholar
+                resolved_orcid = row["orcid"] or resolved_orcid
+                status_value = row["id_resolution_status"] or status_value
+                reason_value = row["id_resolution_reason"] or reason_value
         try:
             schedule_followed_author_historical_backfill(primary_id, trigger="author_create")
         except Exception as exc:
             logger.debug("Could not queue historical backfill for %s: %s", primary_id, exc)
-        logger.info(f"Added author: {name} ({primary_id})")
+        logger.info(
+            "%s author: %s (%s)", "Promoted" if was_promoted else "Added", name, primary_id
+        )
 
         runner = OperationRunner(db)
 
         def _op(_ctx):
             return OperationOutcome(
                 status="completed",
-                message=f"Author created: {name}",
-                result={"author_id": primary_id, "name": name},
+                message=(
+                    f"Author promoted to followed: {name}"
+                    if was_promoted
+                    else f"Author created: {name}"
+                ),
+                result={"author_id": primary_id, "name": name, "promoted": was_promoted},
             )
 
         runner.run(
@@ -2413,7 +2504,16 @@ def create_author(
     except HTTPException:
         raise
     except Exception as e:
-        raise_internal("Failed to add author", e)
+        # Build the label from the raw request so it's available no matter
+        # where in the flow the failure happened.
+        label = (
+            (getattr(author, "name", None) or "").strip()
+            or (author.openalex_id or "").strip()
+            or (getattr(author, "orcid", None) or "").strip()
+            or (author.scholar_id or "").strip()
+            or "author"
+        )
+        raise_internal(f"Failed to add author '{label}'", e)
 
 
 @router.get(
@@ -2835,9 +2935,13 @@ class MergeProfilesRequest(BaseModel):
     """Body for `POST /authors/{primary_id}/merge-profiles`. Each
     `alt_author_ids` entry is an `authors.id` value (NOT an OpenAlex
     ID) so the frontend can pass through `alt_profiles[].author_id`
-    from the needs-attention payload directly."""
+    from the needs-attention payload directly. `alt_openalex_ids`
+    absorbs identities with NO local row (suggestion-rail duplicates):
+    papers reattach + the id is recorded as an alias of the primary.
+    At least one of the two lists must be non-empty."""
 
-    alt_author_ids: List[str] = Field(default_factory=list, min_length=1)
+    alt_author_ids: List[str] = Field(default_factory=list)
+    alt_openalex_ids: List[str] = Field(default_factory=list)
     field_choices: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
 
@@ -2861,22 +2965,29 @@ def merge_author_profiles_route(
     _user: dict = Depends(get_current_user),
 ):
     from alma.application.author_merge import merge_author_profiles
-    from alma.core.db_retry import run_with_lock_retry
+    from alma.core.db_write import run_write_unit
+
+    if not body.alt_author_ids and not body.alt_openalex_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide at least one of alt_author_ids or alt_openalex_ids",
+        )
 
     def _do_merge() -> dict:
-        # The merge is one atomic transaction (single commit at the end), so
-        # on a transient lock we can safely rollback and re-run the whole
-        # thing. ValueError (validation) is non-lock and propagates at once.
-        db.rollback()
+        # The merge is one atomic transaction, serialized behind the writer
+        # gate (run_write_unit: BEGIN IMMEDIATE + lock retry), so a retry
+        # safely re-runs the whole thing. ValueError (validation) is
+        # non-lock and propagates at once.
         return merge_author_profiles(
             db,
             author_id,
             body.alt_author_ids,
+            alt_openalex_ids=body.alt_openalex_ids,
             field_choices=body.field_choices,
         )
 
     try:
-        return run_with_lock_retry(_do_merge, label="merge_author_profiles")
+        return run_write_unit(db, _do_merge, label="merge_author_profiles")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

@@ -184,7 +184,7 @@ def apply_follow_state(
     author_id: str,
     *,
     followed: bool,
-) -> None:
+) -> bool:
     """Atomically flip one author's follow state across all three tables.
 
     Three tables encode follow state and they must stay in lock-step:
@@ -203,6 +203,16 @@ def apply_follow_state(
     This helper is the single entry point: callers flip follow state
     through here and every table lands in the same state, same
     transaction, same request.
+
+    Returns True when a hydration row was enqueued for this author — the
+    CALLER must invoke ``schedule_pending_author_hydration_sweep(...)``
+    AFTER its transaction commits. Scheduling from inside the open write
+    transaction self-deadlocks: the job envelope's ``find_active_job`` →
+    ``reap_orphan_jobs`` writes through the scheduler's OWN connection,
+    which then blocks on the very write lock this transaction still holds
+    (caught live 2026-06-05 via /health/threads; same rule as the
+    author-merge tail — sweeps are scheduled post-commit, see
+    ``author_merge.merge_author_profiles``).
     """
     ensure_followed_author_contract(db)
     # ``followed_authors`` is the primary key in this module; the other
@@ -236,24 +246,23 @@ def apply_follow_state(
 
     # Follow-time metadata hydration is targeted to this author. It fills
     # profile fields, affiliation evidence, and ORCID aliases without making
-    # the follow request wait on external sources.
+    # the follow request wait on external sources. ONLY the enqueue happens
+    # here (a same-connection write that belongs in this transaction); the
+    # sweep that processes the row is the caller's post-commit job — see
+    # the docstring for the self-deadlock this avoids.
+    needs_hydration_sweep = False
     if followed:
         try:
-            from alma.services.author_hydrate import (
-                enqueue_pending_author_hydration,
-                schedule_pending_author_hydration_sweep,
-            )
+            from alma.services.author_hydrate import enqueue_pending_author_hydration
 
-            if enqueue_pending_author_hydration(
-                db,
-                author_id,
-                priority="high",
-                reason="author_follow",
-            ):
-                schedule_pending_author_hydration_sweep(
+            needs_hydration_sweep = bool(
+                enqueue_pending_author_hydration(
+                    db,
+                    author_id,
+                    priority="high",
                     reason="author_follow",
-                    target_author_ids=[author_id],
                 )
+            )
         except Exception as exc:
             logger.debug("author hydration enqueue skipped for %s: %s", author_id, exc)
 
@@ -287,6 +296,8 @@ def apply_follow_state(
                 record_missing_author_remove(db, oid, hard=True)
             except ValueError:
                 pass
+
+    return needs_hydration_sweep
 
 
 def schedule_followed_author_historical_backfill(

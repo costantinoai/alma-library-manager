@@ -1491,24 +1491,29 @@ def follow_author(
     req: FollowAuthorRequest,
     db: sqlite3.Connection = Depends(get_db),
 ):
-    """Start following an author."""
-    from alma.core.db_retry import run_with_lock_retry
+    """Start following an author.
+
+    Idempotent: following an already-followed author returns the existing
+    follow instead of erroring — the user's intent ("this author should be
+    followed") is already satisfied, and a 409 here turned harmless client
+    retries / double-submits into scary error toasts.
+    """
+    from alma.core.db_write import run_write_unit
 
     now = datetime.utcnow().isoformat()
 
-    def _persist_follow() -> str:
-        # Whole follow write unit, retried as one on a transient SQLite lock
-        # so a burst of follows never silently drops one. rollback() first
-        # clears any aborted state from a prior locked attempt; the create /
-        # follow helpers are idempotent so re-running is safe. HTTP 404/409
-        # are control flow (non-lock) and propagate without retry.
-        db.rollback()
+    def _persist_follow() -> tuple[str, bool]:
+        # Whole follow write unit — serialized behind the process writer
+        # gate + BEGIN IMMEDIATE + lock retry (run_write_unit), so a burst
+        # of follows never contends or silently drops one. The create /
+        # follow helpers are idempotent so a retry re-run is safe. HTTP 404
+        # is control flow (non-lock) and propagates without retry.
         ensure_followed_author_contract(db)
         canonical_id = resolve_canonical_author_id(
             db,
             req.author_id,
             create_if_missing=True,
-            fallback_name=req.author_id,
+            fallback_name=(req.name or "").strip() or req.author_id,
         )
         if not canonical_id:
             raise HTTPException(status_code=404, detail="Author could not be resolved")
@@ -1517,11 +1522,16 @@ def follow_author(
             (canonical_id,),
         ).fetchone() is not None
         if already_followed:
-            raise HTTPException(status_code=409, detail="Already following this author")
+            # Idempotent success — nothing to write, keep the existing
+            # follow (incl. its notify preference) untouched.
+            return canonical_id, False
 
         # One canonical entry point — keeps followed_authors / author_type /
-        # feed_monitors synchronized in the same transaction.
-        apply_follow_state(db, canonical_id, followed=True)
+        # feed_monitors synchronized in the same transaction. The flag means
+        # a hydration row was enqueued; the SWEEP is scheduled only after
+        # this unit commits — scheduling in-transaction self-deadlocks
+        # against the scheduler's own connection (see apply_follow_state).
+        needs_hydration_sweep = apply_follow_state(db, canonical_id, followed=True)
         # Respect the user's notify_new_papers override (default is 1, which
         # apply_follow_state already sets — only override when explicitly false).
         if not req.notify_new_papers:
@@ -1538,11 +1548,24 @@ def follow_author(
             from alma.application.gap_radar import clear_missing_author_feedback
 
             clear_missing_author_feedback(db, feedback_author_id)
-        db.commit()
-        return canonical_id
+        return canonical_id, needs_hydration_sweep
 
-    canonical_author_id = run_with_lock_retry(_persist_follow, label="follow_author")
+    canonical_author_id, needs_hydration_sweep = run_write_unit(
+        db, _persist_follow, label="follow_author"
+    )
 
+    # Post-commit side effects — the writer lock is released, so the job
+    # envelope's scheduler-connection writes can't contend with us.
+    if needs_hydration_sweep:
+        try:
+            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+
+            schedule_pending_author_hydration_sweep(
+                reason="author_follow",
+                target_author_ids=[canonical_author_id],
+            )
+        except Exception as exc:
+            logger.debug("author hydration sweep skipped for %s: %s", canonical_author_id, exc)
     try:
         schedule_followed_author_historical_backfill(canonical_author_id, trigger="library_follow")
     except Exception as exc:
@@ -1573,13 +1596,12 @@ def unfollow_author(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Stop following an author."""
-    from alma.core.db_retry import run_with_lock_retry
+    from alma.core.db_write import run_write_unit
 
     def _persist_unfollow() -> None:
-        # Retried as one unit on a transient SQLite lock (rollback() first so
-        # a retry re-runs cleanly). 404 is control flow and propagates without
-        # retry; the contract-ensure and resolve are idempotent reads.
-        db.rollback()
+        # One serialized write unit (writer gate + BEGIN IMMEDIATE + lock
+        # retry via run_write_unit). 404 is control flow and propagates
+        # without retry; the contract-ensure and resolve are idempotent.
         ensure_followed_author_contract(db)
         canonical_author_id = resolve_canonical_author_id(db, author_id, create_if_missing=False) or author_id
         existed = db.execute(
@@ -1592,9 +1614,8 @@ def unfollow_author(
         # Single entry point — deletes from followed_authors, demotes
         # authors.author_type, and tears down the mirrored feed_monitors row.
         apply_follow_state(db, canonical_author_id, followed=False)
-        db.commit()
 
-    run_with_lock_retry(_persist_unfollow, label="unfollow_author")
+    run_write_unit(db, _persist_unfollow, label="unfollow_author")
 
 
 # ===================================================================

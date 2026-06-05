@@ -301,7 +301,7 @@ def ingest_owner(
     if not canonical_id:
         raise HTTPException(status_code=400, detail="Could not create author row.")
 
-    apply_follow_state(db, canonical_id, followed=True)
+    needs_hydration_sweep = apply_follow_state(db, canonical_id, followed=True)
     # Single owner: clear any prior owner before setting this one so the
     # partial unique index (is_owner = 1) never collides.
     db.execute("UPDATE followed_authors SET is_owner = 0 WHERE is_owner = 1")
@@ -310,6 +310,21 @@ def ingest_owner(
         (canonical_id,),
     )
     db.commit()
+
+    # Post-commit: scheduler-connection writes can't contend with us now
+    # (see apply_follow_state on the in-transaction self-deadlock).
+    if needs_hydration_sweep:
+        try:
+            from alma.services.author_hydrate import (
+                schedule_pending_author_hydration_sweep,
+            )
+
+            schedule_pending_author_hydration_sweep(
+                reason="author_follow",
+                target_author_ids=[canonical_id],
+            )
+        except Exception:
+            pass
 
     envelope = schedule_followed_author_historical_backfill(
         canonical_id, trigger="onboarding_owner"
