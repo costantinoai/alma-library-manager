@@ -408,10 +408,18 @@ def merge_author_profiles(
     primary_author_id: str,
     alt_author_ids: Iterable[str],
     *,
+    alt_openalex_ids: Iterable[str] | None = None,
     field_choices: Mapping[str, Mapping[str, str]] | None = None,
     job_id: Optional[str] = None,
 ) -> dict:
     """Collapse `alt_author_ids` into `primary_author_id`.
+
+    ``alt_openalex_ids`` absorbs identities that have NO local `authors`
+    row (e.g. a suggestion-rail candidate the user recognises as a
+    duplicate of someone already curated): their `publication_authors`
+    rows reattach to the primary and the id is recorded as an alias —
+    no throwaway row is created. An id in this list that turns out to
+    HAVE a local row is routed through the normal row path instead.
 
     Returns a summary dict suitable for the API response:
       {
@@ -454,6 +462,31 @@ def merge_author_profiles(
             continue
         seen.add(aid)
         alt_ids_clean.append(aid)
+
+    # Resolve row-less OpenAlex identities. Ids that actually have a local
+    # row are promoted into the normal row path (so soft-remove / follow
+    # cleanup / field union still happen); the rest are absorbed below as
+    # pure aliases.
+    from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
+
+    rowless_oids: list[str] = []
+    seen_oids: set[str] = set()
+    for raw in alt_openalex_ids or []:
+        oid = _norm_oaid((raw or "").strip()) or (raw or "").strip()
+        if not oid or oid.lower() == primary_oid.lower() or oid.lower() in seen_oids:
+            continue
+        seen_oids.add(oid.lower())
+        row = db.execute(
+            "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
+            (oid,),
+        ).fetchone()
+        if row is not None:
+            rid = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+            if rid != primary_id and rid not in seen:
+                seen.add(rid)
+                alt_ids_clean.append(rid)
+            continue
+        rowless_oids.append(oid)
 
     summary = {
         "primary_author_id": primary_id,
@@ -609,6 +642,58 @@ def merge_author_profiles(
         summary["alts_processed"] += 1
         summary["alt_openalex_ids"].append(alt_oid)
         summary["alt_author_ids"].append(alt_id)
+
+    # ---- Row-less aliases (suggestion absorb) ----------------------------
+    # Same paper-reattachment contract as the row path, minus everything
+    # that needs an `authors` row (no soft-remove, no follow/monitor drop,
+    # no field union — there's nothing local to union from). The alias row
+    # is what keeps the suggestion rail from resurfacing this identity.
+    for alt_oid in rowless_oids:
+        drop_cur = db.execute(
+            """
+            DELETE FROM publication_authors
+            WHERE openalex_id = ?
+              AND paper_id IN (
+                  SELECT paper_id FROM publication_authors
+                  WHERE openalex_id = ?
+              )
+            """,
+            (alt_oid, primary_oid),
+        )
+        summary["papers_dropped_as_dup"] += drop_cur.rowcount or 0
+
+        upd_cur = db.execute(
+            "UPDATE publication_authors SET openalex_id = ? WHERE openalex_id = ?",
+            (primary_oid, alt_oid),
+        )
+        summary["papers_reassigned"] += upd_cur.rowcount or 0
+
+        db.execute(
+            """
+            INSERT OR IGNORE INTO author_alt_identifiers
+                (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
+            VALUES (?, ?, ?, NULL, 'manual_merge', ?)
+            """,
+            (uuid.uuid4().hex, primary_id, alt_oid, now),
+        )
+
+        pending_audit_logs.append(
+            (
+                f"Merged row-less OpenAlex identity {alt_oid} "
+                f"→ {primary_row['name'] or primary_id} ({primary_oid})",
+                {
+                    "primary_author_id": primary_id,
+                    "primary_openalex_id": primary_oid,
+                    "alt_author_id": None,
+                    "alt_openalex_id": alt_oid,
+                    "papers_reassigned": upd_cur.rowcount or 0,
+                    "papers_dropped_as_dup": drop_cur.rowcount or 0,
+                },
+            )
+        )
+
+        summary["alts_processed"] += 1
+        summary["alt_openalex_ids"].append(alt_oid)
 
     # Mirror the followed_authors deletes into feed_monitors in one
     # sync at the end (cheaper than calling per-alt). All of the below run
