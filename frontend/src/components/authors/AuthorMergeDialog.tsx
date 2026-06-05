@@ -4,6 +4,7 @@ import { GitMerge, Loader2, Search } from 'lucide-react'
 
 import {
   api,
+  getApiErrorMessage,
   mergeAuthorProfiles,
   type Author,
   type AuthorMergeFieldChoice,
@@ -66,6 +67,15 @@ interface AuthorMergeDialogProps {
    * folds in. Mutually exclusive with `primaryAuthor`.
    */
   absorbAuthor?: Author | null
+  /**
+   * The absorbed author has NO local `authors` row — it's a pure OpenAlex
+   * identity (suggestion-rail candidate). The merge then sends its
+   * `openalex_id` via `alt_openalex_ids`: papers reattach + the id is
+   * recorded as an alias of the survivor, no throwaway row is created.
+   * Field choices are not offered (there is no local row to union from).
+   * Only meaningful together with `absorbAuthor`.
+   */
+  absorbOpenAlexOnly?: boolean
   allowedTargetIds?: string[]
   initialTargetId?: string | null
   title?: string
@@ -129,6 +139,7 @@ export function AuthorMergeDialog({
   onOpenChange,
   primaryAuthor,
   absorbAuthor,
+  absorbOpenAlexOnly = false,
   allowedTargetIds,
   initialTargetId,
   title,
@@ -222,6 +233,15 @@ export function AuthorMergeDialog({
     mutationFn: () => {
       if (!primary) throw new Error('Choose the surviving author first.')
       if (!alt) throw new Error('Choose an author to merge first.')
+      if (absorbOpenAlexOnly) {
+        // Row-less absorb: the suggestion has no local row, so the merge
+        // records its OpenAlex id as an alias of the survivor (and
+        // reattaches its papers) — no alt_author_ids, no field choices.
+        if (!alt.openalex_id) {
+          throw new Error('This suggestion has no OpenAlex ID to merge.')
+        }
+        return mergeAuthorProfiles(primary.id, [], undefined, [alt.openalex_id])
+      }
       return mergeAuthorProfiles(primary.id, [alt.id], { [alt.id]: mergeChoices })
     },
     onSuccess: (data) => {
@@ -246,7 +266,7 @@ export function AuthorMergeDialog({
       onOpenChange(false)
       onMerged?.()
     },
-    onError: () => errorToast('Error', 'Failed to merge authors.'),
+    onError: (err) => errorToast('Failed to merge authors', getApiErrorMessage(err)),
   })
 
   const effectiveTitle =
@@ -339,12 +359,26 @@ export function AuthorMergeDialog({
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <EyebrowLabel tone="muted">Pick winning values</EyebrowLabel>
+              <EyebrowLabel tone="muted">
+                {absorbOpenAlexOnly ? 'What the merge does' : 'Pick winning values'}
+              </EyebrowLabel>
               {selected ? (
                 <span className="truncate text-[10px] text-slate-400">← {selected.name}</span>
               ) : null}
             </div>
-            {primary && alt ? (
+            {primary && alt && absorbOpenAlexOnly ? (
+              // Row-less absorb: no local row → no metadata to union, so no
+              // field choices. Explain exactly what will happen instead.
+              <Alert variant="info" className="px-3 py-2">
+                <AlertDescription className="text-xs">
+                  {alt.name} isn't in your database yet, so there are no stored
+                  fields to choose between. Merging records their OpenAlex ID as
+                  an alias of {primary.name}, reattaches any of their papers
+                  already in your corpus, and stops this suggestion from
+                  resurfacing. {primary.name}'s profile stays exactly as it is.
+                </AlertDescription>
+              </Alert>
+            ) : primary && alt ? (
               mergeDiffs.length === 0 ? (
                 <Alert variant="info" className="px-3 py-2">
                   <AlertDescription className="text-xs">
@@ -430,7 +464,12 @@ export function AuthorMergeDialog({
           </Button>
           <Button
             onClick={() => mergeMutation.mutate()}
-            disabled={!primary || !alt || mergeMutation.isPending}
+            disabled={
+              !primary ||
+              !alt ||
+              (absorbOpenAlexOnly && !alt.openalex_id) ||
+              mergeMutation.isPending
+            }
             title={
               primary && alt
                 ? `Merge ${alt.name} into ${primary.name}.`

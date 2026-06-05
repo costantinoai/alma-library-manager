@@ -26,6 +26,23 @@ export function getApiErrorMessage(err: unknown): string {
 }
 
 /**
+ * True for errors worth retrying automatically: the backend maps transient
+ * SQLite write-lock contention to 503 + Retry-After, so a blip under a
+ * write burst should be retried quietly instead of surfacing a fatal toast.
+ * Use as a React Query mutation `retry` predicate together with
+ * {@link retryDelayMs}.
+ */
+export function isRetryableApiError(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 503
+}
+
+/** Exponential backoff companion to {@link isRetryableApiError}:
+ *  0.5s → 1s → 2s, capped at 4s. */
+export function retryDelayMs(attempt: number): number {
+  return Math.min(500 * 2 ** attempt, 4000)
+}
+
+/**
  * Field names whose values may carry LaTeX-leaked `dotless-ı + combining
  * accent` sequences (see `repairDisplayText`). We normalise every match in
  * place during JSON deserialisation so individual rendering sites can stay
@@ -841,10 +858,24 @@ export function getFollowedAuthorSignals(): Promise<Record<string, AuthorSignal 
   return api.get<Record<string, AuthorSignal | null>>('/library/followed-authors/signals')
 }
 
-export function followAuthor(authorId: string, notifyNewPapers = true): Promise<FollowedAuthor> {
+/** Follow an author — the ONE canonical entry point for every follow flow.
+ *  `authorId` may be a local `authors.id` OR an OpenAlex author id: the
+ *  backend resolves/creates the row, applies follow state, and schedules
+ *  the historical backfill, all in one idempotent call (re-following is a
+ *  success no-op, never an error). Pass `name` so a row created from an
+ *  OpenAlex id gets a human name immediately instead of waiting on the
+ *  backfill. Do NOT pre-create rows via POST /authors before following —
+ *  that route auto-follows, and chaining the two produced spurious
+ *  "already following" failures. */
+export function followAuthor(
+  authorId: string,
+  notifyNewPapers = true,
+  name?: string | null,
+): Promise<FollowedAuthor> {
   return api.post<FollowedAuthor>('/library/followed-authors', {
     author_id: authorId,
     notify_new_papers: notifyNewPapers,
+    name: name ?? undefined,
   })
 }
 
@@ -2558,10 +2589,18 @@ export function mergeAuthorProfiles(
   primaryAuthorId: string,
   altAuthorIds: string[],
   fieldChoices?: AuthorMergeFieldChoices,
+  /** OpenAlex ids with NO local `authors` row (a suggestion-rail duplicate):
+   *  papers reattach + the id is recorded as an alias of the primary —
+   *  no throwaway row is created server-side. */
+  altOpenAlexIds?: string[],
 ): Promise<MergeProfilesResponse> {
   return api.post(
     `/authors/${encodeURIComponent(primaryAuthorId)}/merge-profiles`,
-    { alt_author_ids: altAuthorIds, field_choices: fieldChoices ?? {} },
+    {
+      alt_author_ids: altAuthorIds,
+      alt_openalex_ids: altOpenAlexIds ?? [],
+      field_choices: fieldChoices ?? {},
+    },
   )
 }
 

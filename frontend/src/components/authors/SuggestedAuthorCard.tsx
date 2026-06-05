@@ -51,10 +51,11 @@ function kindLabel(kind: string): string {
 }
 
 /**
- * One suggested-author card. Designed to sit in a horizontal strip of 5;
- * the whole card is clickable (opens the detail dialog) but the Follow /
- * Dismiss buttons are individually focusable and swallow the click so
- * they don't trigger the parent handler.
+ * One suggested-author card. Sits in the rail's container-measured grid
+ * (as many ≥240px columns as fit — see SuggestedAuthorsRail); the whole
+ * card is clickable (opens the detail dialog) but the Follow / Dismiss
+ * buttons are individually focusable and swallow the click so they don't
+ * trigger the parent handler.
  */
 export function SuggestedAuthorCard({
   suggestion,

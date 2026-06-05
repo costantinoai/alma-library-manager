@@ -5,9 +5,12 @@ import { Plus, Users } from 'lucide-react'
 
 import {
   api,
+  getApiErrorMessage,
   getFollowedAuthorSignals,
+  isRetryableApiError,
   listAuthorsNeedsAttention,
   listFollowedAuthors,
+  retryDelayMs,
   type Author,
   type AuthorNeedsAttentionRow,
   type AuthorSignal,
@@ -78,13 +81,20 @@ export function AuthorsPage() {
 
   const addAuthorMutation = useMutation({
     mutationFn: (payload: AddAuthorPayload) => api.post<Author>('/authors', payload),
+    // Transient backend lock blips (503 + Retry-After) retry quietly.
+    retry: (failureCount, err) => isRetryableApiError(err) && failureCount < 3,
+    retryDelay: retryDelayMs,
     onSuccess: () => {
       void invalidateQueries(queryClient, ['authors'], ['library-followed-authors'])
       setAddAuthorOpen(false)
       toast({ title: 'Author added', description: 'They will contribute to Feed on the next refresh.' })
     },
-    onError: () => {
-      errorToast('Could not add author', 'Check the provided identifier and try again.')
+    onError: (err, payload) => {
+      // Name WHO failed and WHY — the backend detail carries the specific
+      // reason (already followed / identifier unresolvable / upstream down).
+      const label =
+        payload.name || payload.openalex_id || payload.orcid || payload.scholar_id || 'author'
+      errorToast(`Could not add ${label}`, getApiErrorMessage(err))
     },
   })
 
@@ -299,6 +309,7 @@ export function AuthorsPage() {
         onSubmit={(payload) => addAuthorMutation.mutate(payload)}
         isPending={addAuthorMutation.isPending}
         isError={addAuthorMutation.isError}
+        errorMessage={addAuthorMutation.error ? getApiErrorMessage(addAuthorMutation.error) : null}
       />
     </div>
   )

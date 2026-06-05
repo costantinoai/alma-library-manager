@@ -75,6 +75,10 @@ interface AddAuthorDialogProps {
   onSubmit: (payload: AddAuthorPayload) => void
   isPending: boolean
   isError: boolean
+  /** Specific backend failure reason (from getApiErrorMessage) — shown in
+   *  the inline error box so the user learns WHY (already followed /
+   *  unresolvable identifier / upstream down), not just that it failed. */
+  errorMessage?: string | null
 }
 
 export function AddAuthorDialog({
@@ -83,6 +87,7 @@ export function AddAuthorDialog({
   onSubmit,
   isPending,
   isError,
+  errorMessage,
 }: AddAuthorDialogProps) {
   const form = useForm<AddAuthorFormValues>({
     resolver: zodResolver(addAuthorFormSchema),
@@ -181,12 +186,13 @@ export function AddAuthorDialog({
               <p className="text-sm font-medium text-critical-500">{rootError}</p>
             )}
 
-            {/* Mutation error (backend 4xx/5xx) */}
+            {/* Mutation error (backend 4xx/5xx) — surfaces the backend's
+                specific reason when available. */}
             {isError && (
               <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 p-3">
-                <AlertCircle className="h-4 w-4 text-critical-500" />
+                <AlertCircle className="h-4 w-4 shrink-0 text-critical-500" />
                 <span className="text-sm text-critical-700">
-                  Failed to add author. Please check the provided identifier and try again.
+                  {errorMessage || 'Failed to add author. Please check the provided identifier and try again.'}
                 </span>
               </div>
             )}

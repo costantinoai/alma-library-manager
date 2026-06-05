@@ -309,9 +309,12 @@ export function AuthorDetailPanel({
   // browse their work before following.
   const isSuggestionOnly = !!suggestion && !author?.added_at
   // Whether `resolved` is a real `authors` row (vs. a pure OpenAlex candidate
-  // synthesized from a suggestion). Soft-remove + merge need a row; a candidate
-  // with no row can only be dismissed. Non-suggestion opens always have a row.
+  // synthesized from a suggestion). Soft-remove needs a row; merge works for
+  // BOTH — a row-less candidate is absorbed by its OpenAlex id (recorded as
+  // an alias of the surviving author, papers reattached — no throwaway row).
+  // Non-suggestion opens always have a row.
   const hasAuthorRow = !suggestion || !!suggestion.existing_author_id
+  const canMerge = hasAuthorRow || !!suggestion?.openalex_id
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
   const [mergeOpen, setMergeOpen] = useState(false)
   const [neighbourhoodOpen, setNeighbourhoodOpen] = useState(false)
@@ -354,7 +357,10 @@ export function AuthorDetailPanel({
   const isFollowed = resolved?.author_type === 'followed'
 
   const followMutation = useMutation({
-    mutationFn: () => followAuthor(resolved.id),
+    // `resolved.id` may be a bare OpenAlex id for suggestion-only opens —
+    // the follow endpoint resolves/creates the row; passing the name keeps
+    // a freshly created row human-readable.
+    mutationFn: () => followAuthor(resolved.id, true, resolved.name),
     onSuccess: () => {
       void invalidateQueries(
         queryClient,
@@ -878,13 +884,13 @@ export function AuthorDetailPanel({
             size="sm"
             variant="outline"
             onClick={() => setMergeOpen(true)}
-            disabled={!hasAuthorRow}
+            disabled={!canMerge}
             title={
-              hasAuthorRow
+              canMerge
                 ? suggestion
-                  ? 'Merge this suggestion into one of your existing authors — that author survives, this folds in; pick which fields win.'
+                  ? 'Merge this suggestion into one of your existing authors — that author survives, this folds in.'
                   : 'Merge another author into this one — pick the duplicate and which fields win.'
-                : 'Follow this author first (it has no local record yet) to merge it with an existing one.'
+                : 'This suggestion has no OpenAlex ID, so it cannot be merged — follow or add the author manually instead.'
             }
           >
             <GitMerge className="h-4 w-4" />
@@ -915,7 +921,10 @@ export function AuthorDetailPanel({
       // From a suggestion: ABSORB it (the suggestion folds into the author you
       // pick, which survives + keeps its follow). From a normal author detail:
       // that author is the survivor and you pick the duplicate to absorb.
+      // A row-less suggestion is absorbed by OpenAlex id (alias record) —
+      // the dialog skips field choices for it.
       {...(suggestion ? { absorbAuthor: resolved } : { primaryAuthor: resolved })}
+      absorbOpenAlexOnly={!!suggestion && !hasAuthorRow}
       onMerged={() => {
         // The suggestion is resolved by the merge — close the panel and let the
         // dialog's own ['author-suggestions'] invalidation refresh the rail.

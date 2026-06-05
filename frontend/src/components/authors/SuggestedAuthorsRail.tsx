@@ -4,13 +4,14 @@ import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { ChevronDown, ChevronUp, Sparkles, UserSearch } from 'lucide-react'
 
 import {
-  api,
   followAuthor,
+  getApiErrorMessage,
+  isRetryableApiError,
   listAuthorSuggestions,
   refreshAuthorSuggestionNetwork,
   rejectAuthorSuggestion,
+  retryDelayMs,
   trackFollowedAuthorSuggestion,
-  type Author,
   type AuthorSuggestion,
 } from '@/api/client'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
@@ -18,37 +19,117 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useElementWidth } from '@/hooks/useElementWidth'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
 
-const COLLAPSED_COUNT = 5
-// Expanded view = 5 columns × 5 rows = 25 cards.
-const EXPANDED_COUNT = 25
-// Fetch enough to cover the expanded view + a buffer for already-acted
-// rows. Server route enforces its own ceiling (limit ≤ 30).
-const FETCH_COUNT = EXPANDED_COUNT + 5
+// Expanded view shows up to this many rows of the measured grid.
+const EXPANDED_ROWS = 5
+// Server route enforces its own ceiling (limit ≤ 30) — fetch right up to it
+// so the expanded view (max 6 columns × 5 rows) is always covered.
+const FETCH_COUNT = 30
 
-// Default grid: 3-up from md, 5-up on xl (the wide Authors page). Callers in
-// narrow containers (the onboarding modal) override this — breakpoints key off
-// the viewport, so a fixed-width modal must opt out of the 5-up escalation or
-// the cards squish and their content spills out.
-const DEFAULT_GRID = 'grid gap-3 md:grid-cols-3 xl:grid-cols-5'
+// ── Container-measured grid ──────────────────────────────────────────
+// The card count is DYNAMIC: we measure the rail's container width and fit
+// as many ≥240px columns as possible (viewport breakpoints can't see a
+// fixed-width modal or a sidebar-squeezed panel; a ResizeObserver can).
+// 240px keeps each card near its natural ~1:1 footprint — narrower and the
+// chip rows wrap, stretching every card in the row into a tall sliver.
+const MIN_CARD_WIDTH = 240
+// Matches the `gap-3` (0.75rem) used between cards.
+const GRID_GAP = 12
+const MAX_COLUMNS = 6
+// Render width before the first ResizeObserver tick lands (one frame).
+const FALLBACK_COLUMNS = 3
+
+// ── Durable follow-intent journal ────────────────────────────────────
+// "Queued" is a real author status (see tasks/AUTHORS_COMPONENT.md): once
+// the user clicks Follow, that author must NEVER be re-suggested — even if
+// the page reloads before the API call commits. Each intent is journalled
+// to localStorage on click and removed on success / permanent failure; on
+// mount the journal seeds the acted-on set (queued authors don't render)
+// and replays outstanding intents. Replay is safe because the backend
+// follow endpoint is idempotent (re-following is a success no-op).
+const PENDING_FOLLOWS_KEY = 'alma.pending-author-follows.v1'
+
+interface FollowIntent {
+  openalexId: string
+  name: string
+  existingAuthorId: string | null
+  suggestionType: string | null
+}
+
+function readPendingFollows(): FollowIntent[] {
+  try {
+    const raw = localStorage.getItem(PENDING_FOLLOWS_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is FollowIntent =>
+        !!item &&
+        typeof item === 'object' &&
+        typeof (item as FollowIntent).openalexId === 'string' &&
+        typeof (item as FollowIntent).name === 'string',
+    )
+  } catch {
+    return []
+  }
+}
+
+function writePendingFollows(intents: FollowIntent[]): void {
+  try {
+    if (intents.length === 0) {
+      localStorage.removeItem(PENDING_FOLLOWS_KEY)
+    } else {
+      localStorage.setItem(PENDING_FOLLOWS_KEY, JSON.stringify(intents))
+    }
+  } catch {
+    // localStorage unavailable (private mode quota etc.) — the in-memory
+    // queue still works for this session; only refresh-survival degrades.
+  }
+}
+
+function addPendingFollow(intent: FollowIntent): void {
+  const current = readPendingFollows()
+  if (current.some((item) => item.openalexId === intent.openalexId)) return
+  writePendingFollows([...current, intent])
+}
+
+function removePendingFollow(openalexId: string): void {
+  writePendingFollows(readPendingFollows().filter((item) => item.openalexId !== openalexId))
+}
 
 interface SuggestedAuthorsRailProps {
   onOpenDetail?: (suggestion: AuthorSuggestion) => void
-  /** Override the grid template (e.g. a 3-up grid inside the onboarding modal). */
-  gridClassName?: string
-  /** How many cards to show before the "see more" toggle. Default 5. */
-  collapsedCount?: number
+  /** Rows shown before the "see more" toggle (each row holds however many
+   *  ≥240px columns fit the container). Default 1; the onboarding modal
+   *  passes 2 so enough cards are visible to hit its follow-5 goal. */
+  collapsedRows?: number
 }
 
 export function SuggestedAuthorsRail({
   onOpenDetail,
-  gridClassName = DEFAULT_GRID,
-  collapsedCount = COLLAPSED_COUNT,
+  collapsedRows = 1,
 }: SuggestedAuthorsRailProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
+
+  // Measured container → column count → visible caps. The inline
+  // `gridTemplateColumns` below renders exactly `columns` tracks, so the
+  // measurement and the layout can never drift apart.
+  const [sectionRef, sectionWidth] = useElementWidth<HTMLElement>()
+  const columns = useMemo(() => {
+    if (sectionWidth == null || sectionWidth <= 0) return FALLBACK_COLUMNS
+    return Math.max(
+      1,
+      Math.min(MAX_COLUMNS, Math.floor((sectionWidth + GRID_GAP) / (MIN_CARD_WIDTH + GRID_GAP))),
+    )
+  }, [sectionWidth])
+  const gridStyle = useMemo(
+    () => ({ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }),
+    [columns],
+  )
 
   // ── Acted-on set + sequential mutation queue ─────────────────────
   // The acted-on set is the primary defense against the "card bounces
@@ -67,9 +148,10 @@ export function SuggestedAuthorsRail({
   // place and re-wrap with `new Set(...)` to keep React's reference
   // identity check honest.
   const [actedOn, setActedOn] = useState<Set<string>>(() => new Set())
-  // See-more toggle — collapsed shows the top 5; expanded fills a 5×5
-  // grid (25 cards). The fetched payload covers the expanded view, so
-  // toggling is a pure visual change with no extra network round-trip.
+  // See-more toggle — collapsed shows whole rows of the measured grid;
+  // expanded fills up to EXPANDED_ROWS of it. The fetched payload covers
+  // the expanded view, so toggling is a pure visual change with no extra
+  // network round-trip.
   const [expanded, setExpanded] = useState(false)
   const markActed = useCallback((openalexId: string | null | undefined) => {
     const id = (openalexId ?? '').trim().toLowerCase()
@@ -81,14 +163,22 @@ export function SuggestedAuthorsRail({
       return next
     })
   }, [])
+  // Permanent failures hand the card back: the action did NOT happen, so
+  // hiding it would be untruthful (and the journal entry is dropped too).
+  const unmarkActed = useCallback((openalexId: string | null | undefined) => {
+    const id = (openalexId ?? '').trim().toLowerCase()
+    if (!id) return
+    setActedOn((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
 
-  // Sequential follow-mutation queue. The acted-on set fixes the
-  // visual bounce; the queue fixes the *backend* race — running two
-  // follow flows in parallel can hit the author-create + monitor-sync
-  // path concurrently, which has occasional UNIQUE-constraint hiccups
-  // on `feed_monitors` under load. One in-flight at a time is cheap
-  // and removes the failure mode entirely. Reject (sync, single
-  // INSERT) doesn't need queuing.
+  // Sequential follow-mutation queue. One in-flight follow at a time keeps
+  // the optimistic cache writes ordered; the backend write itself is
+  // serialized + idempotent, so this is purely a client-ordering concern.
   const followQueueRef = useRef<Promise<unknown>>(Promise.resolve())
 
   const suggestionsQuery = useQuery({
@@ -118,6 +208,10 @@ export function SuggestedAuthorsRail({
         suggestion.openalex_id ?? '',
         suggestion.suggestion_type ?? null,
       ),
+    // Transient backend lock blips (503 + Retry-After) retry quietly
+    // instead of surfacing a fatal toast for a click that will succeed.
+    retry: (failureCount, err) => isRetryableApiError(err) && failureCount < 3,
+    retryDelay: retryDelayMs,
     onMutate: async (suggestion) => {
       const openalexId = suggestion.openalex_id ?? ''
       // Optimistic removal keeps the animation snappy — no spinner gap.
@@ -138,11 +232,12 @@ export function SuggestedAuthorsRail({
       )
       return { prev }
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, suggestion, ctx) => {
       if (ctx?.prev) {
         queryClient.setQueryData(['author-suggestions', FETCH_COUNT], ctx.prev)
       }
-      errorToast('Error', 'Failed to dismiss suggestion.')
+      unmarkActed(suggestion.openalex_id)
+      errorToast(`Could not dismiss ${suggestion.name}`, getApiErrorMessage(err))
     },
     onSettled: () => {
       void invalidateQueries(queryClient, ['author-suggestions'])
@@ -150,25 +245,22 @@ export function SuggestedAuthorsRail({
   })
 
   const followMutation = useMutation({
-    mutationFn: async (suggestion: AuthorSuggestion) => {
-      // Sequential queue — chain onto the previous in-flight follow so
-      // two near-simultaneous clicks never race the author-create +
-      // monitor-sync write path. Tail of the queue resolves with this
-      // call's result so React Query still sees a normal Promise.
-      const tail = followQueueRef.current
-      const next = tail.then(async () => {
-        if (suggestion.existing_author_id) {
-          return followAuthor(suggestion.existing_author_id)
-        }
-        if (suggestion.openalex_id) {
-          const created = await api.post<Author>('/authors', {
-            openalex_id: suggestion.openalex_id,
-            name: suggestion.name,
-          })
-          return followAuthor(created.id)
-        }
+    mutationFn: async (intent: FollowIntent) => {
+      // ONE canonical call: the follow endpoint resolves/creates the author
+      // row server-side (with the human name) and is idempotent. Never
+      // pre-create via POST /authors here — that route auto-follows, and
+      // chaining create + follow produced spurious "already following"
+      // failures (root cause of the 2026-06 "could not add authors" bug).
+      const authorRef = intent.existingAuthorId ?? intent.openalexId
+      if (!authorRef) {
         throw new Error('Suggestion is missing an actionable identifier')
-      })
+      }
+      // Sequential queue — chain onto the previous in-flight follow so the
+      // optimistic cache updates stay ordered under rapid clicks. Tail of
+      // the queue resolves with this call's result so React Query still
+      // sees a normal Promise.
+      const tail = followQueueRef.current
+      const next = tail.then(() => followAuthor(authorRef, true, intent.name))
       // Replace the tail with a swallowing copy so an error in this
       // call doesn't poison the queue for the next click. Errors are
       // already surfaced via `onError` (toast); we log to console here
@@ -178,12 +270,16 @@ export function SuggestedAuthorsRail({
       })
       return next
     },
-    onMutate: async (suggestion) => {
-      // Same defensive pattern as reject: persist in the acted-on set
-      // BEFORE the API call, so any refetch that snapshots the server
-      // state mid-flight (followed_authors not yet committed) still
-      // can't render the just-followed card.
-      markActed(suggestion.openalex_id)
+    // 503 = transient write contention; retry with backoff before treating
+    // the follow as failed. Each retry re-chains through the queue.
+    retry: (failureCount, err) => isRetryableApiError(err) && failureCount < 3,
+    retryDelay: retryDelayMs,
+    onMutate: async (intent) => {
+      // Same defensive pattern as reject: persist in the acted-on set AND
+      // the durable journal BEFORE the API call, so neither a mid-flight
+      // refetch nor a full page reload can resurface the queued author.
+      markActed(intent.openalexId)
+      addPendingFollow(intent)
       await queryClient.cancelQueries({ queryKey: ['author-suggestions', FETCH_COUNT] })
       const prev = queryClient.getQueryData<AuthorSuggestion[]>([
         'author-suggestions',
@@ -191,32 +287,37 @@ export function SuggestedAuthorsRail({
       ])
       queryClient.setQueryData<AuthorSuggestion[]>(
         ['author-suggestions', FETCH_COUNT],
-        (old) => (old ?? []).filter((s) => s.openalex_id !== suggestion.openalex_id),
+        (old) => (old ?? []).filter((s) => s.openalex_id !== intent.openalexId),
       )
       return { prev }
     },
-    onSuccess: (_data, suggestion) => {
-      toast({ title: 'Followed', description: `${suggestion.name} is now followed.` })
+    onSuccess: (_data, intent) => {
+      removePendingFollow(intent.openalexId)
+      toast({ title: 'Followed', description: `${intent.name} is now followed.` })
       // Fire-and-forget bucket-attribution log for outcome calibration.
       // Backend computes per-bucket follow rates from this; failures are
       // ignored because the actual follow has already succeeded.
-      if (suggestion.openalex_id) {
-        trackFollowedAuthorSuggestion(
-          suggestion.openalex_id,
-          suggestion.suggestion_type ?? null,
-        ).catch((err: unknown) => {
-          // Outcome-calibration tracking is best-effort but devs still
-          // need to see when the attribution endpoint is down — silent
-          // .catch used to drop these without any breadcrumb.
-          console.warn('[SuggestedAuthorsRail] follow attribution failed', err)
-        })
+      if (intent.openalexId) {
+        trackFollowedAuthorSuggestion(intent.openalexId, intent.suggestionType).catch(
+          (err: unknown) => {
+            // Outcome-calibration tracking is best-effort but devs still
+            // need to see when the attribution endpoint is down — silent
+            // .catch used to drop these without any breadcrumb.
+            console.warn('[SuggestedAuthorsRail] follow attribution failed', err)
+          },
+        )
       }
     },
-    onError: (_err, _suggestion, ctx) => {
+    onError: (err, intent, ctx) => {
+      // Permanent failure (retries exhausted or a real 4xx/5xx): drop the
+      // journal entry so replay doesn't loop forever, hand the card back,
+      // and say WHO failed and WHY.
+      removePendingFollow(intent.openalexId)
       if (ctx?.prev) {
         queryClient.setQueryData(['author-suggestions', FETCH_COUNT], ctx.prev)
       }
-      errorToast('Error', 'Failed to follow author.')
+      unmarkActed(intent.openalexId)
+      errorToast(`Could not follow ${intent.name}`, getApiErrorMessage(err))
     },
     onSettled: () => {
       void invalidateQueries(
@@ -227,6 +328,21 @@ export function SuggestedAuthorsRail({
       )
     },
   })
+
+  // Replay outstanding follow intents from the journal once per mount —
+  // these are clicks from a previous page load that never got to commit
+  // (refresh mid-burst). Seeding the acted-on set happens inside
+  // followMutation.onMutate, so the authors stay hidden from first paint
+  // of the data; idempotent backend follow makes re-running safe.
+  const replayTriggeredRef = useRef(false)
+  const replayFollow = followMutation.mutate
+  useEffect(() => {
+    if (replayTriggeredRef.current) return
+    replayTriggeredRef.current = true
+    for (const intent of readPendingFollows()) {
+      replayFollow(intent)
+    }
+  }, [replayFollow])
 
   const filtered = useMemo(() => {
     // Filter through the acted-on set FIRST so an acted-on row never
@@ -239,19 +355,23 @@ export function SuggestedAuthorsRail({
     })
   }, [suggestionsQuery.data, actedOn])
 
-  const visibleCap = expanded ? EXPANDED_COUNT : collapsedCount
+  // Caps are whole rows of the measured grid: collapsed = `collapsedRows`
+  // rows, expanded = up to EXPANDED_ROWS (bounded by what we fetched).
+  const collapsedCap = columns * Math.max(1, collapsedRows)
+  const expandedCap = Math.min(columns * EXPANDED_ROWS, FETCH_COUNT)
+  const visibleCap = expanded ? expandedCap : collapsedCap
   const visible = useMemo(() => filtered.slice(0, visibleCap), [filtered, visibleCap])
   // Show the toggle when the filtered pool actually has more rows than
   // the current cap — collapsing always works, expanding only matters
   // when there's something extra to reveal.
-  const canToggle = expanded ? visible.length > collapsedCount : filtered.length > collapsedCount
+  const canToggle = expanded ? visible.length > collapsedCap : filtered.length > collapsedCap
 
   const isLoading = suggestionsQuery.isLoading
   const hasError = suggestionsQuery.isError
   const empty = !isLoading && !hasError && visible.length === 0
 
   return (
-    <section className="space-y-3">
+    <section ref={sectionRef} className="space-y-3">
       <header className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-alma-600" />
@@ -263,8 +383,8 @@ export function SuggestedAuthorsRail({
       </header>
 
       {isLoading ? (
-        <div className={gridClassName}>
-          {Array.from({ length: collapsedCount }).map((_, i) => (
+        <div className="grid gap-3" style={gridStyle}>
+          {Array.from({ length: collapsedCap }).map((_, i) => (
             <Skeleton key={i} className="h-52 rounded-lg" />
           ))}
         </div>
@@ -279,7 +399,7 @@ export function SuggestedAuthorsRail({
           description="Save more papers to your Library and their authors will surface here."
         />
       ) : (
-        <RevealList className={gridClassName}>
+        <RevealList className="grid gap-3" style={gridStyle}>
           {visible.map((s, i) => {
             const keyId = s.openalex_id || s.key
             return (
@@ -287,7 +407,18 @@ export function SuggestedAuthorsRail({
                 <SuggestedAuthorCard
                   suggestion={s}
                   onClick={() => onOpenDetail?.(s)}
-                  onFollow={() => followMutation.mutate(s)}
+                  onFollow={() => {
+                    if (!s.openalex_id && !s.existing_author_id) {
+                      errorToast('Error', 'Cannot follow: missing OpenAlex ID.')
+                      return
+                    }
+                    followMutation.mutate({
+                      openalexId: s.openalex_id ?? '',
+                      name: s.name,
+                      existingAuthorId: s.existing_author_id ?? null,
+                      suggestionType: s.suggestion_type ?? null,
+                    })
+                  }}
                   onReject={() => {
                     if (!s.openalex_id) {
                       errorToast('Error', 'Cannot dismiss: missing OpenAlex ID.')
@@ -297,7 +428,7 @@ export function SuggestedAuthorsRail({
                   }}
                   followPending={
                     followMutation.isPending &&
-                    followMutation.variables?.openalex_id === s.openalex_id
+                    followMutation.variables?.openalexId === s.openalex_id
                   }
                   rejectPending={
                     rejectMutation.isPending &&
@@ -310,9 +441,9 @@ export function SuggestedAuthorsRail({
         </RevealList>
       )}
 
-      {/* See-more toggle — flips between top-5 row and full 5×5 grid.
-          Hidden when the filtered pool has nothing extra to reveal
-          (e.g. fewer than 6 suggestions in the corpus, or every
+      {/* See-more toggle — flips between the collapsed row(s) and the full
+          grid (up to EXPANDED_ROWS). Hidden when the filtered pool has
+          nothing extra to reveal (few suggestions in the corpus, or every
           extra row already acted-on). */}
       {canToggle ? (
         <div className="flex justify-center pt-1">
@@ -326,12 +457,12 @@ export function SuggestedAuthorsRail({
             {expanded ? (
               <>
                 <ChevronUp className="h-3.5 w-3.5" />
-                Show top {collapsedCount}
+                Show fewer
               </>
             ) : (
               <>
                 <ChevronDown className="h-3.5 w-3.5" />
-                See more ({Math.min(filtered.length, EXPANDED_COUNT) - collapsedCount})
+                See more ({Math.min(filtered.length, expandedCap) - collapsedCap})
               </>
             )}
           </Button>

@@ -497,8 +497,9 @@ export function OnlineSearchTab({
       try {
         // Follow goes through the canonical pipeline (resolve_canonical_author_id
         // + apply_follow_state → dedup + hydration + monitor sync). The returned
-        // author_id is the local row we can now link the card to.
-        const followed = await followAuthor(author.openalex_id, true)
+        // author_id is the local row we can now link the card to. Passing the
+        // name means a freshly created row is human-readable immediately.
+        const followed = await followAuthor(author.openalex_id, true, author.name)
         setAuthorResults((prev) =>
           prev
             ? prev.map((a) =>

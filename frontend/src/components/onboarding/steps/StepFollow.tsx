@@ -54,12 +54,11 @@ export function StepFollow({ state, next, back }: StepContext) {
           <GoalMeter done={count} target={TARGET} noun="followed" />
         </div>
 
-        {/* 3-up inside the narrow onboarding modal (the page default escalates
-            to 5-up on xl, which squishes cards here). */}
-        <SuggestedAuthorsRail
-          gridClassName="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
-          collapsedCount={6}
-        />
+        {/* The rail measures its own container (ResizeObserver), so it fits
+            the modal automatically — no viewport-breakpoint override needed.
+            Two collapsed rows keep enough cards visible for the follow-5
+            goal without forcing the See-more toggle. */}
+        <SuggestedAuthorsRail collapsedRows={2} />
       </div>
     </StepShell>
   )
