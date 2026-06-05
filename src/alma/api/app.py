@@ -5,6 +5,7 @@ middleware, exception handlers, and OpenAPI documentation.
 """
 
 import os
+import sqlite3
 import sys
 import time
 import logging
@@ -252,6 +253,36 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "detail": exc.errors()
         }
     )
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def sqlite_lock_exception_handler(request: Request, exc: sqlite3.OperationalError):
+    """Surface transient SQLite write-lock contention as retryable (503).
+
+    A "database is locked/busy" that escapes ``run_with_lock_retry`` /
+    ``run_write_unit`` is a *transient* condition — the client should retry,
+    not show a fatal error. 503 + ``Retry-After`` is the truthful status;
+    the frontend api layer retries these automatically. Every other
+    OperationalError (corruption, readonly, schema) is a real bug and falls
+    through to the generic 500 path.
+    """
+    from alma.core.db_retry import is_transient_lock_error
+
+    if is_transient_lock_error(exc):
+        logger.warning(
+            f"Transient SQLite lock escaped retries on "
+            f"{request.method} {request.url.path} — returning 503"
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers={"Retry-After": "1"},
+            content={
+                "error": "DatabaseBusy",
+                "message": "Database briefly locked — retry",
+                "detail": "Database briefly locked — retry",
+            },
+        )
+    return await general_exception_handler(request, exc)
 
 
 @app.exception_handler(Exception)

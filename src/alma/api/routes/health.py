@@ -165,3 +165,32 @@ def _health_payload(db: sqlite3.Connection) -> dict:
     from alma.services import health as health_service
 
     return (mv.get(db, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+
+
+@router.get(
+    "/threads",
+    summary="Dump all backend thread stacks (diagnostic)",
+    description=(
+        "Read-only diagnostic for write-lock stalls: returns every live "
+        "thread's name + current stack so the holder of the SQLite writer "
+        "(or the process writer gate) can be identified while reads still "
+        "flow. No DB access — usable even when the writer is wedged."
+    ),
+)
+def dump_thread_stacks():
+    import sys
+    import threading
+    import traceback
+
+    frames = sys._current_frames()
+    out = []
+    for thread in threading.enumerate():
+        frame = frames.get(thread.ident)
+        out.append(
+            {
+                "name": thread.name,
+                "daemon": thread.daemon,
+                "stack": traceback.format_stack(frame) if frame else [],
+            }
+        )
+    return {"threads": out}
