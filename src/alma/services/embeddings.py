@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Callable
 
 from alma.ai.embedding_sources import source_for_provider_name
+from alma.core.db_write import write_section
 from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
@@ -348,6 +349,9 @@ def run_embedding_computation(
                 try:
                     from alma.core.vector_blob import encode_vector
 
+                    # Model inference stays OUTSIDE the write section — it
+                    # can take 100-500ms per batch and must not hold the
+                    # writer gate / SQLite write lock.
                     embeddings = provider.embed([p[1] for p in payload])
                     if len(embeddings) != len(payload):
                         raise RuntimeError(
@@ -355,22 +359,22 @@ def run_embedding_computation(
                         )
 
                     inserted_paper_ids: list[str] = []
-                    for (row, _text), emb in zip(payload, embeddings):
-                        conn.execute(
-                            "INSERT OR REPLACE INTO publication_embeddings "
-                            "(paper_id, embedding, model, source, created_at) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (
-                                row["id"],
-                                encode_vector(emb),
-                                model_hf_id,
-                                source_for_provider_name(provider.name),
-                                datetime.utcnow().isoformat(),
-                            ),
-                        )
-                        inserted_paper_ids.append(str(row["id"]))
-                        processed += 1
-                    conn.commit()
+                    with write_section(conn, label="embeddings batch"):
+                        for (row, _text), emb in zip(payload, embeddings):
+                            conn.execute(
+                                "INSERT OR REPLACE INTO publication_embeddings "
+                                "(paper_id, embedding, model, source, created_at) "
+                                "VALUES (?, ?, ?, ?, ?)",
+                                (
+                                    row["id"],
+                                    encode_vector(emb),
+                                    model_hf_id,
+                                    source_for_provider_name(provider.name),
+                                    datetime.utcnow().isoformat(),
+                                ),
+                            )
+                            inserted_paper_ids.append(str(row["id"]))
+                            processed += 1
                     # Keep `author_centroids` coherent with the new
                     # embeddings — D12 `paper_signal.author_alignment`
                     # reads cached centroids on every score pass.
@@ -399,24 +403,28 @@ def run_embedding_computation(
 
                     for row, text in payload:
                         try:
+                            # Inference outside the write section; each item
+                            # commits its own short transaction so the
+                            # writer lock is never held across the NEXT
+                            # item's inference.
                             emb = provider.embed([text])[0]
-                            conn.execute(
-                                "INSERT OR REPLACE INTO publication_embeddings "
-                                "(paper_id, embedding, model, source, created_at) "
-                                "VALUES (?, ?, ?, ?, ?)",
-                                (
-                                    row["id"],
-                                    encode_vector(emb),
-                                    model_hf_id,
-                                    source_for_provider_name(provider.name),
-                                    datetime.utcnow().isoformat(),
-                                ),
-                            )
+                            with write_section(conn, label="embeddings item"):
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO publication_embeddings "
+                                    "(paper_id, embedding, model, source, created_at) "
+                                    "VALUES (?, ?, ?, ?, ?)",
+                                    (
+                                        row["id"],
+                                        encode_vector(emb),
+                                        model_hf_id,
+                                        source_for_provider_name(provider.name),
+                                        datetime.utcnow().isoformat(),
+                                    ),
+                                )
                         except Exception as exc:
                             _record_error(row, exc)
                         finally:
                             processed += 1
-                    conn.commit()
 
             if processed % 25 == 0 or processed == total:
                 set_job_status(

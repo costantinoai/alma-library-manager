@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
+from alma.core.db_write import write_section
 from alma.core.utils import (
     normalize_id_list,
     normalize_doi,
@@ -515,34 +516,104 @@ def _run_s2_batched_phase(
 
         summary["remote_calls"] += 1 if lookup_ids else 0
 
-        for row in chunk_rows:
-            paper_id = str(row["id"])
-            s2_id = str(row["semantic_scholar_id"] or "").strip()
-            doi = str(row["doi"] or "").strip()
-            paper = (
-                fetched_by_s2.get(s2_id) if s2_id else None
-            ) or (
-                fetched_by_doi.get(doi.lower()) if doi else None
-            )
-            lookup_key = _lookup_key_for_row(row)
-            if paper is None:
-                row_lookup_ids = paper_lookup_ids.get(paper_id, [])
-                retry_reason = next(
-                    (
-                        retryable_lookup_errors.get(item)
-                        for item in row_lookup_ids
-                        if retryable_lookup_errors.get(item)
-                    ),
-                    "",
+        # Network I/O for this chunk is done (_fetch_lookup_ids_resilient
+        # above) — the per-row writes below are local-only, so the whole
+        # window rides one writer-gated IMMEDIATE transaction (commit on
+        # exit). Job-status calls stay OUTSIDE the section: they write
+        # through a separate connection and would contend with our lock.
+        with write_section(conn, label="corpus_rehydrate s2 batch"):
+            for row in chunk_rows:
+                paper_id = str(row["id"])
+                s2_id = str(row["semantic_scholar_id"] or "").strip()
+                doi = str(row["doi"] or "").strip()
+                paper = (
+                    fetched_by_s2.get(s2_id) if s2_id else None
+                ) or (
+                    fetched_by_doi.get(doi.lower()) if doi else None
                 )
-                if retry_reason:
+                lookup_key = _lookup_key_for_row(row)
+                if paper is None:
+                    row_lookup_ids = paper_lookup_ids.get(paper_id, [])
+                    retry_reason = next(
+                        (
+                            retryable_lookup_errors.get(item)
+                            for item in row_lookup_ids
+                            if retryable_lookup_errors.get(item)
+                        ),
+                        "",
+                    )
+                    if retry_reason:
+                        _write_ledger(
+                            conn,
+                            paper_id=paper_id,
+                            source=S2_SOURCE,
+                            lookup_key=lookup_key,
+                            status=RETRYABLE_STATUS,
+                            reason=retry_reason,
+                            fields_filled=[],
+                            fields_key="s2_paper_v1",
+                            retry_after=timedelta(hours=6),
+                        )
+                        summary["retryable_error"] += 1
+                        processed += 1
+                        continue
+                    terminal_reason = next(
+                        (
+                            terminal_lookup_errors.get(item)
+                            for item in row_lookup_ids
+                            if terminal_lookup_errors.get(item)
+                        ),
+                        "",
+                    )
+                    _write_ledger(
+                        conn,
+                        paper_id=paper_id,
+                        source=S2_SOURCE,
+                        lookup_key=lookup_key,
+                        status="terminal_no_match",
+                        reason=terminal_reason or "s2_no_match",
+                        fields_filled=[],
+                        fields_key="s2_paper_v1",
+                    )
+                    summary["terminal_no_match"] += 1
+                    processed += 1
+                    continue
+                # Reuse the SPECTER2 vector this S2 response already carries (the
+                # default `fetch_papers_batch` FIELDS request `embedding.specter_v2`).
+                # Storing it now means `run_s2_vector_backfill`'s
+                # `NOT EXISTS publication_embeddings` selector skips this paper, so
+                # the chain doesn't spend a SECOND S2 `/paper/batch` call on it —
+                # the dominant cost at the 1 req/s S2 limit. Opportunistic and
+                # non-fatal: any failure just leaves the vector to the vector phase.
+                try:
+                    _reuse_vec = semantic_scholar.extract_specter2_vector(paper)
+                    if _reuse_vec and semantic_scholar.upsert_specter2_vector(
+                        conn, paper_id, _reuse_vec, created_at=datetime.utcnow().isoformat()
+                    ):
+                        # Keep the vector ledger honest: clear any stale
+                        # missing_vector/error row now that the vector exists.
+                        _clear_fetch_status(
+                            conn, paper_id=paper_id, model=semantic_scholar.S2_SPECTER2_MODEL
+                        )
+                        summary["vector_reused"] += 1
+                except Exception as exc:
+                    logger.debug(
+                        "S2 metadata-phase vector reuse skipped for %s: %s", paper_id, exc
+                    )
+
+                try:
+                    fields_filled = _apply_s2_paper(
+                        conn, paper_id=paper_id, row=row, paper=paper
+                    )
+                except Exception as exc:
+                    logger.warning("S2 apply failed for %s: %s", paper_id, exc)
                     _write_ledger(
                         conn,
                         paper_id=paper_id,
                         source=S2_SOURCE,
                         lookup_key=lookup_key,
                         status=RETRYABLE_STATUS,
-                        reason=retry_reason,
+                        reason=str(exc),
                         fields_filled=[],
                         fields_key="s2_paper_v1",
                         retry_after=timedelta(hours=6),
@@ -550,96 +621,31 @@ def _run_s2_batched_phase(
                     summary["retryable_error"] += 1
                     processed += 1
                     continue
-                terminal_reason = next(
-                    (
-                        terminal_lookup_errors.get(item)
-                        for item in row_lookup_ids
-                        if terminal_lookup_errors.get(item)
-                    ),
-                    "",
-                )
+                if fields_filled:
+                    status_value = "enriched"
+                    reason = f"filled:{len(fields_filled)}"
+                    summary["enriched"] += 1
+                    retry = None
+                    for field in fields_filled:
+                        summary[f"field.{field}"] += 1
+                else:
+                    status_value = "unchanged"
+                    reason = "no_local_improvements"
+                    summary["unchanged"] += 1
+                    retry = UNCHANGED_RETRY_AFTER
                 _write_ledger(
                     conn,
                     paper_id=paper_id,
                     source=S2_SOURCE,
                     lookup_key=lookup_key,
-                    status="terminal_no_match",
-                    reason=terminal_reason or "s2_no_match",
-                    fields_filled=[],
+                    status=status_value,
+                    reason=reason,
+                    fields_filled=fields_filled,
                     fields_key="s2_paper_v1",
+                    retry_after=retry,
                 )
-                summary["terminal_no_match"] += 1
                 processed += 1
-                continue
-            # Reuse the SPECTER2 vector this S2 response already carries (the
-            # default `fetch_papers_batch` FIELDS request `embedding.specter_v2`).
-            # Storing it now means `run_s2_vector_backfill`'s
-            # `NOT EXISTS publication_embeddings` selector skips this paper, so
-            # the chain doesn't spend a SECOND S2 `/paper/batch` call on it —
-            # the dominant cost at the 1 req/s S2 limit. Opportunistic and
-            # non-fatal: any failure just leaves the vector to the vector phase.
-            try:
-                _reuse_vec = semantic_scholar.extract_specter2_vector(paper)
-                if _reuse_vec and semantic_scholar.upsert_specter2_vector(
-                    conn, paper_id, _reuse_vec, created_at=datetime.utcnow().isoformat()
-                ):
-                    # Keep the vector ledger honest: clear any stale
-                    # missing_vector/error row now that the vector exists.
-                    _clear_fetch_status(
-                        conn, paper_id=paper_id, model=semantic_scholar.S2_SPECTER2_MODEL
-                    )
-                    summary["vector_reused"] += 1
-            except Exception as exc:
-                logger.debug(
-                    "S2 metadata-phase vector reuse skipped for %s: %s", paper_id, exc
-                )
 
-            try:
-                fields_filled = _apply_s2_paper(
-                    conn, paper_id=paper_id, row=row, paper=paper
-                )
-            except Exception as exc:
-                logger.warning("S2 apply failed for %s: %s", paper_id, exc)
-                _write_ledger(
-                    conn,
-                    paper_id=paper_id,
-                    source=S2_SOURCE,
-                    lookup_key=lookup_key,
-                    status=RETRYABLE_STATUS,
-                    reason=str(exc),
-                    fields_filled=[],
-                    fields_key="s2_paper_v1",
-                    retry_after=timedelta(hours=6),
-                )
-                summary["retryable_error"] += 1
-                processed += 1
-                continue
-            if fields_filled:
-                status_value = "enriched"
-                reason = f"filled:{len(fields_filled)}"
-                summary["enriched"] += 1
-                retry = None
-                for field in fields_filled:
-                    summary[f"field.{field}"] += 1
-            else:
-                status_value = "unchanged"
-                reason = "no_local_improvements"
-                summary["unchanged"] += 1
-                retry = UNCHANGED_RETRY_AFTER
-            _write_ledger(
-                conn,
-                paper_id=paper_id,
-                source=S2_SOURCE,
-                lookup_key=lookup_key,
-                status=status_value,
-                reason=reason,
-                fields_filled=fields_filled,
-                fields_key="s2_paper_v1",
-                retry_after=retry,
-            )
-            processed += 1
-
-        conn.commit()
         set_job_status(
             job_id,
             status="running",
@@ -770,85 +776,93 @@ def _run_crossref_abstract_phase(
         candidates_by_doi = {}
 
     applied = 0
-    for idx, pid in enumerate(paper_ids, start=1):
+    seen = 0
+    chunk_size = 50
+    for chunk_start in range(0, len(paper_ids), chunk_size):
         if is_cancellation_requested(job_id):
             break
-        doi = paper_to_doi.get(pid)
-        if not doi:
-            fallback_summary["skipped_no_doi"] += 1
-            continue
-        cand = candidates_by_doi.get(doi.lower())
-        lookup_key = f"crossref:{doi.lower()}"
-        if cand is None:
-            _write_ledger(
-                conn,
-                paper_id=pid,
-                source=CROSSREF_SOURCE,
-                lookup_key=lookup_key,
-                status="terminal_no_match",
-                reason="crossref_doi_not_found",
-                fields_filled=[],
-                fields_key="crossref_v1",
-            )
-            fallback_summary["terminal_no_match"] += 1
-            continue
-        try:
-            fields_filled = _apply_crossref_candidate(
-                conn, paper_id=pid, candidate=cand
-            )
-        except Exception as exc:
-            logger.warning("Phase 2 apply failed for %s: %s", pid, exc)
-            _write_ledger(
-                conn,
-                paper_id=pid,
-                source=CROSSREF_SOURCE,
-                lookup_key=lookup_key,
-                status=RETRYABLE_STATUS,
-                reason=str(exc),
-                fields_filled=[],
-                fields_key="crossref_v1",
-                retry_after=timedelta(hours=6),
-            )
-            fallback_summary["retryable_error"] += 1
-            continue
-        applied += 1
-        fallback_summary["attempted"] += 1
-        if fields_filled:
-            status_value = "enriched"
-            reason = f"filled:{len(fields_filled)}"
-            retry: timedelta | None = None
-            fallback_summary["enriched"] += 1
-            fallback_summary["source.crossref"] += 1
-        else:
-            status_value = "unchanged"
-            reason = "no_local_improvements"
-            retry = UNCHANGED_RETRY_AFTER
-        _write_ledger(
-            conn,
-            paper_id=pid,
-            source=CROSSREF_SOURCE,
-            lookup_key=lookup_key,
-            status=status_value,
-            reason=reason,
-            fields_filled=fields_filled,
-            fields_key="crossref_v1",
-            retry_after=retry,
+        chunk = paper_ids[chunk_start:chunk_start + chunk_size]
+        # All Crossref I/O happened in the single batched fetch above —
+        # this window is local-only, one writer-gated IMMEDIATE transaction
+        # per chunk (commit on exit). Job-status calls stay OUTSIDE the
+        # section: they write through a separate connection and would
+        # contend with our held write lock.
+        with write_section(conn, label="corpus_rehydrate crossref batch"):
+            for pid in chunk:
+                seen += 1
+                doi = paper_to_doi.get(pid)
+                if not doi:
+                    fallback_summary["skipped_no_doi"] += 1
+                    continue
+                cand = candidates_by_doi.get(doi.lower())
+                lookup_key = f"crossref:{doi.lower()}"
+                if cand is None:
+                    _write_ledger(
+                        conn,
+                        paper_id=pid,
+                        source=CROSSREF_SOURCE,
+                        lookup_key=lookup_key,
+                        status="terminal_no_match",
+                        reason="crossref_doi_not_found",
+                        fields_filled=[],
+                        fields_key="crossref_v1",
+                    )
+                    fallback_summary["terminal_no_match"] += 1
+                    continue
+                try:
+                    fields_filled = _apply_crossref_candidate(
+                        conn, paper_id=pid, candidate=cand
+                    )
+                except Exception as exc:
+                    logger.warning("Phase 2 apply failed for %s: %s", pid, exc)
+                    _write_ledger(
+                        conn,
+                        paper_id=pid,
+                        source=CROSSREF_SOURCE,
+                        lookup_key=lookup_key,
+                        status=RETRYABLE_STATUS,
+                        reason=str(exc),
+                        fields_filled=[],
+                        fields_key="crossref_v1",
+                        retry_after=timedelta(hours=6),
+                    )
+                    fallback_summary["retryable_error"] += 1
+                    continue
+                applied += 1
+                fallback_summary["attempted"] += 1
+                if fields_filled:
+                    status_value = "enriched"
+                    reason = f"filled:{len(fields_filled)}"
+                    retry: timedelta | None = None
+                    fallback_summary["enriched"] += 1
+                    fallback_summary["source.crossref"] += 1
+                else:
+                    status_value = "unchanged"
+                    reason = "no_local_improvements"
+                    retry = UNCHANGED_RETRY_AFTER
+                _write_ledger(
+                    conn,
+                    paper_id=pid,
+                    source=CROSSREF_SOURCE,
+                    lookup_key=lookup_key,
+                    status=status_value,
+                    reason=reason,
+                    fields_filled=fields_filled,
+                    fields_key="crossref_v1",
+                    retry_after=retry,
+                )
+                if "abstract" in (fields_filled or []):
+                    fallback_summary["abstract_filled"] += 1
+        set_job_status(
+            job_id,
+            status="running",
+            processed=base_processed,
+            total=base_total,
+            message=(
+                f"Cross-source fallback: {seen}/{len(paper_ids)} applied, "
+                f"{int(fallback_summary['abstract_filled'])} abstracts filled"
+            ),
         )
-        if "abstract" in (fields_filled or []):
-            fallback_summary["abstract_filled"] += 1
-        if idx % 50 == 0 or idx == len(paper_ids):
-            conn.commit()
-            set_job_status(
-                job_id,
-                status="running",
-                processed=base_processed,
-                total=base_total,
-                message=(
-                    f"Cross-source fallback: {idx}/{len(paper_ids)} applied, "
-                    f"{int(fallback_summary['abstract_filled'])} abstracts filled"
-                ),
-            )
-    conn.commit()
     add_job_log(
         job_id,
         "Phase 2 cross-source fallback complete",
@@ -1047,8 +1061,12 @@ def _run_abstract_recovery_phase(
         summary[status] += 1
         if "abstract" in filled:
             summary["abstract_filled"] += 1
+        # Commit EVERY paper: `_hydrate_via_abstract_recovery` fetches from
+        # the network before writing, so a per-paper commit releases the
+        # writer lock before the NEXT paper's remote call — committing every
+        # 20 held the lock across up to 19 network fetches.
+        conn.commit()
         if idx % 20 == 0 or idx == len(paper_ids):
-            conn.commit()
             set_job_status(
                 job_id,
                 status="running",
@@ -1486,89 +1504,94 @@ def run_corpus_metadata_rehydration(
             summary["fetched"] += len(works_by_id)
 
             batch_summary: Counter[str] = Counter()
-            for row in batch_rows:
-                paper_id = str(row["id"])
-                work_id = _openalex_work_id(str(row["openalex_id"] or ""))
-                lookup_key = openalex_lookup_key(work_id)
-                key = work_id.lower()
-                if not work_id:
-                    _upsert_enrichment_status(
-                        conn,
-                        paper_id=paper_id,
-                        lookup_key="",
-                        status="terminal_no_match",
-                        reason="missing_openalex_id",
-                    )
-                    summary["terminal_no_match"] += 1
-                    batch_summary["terminal_no_match"] += 1
-                    processed += 1
-                    continue
+            # All network I/O for this batch is done (_fetch_openalex_chunk
+            # above) — the writes below are local-only, so the whole window
+            # rides one writer-gated IMMEDIATE transaction (commit on exit).
+            # Job-status / job-log calls stay OUTSIDE the section: they
+            # write through a separate connection and would contend with
+            # our held write lock.
+            with write_section(conn, label="corpus_rehydrate openalex batch"):
+                for row in batch_rows:
+                    paper_id = str(row["id"])
+                    work_id = _openalex_work_id(str(row["openalex_id"] or ""))
+                    lookup_key = openalex_lookup_key(work_id)
+                    key = work_id.lower()
+                    if not work_id:
+                        _upsert_enrichment_status(
+                            conn,
+                            paper_id=paper_id,
+                            lookup_key="",
+                            status="terminal_no_match",
+                            reason="missing_openalex_id",
+                        )
+                        summary["terminal_no_match"] += 1
+                        batch_summary["terminal_no_match"] += 1
+                        processed += 1
+                        continue
 
-                if work_id in retryable_errors or key in retryable_errors:
-                    reason = retryable_errors.get(work_id) or retryable_errors.get(key) or "openalex_error"
+                    if work_id in retryable_errors or key in retryable_errors:
+                        reason = retryable_errors.get(work_id) or retryable_errors.get(key) or "openalex_error"
+                        _upsert_enrichment_status(
+                            conn,
+                            paper_id=paper_id,
+                            lookup_key=lookup_key,
+                            status=RETRYABLE_STATUS,
+                            reason=reason,
+                            retry_after=retry_after,
+                        )
+                        summary["retryable_error"] += 1
+                        batch_summary["retryable_error"] += 1
+                        processed += 1
+                        continue
+
+                    raw_work = works_by_id.get(key)
+                    if raw_work is None:
+                        _upsert_enrichment_status(
+                            conn,
+                            paper_id=paper_id,
+                            lookup_key=lookup_key,
+                            status="terminal_no_match",
+                            reason="openalex_id_not_found",
+                        )
+                        summary["terminal_no_match"] += 1
+                        batch_summary["terminal_no_match"] += 1
+                        processed += 1
+                        continue
+
+                    normalized = _normalize_work(raw_work)
+                    merge_summary = merge_openalex_work_metadata(conn, paper_id, normalized)
+                    fields_filled = [str(field) for field in merge_summary.get("fields_filled") or []]
+                    for field in fields_filled:
+                        field_counts[field] += 1
+                    db_writes = int(merge_summary.get("db_writes") or 0)
+                    summary["db_writes"] += db_writes
+                    if fields_filled:
+                        status_value = "enriched"
+                        reason = f"filled:{len(fields_filled)}"
+                        summary["enriched"] += 1
+                        batch_summary["enriched"] += 1
+                    else:
+                        status_value = "unchanged"
+                        reason = "no_local_improvements"
+                        summary["unchanged"] += 1
+                        batch_summary["unchanged"] += 1
+                    # Cooldown for `unchanged` so missing-field papers (e.g.
+                    # ARVO / Journal of Vision works that OpenAlex hasn't
+                    # indexed abstracts for yet) re-enter the candidate pool
+                    # later instead of becoming a permanent dead end.
+                    unchanged_retry = (
+                        UNCHANGED_RETRY_AFTER if status_value == "unchanged" else None
+                    )
                     _upsert_enrichment_status(
                         conn,
                         paper_id=paper_id,
                         lookup_key=lookup_key,
-                        status=RETRYABLE_STATUS,
+                        status=status_value,
                         reason=reason,
-                        retry_after=retry_after,
+                        fields_filled=fields_filled,
+                        retry_after=unchanged_retry,
                     )
-                    summary["retryable_error"] += 1
-                    batch_summary["retryable_error"] += 1
                     processed += 1
-                    continue
-
-                raw_work = works_by_id.get(key)
-                if raw_work is None:
-                    _upsert_enrichment_status(
-                        conn,
-                        paper_id=paper_id,
-                        lookup_key=lookup_key,
-                        status="terminal_no_match",
-                        reason="openalex_id_not_found",
-                    )
-                    summary["terminal_no_match"] += 1
-                    batch_summary["terminal_no_match"] += 1
-                    processed += 1
-                    continue
-
-                normalized = _normalize_work(raw_work)
-                merge_summary = merge_openalex_work_metadata(conn, paper_id, normalized)
-                fields_filled = [str(field) for field in merge_summary.get("fields_filled") or []]
-                for field in fields_filled:
-                    field_counts[field] += 1
-                db_writes = int(merge_summary.get("db_writes") or 0)
-                summary["db_writes"] += db_writes
-                if fields_filled:
-                    status_value = "enriched"
-                    reason = f"filled:{len(fields_filled)}"
-                    summary["enriched"] += 1
-                    batch_summary["enriched"] += 1
-                else:
-                    status_value = "unchanged"
-                    reason = "no_local_improvements"
-                    summary["unchanged"] += 1
-                    batch_summary["unchanged"] += 1
-                # Cooldown for `unchanged` so missing-field papers (e.g. ARVO
-                # / Journal of Vision works that OpenAlex hasn't indexed
-                # abstracts for yet) re-enter the candidate pool later
-                # instead of becoming a permanent dead end.
-                unchanged_retry = (
-                    UNCHANGED_RETRY_AFTER if status_value == "unchanged" else None
-                )
-                _upsert_enrichment_status(
-                    conn,
-                    paper_id=paper_id,
-                    lookup_key=lookup_key,
-                    status=status_value,
-                    reason=reason,
-                    fields_filled=fields_filled,
-                    retry_after=unchanged_retry,
-                )
-                processed += 1
-
-            conn.commit()
             set_job_status(
                 job_id,
                 status="running",
@@ -2796,11 +2819,24 @@ def enqueue_pending_hydration(
         # Fire-and-forget: idempotent against an already-active job. The
         # scheduler import is lazy so this helper stays callable from
         # CLI / test contexts where `alma.api.scheduler` isn't wired.
-        try:
-            schedule_pending_hydration_sweep(
-                reason="paper_insert",
-                target_paper_ids=[paper_id],
-            )
-        except Exception as exc:
-            logger.debug("auto schedule_pending_hydration_sweep skipped: %s", exc)
+        #
+        # Deferred past the writer gate: this hook runs from paper-insert
+        # sites that sit INSIDE an open write transaction (e.g. the
+        # author-backfill works-upsert section). The envelope persists job
+        # status through the scheduler's OWN connection, which would block
+        # on the very write lock the calling thread holds — a same-thread
+        # self-deadlock (caught live 2026-06-05 via /health/threads).
+        # run_after_gate_release runs it immediately when no gate is held.
+        from alma.core.db_write import run_after_gate_release
+
+        def _schedule(paper_id: str = paper_id) -> None:
+            try:
+                schedule_pending_hydration_sweep(
+                    reason="paper_insert",
+                    target_paper_ids=[paper_id],
+                )
+            except Exception as exc:
+                logger.debug("auto schedule_pending_hydration_sweep skipped: %s", exc)
+
+        run_after_gate_release(_schedule)
     return queued

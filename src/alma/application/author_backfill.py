@@ -39,6 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+from alma.core.db_write import write_section
 from alma.core.utils import (
     canonical_lookup_doi,
     normalize_doi,
@@ -258,9 +259,15 @@ def _fetch_missing_s2_vectors_for_author(
             )
             summary["bad_local_doi"] += 1
 
+    # Commit the bad_local_doi status writes above BEFORE the first S2
+    # call: the chunk loop's fetch can stall for minutes under S2 rate
+    # limiting (1 req/s + 429 backoff), and an open write transaction
+    # here held the global writer lock for that whole time — the root
+    # cause of "database is locked" bursts when several follow-triggered
+    # backfills ran at once (verified live 2026-06-05).
+    if conn.in_transaction:
+        conn.commit()
     if not lookups:
-        if conn.in_transaction:
-            conn.commit()
         return summary
 
     if log is not None:
@@ -302,6 +309,12 @@ def _fetch_missing_s2_vectors_for_author(
                     lookup_ids=[lookup_id],
                     lookup_key=_lookup_key_for_row(row),
                 )
+            # Release the writer lock before the NEXT chunk's S2 call —
+            # under sustained 429 backoff this error path repeats, and
+            # without a commit the status writes above kept a transaction
+            # open across every backoff sleep (minutes of held lock).
+            if conn.in_transaction:
+                conn.commit()
             continue
         by_lookup = {
             str(v.get("_requested_id") or "").strip(): v
@@ -531,26 +544,31 @@ def refresh_author_works_and_vectors(
                 conn.commit()
             cursor = page.get("next_cursor")
 
-        # Phase 3: upsert each work + publication_authors row.
+        # Phase 3: upsert each work + publication_authors row. All works are
+        # already gathered (Phase 2), so the writes are local-only; chunked
+        # writer-gated IMMEDIATE sections keep each lock window short — a
+        # prolific author can carry thousands of works, and one giant
+        # transaction would stall foreground writes for its whole duration.
         now_iso = datetime.now(timezone.utc).isoformat()
         new_paper_ids: list[str] = []
-        for work in works:
-            paper_id, is_new = _upsert_work(conn, work, now=now_iso)
-            if paper_id is None:
-                continue
-            summary["papers_new" if is_new else "papers_updated"] += 1
-            if is_new:
-                new_paper_ids.append(paper_id)
-            # Ensure publication_authors row for this author exists.
-            _ensure_authorship_row(
-                conn,
-                paper_id=paper_id,
-                openalex_id=oid_norm,
-                display_name=str((profile or {}).get("display_name") or "").strip(),
-                work=work,
-            )
-        if conn.in_transaction:
-            conn.commit()
+        upsert_chunk = 200
+        for chunk_start in range(0, len(works), upsert_chunk):
+            with write_section(conn, label="author_backfill works upsert"):
+                for work in works[chunk_start:chunk_start + upsert_chunk]:
+                    paper_id, is_new = _upsert_work(conn, work, now=now_iso)
+                    if paper_id is None:
+                        continue
+                    summary["papers_new" if is_new else "papers_updated"] += 1
+                    if is_new:
+                        new_paper_ids.append(paper_id)
+                    # Ensure publication_authors row for this author exists.
+                    _ensure_authorship_row(
+                        conn,
+                        paper_id=paper_id,
+                        openalex_id=oid_norm,
+                        display_name=str((profile or {}).get("display_name") or "").strip(),
+                        work=work,
+                    )
 
         # Phase 4: identify papers still missing an S2-sourced SPECTER2
         # vector, then batch-fetch via Semantic Scholar. The vector model

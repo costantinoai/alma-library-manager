@@ -707,6 +707,12 @@ def hydrate_author_metadata(
             filled = result.get("filled") if isinstance(result, dict) else {}
             if isinstance(filled, dict) and AFFILIATION_PURPOSE in filled and filled[AFFILIATION_PURPOSE]:
                 evidence_touched = True
+            # Commit per source: each _hydrate_* fetches from the network
+            # BEFORE writing, so closing the transaction here releases the
+            # writer lock before the NEXT source's remote call — a single
+            # commit at the end held it across up to three network fetches.
+            if conn.in_transaction:
+                conn.commit()
         except Exception as exc:
             logger.warning("Author hydration failed for %s via %s: %s", author_key, source, exc)
             lookup_key = _lookup_key(source, row)
@@ -722,6 +728,8 @@ def hydrate_author_metadata(
                     reason=str(exc),
                 )
             results[source] = {"source": source, "status": RETRYABLE_STATUS, "error": str(exc)}
+            if conn.in_transaction:
+                conn.commit()
 
     decision = recompute_display_affiliation(conn, author_key) if evidence_touched else None
     conn.commit()

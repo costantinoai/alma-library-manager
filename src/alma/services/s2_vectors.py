@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import Callable
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
     canonical_lookup_doi,
@@ -494,175 +495,179 @@ def run_s2_vector_backfill(
             }
 
             batch_bad_local_doi_before = bad_local_doi
-            for row in batch_rows:
-                paper_id = str(row["id"])
-                s2_id = str(row["semantic_scholar_id"] or "").strip()
-                # Match on the canonical-lookup DOI form so the
-                # response-side keys (which were also built from
-                # `canonical_lookup_doi`) round-trip cleanly. The local
-                # `papers.doi` may be mixed-case or URL-encoded; that
-                # cosmetic difference must not block a match.
-                doi = canonical_lookup_doi(str(row["doi"] or "")) or ""
-                processed += 1
+            # Network I/O for this chunk is done (_fetch_lookup_ids_resilient
+            # above) — the per-row writes below are local-only, so the whole
+            # window rides one writer-gated IMMEDIATE transaction (commit on
+            # exit). Job-status / job-log calls stay OUTSIDE the section.
+            with write_section(conn, label="s2_vectors batch"):
+                for row in batch_rows:
+                    paper_id = str(row["id"])
+                    s2_id = str(row["semantic_scholar_id"] or "").strip()
+                    # Match on the canonical-lookup DOI form so the
+                    # response-side keys (which were also built from
+                    # `canonical_lookup_doi`) round-trip cleanly. The local
+                    # `papers.doi` may be mixed-case or URL-encoded; that
+                    # cosmetic difference must not block a match.
+                    doi = canonical_lookup_doi(str(row["doi"] or "")) or ""
+                    processed += 1
 
-                # `bad_local_doi`: row has no s2_id and a DOI that
-                # fails the registry-shape regex. Sending it would
-                # produce a guaranteed-to-fail HTTP 400; the right
-                # remediation is fixing the import (DOI typo, fragment
-                # not stripped, etc.) — not retrying the same string.
-                # The status clears via
-                # `clear_terminal_fetch_status_for_paper` when the DOI
-                # is rewritten by hydration.
-                raw_local_doi = str(row["doi"] or "").strip()
-                if (
-                    not s2_id
-                    and raw_local_doi
-                    and not validate_doi_shape(raw_local_doi)
-                ):
-                    bad_local_doi += 1
-                    _upsert_fetch_status(
-                        conn,
-                        row=row,
-                        model=model,
-                        status="bad_local_doi",
-                        reason=(
-                            "Local DOI fails registry-shape regex; "
-                            "fix the import or rerun hydration to "
-                            "rewrite the DOI before retrying."
-                        ),
-                        lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
+                    # `bad_local_doi`: row has no s2_id and a DOI that
+                    # fails the registry-shape regex. Sending it would
+                    # produce a guaranteed-to-fail HTTP 400; the right
+                    # remediation is fixing the import (DOI typo, fragment
+                    # not stripped, etc.) — not retrying the same string.
+                    # The status clears via
+                    # `clear_terminal_fetch_status_for_paper` when the DOI
+                    # is rewritten by hydration.
+                    raw_local_doi = str(row["doi"] or "").strip()
+                    if (
+                        not s2_id
+                        and raw_local_doi
+                        and not validate_doi_shape(raw_local_doi)
+                    ):
+                        bad_local_doi += 1
+                        _upsert_fetch_status(
+                            conn,
+                            row=row,
+                            model=model,
+                            status="bad_local_doi",
+                            reason=(
+                                "Local DOI fails registry-shape regex; "
+                                "fix the import or rerun hydration to "
+                                "rewrite the DOI before retrying."
+                            ),
+                            lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
+                        )
+                        continue
+
+                    paper = (fetched_by_s2.get(s2_id) if s2_id else None) or (
+                        fetched_by_doi.get(doi) if doi else None
+                    ) or (
+                        fetched_by_request.get(f"DOI:{doi}") if doi else None
+                    ) or (
+                        fetched_by_request.get(s2_id) if s2_id else None
                     )
-                    continue
+                    if paper is None:
+                        lookup_ids_for_paper = batch_lookup_ids_by_paper.get(paper_id, [])
+                        retryable_for_paper = {
+                            lookup_id: retryable_lookup_errors[lookup_id]
+                            for lookup_id in lookup_ids_for_paper
+                            if lookup_id in retryable_lookup_errors
+                        }
+                        terminal_for_paper = {
+                            lookup_id: terminal_lookup_errors[lookup_id]
+                            for lookup_id in lookup_ids_for_paper
+                            if lookup_id in terminal_lookup_errors
+                        }
+                        if retryable_for_paper:
+                            _upsert_fetch_status(
+                                conn,
+                                row=row,
+                                model=model,
+                                status="error",
+                                reason=(
+                                    "Semantic Scholar lookup was deferred by a retryable "
+                                    f"batch/API error: {next(iter(retryable_for_paper.values()))}"
+                                ),
+                                lookup_ids=lookup_ids_for_paper,
+                            )
+                            continue
+                        if terminal_for_paper:
+                            lookup_failures += 1
+                            _upsert_fetch_status(
+                                conn,
+                                row=row,
+                                model=model,
+                                status="lookup_error",
+                                reason=(
+                                    "Semantic Scholar rejected the current DOI/S2 lookup id: "
+                                    f"{next(iter(terminal_for_paper.values()))}"
+                                ),
+                                lookup_ids=lookup_ids_for_paper,
+                            )
+                            continue
+                        unmatched += 1
+                        _upsert_fetch_status(
+                            conn,
+                            row=row,
+                            model=model,
+                            status="unmatched",
+                            reason="Semantic Scholar returned no paper for current DOI/S2 lookup ids",
+                            lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
+                        )
+                        # The title-resolution sweep
+                        # (`alma.services.title_resolution`) handles the
+                        # `unmatched` backlog on its own cadence; this job
+                        # leaves the row stamped and moves on.
+                        continue
 
-                paper = (fetched_by_s2.get(s2_id) if s2_id else None) or (
-                    fetched_by_doi.get(doi) if doi else None
-                ) or (
-                    fetched_by_request.get(f"DOI:{doi}") if doi else None
-                ) or (
-                    fetched_by_request.get(s2_id) if s2_id else None
-                )
-                if paper is None:
                     lookup_ids_for_paper = batch_lookup_ids_by_paper.get(paper_id, [])
-                    retryable_for_paper = {
-                        lookup_id: retryable_lookup_errors[lookup_id]
-                        for lookup_id in lookup_ids_for_paper
-                        if lookup_id in retryable_lookup_errors
-                    }
-                    terminal_for_paper = {
-                        lookup_id: terminal_lookup_errors[lookup_id]
-                        for lookup_id in lookup_ids_for_paper
-                        if lookup_id in terminal_lookup_errors
-                    }
-                    if retryable_for_paper:
+                    status_lookup_key, status_lookup_ids = _lookup_status_for_s2_paper(
+                        row,
+                        paper,
+                        lookup_ids_for_paper,
+                    )
+                    _apply_s2_metadata(conn, paper_id=paper_id, row=row, paper=paper)
+
+                    # T5: piggy-back the SPECTER2 backfill to populate
+                    # `papers.tldr` + `papers.influential_citation_count`
+                    # when S2 supplies them. Both are free on this batch
+                    # call (the FIELDS projection already requests them),
+                    # so we'd be wasting data by not writing them.
+                    tldr_obj = paper.get("tldr")
+                    tldr_text = ""
+                    if isinstance(tldr_obj, dict):
+                        tldr_text = (tldr_obj.get("text") or "").strip()
+                    try:
+                        influential_count = int(paper.get("influentialCitationCount") or 0)
+                    except (TypeError, ValueError):
+                        influential_count = 0
+                    if tldr_text or influential_count > 0:
+                        fill_only_update_paper(
+                            conn,
+                            paper_id,
+                            fill_fields={"tldr": tldr_text} if tldr_text else None,
+                            max_int_fields={"influential_citation_count": influential_count}
+                            if influential_count > 0
+                            else None,
+                        )
+
+                    vector = semantic_scholar.extract_specter2_vector(paper)
+                    if not vector:
+                        missing += 1
+                        _upsert_fetch_status(
+                            conn,
+                            row=row,
+                            model=model,
+                            status="missing_vector",
+                            reason="Semantic Scholar returned the paper without embedding.specter_v2",
+                            lookup_ids=status_lookup_ids,
+                            lookup_key=status_lookup_key,
+                        )
+                        continue
+                    try:
+                        if semantic_scholar.upsert_specter2_vector(
+                            conn,
+                            paper_id,
+                            vector,
+                            source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                            created_at=datetime.utcnow().isoformat(),
+                        ):
+                            stored += 1
+                            batch_inserted_paper_ids.append(paper_id)
+                        _clear_fetch_status(conn, paper_id=paper_id, model=model)
+                    except Exception as exc:
+                        logger.warning("S2 vector store failed for %s: %s", paper_id, exc)
+                        errors += 1
                         _upsert_fetch_status(
                             conn,
                             row=row,
                             model=model,
                             status="error",
-                            reason=(
-                                "Semantic Scholar lookup was deferred by a retryable "
-                                f"batch/API error: {next(iter(retryable_for_paper.values()))}"
-                            ),
-                            lookup_ids=lookup_ids_for_paper,
+                            reason=str(exc),
+                            lookup_ids=status_lookup_ids,
+                            lookup_key=status_lookup_key,
                         )
-                        continue
-                    if terminal_for_paper:
-                        lookup_failures += 1
-                        _upsert_fetch_status(
-                            conn,
-                            row=row,
-                            model=model,
-                            status="lookup_error",
-                            reason=(
-                                "Semantic Scholar rejected the current DOI/S2 lookup id: "
-                                f"{next(iter(terminal_for_paper.values()))}"
-                            ),
-                            lookup_ids=lookup_ids_for_paper,
-                        )
-                        continue
-                    unmatched += 1
-                    _upsert_fetch_status(
-                        conn,
-                        row=row,
-                        model=model,
-                        status="unmatched",
-                        reason="Semantic Scholar returned no paper for current DOI/S2 lookup ids",
-                        lookup_ids=batch_lookup_ids_by_paper.get(paper_id, []),
-                    )
-                    # The title-resolution sweep
-                    # (`alma.services.title_resolution`) handles the
-                    # `unmatched` backlog on its own cadence; this job
-                    # leaves the row stamped and moves on.
-                    continue
-
-                lookup_ids_for_paper = batch_lookup_ids_by_paper.get(paper_id, [])
-                status_lookup_key, status_lookup_ids = _lookup_status_for_s2_paper(
-                    row,
-                    paper,
-                    lookup_ids_for_paper,
-                )
-                _apply_s2_metadata(conn, paper_id=paper_id, row=row, paper=paper)
-
-                # T5: piggy-back the SPECTER2 backfill to populate
-                # `papers.tldr` + `papers.influential_citation_count`
-                # when S2 supplies them. Both are free on this batch
-                # call (the FIELDS projection already requests them),
-                # so we'd be wasting data by not writing them.
-                tldr_obj = paper.get("tldr")
-                tldr_text = ""
-                if isinstance(tldr_obj, dict):
-                    tldr_text = (tldr_obj.get("text") or "").strip()
-                try:
-                    influential_count = int(paper.get("influentialCitationCount") or 0)
-                except (TypeError, ValueError):
-                    influential_count = 0
-                if tldr_text or influential_count > 0:
-                    fill_only_update_paper(
-                        conn,
-                        paper_id,
-                        fill_fields={"tldr": tldr_text} if tldr_text else None,
-                        max_int_fields={"influential_citation_count": influential_count}
-                        if influential_count > 0
-                        else None,
-                    )
-
-                vector = semantic_scholar.extract_specter2_vector(paper)
-                if not vector:
-                    missing += 1
-                    _upsert_fetch_status(
-                        conn,
-                        row=row,
-                        model=model,
-                        status="missing_vector",
-                        reason="Semantic Scholar returned the paper without embedding.specter_v2",
-                        lookup_ids=status_lookup_ids,
-                        lookup_key=status_lookup_key,
-                    )
-                    continue
-                try:
-                    if semantic_scholar.upsert_specter2_vector(
-                        conn,
-                        paper_id,
-                        vector,
-                        source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                        created_at=datetime.utcnow().isoformat(),
-                    ):
-                        stored += 1
-                        batch_inserted_paper_ids.append(paper_id)
-                    _clear_fetch_status(conn, paper_id=paper_id, model=model)
-                except Exception as exc:
-                    logger.warning("S2 vector store failed for %s: %s", paper_id, exc)
-                    errors += 1
-                    _upsert_fetch_status(
-                        conn,
-                        row=row,
-                        model=model,
-                        status="error",
-                        reason=str(exc),
-                        lookup_ids=status_lookup_ids,
-                        lookup_key=status_lookup_key,
-                    )
-            conn.commit()
 
             # Keep `author_centroids` coherent with the new embeddings.
             if batch_inserted_paper_ids:
