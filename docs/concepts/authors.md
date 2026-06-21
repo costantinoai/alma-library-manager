@@ -73,6 +73,37 @@ row is soft-removed, and the primary author centroid is invalidated.
 If hard identifiers still conflict, `author_merge_conflicts` keeps a
 follow-up row for needs-attention.
 
+## Needs attention — a focused card per flag
+
+Every author the resolver couldn't finish surfaces in the Authors page
+**Needs attention** section, and each reason opens a focused card that makes
+*that specific* problem easy to fix — auto when possible, manual when not,
+composing the same backend primitives the rest of the app uses:
+
+| Flag | Card | How it resolves |
+|---|---|---|
+| **No OpenAlex match / followed without an id** | Resolve identity | Retry the auto-resolver, paste an authoritative ORCID / OpenAlex / Scholar id, or — if the person genuinely isn't in any index — **accept that they can't be identified**. |
+| **Candidates too close to decide** | Review candidates | Opens the author detail panel's candidate picker to choose the right match. |
+| **Split profiles (same person, many ids)** | Review profiles | The merge dialog, alternate preselected. |
+| **Merge kept a conflicting identifier** | Resolve conflict | Pick which value sticks, or dismiss. |
+| **Affiliation evidence disagrees across sources** | Choose affiliation | Pick which institution to display (the author moved labs). |
+
+Two of these are **terminal acknowledgments** — they end a flag that would
+otherwise re-appear forever, because it is recomputed from raw data on every
+assessment:
+
+- **Choose affiliation** records the pick as an authoritative `manual` evidence
+  row. It outranks every auto source, **survives future refreshes** (a refresh
+  only replaces its own source's rows), and suppresses the conflict for good —
+  even though OpenAlex / ORCID / Crossref still disagree underneath.
+- **Accept as unidentifiable** sets `id_resolution_status='dismissed'`, which is
+  excluded from both needs-attention and the author-health counts. No identifier
+  is invented; the user can still resolve it later by pasting one.
+
+The Health page's author dimensions read the same predicates, so a resolved or
+acknowledged flag clears there too (the author-health snapshot's freshness
+fingerprint includes affiliation evidence, so the ribbon updates immediately).
+
 ## Followed vs. tracked
 
 Two states matter on the Authors page:
