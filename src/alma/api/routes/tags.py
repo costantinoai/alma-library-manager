@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from alma.api.deps import get_db, get_current_user, open_db_connection
 from alma.api.helpers import raise_internal
+from alma.core.db_write import run_write_unit
 
 logger = logging.getLogger(__name__)
 MAX_TAGS_PER_PAPER = 5
@@ -369,37 +370,39 @@ def merge_tags(
     if source is None or target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source or target tag not found")
 
-    db.execute(
-        """
-        INSERT OR IGNORE INTO publication_tags (paper_id, tag_id)
-        SELECT paper_id, ?
-        FROM publication_tags
-        WHERE tag_id = ?
-        """,
-        (target_tag_id, source_tag_id),
-    )
-    db.execute("DELETE FROM publication_tags WHERE tag_id = ?", (source_tag_id,))
+    def _persist() -> None:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO publication_tags (paper_id, tag_id)
+            SELECT paper_id, ?
+            FROM publication_tags
+            WHERE tag_id = ?
+            """,
+            (target_tag_id, source_tag_id),
+        )
+        db.execute("DELETE FROM publication_tags WHERE tag_id = ?", (source_tag_id,))
 
-    db.execute(
-        """
-        INSERT OR IGNORE INTO tag_suggestions
-            (paper_id, tag, tag_id, confidence, source, accepted, created_at)
-        SELECT
-            paper_id,
-            ?,
-            ?,
-            confidence,
-            source,
-            accepted,
-            created_at
-        FROM tag_suggestions
-        WHERE tag_id = ?
-        """,
-        (target["name"], target_tag_id, source_tag_id),
-    )
-    db.execute("DELETE FROM tag_suggestions WHERE tag_id = ?", (source_tag_id,))
-    db.execute("DELETE FROM tags WHERE id = ?", (source_tag_id,))
-    db.commit()
+        db.execute(
+            """
+            INSERT OR IGNORE INTO tag_suggestions
+                (paper_id, tag, tag_id, confidence, source, accepted, created_at)
+            SELECT
+                paper_id,
+                ?,
+                ?,
+                confidence,
+                source,
+                accepted,
+                created_at
+            FROM tag_suggestions
+            WHERE tag_id = ?
+            """,
+            (target["name"], target_tag_id, source_tag_id),
+        )
+        db.execute("DELETE FROM tag_suggestions WHERE tag_id = ?", (source_tag_id,))
+        db.execute("DELETE FROM tags WHERE id = ?", (source_tag_id,))
+
+    run_write_unit(db, _persist, label="tag_merge")
 
     return {
         "success": True,
@@ -447,7 +450,8 @@ def accept_tag_suggestion(
             detail=f"No suggestion found for tag '{tag_name}'",
         )
 
-    # Get or create the tag
+    # Resolve the tag_id (existing) or decide to create one — all reads, so
+    # they stay outside the write unit.
     tag_id = suggestion["tag_id"]
 
     if tag_id:
@@ -456,18 +460,16 @@ def accept_tag_suggestion(
         if tag_row is None:
             tag_id = None
 
+    create_tag = False
     if not tag_id:
         # Try to find existing tag by name
         tag_row = db.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
         if tag_row:
             tag_id = tag_row["id"]
         else:
-            # Create new tag
+            # New tag — generate the id now, create it inside the unit.
             tag_id = uuid.uuid4().hex
-            db.execute(
-                "INSERT INTO tags (id, name) VALUES (?, ?)",
-                (tag_id, tag_name),
-            )
+            create_tag = True
 
     # Verify paper exists
     pub_row = db.execute(
@@ -491,22 +493,24 @@ def accept_tag_suggestion(
             detail=f"Each paper may have at most {MAX_TAGS_PER_PAPER} tags",
         )
 
-    # Create the tag assignment
-    try:
+    def _persist() -> None:
+        # One atomic unit: create the tag (if new), assign it, and mark the
+        # suggestion accepted — so a retry never leaves an orphan tag row.
+        if create_tag:
+            db.execute(
+                "INSERT INTO tags (id, name) VALUES (?, ?)",
+                (tag_id, tag_name),
+            )
         db.execute(
             "INSERT OR IGNORE INTO publication_tags (paper_id, tag_id) VALUES (?, ?)",
             (paper_id, tag_id),
         )
-    except sqlite3.IntegrityError:
-        pass  # Tag already assigned
+        db.execute(
+            "UPDATE tag_suggestions SET accepted = 1 WHERE paper_id = ? AND tag = ?",
+            (paper_id, tag_name),
+        )
 
-    # Mark suggestion as accepted
-    db.execute(
-        "UPDATE tag_suggestions SET accepted = 1 WHERE paper_id = ? AND tag = ?",
-        (paper_id, tag_name),
-    )
-
-    db.commit()
+    run_write_unit(db, _persist, label="tag_accept_suggestion")
 
     return {
         "success": True,
@@ -534,18 +538,18 @@ def dismiss_tag_suggestion(
         paper_id: Paper UUID identifier.
         tag: Tag name to dismiss.
     """
-    result = db.execute(
-        "DELETE FROM tag_suggestions WHERE paper_id = ? AND tag = ?",
-        (paper_id, tag),
-    )
+    def _persist() -> int:
+        result = db.execute(
+            "DELETE FROM tag_suggestions WHERE paper_id = ? AND tag = ?",
+            (paper_id, tag),
+        )
+        return result.rowcount
 
-    if result.rowcount == 0:
+    if run_write_unit(db, _persist, label="tag_dismiss_suggestion") == 0:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"No suggestion found for tag '{tag}'",
         )
-
-    db.commit()
 
 
 # ---------------------------------------------------------------------------

@@ -458,11 +458,29 @@ def add_to_library(
         (*params, paper_id),
     )
     if cursor.rowcount > 0 and _needs_enrichment(db, paper_id):
-        # Commit the library-state change before scheduling so the
-        # enrichment job's independent connection sees the latest row.
-        if db.in_transaction:
-            db.commit()
-        _schedule_paper_enrichment(paper_id)
+        from alma.core.db_write import (
+            gate_held_by_current_thread,
+            run_after_gate_release,
+        )
+
+        if gate_held_by_current_thread():
+            # Called inside a `run_write_unit`: committing here would break
+            # the caller's atomic write unit, and scheduling through the
+            # scheduler's OWN connection while we hold the writer lock is a
+            # same-thread self-deadlock (SQLite write discipline rule #3).
+            # Defer the scheduling to post-commit, when the row is durable
+            # and the writer gate is released. Same shape as
+            # `enqueue_pending_hydration`.
+            run_after_gate_release(
+                lambda pid=paper_id: _schedule_paper_enrichment(pid)
+            )
+        else:
+            # Legacy non-unit caller (feed accept / discovery lens save /
+            # importer): keep the commit-then-schedule contract so the
+            # enrichment job's independent connection sees the latest row.
+            if db.in_transaction:
+                db.commit()
+            _schedule_paper_enrichment(paper_id)
     return cursor.rowcount > 0
 
 
@@ -562,32 +580,41 @@ def record_paper_feedback(
     rating: int | None = None,
     source_surface: str,
 ) -> None:
-    """Record a paper feedback event through the shared feedback table."""
+    """Record a paper feedback event through the one feedback engine.
+
+    Thin adapter over ``services.signal_lab.record_feedback`` — the single
+    event-recording engine, shared with Feed — so every surface
+    (Library / Discovery / onboarding / publications / Feed) writes the same
+    ``paper_action`` event shape with consistent context enrichment.
+
+    Keyed on ``paper_id`` (not a recommendation id), so the engine's
+    recommendation-resolution and lens-signal paths early-return: surfaces that
+    own those (Discovery's ``mark_recommendation_action``) keep recording them
+    explicitly, so there is no double rec-update / double lens-signal. The
+    engine does NOT commit — the caller owns the transaction (every caller runs
+    inside a ``run_write_unit``).
+    """
     if not _table_exists(db, "feedback_events"):
         return
-    event_id = uuid.uuid4().hex
-    value = {
-        "action": action,
-        "rating": rating,
-        "signal_value": rating_signal_value(rating),
-    }
-    context = {
-        "surface": source_surface,
-        "paper_id": paper_id,
-        "acted_at": datetime.utcnow().isoformat(),
-    }
-    db.execute(
-        """INSERT INTO feedback_events
-           (id, event_type, entity_type, entity_id, value, context_json)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (
-            event_id,
-            "paper_action",
-            "publication",
-            paper_id,
-            json.dumps(value),
-            json.dumps(context),
-        ),
+    # Lazy import: a module-level ``application → services`` import would be a
+    # cycle. Feed records through the same engine the same way.
+    from alma.services.signal_lab import record_feedback
+
+    record_feedback(
+        db,
+        event_type="paper_action",
+        entity_type="publication",
+        entity_id=paper_id,
+        value={
+            "action": action,
+            "rating": rating,
+            "signal_value": rating_signal_value(rating),
+        },
+        context={
+            "surface": source_surface,
+            "paper_id": paper_id,
+            "acted_at": datetime.utcnow().isoformat(),
+        },
     )
 
 

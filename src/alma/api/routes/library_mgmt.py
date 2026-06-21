@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from alma.api.deps import get_db, get_current_user, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
+from alma.core.db_write import run_write_unit
 
 logger = logging.getLogger(__name__)
 
@@ -524,7 +525,6 @@ def reset_embeddings(
     _user: dict = Depends(get_current_user),
 ):
     """Clear every embedding-storing table; counts what was removed."""
-    cleared: dict[str, int] = {}
     existing = {
         row[0]
         for row in conn.execute(
@@ -532,18 +532,21 @@ def reset_embeddings(
         ).fetchall()
     }
 
-    for table in _EMBEDDINGS_RESET_TABLES:
-        if table not in existing:
-            continue
-        try:
-            count_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-            count = int(count_row[0] if count_row else 0)
-            conn.execute(f"DELETE FROM {table}")  # noqa: S608 — hardcoded allowlist
-            cleared[table] = count
-        except sqlite3.OperationalError as exc:
-            logger.warning("Could not clear embedding table %s: %s", table, exc)
+    def _persist() -> dict[str, int]:
+        cleared: dict[str, int] = {}
+        for table in _EMBEDDINGS_RESET_TABLES:
+            if table not in existing:
+                continue
+            try:
+                count_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                count = int(count_row[0] if count_row else 0)
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 — hardcoded allowlist
+                cleared[table] = count
+            except sqlite3.OperationalError as exc:
+                logger.warning("Could not clear embedding table %s: %s", table, exc)
+        return cleared
 
-    conn.commit()
+    cleared = run_write_unit(conn, _persist, label="reset_embeddings")
 
     return {
         "success": True,

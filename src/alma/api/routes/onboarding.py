@@ -32,7 +32,7 @@ from alma.application.followed_authors import (
     resolve_canonical_author_id,
     schedule_followed_author_historical_backfill,
 )
-from alma.core.db_retry import run_with_lock_retry
+from alma.core.db_write import run_write_unit
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import (
     _normalize_openalex_author_id,
@@ -174,12 +174,11 @@ def set_onboarding_profile(
     """Store the user's display name (local greeting; no external call)."""
     name = payload.name.strip()
 
-    def _persist() -> None:
-        db.rollback()
-        upsert_setting(db, _USER_NAME_KEY, name)
-        db.commit()
-
-    run_with_lock_retry(_persist, label="onboarding_profile")
+    run_write_unit(
+        db,
+        lambda: upsert_setting(db, _USER_NAME_KEY, name),
+        label="onboarding_profile",
+    )
 
 
 @router.post("/complete", status_code=204)
@@ -191,12 +190,10 @@ def complete_onboarding(
     completed_at = datetime.utcnow().isoformat()
 
     def _persist() -> None:
-        db.rollback()
         upsert_setting(db, _COMPLETED_KEY, "true")
         upsert_setting(db, _COMPLETED_AT_KEY, completed_at)
-        db.commit()
 
-    run_with_lock_retry(_persist, label="onboarding_complete")
+    run_write_unit(db, _persist, label="onboarding_complete")
 
 
 @router.post("/reset", status_code=204)
@@ -206,15 +203,14 @@ def reset_onboarding(
 ):
     """Clear the completed flag so Settings → Restart re-shows the flow."""
     try:
-        def _persist() -> None:
-            db.rollback()
-            db.execute(
+        run_write_unit(
+            db,
+            lambda: db.execute(
                 "DELETE FROM discovery_settings WHERE key IN (?, ?)",
                 (_COMPLETED_KEY, _COMPLETED_AT_KEY),
-            )
-            db.commit()
-
-        run_with_lock_retry(_persist, label="onboarding_reset")
+            ),
+            label="onboarding_reset",
+        )
     except sqlite3.OperationalError:
         pass
 
@@ -292,24 +288,33 @@ def ingest_owner(
     if not openalex_id:
         raise HTTPException(status_code=400, detail="Invalid OpenAlex id.")
 
-    canonical_id = resolve_canonical_author_id(
-        db,
-        openalex_id,
-        create_if_missing=True,
-        fallback_name=(payload.name or "").strip() or openalex_id,
-    )
-    if not canonical_id:
-        raise HTTPException(status_code=400, detail="Could not create author row.")
+    def _persist() -> tuple[str, bool]:
+        # One atomic follow unit (writer gate + BEGIN IMMEDIATE + retry),
+        # mirroring follow_author: resolve/create the author, apply follow
+        # state, and stamp the single-owner flag. The hydration SWEEP is
+        # scheduled only AFTER commit — scheduling in-transaction
+        # self-deadlocks against the scheduler's own connection.
+        cid = resolve_canonical_author_id(
+            db,
+            openalex_id,
+            create_if_missing=True,
+            fallback_name=(payload.name or "").strip() or openalex_id,
+        )
+        if not cid:
+            raise HTTPException(status_code=400, detail="Could not create author row.")
+        needs_sweep = apply_follow_state(db, cid, followed=True)
+        # Single owner: clear any prior owner before setting this one so the
+        # partial unique index (is_owner = 1) never collides.
+        db.execute("UPDATE followed_authors SET is_owner = 0 WHERE is_owner = 1")
+        db.execute(
+            "UPDATE followed_authors SET is_owner = 1 WHERE author_id = ?",
+            (cid,),
+        )
+        return cid, needs_sweep
 
-    needs_hydration_sweep = apply_follow_state(db, canonical_id, followed=True)
-    # Single owner: clear any prior owner before setting this one so the
-    # partial unique index (is_owner = 1) never collides.
-    db.execute("UPDATE followed_authors SET is_owner = 0 WHERE is_owner = 1")
-    db.execute(
-        "UPDATE followed_authors SET is_owner = 1 WHERE author_id = ?",
-        (canonical_id,),
+    canonical_id, needs_hydration_sweep = run_write_unit(
+        db, _persist, label="onboarding_ingest_owner"
     )
-    db.commit()
 
     # Post-commit: scheduler-connection writes can't contend with us now
     # (see apply_follow_state on the in-transaction self-deadlock).
@@ -359,19 +364,22 @@ def promote_owner_papers(
     except sqlite3.OperationalError:
         rows = []
 
-    promoted = 0
-    for row in rows:
-        paper_id = str(row["paper_id"] if isinstance(row, sqlite3.Row) else row[0])
-        if not paper_id:
-            continue
-        try:
-            if library_app.add_to_library(
-                db, paper_id, rating=3, added_from="onboarding"
-            ):
-                promoted += 1
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("owner paper promote skipped for %s: %s", paper_id, exc)
-    db.commit()
+    def _persist() -> int:
+        promoted = 0
+        for row in rows:
+            paper_id = str(row["paper_id"] if isinstance(row, sqlite3.Row) else row[0])
+            if not paper_id:
+                continue
+            try:
+                if library_app.add_to_library(
+                    db, paper_id, rating=3, added_from="onboarding"
+                ):
+                    promoted += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("owner paper promote skipped for %s: %s", paper_id, exc)
+        return promoted
+
+    promoted = run_write_unit(db, _persist, label="onboarding_promote_owner_papers")
     return PromoteOwnerResponse(promoted=promoted)
 
 
@@ -413,8 +421,11 @@ def onboarding_paper_feedback(
     if action == "undo":
         # Surface-independent: a paper has one signal, so undo clears it all
         # (the canonical use-case), not just onboarding-tagged events.
-        result = library_app.undo_paper_feedback(db, paper_id)
-        db.commit()
+        result = run_write_unit(
+            db,
+            lambda: library_app.undo_paper_feedback(db, paper_id),
+            label="onboarding_undo_feedback",
+        )
         return PaperFeedbackResponse(
             paper_id=paper_id,
             action="undo",
@@ -422,29 +433,33 @@ def onboarding_paper_feedback(
             rating=result.get("rating"),
         )
 
-    if action in _ACTION_RATING:
-        rating = _ACTION_RATING[action]
-        library_app.add_to_library(db, paper_id, rating=rating, added_from="onboarding")
-        library_app.record_paper_feedback(
-            db, paper_id, action=action, rating=rating, source_surface="onboarding"
-        )
-    elif action == "dislike":
-        rating = library_app.DISLIKE_RATING
-        library_app.sink_disliked_paper(db, paper_id)
-        library_app.record_paper_feedback(
-            db, paper_id, action="dislike", rating=rating, source_surface="onboarding"
-        )
-    else:  # dismiss
-        rating = library_app.DISLIKE_RATING
-        library_app.dismiss_paper(db, paper_id)
-        library_app.record_paper_feedback(
-            db, paper_id, action="dismiss", rating=rating, source_surface="onboarding"
+    def _persist() -> None:
+        # One atomic triage unit: membership/sink/dismiss + signal event +
+        # cross-surface reconciliation. add_to_library defers its enrichment
+        # scheduling past the writer gate.
+        if action in _ACTION_RATING:
+            rating = _ACTION_RATING[action]
+            library_app.add_to_library(db, paper_id, rating=rating, added_from="onboarding")
+            library_app.record_paper_feedback(
+                db, paper_id, action=action, rating=rating, source_surface="onboarding"
+            )
+        elif action == "dislike":
+            library_app.sink_disliked_paper(db, paper_id)
+            library_app.record_paper_feedback(
+                db, paper_id, action="dislike",
+                rating=library_app.DISLIKE_RATING, source_surface="onboarding",
+            )
+        else:  # dismiss
+            library_app.dismiss_paper(db, paper_id)
+            library_app.record_paper_feedback(
+                db, paper_id, action="dismiss",
+                rating=library_app.DISLIKE_RATING, source_surface="onboarding",
+            )
+        library_app.sync_surface_resolution(
+            db, paper_id, action=action, source_surface="onboarding"
         )
 
-    library_app.sync_surface_resolution(
-        db, paper_id, action=action, source_surface="onboarding"
-    )
-    db.commit()
+    run_write_unit(db, _persist, label="onboarding_paper_feedback")
 
     row = db.execute(
         "SELECT status, rating FROM papers WHERE id = ?", (paper_id,)

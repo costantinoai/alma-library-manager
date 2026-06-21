@@ -15,6 +15,7 @@ from alma.api.helpers import raise_internal, row_to_paper_response
 from alma.api.models import PaperResponse, ErrorResponse
 from alma.application import library as library_app
 from alma.application import authors as authors_app
+from alma.core.db_write import run_write_unit
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -738,15 +739,17 @@ def rate_publication(
     if str(target["status"] or "") != library_app.LIBRARY_STATUS:
         raise HTTPException(status_code=400, detail="Only saved Library papers can be rated")
 
-    library_app.rate_paper(pub_db, target["id"], int(rating))
-    library_app.record_paper_feedback(
-        pub_db,
-        target["id"],
-        action="rate",
-        rating=int(rating),
-        source_surface="papers",
-    )
-    pub_db.commit()
+    def _persist() -> None:
+        library_app.rate_paper(pub_db, target["id"], int(rating))
+        library_app.record_paper_feedback(
+            pub_db,
+            target["id"],
+            action="rate",
+            rating=int(rating),
+            source_surface="papers",
+        )
+
+    run_write_unit(pub_db, _persist, label="paper_rate")
     return {
         "success": True,
         "paper_id": target["id"],
@@ -774,8 +777,11 @@ def undo_paper_feedback_endpoint(
     target = pub_db.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if target is None:
         raise HTTPException(status_code=404, detail="Paper not found")
-    result = library_app.undo_paper_feedback(pub_db, paper_id, aspect)
-    pub_db.commit()
+    result = run_write_unit(
+        pub_db,
+        lambda: library_app.undo_paper_feedback(pub_db, paper_id, aspect),
+        label="paper_undo_feedback",
+    )
     return result
 
 
@@ -848,21 +854,25 @@ def _network_cache_write(
 ) -> None:
     try:
         now = datetime.utcnow()
-        db.execute(
-            """
-            INSERT OR REPLACE INTO paper_network_cache
-                (paper_id, direction, fetched_at, expires_at, payload_json)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                paper_id,
-                direction,
-                now.isoformat(),
-                (now + timedelta(hours=_NETWORK_CACHE_TTL_HOURS)).isoformat(),
-                json.dumps(payload),
-            ),
+        params = (
+            paper_id,
+            direction,
+            now.isoformat(),
+            (now + timedelta(hours=_NETWORK_CACHE_TTL_HOURS)).isoformat(),
+            json.dumps(payload),
         )
-        db.commit()
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                """
+                INSERT OR REPLACE INTO paper_network_cache
+                    (paper_id, direction, fetched_at, expires_at, payload_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                params,
+            ),
+            label="paper_network_cache_write",
+        )
     except sqlite3.OperationalError as exc:
         logger.debug("paper_network_cache write failed: %s", exc)
 
@@ -1186,8 +1196,11 @@ def delete_publication(
                 detail=f"Paper not found"
             )
 
-        library_app.soft_remove_from_library(db, paper_id)
-        db.commit()
+        run_write_unit(
+            db,
+            lambda: library_app.soft_remove_from_library(db, paper_id),
+            label="paper_delete",
+        )
 
         logger.info(f"Soft-removed paper: {paper['title']} (ID: {paper_id})")
 

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from alma.api.deps import get_db, get_current_user
+from alma.core.db_write import run_write_unit
 from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,9 @@ def run_dedup(
 ):
     try:
         from alma.library.topic_deduplication import build_canonical_topics
-        result = build_canonical_topics(db)
+        result = run_write_unit(
+            db, lambda: build_canonical_topics(db), label="topics_dedup"
+        )
         return {"status": "completed", "result": result}
     except Exception as e:
         logger.error("Topic dedup failed: %s", redact_sensitive_text(str(e)))
@@ -206,7 +209,9 @@ def dedup_dry_run(
 
         # First ensure canonical topics exist
         from alma.library.topic_deduplication import build_canonical_topics
-        build_result = build_canonical_topics(db)
+        build_result = run_write_unit(
+            db, lambda: build_canonical_topics(db), label="topics_dedup_dry_run"
+        )
 
         # Get deterministic candidates
         deterministic = find_similar_topics(db, threshold=threshold)
@@ -271,7 +276,11 @@ def merge_topic(
 ):
     try:
         from alma.library.topic_deduplication import merge_topics
-        result = merge_topics(db, keep_topic_id=topic_id, merge_topic_id=body.merge_topic_id)
+        result = run_write_unit(
+            db,
+            lambda: merge_topics(db, keep_topic_id=topic_id, merge_topic_id=body.merge_topic_id),
+            label="topic_merge",
+        )
         if "error" in result:
             raise HTTPException(status_code=404, detail=result["error"])
         return {"status": "merged", "result": result}

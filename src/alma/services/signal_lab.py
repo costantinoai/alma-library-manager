@@ -167,7 +167,10 @@ def record_feedback(
         _propagate_to_topics_and_authors(conn, paper_target_id, delta)
         _record_publication_lens_signal(conn, rec_target, event_type, value or {}, delta)
 
-    conn.commit()
+    # Caller owns the transaction: this is the single feedback-recording
+    # engine, always invoked inside a `run_write_unit` (foreground routes) so
+    # the event + recommendation/profile/propagation/lens writes commit
+    # atomically together. No commit here (SQLite write discipline).
     return event_id
 
 

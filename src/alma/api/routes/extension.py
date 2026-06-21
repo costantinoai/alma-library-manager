@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.db_write import run_write_unit
 from alma.core.utils import resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -407,60 +408,60 @@ def undo_from_extension(
         raise HTTPException(status_code=404, detail="Paper not found")
 
     now = datetime.utcnow().isoformat()
-
-    # Drop the positive feedback signal this save wrote (the most recent
-    # browser_extension paper_action for this paper) so an undone save
-    # doesn't keep teaching the recommender. The surface lives in
-    # context_json, so match on it.
-    try:
-        db.execute(
-            """
-            DELETE FROM feedback_events
-            WHERE id = (
-                SELECT id FROM feedback_events
-                WHERE entity_type = 'publication' AND entity_id = ?
-                  AND event_type = 'paper_action'
-                  AND context_json LIKE '%browser_extension%'
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT 1
-            )
-            """,
-            (paper_id,),
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Undo: could not remove feedback event for %s: %s", paper_id, exc)
-
     prior = req.prior or None
-    if prior:
-        db.execute(
-            """
-            UPDATE papers
-            SET status = ?, rating = ?, reading_status = ?,
-                added_from = ?, added_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                prior.get("status"),
-                prior.get("rating"),
-                prior.get("reading_status"),
-                prior.get("added_from"),
-                prior.get("added_at"),
-                now,
-                paper_id,
-            ),
-        )
-        result = "restored"
-    else:
-        db.execute(
-            """
-            UPDATE papers
-            SET status = 'tracked', rating = 0, reading_status = NULL,
-                added_from = NULL, added_at = NULL, updated_at = ?
-            WHERE id = ?
-            """,
-            (now, paper_id),
-        )
-        result = "removed_from_library"
+    result = "restored" if prior else "removed_from_library"
 
-    db.commit()
+    def _persist() -> None:
+        # Drop the positive feedback signal this save wrote (the most recent
+        # browser_extension paper_action for this paper) so an undone save
+        # doesn't keep teaching the recommender. The surface lives in
+        # context_json, so match on it.
+        try:
+            db.execute(
+                """
+                DELETE FROM feedback_events
+                WHERE id = (
+                    SELECT id FROM feedback_events
+                    WHERE entity_type = 'publication' AND entity_id = ?
+                      AND event_type = 'paper_action'
+                      AND context_json LIKE '%browser_extension%'
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT 1
+                )
+                """,
+                (paper_id,),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Undo: could not remove feedback event for %s: %s", paper_id, exc)
+
+        if prior:
+            db.execute(
+                """
+                UPDATE papers
+                SET status = ?, rating = ?, reading_status = ?,
+                    added_from = ?, added_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    prior.get("status"),
+                    prior.get("rating"),
+                    prior.get("reading_status"),
+                    prior.get("added_from"),
+                    prior.get("added_at"),
+                    now,
+                    paper_id,
+                ),
+            )
+        else:
+            db.execute(
+                """
+                UPDATE papers
+                SET status = 'tracked', rating = 0, reading_status = NULL,
+                    added_from = NULL, added_at = NULL, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, paper_id),
+            )
+
+    run_write_unit(db, _persist, label="extension_undo_save")
     return {"ok": True, "paper_id": paper_id, "result": result}

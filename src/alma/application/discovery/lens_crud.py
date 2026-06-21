@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from alma.application import library as library_app
+from alma.core.db_write import run_write_unit
 from alma.core.scoring_math import age_decay, clamp
 from alma.discovery.defaults import (
     DISCOVERY_SETTINGS_DEFAULTS,
@@ -193,90 +194,101 @@ def mark_recommendation_action(
     stamp_recommendation = action in {"save", "read", "dismiss", "seen"}
     now = datetime.utcnow().isoformat()
 
-    if action == "save":
-        effective_rating = max(current_rating, int(rating or 3), 3)
-        if paper_id:
-            library_app.add_to_library(
+    def _persist() -> None:
+        # One atomic discovery-action unit (writer gate + BEGIN IMMEDIATE +
+        # retry): paper membership/rating → recommendation stamp →
+        # cross-surface reconcile → signal event → per-lens signal, committed
+        # together. add_to_library defers enrichment scheduling past the gate;
+        # record_paper_feedback (now the shared engine adapter) and
+        # record_lens_signal do not commit. The engine keys on paper_id so it
+        # won't double the explicit recommendation/lens writes below.
+        nonlocal effective_rating, feedback_action
+        if action == "save":
+            effective_rating = max(current_rating, int(rating or 3), 3)
+            if paper_id:
+                library_app.add_to_library(
+                    db,
+                    paper_id,
+                    rating=effective_rating,
+                    added_from="discovery_save",
+                )
+            feedback_action = "save"
+        elif action == "read":
+            if paper_id:
+                db.execute(
+                    """
+                    UPDATE papers
+                    SET reading_status = 'reading',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, paper_id),
+                )
+        elif action in {"like", "love"}:
+            effective_rating = int(rating or (5 if action == "love" else 4))
+            effective_rating = max(1, min(5, effective_rating))
+            if paper_id:
+                db.execute(
+                    "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
+                    (effective_rating, now, paper_id),
+                )
+            feedback_action = "love" if effective_rating >= 5 else "like"
+        elif action == "dismiss":
+            effective_rating = 1
+            feedback_action = "dismiss"
+        elif action == "dislike":
+            effective_rating = 1
+            if paper_id:
+                db.execute(
+                    "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
+                    (effective_rating, now, paper_id),
+                )
+            feedback_action = "dislike"
+
+        if stamp_recommendation:
+            if paper_id and action in {"read", "dismiss"}:
+                db.execute(
+                    """
+                    UPDATE recommendations
+                    SET user_action = ?, action_at = ?
+                    WHERE paper_id = ?
+                      AND (user_action IS NULL OR TRIM(user_action) = '')
+                    """,
+                    (action, now, paper_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
+                    (action, now, rec_id),
+                )
+
+        if paper_id and action == "save":
+            library_app.sync_surface_resolution(
                 db,
                 paper_id,
+                action="save",
+                source_surface="discovery",
+            )
+        if paper_id and feedback_action:
+            library_app.record_paper_feedback(
+                db,
+                paper_id,
+                action=feedback_action,
                 rating=effective_rating,
-                added_from="discovery_save",
+                source_surface="discovery",
             )
-        feedback_action = "save"
-    elif action == "read":
-        if paper_id:
-            db.execute(
-                """
-                UPDATE papers
-                SET reading_status = 'reading',
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (now, paper_id),
-            )
-    elif action in {"like", "love"}:
-        effective_rating = int(rating or (5 if action == "love" else 4))
-        effective_rating = max(1, min(5, effective_rating))
-        if paper_id:
-            db.execute(
-                "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-                (effective_rating, now, paper_id),
-            )
-        feedback_action = "love" if effective_rating >= 5 else "like"
-    elif action == "dismiss":
-        effective_rating = 1
-        feedback_action = "dismiss"
-    elif action == "dislike":
-        effective_rating = 1
-        if paper_id:
-            db.execute(
-                "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
-                (effective_rating, now, paper_id),
-            )
-        feedback_action = "dislike"
-
-    if stamp_recommendation:
-        if paper_id and action in {"read", "dismiss"}:
-            db.execute(
-                """
-                UPDATE recommendations
-                SET user_action = ?, action_at = ?
-                WHERE paper_id = ?
-                  AND (user_action IS NULL OR TRIM(user_action) = '')
-                """,
-                (action, now, paper_id),
-            )
-        else:
-            db.execute(
-                "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
-                (action, now, rec_id),
+        lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
+        if lens_id and paper_id and feedback_action:
+            signal_value = library_app.rating_signal_value(effective_rating)
+            record_lens_signal(
+                db,
+                lens_id=str(lens_id),
+                paper_id=paper_id,
+                signal_value=signal_value,
+                source="recommendation_action",
             )
 
-    if paper_id and action == "save":
-        library_app.sync_surface_resolution(
-            db,
-            paper_id,
-            action="save",
-            source_surface="discovery",
-        )
-    if paper_id and feedback_action:
-        library_app.record_paper_feedback(
-            db,
-            paper_id,
-            action=feedback_action,
-            rating=effective_rating,
-            source_surface="discovery",
-        )
-    lens_id = row["lens_id"] if isinstance(row, sqlite3.Row) else None
-    if lens_id and paper_id and feedback_action:
-        signal_value = library_app.rating_signal_value(effective_rating)
-        record_lens_signal(
-            db,
-            lens_id=str(lens_id),
-            paper_id=paper_id,
-            signal_value=signal_value,
-            source="recommendation_action",
-        )
+    run_write_unit(db, _persist, label="discovery_rec_action")
     return {
         "id": rec_id,
         action: True,

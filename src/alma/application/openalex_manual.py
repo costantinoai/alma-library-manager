@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 from alma.application import library as library_app
 from alma.application.feed import _upsert_candidate_paper
+from alma.core.db_write import run_write_unit
 from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.source_search import (
@@ -994,102 +995,113 @@ def save_online_search_result(
         title=title,
         query=query,
     )
-    normalized: dict = {}
-    paper_id: Optional[str] = None
-    if raw_work is not None:
-        normalized = _normalize_work(raw_work)
-        _ensure_schema(db)
-        paper_id = _upsert_single_paper(db, normalized)
+    # Normalization is pure CPU (no network) — fine to do before the unit.
+    normalized: dict = _normalize_work(raw_work) if raw_work is not None else {}
 
-    if not paper_id:
-        # Fall back to the multi-source candidate when OpenAlex can't
-        # resolve the paper. The feed upsert helper handles dedup via
-        # the canonical triple and fills whatever metadata the source
-        # provided; enrichment fills the rest later.
-        if candidate:
-            paper_id = _upsert_candidate_paper(
-                db,
-                dict(candidate),
-                now=datetime.utcnow().isoformat(),
-            )
-            match_source = (
-                str(candidate.get("source_api") or "").strip()
-                or (
-                    candidate.get("source_apis")[0]
-                    if isinstance(candidate.get("source_apis"), list)
-                    and candidate.get("source_apis")
-                    else ""
+    def _persist() -> tuple[str, str, int]:
+        # One atomic write unit (writer gate + BEGIN IMMEDIATE + retry).
+        # All network I/O already happened in `_resolve_work_from_inputs`
+        # above; the unit only touches the DB. add_to_library defers its
+        # enrichment scheduling past the gate.
+        ms = match_source
+        pid: Optional[str] = None
+        if raw_work is not None:
+            _ensure_schema(db)
+            pid = _upsert_single_paper(db, normalized)
+
+        if not pid:
+            # Fall back to the multi-source candidate when OpenAlex can't
+            # resolve the paper. The feed upsert helper handles dedup via
+            # the canonical triple and fills whatever metadata the source
+            # provided; enrichment fills the rest later.
+            if candidate:
+                pid = _upsert_candidate_paper(
+                    db,
+                    dict(candidate),
+                    now=datetime.utcnow().isoformat(),
                 )
-                or "multi_source"
-            )
-        if not paper_id:
-            raise ValueError(
-                "Could not resolve the paper — missing OpenAlex match and "
-                "no candidate metadata to fall back on."
-            )
+                ms = (
+                    str(candidate.get("source_api") or "").strip()
+                    or (
+                        candidate.get("source_apis")[0]
+                        if isinstance(candidate.get("source_apis"), list)
+                        and candidate.get("source_apis")
+                        else ""
+                    )
+                    or "multi_source"
+                )
+            if not pid:
+                raise ValueError(
+                    "Could not resolve the paper — missing OpenAlex match and "
+                    "no candidate metadata to fall back on."
+                )
 
-    target_rating = _ONLINE_SEARCH_ACTION_RATINGS[action]
-    now = datetime.utcnow().isoformat()
-    current = db.execute(
-        "SELECT status, rating FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()
-    current_status = str((current["status"] if current else "") or "").strip().lower()
-    current_rating = int((current["rating"] if current else 0) or 0)
-    effective_rating = target_rating
+        target_rating = _ONLINE_SEARCH_ACTION_RATINGS[action]
+        now = datetime.utcnow().isoformat()
+        current = db.execute(
+            "SELECT status, rating FROM papers WHERE id = ?", (pid,)
+        ).fetchone()
+        current_status = str((current["status"] if current else "") or "").strip().lower()
+        current_rating = int((current["rating"] if current else 0) or 0)
+        eff = target_rating
 
-    if action in {"add", "like", "love"}:
-        # Monotonic rating upgrade — never downgrade a saved paper.
-        effective_rating = max(current_rating, target_rating)
-        library_app.add_to_library(
+        if action in {"add", "like", "love"}:
+            # Monotonic rating upgrade — never downgrade a saved paper.
+            eff = max(current_rating, target_rating)
+            library_app.add_to_library(
+                db,
+                pid,
+                rating=eff,
+                added_from=added_from,
+                default_reading_status=default_reading_status,
+                override_added_from=override_added_from,
+            )
+        else:  # dislike
+            if current_status == library_app.LIBRARY_STATUS:
+                # Respect an existing save: don't auto-remove from library just
+                # because the user hit dislike on the online search surface.
+                # Record the negative signal and leave the library entry alone.
+                eff = current_rating
+            else:
+                library_app.dismiss_paper(db, pid)
+                eff = target_rating
+
+        library_app.record_paper_feedback(
             db,
-            paper_id,
-            rating=effective_rating,
-            added_from=added_from,
-            default_reading_status=default_reading_status,
-            override_added_from=override_added_from,
+            pid,
+            action=action,
+            rating=eff,
+            source_surface=added_from,
         )
-    else:  # dislike
-        if current_status == library_app.LIBRARY_STATUS:
-            # Respect an existing save: don't auto-remove from library just
-            # because the user hit dislike on the online search surface.
-            # Record the negative signal and leave the library entry alone.
-            effective_rating = current_rating
-        else:
-            library_app.dismiss_paper(db, paper_id)
-            effective_rating = target_rating
 
-    library_app.record_paper_feedback(
-        db,
-        paper_id,
-        action=action,
-        rating=effective_rating,
-        source_surface=added_from,
-    )
+        # NB: `publication_references` rows were already written by
+        # `_upsert_single_paper` → `upsert_work_sidecars`: every resolve path
+        # selects `referenced_works` (`_WORKS_SELECT_FIELDS`), so a separate
+        # referenced-works fetch here would be a redundant upstream round-trip
+        # on the user-facing save path.
 
-    # NB: `publication_references` rows were already written by
-    # `_upsert_single_paper` → `upsert_work_sidecars`: every resolve path
-    # selects `referenced_works` (`_WORKS_SELECT_FIELDS`), so a separate
-    # referenced-works fetch here would be a redundant upstream round-trip
-    # on the user-facing save path.
+        db.execute(
+            """
+            UPDATE papers
+            SET openalex_resolution_status = 'openalex_resolved',
+                openalex_resolution_reason = ?,
+                openalex_resolution_updated_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (f"{added_from}:{ms}", now, now, pid),
+        )
+        library_app.sync_surface_resolution(
+            db,
+            pid,
+            action=action,
+            source_surface=added_from,
+        )
+        return pid, ms, eff
 
-    db.execute(
-        """
-        UPDATE papers
-        SET openalex_resolution_status = 'openalex_resolved',
-            openalex_resolution_reason = ?,
-            openalex_resolution_updated_at = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (f"{added_from}:{match_source}", now, now, paper_id),
+    paper_id, match_source, effective_rating = run_write_unit(
+        db, _persist, label="online_search_save"
     )
-    library_app.sync_surface_resolution(
-        db,
-        paper_id,
-        action=action,
-        source_surface=added_from,
-    )
-    db.commit()
 
     row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not row:
@@ -1134,45 +1146,51 @@ def add_work_to_library(
     if raw_work is None:
         raise ValueError("No OpenAlex work found for the provided input")
 
+    # Normalization is pure CPU (no network) — fine before the unit.
     normalized = _normalize_work(raw_work)
-    _ensure_schema(db)
-    paper_id = _upsert_single_paper(db, normalized)
-    if not paper_id:
-        raise ValueError("Resolved work is missing required title metadata")
 
-    # `publication_references` already written by `_upsert_single_paper` →
-    # `upsert_work_sidecars` (the resolve selects `referenced_works`) — no
-    # separate referenced-works fetch needed.
+    def _persist() -> str:
+        # One atomic write unit; the OpenAlex resolve already happened above.
+        _ensure_schema(db)
+        pid = _upsert_single_paper(db, normalized)
+        if not pid:
+            raise ValueError("Resolved work is missing required title metadata")
 
-    now = datetime.utcnow().isoformat()
-    library_app.add_to_library(
-        db,
-        paper_id,
-        added_from=added_from,
-    )
-    db.execute(
-        """
-        UPDATE papers
-        SET openalex_resolution_status = 'openalex_resolved',
-            openalex_resolution_reason = ?,
-            openalex_resolution_updated_at = ?,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            f"manual_add:{match_source}",
-            now,
-            now,
-            paper_id,
-        ),
-    )
-    library_app.sync_surface_resolution(
-        db,
-        paper_id,
-        action="save",
-        source_surface="discovery_manual",
-    )
-    db.commit()
+        # `publication_references` already written by `_upsert_single_paper` →
+        # `upsert_work_sidecars` (the resolve selects `referenced_works`) — no
+        # separate referenced-works fetch needed.
+
+        now = datetime.utcnow().isoformat()
+        library_app.add_to_library(
+            db,
+            pid,
+            added_from=added_from,
+        )
+        db.execute(
+            """
+            UPDATE papers
+            SET openalex_resolution_status = 'openalex_resolved',
+                openalex_resolution_reason = ?,
+                openalex_resolution_updated_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                f"manual_add:{match_source}",
+                now,
+                now,
+                pid,
+            ),
+        )
+        library_app.sync_surface_resolution(
+            db,
+            pid,
+            action="save",
+            source_surface="discovery_manual",
+        )
+        return pid
+
+    paper_id = run_write_unit(db, _persist, label="manual_add_to_library")
 
     row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
     if not row:

@@ -167,6 +167,9 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
     5. Inserts into ``topics`` and ``topic_aliases``.
     6. Links ``publication_topics.topic_id`` to the canonical topic.
 
+    Caller owns the transaction: this does NOT commit. Foreground routes
+    wrap it in ``run_write_unit`` (SQLite write discipline).
+
     Args:
         conn: Active SQLite connection.
 
@@ -244,7 +247,8 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
             ).rowcount
             links_updated += updated or 0
 
-    conn.commit()
+    # Caller owns the transaction (foreground routes wrap this in
+    # `run_write_unit`; see SQLite write discipline). No commit here.
     return {
         "topics_created": topics_created,
         "aliases_created": aliases_created,
@@ -412,6 +416,9 @@ def merge_topics(
     Moves all aliases and publication_topics references from
     ``merge_topic_id`` to ``keep_topic_id``, then deletes the merged topic.
 
+    Caller owns the transaction: this does NOT commit. Foreground routes
+    wrap it in ``run_write_unit`` (SQLite write discipline).
+
     Args:
         conn: Active SQLite connection.
         keep_topic_id: The topic to keep.
@@ -463,7 +470,8 @@ def merge_topics(
     # Delete the merged topic
     conn.execute("DELETE FROM topics WHERE topic_id = ?", (merge_topic_id,))
 
-    conn.commit()
+    # Caller owns the transaction (foreground routes wrap this in
+    # `run_write_unit`; see SQLite write discipline). No commit here.
     return {
         "kept": keep_topic_id,
         "merged": merge_topic_id,

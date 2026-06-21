@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.db_write import run_write_unit
 
 logger = logging.getLogger(__name__)
 
@@ -68,20 +69,26 @@ def track_interaction(
     entity_type = "publication" if body.paper_id else "session"
     entity_id = body.paper_id or ""
 
-    conn.execute(
-        """INSERT INTO feedback_events
-           (id, event_type, entity_type, entity_id, value, context_json)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (
-            event_id,
-            body.event_type,
-            entity_type,
-            entity_id,
-            None,
-            json.dumps(body.context) if body.context else None,
+    # Passive telemetry insert — gated single-statement write. (Not routed
+    # through record_feedback: these are non-signal UI events that must NOT
+    # touch preference profiles, per this endpoint's contract.)
+    run_write_unit(
+        conn,
+        lambda: conn.execute(
+            """INSERT INTO feedback_events
+               (id, event_type, entity_type, entity_id, value, context_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                body.event_type,
+                entity_type,
+                entity_id,
+                None,
+                json.dumps(body.context) if body.context else None,
+            ),
         ),
+        label="feedback_track",
     )
-    conn.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -107,7 +114,6 @@ _FEEDBACK_RESET_TABLES = (
     ),
 )
 def reset_feedback_learning(conn: sqlite3.Connection = Depends(get_db)):
-    cleared: dict[str, int] = {}
     existing = {
         row[0]
         for row in conn.execute(
@@ -115,32 +121,38 @@ def reset_feedback_learning(conn: sqlite3.Connection = Depends(get_db)):
         ).fetchall()
     }
 
-    for table in _FEEDBACK_RESET_TABLES:
-        if table not in existing:
-            continue
-        try:
-            count_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-            count = int(count_row[0] if count_row else 0)
-            conn.execute(f"DELETE FROM {table}")  # noqa: S608 — hardcoded allowlist
-            cleared[table] = count
-        except sqlite3.OperationalError as exc:
-            logger.warning("Could not clear feedback-learning table %s: %s", table, exc)
+    def _persist() -> dict[str, int]:
+        # One gated unit clears every feedback-encoding table + the
+        # recommendation actions, so a reset is all-or-nothing. Per-table
+        # OperationalError stays best-effort (a missing/odd table is skipped).
+        cleared: dict[str, int] = {}
+        for table in _FEEDBACK_RESET_TABLES:
+            if table not in existing:
+                continue
+            try:
+                count_row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                count = int(count_row[0] if count_row else 0)
+                conn.execute(f"DELETE FROM {table}")  # noqa: S608 — hardcoded allowlist
+                cleared[table] = count
+            except sqlite3.OperationalError as exc:
+                logger.warning("Could not clear feedback-learning table %s: %s", table, exc)
 
-    if "recommendations" in existing:
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM recommendations WHERE user_action IS NOT NULL"
-            ).fetchone()
-            count = int(row[0] if row else 0)
-            conn.execute(
-                "UPDATE recommendations SET user_action = NULL, action_at = NULL "
-                "WHERE user_action IS NOT NULL"
-            )
-            cleared["recommendations.user_action"] = count
-        except sqlite3.OperationalError as exc:
-            logger.warning("Could not clear recommendations.user_action: %s", exc)
+        if "recommendations" in existing:
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM recommendations WHERE user_action IS NOT NULL"
+                ).fetchone()
+                count = int(row[0] if row else 0)
+                conn.execute(
+                    "UPDATE recommendations SET user_action = NULL, action_at = NULL "
+                    "WHERE user_action IS NOT NULL"
+                )
+                cleared["recommendations.user_action"] = count
+            except sqlite3.OperationalError as exc:
+                logger.warning("Could not clear recommendations.user_action: %s", exc)
+        return cleared
 
-    conn.commit()
+    cleared = run_write_unit(conn, _persist, label="feedback_reset")
 
     return {
         "success": True,

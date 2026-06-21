@@ -10,6 +10,7 @@ from typing import Any
 
 from alma.application.followed_authors import ensure_followed_author_contract
 from alma.application.feed_query_language import normalize_keyword_expression
+from alma.core.db_write import gate_held_by_current_thread, run_write_unit
 
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
@@ -147,7 +148,14 @@ def sync_author_monitors(db: sqlite3.Connection) -> None:
             _clear_monitor_feed_items(db, monitor_id)
             db.execute("DELETE FROM feed_monitors WHERE id = ?", (monitor_id,))
 
-    db.commit()
+    # Commit only when we own the transaction. Inside a writer-gated unit
+    # (author merge, or follow/unfollow via apply_follow_state), the caller
+    # commits the whole unit — committing here would split that atomicity and
+    # leave a mid-unit commit. Background refresh callers invoke this
+    # standalone (no gate held) and rely on it persisting immediately. Same
+    # gate-aware pattern as library.add_to_library.
+    if not gate_held_by_current_thread():
+        db.commit()
 
 
 def _monitor_health(row: sqlite3.Row) -> tuple[str, str | None]:
@@ -232,17 +240,22 @@ def create_feed_monitor(
     now = datetime.utcnow().isoformat()
     monitor_id = uuid.uuid4().hex
     payload = {"query": normalized_query, **(config or {})}
-    db.execute(
-        """
-        INSERT INTO feed_monitors (
-            id, monitor_type, monitor_key, label, config_json,
-            enabled, created_at, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-        """,
-        (monitor_id, monitor_type, monitor_key, monitor_label, _json_dumps(payload), now, now),
+    # Single gated INSERT. The duplicate guard above raised IntegrityError
+    # before opening the unit, so the route's 409 mapping still fires.
+    run_write_unit(
+        db,
+        lambda: db.execute(
+            """
+            INSERT INTO feed_monitors (
+                id, monitor_type, monitor_key, label, config_json,
+                enabled, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (monitor_id, monitor_type, monitor_key, monitor_label, _json_dumps(payload), now, now),
+        ),
+        label="feed_monitor_create",
     )
-    db.commit()
     created = _fetch_monitor_row(db, monitor_id)
     assert created is not None
     return _serialize_monitor_row(created)
@@ -270,31 +283,38 @@ def update_feed_monitor(
         if definition_changed:
             raise ValueError("Author monitors can only be enabled or disabled from Feed settings")
         now = datetime.utcnow().isoformat()
-        if current_enabled != next_enabled and not next_enabled:
-            _clear_monitor_feed_items(db, monitor_id)
-        if current_enabled != next_enabled and next_enabled:
-            db.execute(
-                """
-                UPDATE feed_monitors
-                SET enabled = ?,
-                    last_status = NULL,
-                    last_error = NULL,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (next_enabled, now, monitor_id),
-            )
-        else:
-            db.execute(
-                """
-                UPDATE feed_monitors
-                SET enabled = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (next_enabled, now, monitor_id),
-            )
-        db.commit()
+
+        def _persist_author() -> None:
+            # One gated unit: an enable/disable toggle (author monitors can't
+            # change their definition) plus the feed-item clear on disable.
+            if current_enabled != next_enabled and not next_enabled:
+                _clear_monitor_feed_items(db, monitor_id)
+            if current_enabled != next_enabled and next_enabled:
+                # Re-enable also clears the prior failure status so the row
+                # doesn't show a stale error after being turned back on.
+                db.execute(
+                    """
+                    UPDATE feed_monitors
+                    SET enabled = ?,
+                        last_status = NULL,
+                        last_error = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_enabled, now, monitor_id),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE feed_monitors
+                    SET enabled = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_enabled, now, monitor_id),
+                )
+
+        run_write_unit(db, _persist_author, label="feed_monitor_update")
         updated = _fetch_monitor_row(db, monitor_id)
         assert updated is not None
         return _serialize_monitor_row(updated)
@@ -334,50 +354,57 @@ def update_feed_monitor(
         or next_monitor_key != str(row["monitor_key"] or "").strip()
         or str(next_config.get("query") or "").strip() != str(current_config.get("query") or row["monitor_key"] or "").strip()
     )
-    if source_definition_changed or (current_enabled != next_enabled and not next_enabled):
-        _clear_monitor_feed_items(db, monitor_id)
-    if definition_changed:
-        db.execute(
-            """
-            UPDATE feed_monitors
-            SET monitor_key = ?,
-                label = ?,
-                config_json = ?,
-                enabled = ?,
-                last_checked_at = NULL,
-                last_success_at = NULL,
-                last_status = NULL,
-                last_error = NULL,
-                last_result_json = NULL,
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (next_monitor_key, next_label, _json_dumps(next_config), next_enabled, now, monitor_id),
-        )
-    else:
-        if current_enabled != next_enabled and next_enabled:
+
+    def _persist() -> None:
+        # One gated unit: clear stale feed rows when the definition changed (or
+        # the monitor was disabled), then apply the update. The duplicate guard
+        # above already raised IntegrityError outside the unit (→ route 409).
+        if source_definition_changed or (current_enabled != next_enabled and not next_enabled):
+            _clear_monitor_feed_items(db, monitor_id)
+        if definition_changed:
+            # A definition edit invalidates all prior fetch/result state.
             db.execute(
                 """
                 UPDATE feed_monitors
-                SET enabled = ?,
+                SET monitor_key = ?,
+                    label = ?,
+                    config_json = ?,
+                    enabled = ?,
+                    last_checked_at = NULL,
+                    last_success_at = NULL,
                     last_status = NULL,
                     last_error = NULL,
+                    last_result_json = NULL,
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (next_enabled, now, monitor_id),
+                (next_monitor_key, next_label, _json_dumps(next_config), next_enabled, now, monitor_id),
             )
         else:
-            db.execute(
-                """
-                UPDATE feed_monitors
-                SET enabled = ?,
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (next_enabled, now, monitor_id),
-            )
-    db.commit()
+            if current_enabled != next_enabled and next_enabled:
+                db.execute(
+                    """
+                    UPDATE feed_monitors
+                    SET enabled = ?,
+                        last_status = NULL,
+                        last_error = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_enabled, now, monitor_id),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE feed_monitors
+                    SET enabled = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (next_enabled, now, monitor_id),
+                )
+
+    run_write_unit(db, _persist, label="feed_monitor_update")
 
     updated = _fetch_monitor_row(db, monitor_id)
     assert updated is not None
@@ -393,9 +420,13 @@ def delete_feed_monitor(db: sqlite3.Connection, monitor_id: str) -> bool:
         return False
     if str(row["monitor_type"] or "") == "author":
         raise ValueError("Author monitors are owned by the Authors page")
-    _clear_monitor_feed_items(db, monitor_id)
-    db.execute("DELETE FROM feed_monitors WHERE id = ?", (monitor_id,))
-    db.commit()
+
+    def _persist() -> None:
+        # One gated unit: drop the monitor's feed rows, then the monitor row.
+        _clear_monitor_feed_items(db, monitor_id)
+        db.execute("DELETE FROM feed_monitors WHERE id = ?", (monitor_id,))
+
+    run_write_unit(db, _persist, label="feed_monitor_delete")
     return True
 
 

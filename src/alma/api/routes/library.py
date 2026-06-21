@@ -33,6 +33,7 @@ from alma.application.followed_authors import (
     schedule_followed_author_historical_backfill,
 )
 from alma.application import library as library_app
+from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import paper_date_sort_expr
 from alma.services import health as health_service
 
@@ -86,11 +87,15 @@ def _ensure_library_signal_scores(db: sqlite3.Connection) -> None:
     if not scores:
         return
     try:
-        db.executemany(
-            "UPDATE papers SET global_signal_score = ? WHERE id = ?",
-            [(float(scores.get(pid, 0.0)), pid) for pid in pending],
+        rows = [(float(scores.get(pid, 0.0)), pid) for pid in pending]
+        run_write_unit(
+            db,
+            lambda: db.executemany(
+                "UPDATE papers SET global_signal_score = ? WHERE id = ?",
+                rows,
+            ),
+            label="library_signal_backfill",
         )
-        db.commit()
     except sqlite3.OperationalError as exc:
         logger.debug("signal backfill write failed: %s", exc)
 
@@ -288,12 +293,16 @@ def save_publication(
     try:
         paper_id = str(req.paper_id or "").strip() or None
         added_from = str(req.added_from or "").strip() or "library_manual"
+        title = str(req.title or "").strip()
 
-        if not paper_id:
-            title = str(req.title or "").strip()
-            if not title:
-                raise HTTPException(status_code=400, detail="paper_id or title is required")
-            paper_id = library_app.upsert_paper(
+        if not paper_id and not title:
+            raise HTTPException(status_code=400, detail="paper_id or title is required")
+
+        def _persist() -> tuple[str, bool]:
+            # One atomic write unit (writer gate + BEGIN IMMEDIATE + retry):
+            # upsert the row → promote to library → reconcile feed/discovery.
+            # add_to_library defers its enrichment scheduling past the gate.
+            pid = paper_id or library_app.upsert_paper(
                 db,
                 title=title,
                 authors=req.authors,
@@ -305,22 +314,23 @@ def save_publication(
                 openalex_id=req.openalex_id,
                 status=library_app.TRACKED_STATUS,
             )
-
-        cursor_ok = library_app.add_to_library(
-            db,
-            paper_id,
-            rating=req.rating if req.rating is not None else library_app.DEFAULT_LIBRARY_RATING,
-            notes=req.notes,
-            added_from=added_from,
-        )
-        if cursor_ok:
-            library_app.sync_surface_resolution(
+            ok = library_app.add_to_library(
                 db,
-                paper_id,
-                action="save",
-                source_surface="library",
+                pid,
+                rating=req.rating if req.rating is not None else library_app.DEFAULT_LIBRARY_RATING,
+                notes=req.notes,
+                added_from=added_from,
             )
-        db.commit()
+            if ok:
+                library_app.sync_surface_resolution(
+                    db,
+                    pid,
+                    action="save",
+                    source_surface="library",
+                )
+            return pid, ok
+
+        paper_id, cursor_ok = run_write_unit(db, _persist, label="library_save")
         if not cursor_ok:
             raise HTTPException(status_code=404, detail="Paper not found")
         row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
@@ -347,8 +357,11 @@ def unsave_publication(
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found in library")
-    library_app.soft_remove_from_library(db, paper_id)
-    db.commit()
+    run_write_unit(
+        db,
+        lambda: library_app.soft_remove_from_library(db, paper_id),
+        label="library_unsave",
+    )
 
 
 @router.put(
@@ -414,16 +427,18 @@ def update_saved_paper(
         update_kwargs["authors"] = authors.strip()
     if abstract is not None:
         update_kwargs["abstract"] = abstract.strip()
-    library_app.update_paper(db, paper_id, **update_kwargs)
-    if rating is not None:
-        library_app.record_paper_feedback(
-            db,
-            paper_id,
-            action="rate",
-            rating=int(rating),
-            source_surface="library",
-        )
-    db.commit()
+    def _persist() -> None:
+        library_app.update_paper(db, paper_id, **update_kwargs)
+        if rating is not None:
+            library_app.record_paper_feedback(
+                db,
+                paper_id,
+                action="rate",
+                rating=int(rating),
+                source_surface="library",
+            )
+
+    run_write_unit(db, _persist, label="library_update_saved")
     updated = db.execute(
         "SELECT * FROM papers WHERE id = ?",
         (paper_id,),
@@ -460,12 +475,16 @@ def bulk_clear_rating(
 ):
     """Set rating to 0 for multiple library papers (paper stays saved)."""
     placeholders = ",".join("?" for _ in req.paper_ids)
-    cursor = db.execute(
-        f"UPDATE papers SET rating = 0 WHERE id IN ({placeholders}) AND status = 'library'",
-        req.paper_ids,
-    )
-    db.commit()
-    return _BulkActionResponse(affected=cursor.rowcount or 0)
+
+    def _persist() -> int:
+        cursor = db.execute(
+            f"UPDATE papers SET rating = 0 WHERE id IN ({placeholders}) AND status = 'library'",
+            req.paper_ids,
+        )
+        return cursor.rowcount or 0
+
+    affected = run_write_unit(db, _persist, label="library_bulk_clear_rating")
+    return _BulkActionResponse(affected=affected)
 
 
 @router.post(
@@ -483,9 +502,12 @@ def bulk_remove(
         f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = 'library'",
         req.paper_ids,
     ).fetchall()
-    for row in rows:
-        library_app.soft_remove_from_library(db, str(row["id"]))
-    db.commit()
+
+    def _persist() -> None:
+        for row in rows:
+            library_app.soft_remove_from_library(db, str(row["id"]))
+
+    run_write_unit(db, _persist, label="library_bulk_remove")
     return _BulkActionResponse(affected=len(rows))
 
 
@@ -512,18 +534,22 @@ def bulk_add_to_collection(
         req.paper_ids,
     ).fetchall()
     now = datetime.utcnow().isoformat()
-    added = 0
-    for row in library_rows:
-        pid = str(row["id"])
-        try:
-            db.execute(
-                "INSERT OR IGNORE INTO collection_items (id, collection_id, paper_id, added_at) VALUES (?, ?, ?, ?)",
-                (uuid.uuid4().hex, req.collection_id, pid, now),
-            )
-            added += int(db.execute("SELECT changes()").fetchone()[0] or 0)
-        except sqlite3.IntegrityError:
-            pass
-    db.commit()
+
+    def _persist() -> int:
+        added = 0
+        for row in library_rows:
+            pid = str(row["id"])
+            try:
+                db.execute(
+                    "INSERT OR IGNORE INTO collection_items (id, collection_id, paper_id, added_at) VALUES (?, ?, ?, ?)",
+                    (uuid.uuid4().hex, req.collection_id, pid, now),
+                )
+                added += int(db.execute("SELECT changes()").fetchone()[0] or 0)
+            except sqlite3.IntegrityError:
+                pass
+        return added
+
+    added = run_write_unit(db, _persist, label="library_bulk_add_to_collection")
     return _BulkActionResponse(affected=added)
 
 
@@ -607,11 +633,14 @@ def create_collection(
     try:
         cid = uuid.uuid4().hex
         now = datetime.utcnow().isoformat()
-        db.execute(
-            "INSERT INTO collections (id, name, description, color, created_at) VALUES (?, ?, ?, ?, ?)",
-            (cid, req.name, req.description, req.color, now),
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                "INSERT INTO collections (id, name, description, color, created_at) VALUES (?, ?, ?, ?, ?)",
+                (cid, req.name, req.description, req.color, now),
+            ),
+            label="collection_create",
         )
-        db.commit()
         return CollectionResponse(
             id=cid,
             name=req.name,
@@ -640,11 +669,14 @@ def update_collection(
     row = db.execute("SELECT * FROM collections WHERE id = ?", (collection_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Collection not found")
-    db.execute(
-        "UPDATE collections SET name = ?, description = ?, color = ? WHERE id = ?",
-        (req.name, req.description, req.color, collection_id),
+    run_write_unit(
+        db,
+        lambda: db.execute(
+            "UPDATE collections SET name = ?, description = ?, color = ? WHERE id = ?",
+            (req.name, req.description, req.color, collection_id),
+        ),
+        label="collection_update",
     )
-    db.commit()
     cnt = db.execute(
         """
         SELECT COUNT(*) AS n
@@ -675,11 +707,13 @@ def delete_collection(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Delete a collection and cascade-remove its items."""
-    cursor = db.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
-    # Also remove items (in case FK cascade not enforced by driver)
-    db.execute("DELETE FROM collection_items WHERE collection_id = ?", (collection_id,))
-    db.commit()
-    if cursor.rowcount == 0:
+    def _persist() -> int:
+        cursor = db.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+        # Also remove items (in case FK cascade not enforced by driver)
+        db.execute("DELETE FROM collection_items WHERE collection_id = ?", (collection_id,))
+        return cursor.rowcount
+
+    if run_write_unit(db, _persist, label="collection_delete") == 0:
         raise HTTPException(status_code=404, detail="Collection not found")
 
 
@@ -704,11 +738,14 @@ def add_collection_item(
     _require_library_paper(db, body.paper_id)
     now = datetime.utcnow().isoformat()
     try:
-        db.execute(
-            "INSERT INTO collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
-            (collection_id, body.paper_id, now),
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                "INSERT INTO collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
+                (collection_id, body.paper_id, now),
+            ),
+            label="collection_add_item",
         )
-        db.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Paper already in collection")
     return {"collection_id": collection_id, "paper_id": body.paper_id, "added_at": now}
@@ -725,12 +762,14 @@ def remove_collection_item(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove a paper from a collection."""
-    cursor = db.execute(
-        "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
-        (collection_id, paper_id),
-    )
-    db.commit()
-    if cursor.rowcount == 0:
+    def _persist() -> int:
+        cursor = db.execute(
+            "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+            (collection_id, paper_id),
+        )
+        return cursor.rowcount
+
+    if run_write_unit(db, _persist, label="collection_remove_item") == 0:
         raise HTTPException(status_code=404, detail="Item not found in collection")
 
 
@@ -790,11 +829,14 @@ def create_tag(
     """Create a new tag."""
     try:
         tid = uuid.uuid4().hex
-        db.execute(
-            "INSERT INTO tags (id, name, color) VALUES (?, ?, ?)",
-            (tid, req.name, req.color),
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                "INSERT INTO tags (id, name, color) VALUES (?, ?, ?)",
+                (tid, req.name, req.color),
+            ),
+            label="tag_create",
         )
-        db.commit()
         return TagResponse(id=tid, name=req.name, color=req.color)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail=f"Tag '{req.name}' already exists")
@@ -812,10 +854,12 @@ def delete_tag(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Delete a tag and cascade-remove its publication assignments."""
-    cursor = db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
-    db.execute("DELETE FROM publication_tags WHERE tag_id = ?", (tag_id,))
-    db.commit()
-    if cursor.rowcount == 0:
+    def _persist() -> int:
+        cursor = db.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+        db.execute("DELETE FROM publication_tags WHERE tag_id = ?", (tag_id,))
+        return cursor.rowcount
+
+    if run_write_unit(db, _persist, label="tag_delete") == 0:
         raise HTTPException(status_code=404, detail="Tag not found")
 
 
@@ -850,11 +894,14 @@ def assign_tag(
             detail=f"Each paper may have at most {MAX_TAGS_PER_PAPER} tags",
         )
     try:
-        db.execute(
-            "INSERT INTO publication_tags (paper_id, tag_id) VALUES (?, ?)",
-            (body.paper_id, body.tag_id),
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                "INSERT INTO publication_tags (paper_id, tag_id) VALUES (?, ?)",
+                (body.paper_id, body.tag_id),
+            ),
+            label="tag_assign",
         )
-        db.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Tag already assigned to this paper")
     return {"paper_id": body.paper_id, "tag_id": body.tag_id}
@@ -871,12 +918,14 @@ def remove_tag_assignment(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove a tag assignment from a paper."""
-    cursor = db.execute(
-        "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
-        (paper_id, tag_id),
-    )
-    db.commit()
-    if cursor.rowcount == 0:
+    def _persist() -> int:
+        cursor = db.execute(
+            "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
+            (paper_id, tag_id),
+        )
+        return cursor.rowcount
+
+    if run_write_unit(db, _persist, label="tag_unassign") == 0:
         raise HTTPException(status_code=404, detail="Tag assignment not found")
 
 
@@ -1117,17 +1166,20 @@ def create_topic(
 
     topic_id = _topic_id_from_normalized(normalized)
     now = datetime.utcnow().isoformat()
-    db.execute(
-        """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
-           VALUES (?, ?, ?, 'manual', ?)""",
-        (topic_id, canonical, normalized, now),
-    )
-    db.execute(
-        """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
-           VALUES (?, ?, ?, 'manual', 1.0, ?)""",
-        (topic_id, canonical, normalized, now),
-    )
-    db.commit()
+
+    def _persist() -> None:
+        db.execute(
+            """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
+               VALUES (?, ?, ?, 'manual', ?)""",
+            (topic_id, canonical, normalized, now),
+        )
+        db.execute(
+            """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
+               VALUES (?, ?, ?, 'manual', 1.0, ?)""",
+            (topic_id, canonical, normalized, now),
+        )
+
+    run_write_unit(db, _persist, label="topic_create")
 
     for topic in _list_topic_summaries(db):
         if topic.canonical.lower() == canonical.lower():
@@ -1159,27 +1211,29 @@ def create_topic_alias(
     topic_id = _topic_id_from_normalized(canon_normalized)
     now = datetime.utcnow().isoformat()
 
-    # Ensure canonical topic exists
-    db.execute(
-        """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
-           VALUES (?, ?, ?, 'manual', ?)""",
-        (topic_id, canonical, canon_normalized, now),
-    )
-    # Insert the alias
-    db.execute(
-        """INSERT INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
-           VALUES (?, ?, ?, 'manual', 1.0, ?)
-           ON CONFLICT(normalized_term) DO UPDATE SET
-               topic_id = excluded.topic_id,
-               raw_term = excluded.raw_term""",
-        (topic_id, alias, alias_normalized, now),
-    )
-    # Link matching publication_topics
-    db.execute(
-        "UPDATE publication_topics SET topic_id = ? WHERE topic_id IS NULL AND LOWER(TRIM(term)) = ?",
-        (topic_id, alias_normalized),
-    )
-    db.commit()
+    def _persist() -> None:
+        # Ensure canonical topic exists
+        db.execute(
+            """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
+               VALUES (?, ?, ?, 'manual', ?)""",
+            (topic_id, canonical, canon_normalized, now),
+        )
+        # Insert the alias
+        db.execute(
+            """INSERT INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
+               VALUES (?, ?, ?, 'manual', 1.0, ?)
+               ON CONFLICT(normalized_term) DO UPDATE SET
+                   topic_id = excluded.topic_id,
+                   raw_term = excluded.raw_term""",
+            (topic_id, alias, alias_normalized, now),
+        )
+        # Link matching publication_topics
+        db.execute(
+            "UPDATE publication_topics SET topic_id = ? WHERE topic_id IS NULL AND LOWER(TRIM(term)) = ?",
+            (topic_id, alias_normalized),
+        )
+
+    run_write_unit(db, _persist, label="topic_create_alias")
 
     for topic in _list_topic_summaries(db):
         if topic.canonical.lower() == canonical.lower():
@@ -1233,19 +1287,20 @@ def rename_topic(
 
     now = datetime.utcnow().isoformat()
 
-    # Update the canonical name
-    db.execute(
-        "UPDATE topics SET canonical_name = ?, normalized_name = ? WHERE topic_id = ?",
-        (new_name, new_normalized, topic_id),
-    )
+    def _persist() -> None:
+        # Update the canonical name
+        db.execute(
+            "UPDATE topics SET canonical_name = ?, normalized_name = ? WHERE topic_id = ?",
+            (new_name, new_normalized, topic_id),
+        )
+        # Ensure old name is an alias
+        db.execute(
+            """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
+               VALUES (?, ?, ?, 'manual', 1.0, ?)""",
+            (topic_id, old_name, old_normalized, now),
+        )
 
-    # Ensure old name is an alias
-    db.execute(
-        """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
-           VALUES (?, ?, ?, 'manual', 1.0, ?)""",
-        (topic_id, old_name, old_normalized, now),
-    )
-    db.commit()
+    run_write_unit(db, _persist, label="topic_rename")
 
     for topic in _list_topic_summaries(db):
         if topic.canonical.lower() == new_name.lower():
@@ -1277,33 +1332,36 @@ def group_topic(
     source_topic_id = _topic_id_from_normalized(source_normalized)
     now = datetime.utcnow().isoformat()
 
-    # Ensure target topic exists
-    db.execute(
-        """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
-           VALUES (?, ?, ?, 'manual', ?)""",
-        (target_topic_id, target, target_normalized, now),
-    )
+    def _persist() -> None:
+        # Ensure target topic exists
+        db.execute(
+            """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
+               VALUES (?, ?, ?, 'manual', ?)""",
+            (target_topic_id, target, target_normalized, now),
+        )
 
-    if source_topic_id != target_topic_id:
-        # If source topic exists, merge it
-        source_exists = db.execute(
-            "SELECT 1 FROM topics WHERE topic_id = ?", (source_topic_id,)
-        ).fetchone()
-        if source_exists:
-            merge_topics(db, keep_topic_id=target_topic_id, merge_topic_id=source_topic_id)
-        else:
-            # Just add the source as an alias
-            db.execute(
-                """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
-                   VALUES (?, ?, ?, 'manual', 1.0, ?)""",
-                (target_topic_id, source, source_normalized, now),
-            )
-            # Link publication_topics
-            db.execute(
-                "UPDATE publication_topics SET topic_id = ? WHERE topic_id IS NULL AND LOWER(TRIM(term)) = ?",
-                (target_topic_id, source_normalized),
-            )
-    db.commit()
+        if source_topic_id != target_topic_id:
+            # If source topic exists, merge it (merge_topics no longer
+            # commits — it runs inside this unit).
+            source_exists = db.execute(
+                "SELECT 1 FROM topics WHERE topic_id = ?", (source_topic_id,)
+            ).fetchone()
+            if source_exists:
+                merge_topics(db, keep_topic_id=target_topic_id, merge_topic_id=source_topic_id)
+            else:
+                # Just add the source as an alias
+                db.execute(
+                    """INSERT OR IGNORE INTO topic_aliases (topic_id, raw_term, normalized_term, source, confidence, created_at)
+                       VALUES (?, ?, ?, 'manual', 1.0, ?)""",
+                    (target_topic_id, source, source_normalized, now),
+                )
+                # Link publication_topics
+                db.execute(
+                    "UPDATE publication_topics SET topic_id = ? WHERE topic_id IS NULL AND LOWER(TRIM(term)) = ?",
+                    (target_topic_id, source_normalized),
+                )
+
+    run_write_unit(db, _persist, label="topic_group")
 
     for topic in _list_topic_summaries(db):
         if topic.canonical.lower() == target.lower():
@@ -1345,41 +1403,48 @@ def delete_topic(
     if not topic_row and not pub_has_rows:
         raise HTTPException(status_code=404, detail="Topic not found")
 
+    # Validate + resolve the replacement (if any) BEFORE the write unit so a
+    # 422 never opens a transaction.
+    replacement_term = None
+    repl_normalized = None
+    repl_topic_id = None
+    now = datetime.utcnow().isoformat()
     if replacement:
         replacement_term = normalize_topic_term(replacement)
         if not replacement_term:
             raise HTTPException(status_code=422, detail="Replacement topic cannot be empty")
-
         repl_normalized = normalize_topic(replacement_term)
         repl_topic_id = _topic_id_from_normalized(repl_normalized)
-        now = datetime.utcnow().isoformat()
 
-        # Ensure replacement topic exists
-        db.execute(
-            """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
-               VALUES (?, ?, ?, 'manual', ?)""",
-            (repl_topic_id, replacement_term, repl_normalized, now),
-        )
-
-        if topic_row:
-            # Merge old topic into replacement
-            merge_topics(db, keep_topic_id=repl_topic_id, merge_topic_id=topic_row["topic_id"])
-        else:
-            # Just update publication_topics
+    def _persist() -> None:
+        if replacement:
+            # Ensure replacement topic exists
             db.execute(
-                "UPDATE publication_topics SET topic_id = ? WHERE LOWER(TRIM(term)) = ?",
-                (repl_topic_id, canon_normalized),
+                """INSERT OR IGNORE INTO topics (topic_id, canonical_name, normalized_name, source, created_at)
+                   VALUES (?, ?, ?, 'manual', ?)""",
+                (repl_topic_id, replacement_term, repl_normalized, now),
             )
-    else:
-        if topic_row:
-            db.execute("DELETE FROM topic_aliases WHERE topic_id = ?", (topic_row["topic_id"],))
-            db.execute("UPDATE publication_topics SET topic_id = NULL WHERE topic_id = ?", (topic_row["topic_id"],))
-            db.execute("DELETE FROM topics WHERE topic_id = ?", (topic_row["topic_id"],))
-        db.execute(
-            "DELETE FROM publication_topics WHERE LOWER(TRIM(term)) = LOWER(TRIM(?))",
-            (canonical,),
-        )
-    db.commit()
+            if topic_row:
+                # Merge old topic into replacement (merge_topics runs inside
+                # this unit; it no longer commits).
+                merge_topics(db, keep_topic_id=repl_topic_id, merge_topic_id=topic_row["topic_id"])
+            else:
+                # Just update publication_topics
+                db.execute(
+                    "UPDATE publication_topics SET topic_id = ? WHERE LOWER(TRIM(term)) = ?",
+                    (repl_topic_id, canon_normalized),
+                )
+        else:
+            if topic_row:
+                db.execute("DELETE FROM topic_aliases WHERE topic_id = ?", (topic_row["topic_id"],))
+                db.execute("UPDATE publication_topics SET topic_id = NULL WHERE topic_id = ?", (topic_row["topic_id"],))
+                db.execute("DELETE FROM topics WHERE topic_id = ?", (topic_row["topic_id"],))
+            db.execute(
+                "DELETE FROM publication_topics WHERE LOWER(TRIM(term)) = LOWER(TRIM(?))",
+                (canonical,),
+            )
+
+    run_write_unit(db, _persist, label="topic_delete")
 
 
 @router.delete(
@@ -1400,12 +1465,15 @@ def delete_topic_alias(
     from alma.library.topic_deduplication import normalize_topic
 
     alias_normalized = normalize_topic(alias)
-    cursor = db.execute(
-        "DELETE FROM topic_aliases WHERE normalized_term = ?",
-        (alias_normalized,),
-    )
-    db.commit()
-    if cursor.rowcount == 0:
+
+    def _persist() -> int:
+        cursor = db.execute(
+            "DELETE FROM topic_aliases WHERE normalized_term = ?",
+            (alias_normalized,),
+        )
+        return cursor.rowcount
+
+    if run_write_unit(db, _persist, label="topic_delete_alias") == 0:
         raise HTTPException(status_code=404, detail="Alias not found")
 
 
@@ -1498,8 +1566,6 @@ def follow_author(
     followed") is already satisfied, and a 409 here turned harmless client
     retries / double-submits into scary error toasts.
     """
-    from alma.core.db_write import run_write_unit
-
     now = datetime.utcnow().isoformat()
 
     def _persist_follow() -> tuple[str, bool]:
@@ -1596,7 +1662,6 @@ def unfollow_author(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Stop following an author."""
-    from alma.core.db_write import run_write_unit
 
     def _persist_unfollow() -> None:
         # One serialized write unit (writer gate + BEGIN IMMEDIATE + lock
@@ -1662,13 +1727,14 @@ def update_reading_status(
             )
 
         # Update the paper
-        cursor = db.execute(
-            "UPDATE papers SET reading_status = ? WHERE id = ?",
-            (incoming, paper_id),
-        )
-        db.commit()
+        def _persist() -> int:
+            cursor = db.execute(
+                "UPDATE papers SET reading_status = ? WHERE id = ?",
+                (incoming, paper_id),
+            )
+            return cursor.rowcount
 
-        if cursor.rowcount == 0:
+        if run_write_unit(db, _persist, label="reading_status_update") == 0:
             raise HTTPException(status_code=404, detail="Paper not found")
 
         # Return updated paper
