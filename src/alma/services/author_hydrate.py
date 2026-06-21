@@ -377,6 +377,13 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
 
     if ALIASES_PURPOSE in purposes:
         alias_count = 0
+        # Release the writer lock before record_orcid_aliases' OpenAlex
+        # discovery call: the affiliation purpose above may have opened a write
+        # transaction, and record_orcid_aliases does network FIRST then writes
+        # — holding the lock across that call is the "no txn across network I/O"
+        # violation. The per-source commit below persists its writes.
+        if conn.in_transaction:
+            conn.commit()
         try:
             from alma.application.author_merge import record_orcid_aliases
 
@@ -960,14 +967,20 @@ def count_metadata_candidates(
 def run_author_metadata_rehydration(
     job_id: str | None = None,
     *,
-    limit: int | None = None,
+    limit: int,
     force: bool = False,
     target_author_ids: list[str] | tuple[str, ...] | None = None,
     set_job_status: Callable[..., Any] | None = None,
     add_job_log: Callable[..., Any] | None = None,
     is_cancellation_requested: Callable[[str], bool] | None = None,
 ) -> dict[str, Any]:
-    """Activity runner for author profile/affiliation hydration."""
+    """Activity runner for author profile/affiliation hydration.
+
+    `limit` is REQUIRED and is the run's total budget in author-source attempts
+    (the unit) shared across all sources — see the per-source selection loop.
+    Every caller declares it: the maintenance tick passes the registry cap, the
+    admin route its full-sweep budget. There is no unbounded mode.
+    """
     from alma.api.deps import open_db_connection
 
     conn = open_db_connection()
@@ -976,7 +989,7 @@ def run_author_metadata_rehydration(
     summary: Counter[str] = Counter()
     try:
         ensure_author_hydration_tables(conn)
-        bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
+        bounded_limit = max(1, min(int(limit), 100_000))
         target_ids = normalize_id_list(target_author_ids)
         enqueued = _enqueue_candidates_for_run(
             conn,
@@ -998,18 +1011,29 @@ def run_author_metadata_rehydration(
             ("orcid", ORCID_SOURCE),
             ("crossref", CROSSREF_SOURCE),
         ]
+        # ONE total budget across all sources: the unit is one author-source
+        # attempt, so the cap bounds the SUM of per-source candidates, not each
+        # source independently. Previously every source selected up to `limit`,
+        # so a run could make ~4× the budget in attempts. Sources are filled in
+        # `phases` order (OpenAlex first) until the shared budget is spent; the
+        # rest carry over to the next run.
         total_candidates = 0
         source_rows: dict[str, list[sqlite3.Row]] = {}
+        remaining = bounded_limit
         for _, source in phases:
+            if remaining <= 0:
+                source_rows[source] = []
+                continue
             rows = _select_source_candidates(
                 conn,
                 source=source,
-                limit=bounded_limit,
+                limit=remaining,
                 force=force,
                 target_author_ids=target_ids,
             )
             source_rows[source] = rows
             total_candidates += len(rows)
+            remaining = max(0, remaining - len(rows))
         processed = 0
         if set_job_status:
             set_job_status(
@@ -1102,17 +1126,33 @@ def schedule_pending_author_hydration_sweep(
     but for the ``authors`` table. Both go through the canonical
     Activity envelope (:func:`alma.core.job_envelope.schedule_with_envelope`).
     """
-    from alma.core.job_envelope import schedule_with_envelope, target_scoped_operation_key
+    from alma.core.job_envelope import schedule_with_envelope
 
-    bounded_limit = None if limit is None else max(1, min(int(limit), 100_000))
+    # The runner takes a REQUIRED budget, so "all eligible" (limit=None on this
+    # auto sweep) resolves to an explicit full-sweep budget — the same 100k
+    # ceiling the runner clamps to — rather than passing None downstream.
+    full_sweep = limit is None
+    bounded_limit = 100_000 if full_sweep else max(1, min(int(limit), 100_000))
     target_ids = normalize_id_list(target_author_ids)
     if target_ids:
-        queued_message = f"Author metadata hydration auto-queued for {len(target_ids)} target author(s)"
-    elif bounded_limit is not None:
+        queued_message = (
+            f"Author metadata hydration drain coalesced (triggered by {len(target_ids)} "
+            "high-priority author(s))"
+        )
+    elif not full_sweep:
         queued_message = f"Author metadata hydration auto-queued for up to {bounded_limit} author(s)"
     else:
         queued_message = "Author metadata hydration auto-queued for all eligible authors"
-    operation_key = target_scoped_operation_key("authors.rehydrate_metadata", target_ids)
+    # COALESCING DISPATCHER (task-29 Checkpoint D). The triggering author is
+    # already durable + high-priority in `author_enrichment_status` (the caller
+    # ran `enqueue_pending_author_hydration(priority="high")` first), so we drain
+    # the ledger under the FIXED key rather than mint a per-target-set job. Five
+    # rapid follows therefore coalesce into ONE ordered author lane instead of
+    # five jobs racing the same APIs + writer lock. No starvation: the high-
+    # priority enqueue makes the fresh author eligible, and the eligible pool is
+    # bounded to authors actually DUE (followed-first), so the lane processes the
+    # fresh follow alongside any other due authors — never skips it.
+    operation_key = "authors.rehydrate_metadata"
 
     def _runner_factory(job_id: str) -> Callable[[], dict[str, Any]]:
         from alma.api.scheduler import (
@@ -1126,7 +1166,7 @@ def schedule_pending_author_hydration_sweep(
                 job_id,
                 limit=bounded_limit,
                 force=False,
-                target_author_ids=target_ids,
+                target_author_ids=None,  # drain the ledger, not a per-call target set
                 set_job_status=set_job_status,
                 add_job_log=add_job_log,
                 is_cancellation_requested=is_cancellation_requested,
@@ -1143,10 +1183,14 @@ def schedule_pending_author_hydration_sweep(
         log_message="Auto-queued author metadata hydration",
         log_data={
             "reason": reason,
-            "limit": bounded_limit,
-            "all_eligible": not target_ids and bounded_limit is None,
-            "target_author_ids": target_ids,
-            "target_count": len(target_ids),
+            # Record the REQUESTED budget (None = "all eligible") as the intent;
+            # the runner is invoked with the resolved explicit budget above.
+            "limit": limit,
+            # The sweep now drains the eligible ledger (coalesced), so a full
+            # sweep IS an all-eligible drain regardless of which targets triggered it.
+            "all_eligible": full_sweep,
+            "trigger_author_ids": target_ids,
+            "trigger_count": len(target_ids),
         },
         extra_status_fields={
             "started_at": _utcnow_iso(),

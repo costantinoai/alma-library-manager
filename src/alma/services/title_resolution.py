@@ -566,10 +566,17 @@ def run_title_resolution_sweep(
         resolved = resolved_via_openalex + resolved_via_s2
         remaining = _count_remaining_eligible(conn, model)
         cancelled = is_cancellation_requested(job_id)
+        # One total budget across continuations: ``limit`` carries the REMAINING
+        # session budget (the first run gets the user's full limit; each
+        # continuation is handed limit−processed), so the whole logical run can
+        # never resolve more than the original limit. Previously the continuation
+        # re-passed the per-run budget, resetting the cap on every chunk.
+        remaining_session = max(0, int(limit or 500) - processed)
         will_continue = (
             not cancelled
             and resolved > 0
             and remaining > 0
+            and remaining_session > 0
             and continuation_depth < _MAX_CONTINUATION_DEPTH
         )
 
@@ -581,6 +588,7 @@ def run_title_resolution_sweep(
             "s2_fallback_calls": s2_fallback_calls,
             "s2_rate_limited": s2_rate_limited,
             "remaining_eligible": remaining,
+            "remaining_session_budget": remaining_session,
             "continuation_depth": continuation_depth,
             "model": model,
         }
@@ -621,7 +629,7 @@ def run_title_resolution_sweep(
                 new_job_id,
                 _run_title_resolution_sweep,
                 new_job_id,
-                budget,
+                remaining_session,
                 continuation_depth + 1,
             )
             result_data["continuation_job_id"] = new_job_id

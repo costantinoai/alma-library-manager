@@ -146,6 +146,18 @@ def _activity_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=5000")
+    # BEGIN IMMEDIATE for every Activity WRITE (task-29 §8.2 "Activity writes
+    # bypass the writer gate"). Activity status/log persistence used the default
+    # DEFERRED transaction: under WAL a DEFERRED txn starts as a reader and, if
+    # another connection already holds the write lock, FAILS the upgrade
+    # instantly with "database is locked" instead of waiting — which dropped
+    # status/log rows under a write burst (the "only 1 of 8 simultaneous actions
+    # logged" symptom). IMMEDIATE acquires the write lock up front, so concurrent
+    # Activity + foreground writers serialize via busy_timeout (5 s) rather than
+    # racing the upgrade. Read paths through this connection are unaffected:
+    # sqlite3 only emits an implicit BEGIN before DML, never before SELECT, so a
+    # read-only use never takes the write lock.
+    conn.isolation_level = "IMMEDIATE"
     return conn
 
 
@@ -584,9 +596,109 @@ def _discovery_schedule_interval_hours(key: str, default: int = 0) -> int:
         return default
 
 
+def _schedule_flag_enabled(key: str, default: bool = False) -> bool:
+    """Read a boolean opt-in flag from the discovery_settings KV store.
+
+    Mirrors `_discovery_schedule_interval_hours` for the `*_enabled` toggles
+    that gate the opt-in auto-refresh jobs. Values are stored as the strings
+    "true"/"false"; anything else falls back to `default`.
+    """
+    try:
+        from alma.api.deps import open_db_connection
+
+        conn = open_db_connection()
+        try:
+            row = conn.execute(
+                "SELECT value FROM discovery_settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+            if not row:
+                return default
+            return str(row["value"]).strip().lower() in {"1", "true", "yes", "on"}
+        finally:
+            conn.close()
+    except Exception:
+        return default
+
+
+def _register_interval_job(
+    sched,
+    *,
+    job_id: str,
+    func,
+    name: str,
+    description: str,
+    enabled: bool,
+    interval_hours: int,
+) -> bool:
+    """Register (or remove) an interval-triggered job from one place.
+
+    The single seam for every opt-in periodic refresh: it removes any existing
+    copy first (idempotent — safe to call both at startup and on a live
+    settings change), then re-adds the job ONLY when it is opted in (`enabled`)
+    AND has a positive interval. Returns True when the job is now scheduled,
+    False when it is left disabled.
+    """
+    try:
+        sched.remove_job(job_id)
+    except Exception:
+        pass
+    with _job_lock:
+        _job_meta.pop(job_id, None)
+
+    if enabled and interval_hours > 0:
+        sched.add_job(
+            func,
+            trigger=IntervalTrigger(hours=interval_hours),
+            id=job_id,
+            name=name,
+            replace_existing=True,
+        )
+        with _job_lock:
+            _job_meta[job_id] = {
+                "action": job_id,
+                "name": name,
+                "description": description,
+            }
+        logger.info("Registered %s job (interval=%dh)", job_id, interval_hours)
+        return True
+
+    logger.info("%s disabled (auto-refresh opt-in OFF)", job_id)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
+
+def active_job_namespaces(conn: sqlite3.Connection) -> tuple[set[str], int]:
+    """(distinct operation-key namespaces, total count) of currently-active jobs.
+
+    The live input to `job_policy.admit_maintenance` — read-only over
+    `operation_status`. The namespace is the first dotted/colon segment of the
+    operation key (the same identity the policy catalog is keyed by)."""
+    try:
+        rows = conn.execute(
+            "SELECT operation_key FROM operation_status "
+            "WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set(), 0
+    namespaces: set[str] = set()
+    total = 0
+    for row in rows:
+        key = str((row["operation_key"] if isinstance(row, sqlite3.Row) else row[0]) or "")
+        if not key:
+            continue
+        total += 1
+        namespaces.add(key.split(".", 1)[0].split(":", 1)[0])
+    return namespaces, total
+
+
+def scheduler_worker_capacity() -> int:
+    """Public accessor for the configured worker-pool size (admission input)."""
+    return _scheduler_max_workers()
+
 
 def _scheduler_max_workers() -> int:
     """Concurrent background-job cap, env-overridable, clamped to [1, 16].
@@ -751,25 +863,35 @@ def setup_scheduler() -> None:
         "Registered refresh_authors job (cron hour=%d)", refresh_hour,
     )
 
-    # -- Discovery recommendation refresh (interval) ----------------------
-    refresh_hours = _discovery_schedule_interval_hours("schedule.refresh_interval_hours", 0)
-    if refresh_hours > 0:
-        sched.add_job(
-            refresh_recommendations_periodic,
-            trigger=IntervalTrigger(hours=refresh_hours),
-            id="refresh_recommendations",
-            name="Periodic recommendation refresh",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["refresh_recommendations"] = {
-                "action": "refresh_recommendations",
-                "name": "Periodic recommendation refresh",
-                "description": f"Refreshes discovery recommendations every {refresh_hours}h",
-            }
-        logger.info(
-            "Registered refresh_recommendations job (interval=%dh)", refresh_hours,
-        )
+    # -- Discovery recommendation refresh (interval, opt-in) --------------
+    # Runs only when the page/Settings toggle (schedule.refresh_enabled) is on
+    # AND the interval is > 0. Default OFF.
+    refresh_hours = _discovery_schedule_interval_hours("schedule.refresh_interval_hours", 6)
+    _register_interval_job(
+        sched,
+        job_id="refresh_recommendations",
+        func=refresh_recommendations_periodic,
+        name="Periodic recommendation refresh",
+        description=f"Refreshes discovery recommendations every {refresh_hours}h",
+        enabled=_schedule_flag_enabled("schedule.refresh_enabled"),
+        interval_hours=refresh_hours,
+    )
+
+    # -- Feed inbox refresh (interval, opt-in) ----------------------------
+    # Symmetric to discovery: gated on schedule.feed_refresh_enabled +
+    # schedule.feed_refresh_interval_hours. Default OFF.
+    feed_refresh_hours = _discovery_schedule_interval_hours(
+        "schedule.feed_refresh_interval_hours", 6
+    )
+    _register_interval_job(
+        sched,
+        job_id="refresh_feed_inbox",
+        func=refresh_feed_inbox_periodic,
+        name="Periodic feed refresh",
+        description=f"Refreshes the feed inbox every {feed_refresh_hours}h",
+        enabled=_schedule_flag_enabled("schedule.feed_refresh_enabled"),
+        interval_hours=feed_refresh_hours,
+    )
 
     # -- Citation graph maintenance (interval) -----------------------------
     graph_maintenance_hours = _discovery_schedule_interval_hours(
@@ -842,6 +964,33 @@ def setup_scheduler() -> None:
             ),
         }
     logger.info("Registered maintenance_repair job (interval=%dh)", idle_interval_hours)
+
+    # -- Hydration ledger drain (interval) --------------------------------
+    # Restart-recovery + residual drain for the durable coalescing dispatcher
+    # (task-29 Checkpoint D). Re-schedules the coalescing hydration sweeps when
+    # the durable ledgers hold pending rows, so work enqueued before a restart
+    # resumes under ONE dispatcher. Idempotent (find_active_job), low cadence.
+    try:
+        drain_interval_minutes = max(1, int(os.getenv("ALMA_HYDRATION_DRAIN_INTERVAL_MINUTES", "15")))
+    except (TypeError, ValueError):
+        drain_interval_minutes = 15
+    sched.add_job(
+        drain_pending_hydration_periodic,
+        trigger=IntervalTrigger(minutes=drain_interval_minutes),
+        id="hydration_drain",
+        name="Pending hydration drain",
+        replace_existing=True,
+    )
+    with _job_lock:
+        _job_meta["hydration_drain"] = {
+            "action": "hydration_drain",
+            "name": "Pending hydration drain",
+            "description": (
+                f"Resumes the coalescing hydration dispatcher every "
+                f"{drain_interval_minutes}m when durable ledger rows are pending"
+            ),
+        }
+    logger.info("Registered hydration_drain job (interval=%dm)", drain_interval_minutes)
 
 
 def shutdown_scheduler() -> None:
@@ -1158,6 +1307,69 @@ def refresh_recommendations_periodic() -> None:
         )
 
 
+def refresh_feed_inbox_periodic() -> None:
+    """Periodically refresh the feed inbox from active monitors.
+
+    Mirrors the manual ``POST /feed/refresh`` background runner
+    (``routes/feed.py``) but stamps ``trigger_source="scheduler"`` so the run
+    is muted from toast spam while staying visible in Activity. Opt-in: only
+    registered when feed auto-refresh is enabled (see ``reschedule_feed_refresh``
+    / ``setup_scheduler``). Uses its own connection and the gather-then-write
+    feed path, so it never holds the writer gate across network I/O.
+    """
+    job_id = "periodic_feed_refresh"
+    operation_key = "feed.refresh_periodic"
+    set_job_status(
+        job_id,
+        status="running",
+        trigger_source="scheduler",
+        operation_key=operation_key,
+        started_at=datetime.utcnow().isoformat(),
+        message="Refreshing feed inbox (periodic)",
+    )
+    logger.info("Starting periodic feed inbox refresh")
+    try:
+        from alma.application import feed as feed_app
+        from alma.api.helpers import ActivityJobContext
+        from alma.api.deps import open_db_connection
+
+        conn = open_db_connection()
+        try:
+            result = feed_app.refresh_feed_inbox(conn, ctx=ActivityJobContext(job_id))
+        finally:
+            conn.close()
+
+        items_created = int((result or {}).get("items_created") or 0)
+        final_status = "noop" if items_created == 0 else "completed"
+        final_message = (
+            "No new papers found from active monitors"
+            if items_created == 0
+            else f"Added {items_created} new papers to feed inbox"
+        )
+        set_job_status(
+            job_id,
+            status=final_status,
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=datetime.utcnow().isoformat(),
+            message=final_message,
+            result=result,
+        )
+        logger.info(
+            "Periodic feed inbox refresh complete: %d items created", items_created
+        )
+    except Exception:
+        logger.exception("Fatal error in refresh_feed_inbox_periodic")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=datetime.utcnow().isoformat(),
+            message="Periodic feed inbox refresh failed",
+        )
+
+
 def maintain_citation_graph_periodic() -> None:
     """Periodically backfill local citation/reference edges from OpenAlex."""
     job_id = "periodic_citation_graph_maintenance"
@@ -1212,6 +1424,44 @@ def _operation_log_retention_days() -> int:
         return 30
 
 
+def run_db_housekeeping(conn: sqlite3.Connection) -> dict[str, object]:
+    """Prune stale ``operation_logs`` + incremental-vacuum on an OPEN connection.
+
+    The single source of truth for the housekeeping pass, shared by the daily
+    ``db_maintenance_periodic`` scheduler job and the on-demand ``housekeeping``
+    maintenance task (task-29 Checkpoint C). Caller owns connection lifecycle
+    and Activity status; this just does the two cheap steps and reports counts.
+    """
+    summary: dict[str, object] = {}
+    # Operation log retention — committed in its own transaction so the VACUUM
+    # below has clean ground.
+    retention_days = _operation_log_retention_days()
+    cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+    try:
+        cur = conn.execute("DELETE FROM operation_logs WHERE timestamp < ?", (cutoff,))
+        deleted = cur.rowcount
+        conn.commit()
+        summary["operation_logs_pruned"] = deleted
+        summary["operation_logs_retention_days"] = retention_days
+    except sqlite3.OperationalError as exc:
+        logger.warning("operation_logs prune skipped: %s", exc)
+
+    # Incremental vacuum runs in autocommit and releases all currently-free
+    # pages. Cheap when there's little to free.
+    try:
+        free_before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        if free_before:
+            conn.isolation_level = None
+            conn.execute("PRAGMA incremental_vacuum")
+            free_after = conn.execute("PRAGMA freelist_count").fetchone()[0]
+            summary["pages_freed"] = free_before - free_after
+        else:
+            summary["pages_freed"] = 0
+    except sqlite3.OperationalError as exc:
+        logger.warning("incremental_vacuum skipped: %s", exc)
+    return summary
+
+
 def db_maintenance_periodic() -> None:
     """Reclaim free pages and prune stale ``operation_logs`` rows.
 
@@ -1241,41 +1491,7 @@ def db_maintenance_periodic() -> None:
 
         conn = open_db_connection()
         try:
-            # Operation log retention — committed in its own transaction
-            # so the VACUUM below has clean ground.
-            retention_days = _operation_log_retention_days()
-            cutoff = (
-                datetime.utcnow() - timedelta(days=retention_days)
-            ).isoformat()
-            try:
-                cur = conn.execute(
-                    "DELETE FROM operation_logs WHERE timestamp < ?",
-                    (cutoff,),
-                )
-                deleted = cur.rowcount
-                conn.commit()
-                summary["operation_logs_pruned"] = deleted
-                summary["operation_logs_retention_days"] = retention_days
-            except sqlite3.OperationalError as exc:
-                logger.warning("operation_logs prune skipped: %s", exc)
-
-            # Incremental vacuum runs in autocommit and releases all
-            # currently-free pages. Cheap when there's little to free.
-            try:
-                free_before = conn.execute(
-                    "PRAGMA freelist_count"
-                ).fetchone()[0]
-                if free_before:
-                    conn.isolation_level = None
-                    conn.execute("PRAGMA incremental_vacuum")
-                    free_after = conn.execute(
-                        "PRAGMA freelist_count"
-                    ).fetchone()[0]
-                    summary["pages_freed"] = free_before - free_after
-                else:
-                    summary["pages_freed"] = 0
-            except sqlite3.OperationalError as exc:
-                logger.warning("incremental_vacuum skipped: %s", exc)
+            summary = run_db_housekeeping(conn)
         finally:
             conn.close()
         set_job_status(
@@ -1297,6 +1513,58 @@ def db_maintenance_periodic() -> None:
             finished_at=datetime.utcnow().isoformat(),
             message="DB maintenance failed",
         )
+
+
+def drain_pending_hydration_periodic() -> None:
+    """Restart-recovery + residual drain for the durable hydration ledgers
+    (task-29 Checkpoint D — durable coalescing dispatcher).
+
+    The paper/author enrichment ledgers are durable SQLite tables, so pending
+    work survives a restart — but the insert hooks only SCHEDULE a coalescing
+    sweep at insert time. Without this tick, rows enqueued just before a restart
+    (or left pending after a bounded sweep) would sit idle until the next insert.
+    This periodically re-schedules the COALESCING drains — idempotent via
+    `find_active_job`, so it never spawns a second dispatcher when one is live —
+    whenever pending rows exist, guaranteeing one dispatcher resumes the durable
+    queue. Cheap: two COUNT(*) reads, then at most two idempotent schedule calls.
+    """
+    from alma.api.deps import open_db_connection
+
+    try:
+        conn = open_db_connection()
+    except Exception:
+        return
+    try:
+        def _pending(table: str) -> int:
+            try:
+                return int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE status = 'pending'"
+                    ).fetchone()[0]
+                    or 0
+                )
+            except sqlite3.OperationalError:
+                return 0
+
+        papers_pending = _pending("paper_enrichment_status")
+        authors_pending = _pending("author_enrichment_status")
+    finally:
+        conn.close()
+
+    if papers_pending:
+        try:
+            from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
+
+            schedule_pending_hydration_sweep(reason="restart_drain")
+        except Exception:
+            logger.exception("restart hydration drain (papers) failed to schedule")
+    if authors_pending:
+        try:
+            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+
+            schedule_pending_author_hydration_sweep(reason="restart_drain")
+        except Exception:
+            logger.exception("restart hydration drain (authors) failed to schedule")
 
 
 # ===================================================================
@@ -1942,41 +2210,48 @@ def schedule_alert(
     return job_id
 
 
-def reschedule_discovery_refresh(interval_hours: int) -> None:
+def reschedule_discovery_refresh(enabled: bool, interval_hours: int) -> None:
     """Update or remove the periodic recommendation refresh job.
 
+    The job runs only when auto-refresh is opted in (`enabled`) AND the
+    interval is > 0. Called live from the discovery-settings PUT handler so a
+    toggle/interval change takes effect without a restart.
+
     Args:
+        enabled: Whether discovery auto-refresh is opted in.
         interval_hours: Refresh interval in hours. 0 = disabled.
     """
-    sched = get_scheduler()
+    _register_interval_job(
+        get_scheduler(),
+        job_id="refresh_recommendations",
+        func=refresh_recommendations_periodic,
+        name="Periodic recommendation refresh",
+        description=f"Refreshes discovery recommendations every {interval_hours}h",
+        enabled=enabled,
+        interval_hours=interval_hours,
+    )
 
-    # Remove existing job if present
-    try:
-        sched.remove_job("refresh_recommendations")
-    except Exception:
-        pass
-    with _job_lock:
-        _job_meta.pop("refresh_recommendations", None)
 
-    if interval_hours > 0:
-        sched.add_job(
-            refresh_recommendations_periodic,
-            trigger=IntervalTrigger(hours=interval_hours),
-            id="refresh_recommendations",
-            name="Periodic recommendation refresh",
-            replace_existing=True,
-        )
-        with _job_lock:
-            _job_meta["refresh_recommendations"] = {
-                "action": "refresh_recommendations",
-                "name": "Periodic recommendation refresh",
-                "description": f"Refreshes discovery recommendations every {interval_hours}h",
-            }
-        logger.info(
-            "Rescheduled refresh_recommendations job (interval=%dh)", interval_hours,
-        )
-    else:
-        logger.info("Discovery recommendation refresh disabled")
+def reschedule_feed_refresh(enabled: bool, interval_hours: int) -> None:
+    """Update or remove the periodic feed-inbox refresh job.
+
+    Symmetric to `reschedule_discovery_refresh`. The job runs only when feed
+    auto-refresh is opted in (`enabled`) AND the interval is > 0. Called live
+    from the feed-settings PUT handler.
+
+    Args:
+        enabled: Whether feed auto-refresh is opted in.
+        interval_hours: Refresh interval in hours. 0 = disabled.
+    """
+    _register_interval_job(
+        get_scheduler(),
+        job_id="refresh_feed_inbox",
+        func=refresh_feed_inbox_periodic,
+        name="Periodic feed refresh",
+        description=f"Refreshes the feed inbox every {interval_hours}h",
+        enabled=enabled,
+        interval_hours=interval_hours,
+    )
 
 
 def reschedule_citation_graph_maintenance(interval_hours: int) -> None:

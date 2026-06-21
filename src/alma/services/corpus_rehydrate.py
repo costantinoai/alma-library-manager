@@ -1373,6 +1373,27 @@ def run_corpus_metadata_rehydration(
     retry_after = timedelta(hours=6)
     summary: Counter[str] = Counter()
     field_counts: Counter[str] = Counter()
+
+    # ONE total budget across every phase of this logical run (title resolution
+    # → OpenAlex → batched S2 → Crossref → landing-page recovery). Each phase
+    # selects and claims from the SAME remaining pool, so a run can never process
+    # more than `limit` paper-slots in total. Previously each phase independently
+    # selected up to `limit`, multiplying the real work by the number of phases —
+    # the root of "I raised the limit and it didn't change anything". `None`
+    # means no cap configured (unbounded, legacy behavior).
+    budget_total = limit
+    claimed_units = 0
+
+    def _phase_limit() -> int | None:
+        return None if budget_total is None else max(0, budget_total - claimed_units)
+
+    def _budget_exhausted() -> bool:
+        # When the shared budget is spent, a phase must be SKIPPED entirely — not
+        # called with limit=0. The candidate selectors floor their LIMIT at
+        # max(1, limit), so passing 0 would still fetch one paper and overrun the
+        # total budget (e.g. 7 → 10 across four phases). None budget = unbounded.
+        return budget_total is not None and claimed_units >= budget_total
+
     try:
         _ensure_enrichment_status_table(conn)
 
@@ -1386,16 +1407,21 @@ def run_corpus_metadata_rehydration(
         title_resolution_summary = _run_title_resolution_phase(
             conn,
             job_id=job_id,
-            limit=limit,
+            limit=_phase_limit(),
             target_paper_ids=target_ids,
             add_job_log=add_job_log,
             is_cancellation_requested=is_cancellation_requested,
         )
         summary["title_resolution_attempted"] = title_resolution_summary["attempted"]
         summary["title_resolution_resolved"] = title_resolution_summary["resolved"]
+        claimed_units += int(title_resolution_summary["attempted"])
 
-        rows = _select_openalex_candidates(
-            conn, limit=limit, force=force, target_paper_ids=target_ids
+        rows = (
+            []
+            if _budget_exhausted()
+            else _select_openalex_candidates(
+                conn, limit=_phase_limit(), force=force, target_paper_ids=target_ids
+            )
         )
         total = len(rows)
         summary["candidates"] = total
@@ -1625,12 +1651,15 @@ def run_corpus_metadata_rehydration(
         # `influential_citation_count` + abstract-fallback for every
         # eligible paper, since those S2-only fields drive the Discovery
         # ranker (`citation_quality`) and PaperCard's TLDR display.
+        # OpenAlex phase done — claim what it processed against the shared budget.
+        claimed_units += processed
+
         s2_summary: Counter[str] = Counter()
-        if not is_cancellation_requested(job_id):
+        if not is_cancellation_requested(job_id) and not _budget_exhausted():
             try:
                 s2_summary = _run_s2_batched_phase(
                     conn,
-                    limit=limit,
+                    limit=_phase_limit(),
                     target_paper_ids=target_ids,
                     job_id=job_id,
                     set_job_status=set_job_status,
@@ -1653,10 +1682,13 @@ def run_corpus_metadata_rehydration(
         # gated on OpenAlex candidates: insert hooks can leave a pending
         # Crossref row when OpenAlex is already enriched, and the sweep
         # must still process it.
+        # S2 phase done — claim its attempted papers.
+        claimed_units += int(s2_summary.get("candidates", 0))
+
         fallback_summary: Counter[str] = Counter()
-        if not is_cancellation_requested(job_id):
+        if not is_cancellation_requested(job_id) and not _budget_exhausted():
             crossref_ids = _select_crossref_abstract_candidates(
-                conn, limit=limit, seed_paper_ids=target_ids or None
+                conn, limit=_phase_limit(), seed_paper_ids=target_ids or None
             )
             try:
                 fallback_summary = _run_crossref_abstract_phase(
@@ -1680,12 +1712,15 @@ def run_corpus_metadata_rehydration(
                 )
 
         # Phase 3 — public landing-page/OA abstract metadata recovery.
+        # Crossref phase done — claim its attempted papers.
+        claimed_units += int(fallback_summary.get("attempted", 0))
+
         abstract_recovery_summary: Counter[str] = Counter()
-        if not is_cancellation_requested(job_id):
+        if not is_cancellation_requested(job_id) and not _budget_exhausted():
             try:
                 abstract_recovery_summary = _run_abstract_recovery_phase(
                     conn,
-                    limit=limit,
+                    limit=_phase_limit(),
                     target_paper_ids=target_ids,
                     job_id=job_id,
                     set_job_status=set_job_status,
@@ -2829,12 +2864,18 @@ def enqueue_pending_hydration(
         # run_after_gate_release runs it immediately when no gate is held.
         from alma.core.db_write import run_after_gate_release
 
-        def _schedule(paper_id: str = paper_id) -> None:
+        def _schedule() -> None:
             try:
-                schedule_pending_hydration_sweep(
-                    reason="paper_insert",
-                    target_paper_ids=[paper_id],
-                )
+                # COALESCING DISPATCHER (task-29 Checkpoint D). The paper is
+                # already durably in `paper_enrichment_status` (above), so we kick
+                # ONE ledger-draining sweep under the FIXED operation key instead
+                # of a per-paper target-scoped job. N inserts upsert N ledger rows
+                # but coalesce into a single dispatcher (`find_active_job` dedups
+                # the fixed key), killing the 1,530-key / 1,557-job storm that
+                # author-works expansion produced. No starvation: the OpenAlex
+                # selector drains newest-first (`created_at DESC`), so this very
+                # paper is serviced in the first chunk, not buried under backlog.
+                schedule_pending_hydration_sweep(reason="paper_insert")
             except Exception as exc:
                 logger.debug("auto schedule_pending_hydration_sweep skipped: %s", exc)
 
