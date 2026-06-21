@@ -6,6 +6,7 @@ then populates topics, institutions, and citation counts.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -17,6 +18,7 @@ from typing import Optional
 import requests
 
 from alma.config import get_api_call_delay
+from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import resolve_paper_openalex_work
 from alma.core.utils import normalize_doi, normalize_orcid, normalize_text as _normalize_text
 from alma.openalex.client import (
@@ -406,137 +408,101 @@ def enrich_publication(
             "url": (pub.get("url") or "").strip(),
         }
 
-    # Update the papers row with enriched metadata
-    updates = []
-    params = []
+    # Write the enriched metadata through the canonical fill-only primitive
+    # (core.paper_updates.fill_only_update_paper) rather than a hand-rolled
+    # UPDATE, so enrichment shares the one paper-write policy with every other
+    # source adapter. Two intents:
+    #   - fill_fields: gap-fillers we must NEVER clobber once the row has them —
+    #     abstract / url / doi / authors (the primitive writes only when the
+    #     local value is empty), matching the prior `and not pub.get(...)` guards.
+    #   - always_fields: source-owned metadata OpenAlex is authoritative for and
+    #     refreshes every run — counts, FWCI, percentiles, OA flags, biblio,
+    #     institution/country counts, keyword/counts/SDG JSON. Each is added only
+    #     when the source actually provided it, exactly as the prior conditional
+    #     UPDATE did. updated_at is deliberately left untouched (enrichment never
+    #     bumped it).
+    fill_fields: dict = {}
+    always_fields: dict = {}
+
+    if (enriched_abstract := (work.get("abstract") or "").strip()):
+        fill_fields["abstract"] = enriched_abstract
+    if (enriched_url := (work.get("pub_url") or "").strip()):
+        fill_fields["url"] = enriched_url
+    if (enriched_doi := (work.get("doi") or "").strip()):
+        fill_fields["doi"] = enriched_doi
+    if (enriched_authors := (work.get("authors") or "").strip()):
+        fill_fields["authors"] = enriched_authors
 
     citations = work.get("num_citations")
     if citations is not None:
-        updates.append("cited_by_count = ?")
-        params.append(int(citations))
-
+        always_fields["cited_by_count"] = int(citations)
     enriched_year = work.get("year")
     if enriched_year is not None:
-        updates.append("year = ?")
-        params.append(enriched_year)
-
-    enriched_journal = (work.get("journal") or "").strip()
-    if enriched_journal:
-        updates.append("journal = ?")
-        params.append(enriched_journal)
-
-    enriched_abstract = (work.get("abstract") or "").strip()
-    if enriched_abstract and not (pub.get("abstract") or "").strip():
-        updates.append("abstract = ?")
-        params.append(enriched_abstract)
-
-    enriched_url = (work.get("pub_url") or "").strip()
-    if enriched_url and not (pub.get("url") or "").strip():
-        updates.append("url = ?")
-        params.append(enriched_url)
-
-    enriched_doi = (work.get("doi") or "").strip()
-    if enriched_doi and not doi:
-        updates.append("doi = ?")
-        params.append(enriched_doi)
-
-    enriched_authors = (work.get("authors") or "").strip()
-    if enriched_authors and not (pub.get("authors") or "").strip():
-        updates.append("authors = ?")
-        params.append(enriched_authors)
-
-    # Extended OpenAlex enrichment fields
-    oa_id = (work.get("openalex_id") or "").strip()
-    if oa_id:
-        updates.append("openalex_id = ?")
-        params.append(oa_id)
-
-    work_type = (work.get("type") or "").strip()
-    if work_type:
-        updates.append("work_type = ?")
-        params.append(work_type)
-
-    lang = (work.get("language") or "").strip()
-    if lang:
-        updates.append("language = ?")
-        params.append(lang)
+        always_fields["year"] = enriched_year
+    if (enriched_journal := (work.get("journal") or "").strip()):
+        always_fields["journal"] = enriched_journal
+    if (oa_id := (work.get("openalex_id") or "").strip()):
+        always_fields["openalex_id"] = oa_id
+    if (work_type := (work.get("type") or "").strip()):
+        always_fields["work_type"] = work_type
+    if (lang := (work.get("language") or "").strip()):
+        always_fields["language"] = lang
 
     oa_info = work.get("open_access") or {}
     if isinstance(oa_info, dict):
-        updates.append("is_oa = ?")
-        params.append(1 if oa_info.get("is_oa") else 0)
-        oa_status = (oa_info.get("oa_status") or "").strip()
-        if oa_status:
-            updates.append("oa_status = ?")
-            params.append(oa_status)
-        oa_url = (oa_info.get("oa_url") or "").strip()
-        if oa_url:
-            updates.append("oa_url = ?")
-            params.append(oa_url)
+        always_fields["is_oa"] = 1 if oa_info.get("is_oa") else 0
+        if (oa_status := (oa_info.get("oa_status") or "").strip()):
+            always_fields["oa_status"] = oa_status
+        if (oa_url := (oa_info.get("oa_url") or "").strip()):
+            always_fields["oa_url"] = oa_url
 
     if work.get("is_retracted"):
-        updates.append("is_retracted = ?")
-        params.append(1)
+        always_fields["is_retracted"] = 1
 
     fwci = work.get("fwci")
     if fwci is not None:
-        updates.append("fwci = ?")
-        params.append(float(fwci))
+        always_fields["fwci"] = float(fwci)
 
     pctile = work.get("cited_by_percentile") or {}
     if isinstance(pctile, dict):
         if pctile.get("min") is not None:
-            updates.append("cited_by_percentile_min = ?")
-            params.append(float(pctile["min"]))
+            always_fields["cited_by_percentile_min"] = float(pctile["min"])
         if pctile.get("max") is not None:
-            updates.append("cited_by_percentile_max = ?")
-            params.append(float(pctile["max"]))
+            always_fields["cited_by_percentile_max"] = float(pctile["max"])
 
     ref_count = work.get("referenced_works_count")
     if ref_count is not None:
-        updates.append("referenced_works_count = ?")
-        params.append(int(ref_count))
+        always_fields["referenced_works_count"] = int(ref_count)
 
     biblio = work.get("biblio") or {}
     if isinstance(biblio, dict):
         for field in ("volume", "issue", "first_page", "last_page"):
             val = (biblio.get(field) or "").strip()
             if val:
-                updates.append(f"{field} = ?")
-                params.append(val)
+                always_fields[field] = val
 
     inst_count = work.get("institutions_distinct_count")
     if inst_count is not None:
-        updates.append("institutions_count = ?")
-        params.append(int(inst_count))
+        always_fields["institutions_count"] = int(inst_count)
 
     country_count = work.get("countries_distinct_count")
     if country_count is not None:
-        updates.append("countries_count = ?")
-        params.append(int(country_count))
+        always_fields["countries_count"] = int(country_count)
 
-    kws = work.get("keywords") or []
-    if kws:
-        import json
-        updates.append("keywords = ?")
-        params.append(json.dumps(kws))
+    if (kws := work.get("keywords") or []):
+        always_fields["keywords"] = json.dumps(kws)
+    if (cby := work.get("counts_by_year") or []):
+        always_fields["counts_by_year"] = json.dumps(cby)
+    if (sdgs := work.get("sdgs") or []):
+        always_fields["sdgs"] = json.dumps(sdgs)
 
-    cby = work.get("counts_by_year") or []
-    if cby:
-        import json
-        updates.append("counts_by_year = ?")
-        params.append(json.dumps(cby))
-
-    sdgs = work.get("sdgs") or []
-    if sdgs:
-        import json
-        updates.append("sdgs = ?")
-        params.append(json.dumps(sdgs))
-
-    if updates:
-        sql = f"UPDATE papers SET {', '.join(updates)} WHERE id = ?"
-        params.append(paper_id)
-        conn.execute(sql, params)
+    fill_only_update_paper(
+        conn,
+        paper_id,
+        fill_fields=fill_fields,
+        always_fields=always_fields,
+        touch_updated_at=False,
+    )
 
     # Upsert topics, institutions, and authorships
     topics = work.get("topics") or []
@@ -672,7 +638,9 @@ def enrich_all_unenriched(
                     titles_to_resolve.append((tnk, rd))
 
     if titles_to_resolve:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import as_completed
+
+        from alma.core.concurrency import bounded_thread_pool
 
         def _pre_resolve_title(item: tuple[str, dict]) -> tuple[str, Optional[dict], Optional[str], Optional[str]]:
             tnk, pub = item
@@ -690,7 +658,7 @@ def enrich_all_unenriched(
                 step="title_prefetch",
             )
         # Use 3 workers to stay within OpenAlex rate limits
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with bounded_thread_pool(3) as executor:
             futures = {
                 executor.submit(_pre_resolve_title, item): item[0]
                 for item in titles_to_resolve
