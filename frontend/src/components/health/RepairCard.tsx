@@ -19,7 +19,7 @@
  * badge — the triage signal — everything else is alma-grey, per the "saturated
  * tones inside an off-white card read as alarms" lesson.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Eye, History, Play } from 'lucide-react'
 
@@ -35,6 +35,7 @@ import {
   estimateMaintenanceOperation,
   type HealthDimension,
   type MaintenanceOperation,
+  type MaintenanceRunRequest,
 } from '@/api/client'
 import {
   COST_LABEL,
@@ -46,13 +47,22 @@ import {
   sortBySeverity,
 } from './healthFormat'
 import { DimensionStatusRow } from './DimensionStatusRow'
+import { RepairConfirmDialog } from './RepairConfirmDialog'
 
 interface RepairCardProps {
   op: MaintenanceOperation
   /** The health dimensions this op repairs (op.repairs ∩ snapshot.dimensions). */
   dims: HealthDimension[]
-  onRun: (key: string, params?: Record<string, unknown>) => void
-  onConfig: (key: string, body: { enabled?: boolean; daily_cap?: number; batch_size?: number }) => void
+  onRun: (key: string, request: MaintenanceRunRequest) => void
+  onConfig: (
+    key: string,
+    body: {
+      auto_enabled?: boolean
+      auto_daily_cap?: number
+      remembered_manual_limit?: number
+      request_batch_size?: number
+    },
+  ) => void
   /** Open the affected-papers drilldown for one dimension. */
   onOpenDim: (dim: HealthDimension) => void
   running: boolean
@@ -65,9 +75,10 @@ function prettyScope(value: string): string {
 }
 
 export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: RepairCardProps) {
-  // Local daily-cap state so the input stays responsive; commit on blur.
-  const [cap, setCap] = useState(op.daily_cap)
-  useEffect(() => setCap(op.daily_cap), [op.daily_cap])
+  const [autoCap, setAutoCap] = useState(op.auto_daily_cap)
+  useEffect(() => setAutoCap(op.auto_daily_cap), [op.auto_daily_cap])
+  const [manualLimit, setManualLimit] = useState(op.manual_limit)
+  useEffect(() => setManualLimit(op.manual_limit), [op.manual_limit])
 
   const scopeSpec = op.params_spec?.scope
   const hasDryRun = op.params_spec?.dry_run != null
@@ -78,22 +89,28 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
   // Per-op API batch size (overridable ops only — e.g. S2 vectors). Local state
   // for a responsive field; persisted on blur, but the ETA recomputes live as it
   // changes so the user sees the call count / time drop before committing.
-  const batchOverridable = op.batch_size_max != null
-  const persistedBatch = op.batch_size ?? op.batch_size_default ?? 1
+  const batchOverridable = op.request_batch_max != null
+  const persistedBatch = op.request_batch_size ?? op.request_batch_default ?? 1
   const [batch, setBatch] = useState<number>(persistedBatch)
   useEffect(() => setBatch(persistedBatch), [persistedBatch])
+
+  // Destructive ops route their Run through an explicit review dialog that
+  // carries the backend confirmation token; safe ops run on the single click.
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   // "Dirty" = the chosen scope/batch differs from what the polled op row reflects,
   // so re-query a live count + ETA instead of using the (cached) row values.
   const scopeDirty = !!scopeSpec && scope !== defaultScope
   const batchDirty = batchOverridable && batch !== persistedBatch
-  const dirty = scopeDirty || batchDirty
+  const limitDirty = manualLimit !== op.manual_limit
+  const dirty = scopeDirty || batchDirty || limitDirty
   const estimateQuery = useQuery({
-    queryKey: ['health', 'estimate', op.key, scope, batch],
+    queryKey: ['health', 'estimate', op.key, scope, batch, manualLimit],
     queryFn: () =>
       estimateMaintenanceOperation(op.key, {
         scope: scopeSpec ? scope : undefined,
-        batch_size: batchOverridable ? batch : undefined,
+        max_items: manualLimit,
+        request_batch_size: batchOverridable ? batch : undefined,
       }),
     enabled: dirty,
     staleTime: 30_000,
@@ -102,13 +119,12 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
   const pending = estimate ? estimate.candidates_pending : op.candidates_pending
   const eta = estimate ? estimate.eta : op.eta
 
-  const runParams = useMemo(() => {
-    return (extra?: Record<string, unknown>): Record<string, unknown> | undefined => {
-      const p: Record<string, unknown> = { ...extra }
-      if (scopeSpec) p.scope = scope
-      return Object.keys(p).length ? p : undefined
-    }
-  }, [scopeSpec, scope])
+  const runRequest = (extra?: Partial<MaintenanceRunRequest>): MaintenanceRunRequest => ({
+    max_items: manualLimit,
+    request_batch_size: batchOverridable ? batch : undefined,
+    scope: scopeSpec ? scope : undefined,
+    ...extra,
+  })
 
   // Rolled-up severity = worst across the op's dimensions (null = dimension-less
   // cleanup op, which shows no severity badge — just its pending count).
@@ -137,6 +153,9 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="font-medium text-alma-800">{op.label}</h3>
+            {op.recommended ? <StatusBadge tone="info" size="sm">Recommended next</StatusBadge> : null}
+            {op.optional ? <StatusBadge tone="neutral" size="sm">Optional</StatusBadge> : null}
+            {op.manual_gate ? <StatusBadge tone="warning" size="sm">Manual gate</StatusBadge> : null}
             <StatusBadge tone="neutral" size="sm" className="uppercase tracking-wide">
               {COST_LABEL[op.cost] ?? op.cost}
             </StatusBadge>
@@ -165,6 +184,12 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
           <EtaHint eta={eta} />
         </div>
       </div>
+
+      {op.blocked_by.length > 0 ? (
+        <p className="rounded-sm border border-warning-100 bg-warning-50 px-3 py-2 text-xs text-warning-800">
+          Blocked by {op.blocked_by.map((item) => `${item.label} (${item.pending})`).join(', ')}.
+        </p>
+      ) : null}
 
       {/* Status rows — the gaps this op repairs (click → affected papers). */}
       {attentionDims.length > 0 ? (
@@ -202,16 +227,20 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
 
       {/* Controls footer: auto-repair · scope/cap · preview · run */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          <Switch
-            checked={op.enabled}
-            onCheckedChange={(value) => onConfig(op.key, { enabled: value })}
-          />
-          <span className="inline-flex items-center gap-1">
-            Auto-repair
-            <span className="text-xs text-slate-400">{op.enabled ? '(on)' : '(opt-in)'}</span>
-          </span>
-        </label>
+        {!op.destructive ? (
+          <label className="flex items-center gap-2 text-sm text-slate-700">
+            <Switch
+              checked={op.auto_enabled}
+              onCheckedChange={(value) => onConfig(op.key, { auto_enabled: value })}
+            />
+            <span className="inline-flex items-center gap-1">
+              Auto-repair
+              <span className="text-xs text-slate-400">{op.auto_enabled ? '(on)' : '(opt-in)'}</span>
+            </span>
+          </label>
+        ) : (
+          <span className="text-xs font-medium text-warning-700">Never runs automatically</span>
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           {scopeSpec ? (
@@ -230,26 +259,33 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
                 </SelectContent>
               </Select>
             </label>
-          ) : (
+          ) : null}
+
+          <SettingsNumberField
+            label={<span className="inline-flex items-center gap-1">Run limit<JargonHint title="Run limit" description={`Maximum ${op.unit.replace(/_/g, ' ')} units for this manual run. This exact visible value is sent atomically with Run.`} /></span>}
+            value={manualLimit}
+            min={1}
+            max={op.max_manual_limit}
+            onChange={setManualLimit}
+            onBlur={() => {
+              if (manualLimit !== op.manual_limit) onConfig(op.key, { remembered_manual_limit: manualLimit })
+            }}
+            className="min-w-0"
+          />
+
+          {!op.destructive ? (
             <SettingsNumberField
-              label={
-                <span className="inline-flex items-center gap-1">
-                  Daily cap
-                  <JargonHint
-                    title="Daily cap"
-                    description="The most items the automatic healer will process per day for this task. Run-now also uses this as its batch size where the task supports a limit."
-                  />
-                </span>
-              }
-              value={cap}
+              label={<span className="inline-flex items-center gap-1">Auto daily cap<JargonHint title="Auto daily cap" description="Maximum units unattended repair may process per UTC day. It does not change the manual Run limit." /></span>}
+              value={autoCap}
               min={1}
-              onChange={setCap}
+              max={op.max_auto_daily_cap}
+              onChange={setAutoCap}
               onBlur={() => {
-                if (cap !== op.daily_cap) onConfig(op.key, { daily_cap: cap })
+                if (autoCap !== op.auto_daily_cap) onConfig(op.key, { auto_daily_cap: autoCap })
               }}
               className="min-w-0"
             />
-          )}
+          ) : null}
 
           {batchOverridable ? (
             <SettingsNumberField
@@ -258,16 +294,16 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
                   Batch size
                   <JargonHint
                     title="Batch size"
-                    description={`Items per API request (max ${op.batch_size_max}). A bigger batch means fewer requests — at this endpoint's rate limit that's proportionally faster. The ETA above updates as you change it, and the actual run uses this value.`}
+                    description={`${op.request_batch_unit?.replace(/_/g, ' ') ?? 'lookup IDs'} per upstream request (max ${op.request_batch_max}). This is separate from the total run limit.`}
                   />
                 </span>
               }
               value={batch}
               min={1}
-              max={op.batch_size_max ?? undefined}
+              max={op.request_batch_max ?? undefined}
               onChange={setBatch}
               onBlur={() => {
-                if (batch !== persistedBatch) onConfig(op.key, { batch_size: batch })
+                if (batch !== persistedBatch) onConfig(op.key, { request_batch_size: batch })
               }}
               className="min-w-0"
             />
@@ -280,7 +316,7 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
               icon={<Eye className="h-4 w-4" />}
               pending={running}
               className="text-alma-700 hover:bg-alma-50"
-              onClick={() => onRun(op.key, runParams({ dry_run: true }))}
+              onClick={() => onRun(op.key, runRequest({ dry_run: true }))}
             >
               Preview
             </AsyncButton>
@@ -291,12 +327,31 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
             icon={<Play className="h-4 w-4" />}
             pending={running}
             className="border-alma-200 text-alma-700 hover:bg-alma-50"
-            onClick={() => onRun(op.key, runParams(hasDryRun ? { dry_run: false } : undefined))}
+            disabled={op.blocked_by.length > 0}
+            onClick={() =>
+              op.destructive
+                ? setConfirmOpen(true)
+                : onRun(op.key, runRequest(hasDryRun ? { dry_run: false } : undefined))
+            }
           >
-            {hasDryRun ? 'Run sweep' : 'Run now'}
+            {op.destructive ? 'Review & run…' : 'Run now'}
           </AsyncButton>
         </div>
       </div>
+
+      {op.destructive ? (
+        <RepairConfirmDialog
+          op={op}
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          request={runRequest()}
+          running={running}
+          onConfirm={(req) => {
+            setConfirmOpen(false)
+            onRun(op.key, req)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

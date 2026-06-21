@@ -9,7 +9,7 @@ import { useState } from 'react'
 import { motion, useReducedMotion } from 'framer-motion'
 import { CheckCircle2 } from 'lucide-react'
 
-import type { HealthDimension, MaintenanceOperation } from '@/api/client'
+import type { HealthDimension, MaintenanceOperation, MaintenanceRunRequest } from '@/api/client'
 import { isOpAttention, sortOpsByAttention } from './healthFormat'
 import { RepairCard } from './RepairCard'
 import { SectionLabel } from './SectionLabel'
@@ -19,8 +19,16 @@ interface RepairGroupProps {
   ops: MaintenanceOperation[]
   /** Resolve the dimensions one op repairs (op.repairs ∩ snapshot.dimensions). */
   dimsOf: (op: MaintenanceOperation) => HealthDimension[]
-  onRun: (key: string, params?: Record<string, unknown>) => void
-  onConfig: (key: string, body: { enabled?: boolean; daily_cap?: number; batch_size?: number }) => void
+  onRun: (key: string, request: MaintenanceRunRequest) => void
+  onConfig: (
+    key: string,
+    body: {
+      auto_enabled?: boolean
+      auto_daily_cap?: number
+      remembered_manual_limit?: number
+      request_batch_size?: number
+    },
+  ) => void
   onOpenDim: (dim: HealthDimension) => void
   runningKey: string | null
 }

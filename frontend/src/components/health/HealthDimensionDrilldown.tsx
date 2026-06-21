@@ -133,7 +133,10 @@ export function HealthDimensionDrilldown({
   })
 
   const fixSelectedMutation = useMutation({
-    mutationFn: (ids: string[]) => runMaintenanceOperation(fixActionKey!, ids),
+    // Targeted run: exactly the selected papers, with max_items bound to that
+    // count so the backend never processes beyond the user's selection.
+    mutationFn: (ids: string[]) =>
+      runMaintenanceOperation(fixActionKey!, { target_ids: ids, max_items: ids.length }),
     onSuccess: async (res) => {
       setSelected(new Set())
       await refreshHealth()

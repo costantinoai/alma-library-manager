@@ -293,7 +293,19 @@ export interface MaintenanceOperation {
   sources: string[]
   local_compute: boolean
   destructive: boolean
-  hard_cap: number | null
+  stage: string
+  order: number
+  unit: string
+  target_kind: string
+  supports_targets: boolean
+  prerequisites: string[]
+  dependencies: Array<{ key: string; label: string; pending: number; required: boolean }>
+  blocked_by: Array<{ key: string; label: string; pending: number; required: boolean }>
+  unlocks: string[]
+  optional: boolean
+  manual_gate: boolean
+  readiness: 'healthy' | 'blocked' | 'manual_review' | 'optional' | 'ready'
+  recommended: boolean
   repairs: string[]
   operation_key: string
   candidates_pending: number
@@ -302,28 +314,59 @@ export interface MaintenanceOperation {
   /** Run-time controls the card should render (scope select / dry-run preview). */
   params_spec: MaintenanceParamsSpec | null
   /** Effective API batch size (items/request), or null when the batch is fixed. */
-  batch_size: number | null
-  /** Default + max batch when overridable (else null) — bounds the batch control. */
-  batch_size_default: number | null
-  batch_size_max: number | null
-  enabled: boolean
-  default_enabled: boolean
-  daily_cap: number
+  request_batch_size: number | null
+  request_batch_default: number | null
+  request_batch_max: number | null
+  request_batch_unit: string | null
+  auto_enabled: boolean
+  default_auto_enabled: boolean
+  auto_daily_cap: number
+  max_auto_daily_cap: number
+  manual_limit: number
+  default_manual_limit: number
+  max_manual_limit: number
   last_run: MaintenanceLastRun | null
   /** Finished-at of the most recent *successful* run (any trigger), or null. */
   last_success_at: string | null
 }
 
 /** Response of GET /health/operations/{key}/estimate — count + ETA for chosen params. */
-export interface MaintenanceEstimate {
-  key: string
-  params: Record<string, string | boolean>
+export interface MaintenancePlan {
+  task_key: string
+  spec: MaintenanceRunRequest
   candidates_pending: number
+  selected_items: number
+  unit: string
+  dependencies: Array<{ key: string; label: string; pending: number; required: boolean }>
+  expected_requests: Record<string, number>
+  plan_fingerprint: string
+  confirmation_token: string | null
+}
+
+export interface MaintenanceEstimate extends MaintenancePlan {
+  key: string
   eta: MaintenanceEta | null
+}
+
+export interface MaintenanceRunRequest {
+  target_ids?: string[]
+  /** Omit to let the backend apply the task's remembered manual limit (e.g. a
+   *  drilldown "fix all"); set it for the exact visible Run-now limit. */
+  max_items?: number
+  request_batch_size?: number | null
+  scope?: string | null
+  dry_run?: boolean
+  force?: boolean
+  confirmation_token?: string | null
+  plan_fingerprint?: string | null
 }
 
 export interface HealthOperationsResponse {
   generated_at: string
+  recommended_next: { key: string; label: string; readiness: string; reason: string } | null
+  // Backend-owned ordered stage groups (Checkpoint G): the UI renders these
+  // verbatim with their labels — no hard-coded task-key grouping/order.
+  stages: Array<{ key: string; label: string; order: number; operation_keys: string[] }>
   operations: MaintenanceOperation[]
 }
 
@@ -331,6 +374,7 @@ export interface RunMaintenanceResponse {
   key: string
   status: string
   job_id: string | null
+  plan: MaintenancePlan
 }
 
 export function getHealthSnapshot(): Promise<HealthSnapshot> {
@@ -372,27 +416,24 @@ export function getHealthDimensionItems(
 
 export function runMaintenanceOperation(
   key: string,
-  targetPaperIds?: string[],
-  params?: Record<string, unknown>,
+  request: MaintenanceRunRequest,
 ): Promise<RunMaintenanceResponse> {
-  const body: Record<string, unknown> = {}
-  if (targetPaperIds && targetPaperIds.length) body.target_paper_ids = targetPaperIds
-  if (params && Object.keys(params).length) body.params = params
   return api.post<RunMaintenanceResponse>(
     `/health/operations/${encodeURIComponent(key)}/run`,
-    Object.keys(body).length ? body : undefined,
+    request,
   )
 }
 
 /** Recompute just the pending count + ETA for chosen params (e.g. a new scope). */
 export function estimateMaintenanceOperation(
   key: string,
-  params?: { scope?: string; dry_run?: boolean; batch_size?: number },
+  params?: { scope?: string; dry_run?: boolean; max_items?: number; request_batch_size?: number },
 ): Promise<MaintenanceEstimate> {
   const qs = new URLSearchParams()
   if (params?.scope != null) qs.set('scope', params.scope)
   if (params?.dry_run != null) qs.set('dry_run', String(params.dry_run))
-  if (params?.batch_size != null) qs.set('batch_size', String(params.batch_size))
+  if (params?.max_items != null) qs.set('max_items', String(params.max_items))
+  if (params?.request_batch_size != null) qs.set('request_batch_size', String(params.request_batch_size))
   const query = qs.toString()
   return api.get<MaintenanceEstimate>(
     `/health/operations/${encodeURIComponent(key)}/estimate${query ? `?${query}` : ''}`,
@@ -401,7 +442,12 @@ export function estimateMaintenanceOperation(
 
 export function setMaintenanceConfig(
   key: string,
-  body: { enabled?: boolean; daily_cap?: number; batch_size?: number },
+  body: {
+    auto_enabled?: boolean
+    auto_daily_cap?: number
+    remembered_manual_limit?: number
+    request_batch_size?: number
+  },
 ): Promise<MaintenanceOperation> {
   return api.post<MaintenanceOperation>(
     `/health/operations/${encodeURIComponent(key)}/config`,
@@ -1665,6 +1711,7 @@ export interface DiscoveryLimits {
 }
 
 export interface DiscoverySchedule {
+  refresh_enabled: boolean
   refresh_interval_hours: number
   graph_maintenance_interval_hours: number
 }
@@ -3563,6 +3610,19 @@ export function listFeedInbox(params?: {
 
 export function refreshFeedInbox(): Promise<ActivityOperationResponse> {
   return api.post('/feed/refresh')
+}
+
+export interface FeedSettings {
+  auto_refresh_enabled: boolean
+  refresh_interval_hours: number
+}
+
+export function getFeedSettings(): Promise<FeedSettings> {
+  return api.get<FeedSettings>('/feed/settings')
+}
+
+export function updateFeedSettings(body: FeedSettings): Promise<FeedSettings> {
+  return api.put<FeedSettings>('/feed/settings', body)
 }
 
 export interface FeedStatusResponse {

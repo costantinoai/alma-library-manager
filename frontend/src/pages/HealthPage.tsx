@@ -16,7 +16,7 @@
  * carries its run / auto-repair / cap / scope / batch controls once. Every
  * number reads the canonical endpoints (/insights/health + /health/operations).
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -27,6 +27,7 @@ import {
   setMaintenanceConfig,
   type HealthDimension,
   type MaintenanceOperation,
+  type MaintenanceRunRequest,
 } from '@/api/client'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { Button } from '@/components/ui/button'
@@ -44,15 +45,16 @@ import { useToast, errorToast } from '@/hooks/useToast'
 const SNAPSHOT_KEY = ['health', 'snapshot']
 const OPERATIONS_KEY = ['health', 'operations']
 
-// Op grouping by domain. Anything the registry adds later that isn't listed
-// here falls into "Other maintenance" rather than vanishing.
-const CORPUS_OPS = ['corpus_metadata', 'title_resolution', 's2_vector', 'embedding', 'dedup_preprint_twins']
-const AUTHOR_OPS = ['author_metadata', 'refresh_authors', 'dedup_orcid', 'gc_orphan_authors']
-
 export function HealthPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [openDim, setOpenDim] = useState<HealthDimension | null>(null)
+  // "Run recommended sequence" auto-advance state. `sequenceActive` turns on a
+  // refetch loop; `lastFiredRef` records the op we last launched so we never
+  // re-fire the same step while it is still running (the backend only advances
+  // `recommended_next` once a step's pending drops, i.e. it completed).
+  const [sequenceActive, setSequenceActive] = useState(false)
+  const lastFiredRef = useRef<string | null>(null)
 
   const snapshotQuery = useQuery({
     queryKey: SNAPSHOT_KEY,
@@ -65,11 +67,17 @@ export function HealthPage() {
     queryFn: getHealthOperations,
     staleTime: 30_000,
     retry: 1,
+    // While a sequence runs, re-plan on a cadence so `recommended_next` advances
+    // as each background step finishes.
+    refetchInterval: sequenceActive ? 3000 : false,
   })
 
   const runMutation = useMutation({
-    mutationFn: ({ key, params }: { key: string; params?: Record<string, unknown> }) =>
-      runMaintenanceOperation(key, undefined, params),
+    // The atomic Run spec travels with the click (RepairCard builds it from its
+    // visible controls). A bare `{ key }` — e.g. a drilldown "fix all" — sends no
+    // max_items, so the backend applies the task's remembered manual limit.
+    mutationFn: ({ key, request }: { key: string; request?: MaintenanceRunRequest }) =>
+      runMaintenanceOperation(key, request ?? {}),
     onSuccess: async (result) => {
       await invalidateQueries(queryClient, OPERATIONS_KEY, SNAPSHOT_KEY)
       if (result.status === 'noop' || !result.job_id) {
@@ -81,7 +89,12 @@ export function HealthPage() {
         })
       }
     },
-    onError: (err) => errorToast('Could not start maintenance', String(err)),
+    onError: (err) => {
+      // A failed step stops the sequence (don't loop on a broken step).
+      setSequenceActive(false)
+      lastFiredRef.current = null
+      errorToast('Could not start maintenance', String(err))
+    },
   })
 
   const configMutation = useMutation({
@@ -90,7 +103,12 @@ export function HealthPage() {
       body,
     }: {
       key: string
-      body: { enabled?: boolean; daily_cap?: number; batch_size?: number }
+      body: {
+        auto_enabled?: boolean
+        auto_daily_cap?: number
+        remembered_manual_limit?: number
+        request_batch_size?: number
+      }
     }) => setMaintenanceConfig(key, body),
     onSuccess: async () => {
       await invalidateQueries(queryClient, OPERATIONS_KEY)
@@ -115,17 +133,54 @@ export function HealthPage() {
   const repairedKeys = new Set(operations.flatMap((op) => op.repairs))
   const orphanDims = (snapshot?.dimensions ?? []).filter((d) => !repairedKeys.has(d.key))
 
-  const corpusOps = operations.filter((op) => CORPUS_OPS.includes(op.key))
-  const authorOps = operations.filter((op) => AUTHOR_OPS.includes(op.key))
-  const otherOps = operations.filter(
-    (op) => !CORPUS_OPS.includes(op.key) && !AUTHOR_OPS.includes(op.key),
-  )
+  // Grouping + order come ONLY from the backend plan (Checkpoint G): render each
+  // stage in registry order with its label, populated by its operation_keys. No
+  // hard-coded task-key arrays — a registry addition appears in its stage
+  // automatically. Empty stages (nothing pending/applicable) are dropped.
+  const opByKey = new Map(operations.map((op): [string, MaintenanceOperation] => [op.key, op]))
+  const stageGroups = (operationsQuery.data?.stages ?? [])
+    .map((stage) => ({
+      key: stage.key,
+      label: stage.label,
+      ops: stage.operation_keys
+        .map((k) => opByKey.get(k))
+        .filter((o): o is MaintenanceOperation => !!o),
+    }))
+    .filter((group) => group.ops.length > 0)
+  const recommended = operationsQuery.data?.recommended_next ?? null
 
-  const onRun = (key: string, params?: Record<string, unknown>) =>
-    runMutation.mutate({ key, params })
+  // Auto-advance the recommended sequence (Checkpoint G). No per-job polling: the
+  // backend only moves `recommended_next` to the NEXT op once the current one's
+  // pending drops (it finished), so firing whenever the recommended key CHANGES
+  // walks one safe step at a time and naturally stops when `recommended_next`
+  // becomes null (everything healthy, or only manual-review gates remain).
+  useEffect(() => {
+    if (!sequenceActive || runMutation.isPending) return
+    if (!recommended) {
+      setSequenceActive(false)
+      lastFiredRef.current = null
+      toast({
+        title: 'Recommended sequence finished',
+        description: 'No further safe steps — stopped (any manual-review gates remain for you).',
+      })
+      return
+    }
+    if (recommended.key !== lastFiredRef.current) {
+      lastFiredRef.current = recommended.key
+      runMutation.mutate({ key: recommended.key })
+    }
+  }, [sequenceActive, recommended, runMutation.isPending])
+
+  const onRun = (key: string, request: MaintenanceRunRequest) =>
+    runMutation.mutate({ key, request })
   const onConfig = (
     key: string,
-    body: { enabled?: boolean; daily_cap?: number; batch_size?: number },
+    body: {
+      auto_enabled?: boolean
+      auto_daily_cap?: number
+      remembered_manual_limit?: number
+      request_batch_size?: number
+    },
   ) => configMutation.mutate({ key, body })
 
   const groupProps = { dimsOf, onRun, onConfig, onOpenDim: setOpenDim, runningKey }
@@ -226,13 +281,68 @@ export function HealthPage() {
         runningKey={runningKey}
       />
 
-      {/* Repair groups — status + action in one card. */}
+      {/* Recommended next — the safe one-click sequence driver. The backend only
+          ever points this at the first actionable, non-blocked, non-destructive,
+          non-manual op in dependency order, so running it repeatedly walks the
+          repair sequence and stops at a manual-review gate (re-planned on each
+          refetch). */}
+      {recommended ? (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
+          <div>
+            <SectionLabel>Recommended next</SectionLabel>
+            <p className="mt-1 text-sm text-alma-900">
+              <strong>{recommended.label}</strong>
+              <span className="text-slate-500"> — {recommended.reason}</span>
+            </p>
+            {sequenceActive ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Running the recommended sequence — advancing as each step completes, stopping at any
+                manual-review gate.
+              </p>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            {sequenceActive ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSequenceActive(false)
+                  lastFiredRef.current = null
+                }}
+              >
+                Stop
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => runMutation.mutate({ key: recommended.key })}
+                  disabled={runningKey === recommended.key}
+                >
+                  {runningKey === recommended.key ? 'Starting…' : 'Run step'}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    lastFiredRef.current = null
+                    setSequenceActive(true)
+                  }}
+                >
+                  Run sequence
+                </Button>
+              </>
+            )}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Repair groups — status + action in one card, in backend stage order. */}
       {operations.length > 0 ? (
-        <>
-          <RepairGroup title="Corpus & embeddings" ops={corpusOps} {...groupProps} />
-          <RepairGroup title="Authors" ops={authorOps} {...groupProps} />
-          <RepairGroup title="Other maintenance" ops={otherOps} {...groupProps} />
-        </>
+        stageGroups.map((group) => (
+          <RepairGroup key={group.key} title={group.label} ops={group.ops} {...groupProps} />
+        ))
       ) : (
         <p className="text-sm text-slate-500">Loading repair operations…</p>
       )}
