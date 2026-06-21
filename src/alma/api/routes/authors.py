@@ -6,7 +6,9 @@ import os
 import sqlite3
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+
+from alma.core.concurrency import bounded_thread_pool
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from types import SimpleNamespace
@@ -1524,8 +1526,8 @@ def _deep_refresh_all_impl(
             except Exception:
                 pass
 
-    with ThreadPoolExecutor(
-        max_workers=_DEEP_REFRESH_MAX_WORKERS,
+    with bounded_thread_pool(
+        _DEEP_REFRESH_MAX_WORKERS,
         thread_name_prefix="deep-refresh",
     ) as executor:
         futures = {
