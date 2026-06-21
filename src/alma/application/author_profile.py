@@ -27,6 +27,8 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Optional
 
+from alma.core.db_write import commit_unless_gated
+
 logger = logging.getLogger(__name__)
 
 
@@ -186,8 +188,9 @@ def apply_author_profile_update(
     sql = f"UPDATE authors SET {', '.join(fields)} WHERE id = ?"
     try:
         db.execute(sql, params)
-        if db.in_transaction:
-            db.commit()
+        # Caller-owns-transaction: no-op inside a gated refresh unit (caller
+        # commits), commit standalone for the maintenance-due hydration path.
+        commit_unless_gated(db, label="apply_author_profile_update")
     except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
         logger.warning("apply_author_profile_update failed for %s: %s", author_key, exc)
         return {"updated": [], "error": str(exc)}

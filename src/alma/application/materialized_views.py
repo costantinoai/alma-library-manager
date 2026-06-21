@@ -38,6 +38,8 @@ from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable, Optional
 
+from alma.core.db_write import commit_unless_gated
+
 logger = logging.getLogger(__name__)
 
 
@@ -202,8 +204,9 @@ def _write_row(
             rebuild_job_id,
         ),
     )
-    if conn.in_transaction:
-        conn.commit()
+    # Caller-owns-transaction: the MV rebuild path may run this inside a gated
+    # unit; standalone callers (direct mv.get) commit immediately.
+    commit_unless_gated(conn, label="materialized_views._write_row")
 
 
 def _set_rebuild_job_id(
@@ -217,8 +220,8 @@ def _set_rebuild_job_id(
             "UPDATE materialized_views SET rebuild_job_id = ? WHERE view_key = ?",
             (job_id, view_key),
         )
-        if conn.in_transaction:
-            conn.commit()
+        # Caller-owns-transaction (see _write_row).
+        commit_unless_gated(conn, label="materialized_views._set_rebuild_job_id")
     except sqlite3.OperationalError:
         pass
 

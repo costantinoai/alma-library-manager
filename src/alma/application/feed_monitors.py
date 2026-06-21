@@ -10,7 +10,7 @@ from typing import Any
 
 from alma.application.followed_authors import ensure_followed_author_contract
 from alma.application.feed_query_language import normalize_keyword_expression
-from alma.core.db_write import gate_held_by_current_thread, run_write_unit
+from alma.core.db_write import commit_unless_gated, run_write_unit
 
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
@@ -148,14 +148,10 @@ def sync_author_monitors(db: sqlite3.Connection) -> None:
             _clear_monitor_feed_items(db, monitor_id)
             db.execute("DELETE FROM feed_monitors WHERE id = ?", (monitor_id,))
 
-    # Commit only when we own the transaction. Inside a writer-gated unit
-    # (author merge, or follow/unfollow via apply_follow_state), the caller
-    # commits the whole unit — committing here would split that atomicity and
-    # leave a mid-unit commit. Background refresh callers invoke this
-    # standalone (no gate held) and rely on it persisting immediately. Same
-    # gate-aware pattern as library.add_to_library.
-    if not gate_held_by_current_thread():
-        db.commit()
+    # Caller-owns-transaction: inside a writer-gated unit (author merge, or
+    # follow/unfollow via apply_follow_state) the caller commits the whole unit;
+    # background refresh callers invoke this standalone and persist immediately.
+    commit_unless_gated(db, label="sync_author_monitors")
 
 
 def _monitor_health(row: sqlite3.Row) -> tuple[str, str | None]:

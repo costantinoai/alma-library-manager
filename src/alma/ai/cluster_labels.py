@@ -27,6 +27,8 @@ import sqlite3
 from datetime import datetime
 from typing import Iterable
 
+from alma.core.db_write import commit_unless_gated
+
 logger = logging.getLogger(__name__)
 
 
@@ -127,7 +129,8 @@ def store_label(
                 datetime.now().isoformat(),
             ),
         )
-        if conn.in_transaction:
-            conn.commit()
+        # Caller-owns-transaction: the label cache may be written inside a gated
+        # graph-build unit; standalone callers commit immediately.
+        commit_unless_gated(conn, label="cache_cluster_label")
     except sqlite3.OperationalError as exc:
         logger.warning("Failed caching cluster label: %s", exc)

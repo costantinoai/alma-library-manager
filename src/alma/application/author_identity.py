@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from alma.core.db_write import commit_unless_gated
 from alma.core.resolution import (
     AuthorResolutionResult,
     get_author_sample_titles,
@@ -448,8 +449,10 @@ def persist_identity_result(
     params.append(author_id)
     try:
         db.execute(sql, params)
-        if db.in_transaction:
-            db.commit()
+        # Caller-owns-transaction: no-op when persisted inside a gated unit
+        # (the caller commits the whole unit); commit standalone via the
+        # background-sweep callers. See db_write.commit_unless_gated.
+        commit_unless_gated(db, label="persist_identity_result")
     except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
         logger.warning("persist_identity_result failed for %s: %s", author_id, exc)
 

@@ -459,6 +459,7 @@ def add_to_library(
     )
     if cursor.rowcount > 0 and _needs_enrichment(db, paper_id):
         from alma.core.db_write import (
+            commit_unless_gated,
             gate_held_by_current_thread,
             run_after_gate_release,
         )
@@ -478,8 +479,9 @@ def add_to_library(
             # Legacy non-unit caller (feed accept / discovery lens save /
             # importer): keep the commit-then-schedule contract so the
             # enrichment job's independent connection sees the latest row.
-            if db.in_transaction:
-                db.commit()
+            # commit_unless_gated takes the standalone (retried) path here
+            # since the gate is not held.
+            commit_unless_gated(db, label="add_to_library")
             _schedule_paper_enrichment(paper_id)
     return cursor.rowcount > 0
 
