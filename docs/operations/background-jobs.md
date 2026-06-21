@@ -106,6 +106,19 @@ stop before the next Activity write when possible.
   and **worker capacity is reserved for user/product work**, so a backlog drain
   can't starve a click. A structural test fails CI on any unclassified scheduling
   call.
+* **Per-job nested fan-out budget.** `ALMA_SCHEDULER_WORKERS` bounds how many
+  jobs run at once; `JobPolicy.fanout_budget` bounds how *wide* each one fans
+  out. A job that internally spawns a `ThreadPoolExecutor` (discovery retrieval
+  lanes, S2 `/paper/batch`, per-author works expansion, library enrichment) goes
+  through `core.concurrency.bounded_thread_pool`, which clamps the pool to the
+  running job's budget — so N concurrent jobs can't each open a 12-worker pool
+  and storm SQLite / the upstream APIs. The clamp applies **only on the
+  background-job path**: interactive request-path fan-out (a user clicking
+  Discover / Find & Add) keeps its full width, since there latency, not writer
+  contention, is the concern. Latency-sensitive network namespaces
+  (discovery/feed/lenses) carry a generous budget; DB-writing namespaces a
+  tighter one. A structural test fails CI on any raw `ThreadPoolExecutor(…)`
+  outside the one primitive.
 
 ## Common job types
 
