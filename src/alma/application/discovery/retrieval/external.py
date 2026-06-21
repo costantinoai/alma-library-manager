@@ -9,7 +9,9 @@ results back through the branch-control lifecycle.
 from __future__ import annotations
 
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
+
+from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -142,7 +144,7 @@ def _retrieve_external_channel(
     # so widening only overlaps the FAST sources (OpenAlex 100 req/s, Crossref).
     # Worst case 12 × 2 OpenAlex sub-calls (search_works_hybrid) ≈ 3 OA req/s
     # averaged over the 8s lane deadline, far under the 100 req/s key ceiling.
-    lane_executor = ThreadPoolExecutor(max_workers=12, thread_name_prefix="lens-lane")
+    lane_executor = bounded_thread_pool(12, thread_name_prefix="lens-lane")
 
     def _submit_source_search(
         cache_key: tuple,

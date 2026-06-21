@@ -272,9 +272,11 @@ def fetch_works_by_dois(
             out.update(_fetch_works_chunk(chunk))
         return out
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    from alma.core.concurrency import bounded_thread_pool
+
+    with bounded_thread_pool(workers) as ex:
         futures = [ex.submit(_fetch_works_chunk, chunk) for chunk in chunks]
         for fut in as_completed(futures):
             try:

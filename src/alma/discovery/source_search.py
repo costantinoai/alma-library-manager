@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import as_completed, wait
+
+from alma.core.concurrency import bounded_thread_pool
 import logging
 from time import perf_counter
 from typing import Any, Dict, Optional
@@ -495,8 +497,8 @@ def search_across_sources(
     # explicitly so we can return as soon as the deadline fires and call
     # `shutdown(wait=False)` — background HTTP threads finish on their
     # own (each source library already caps its per-request timeout).
-    executor = ThreadPoolExecutor(
-        max_workers=max(1, min(5, len(source_calls))),
+    executor = bounded_thread_pool(
+        max(1, min(5, len(source_calls))),
         thread_name_prefix="lens-source",
     )
     try:
@@ -602,8 +604,8 @@ def stream_across_sources(
     for source_name, _ in source_calls:
         yield {"type": "source_pending", "source": source_name}
 
-    executor = ThreadPoolExecutor(
-        max_workers=max(1, min(5, len(source_calls))),
+    executor = bounded_thread_pool(
+        max(1, min(5, len(source_calls))),
         thread_name_prefix="findadd-stream",
     )
     started_at = perf_counter()

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+from alma.core.concurrency import bounded_thread_pool
 from typing import Any
 
 from alma.core.scoring_math import clamp
@@ -239,7 +239,7 @@ def _retrieve_graph_channel(
         # Bounded fan-out: drain up to the deadline, abandon (shutdown
         # wait=False) any OpenAlex call still pending so a slow/429 source
         # can't stall the lane (F2).
-        gpool = ThreadPoolExecutor(max_workers=min(6, max(1, len(call_keys))), thread_name_prefix="graph-oa")
+        gpool = bounded_thread_pool(min(6, max(1, len(call_keys))), thread_name_prefix="graph-oa")
         future_map = {
             gpool.submit(fn_map[rel], identifier, 6): (identifier, rel, weight)
             for identifier, rel, weight in call_keys
@@ -278,7 +278,7 @@ def _retrieve_graph_channel(
         # Bounded fan-out (F2): S2 is the rate-limit-prone source — abandon
         # any call still in 429 retry/cooldown at the deadline (this is the
         # exact site of the live-reproduced 7.3 min hang).
-        s2pool = ThreadPoolExecutor(max_workers=min(4, max(1, len(seed_dois))), thread_name_prefix="graph-s2")
+        s2pool = bounded_thread_pool(min(4, max(1, len(seed_dois))), thread_name_prefix="graph-s2")
         future_map = {s2pool.submit(semantic_scholar.fetch_related_papers, doi, 6): doi for doi in seed_dois}
         done_map = _drain_futures_within_deadline(s2pool, future_map, _GRAPH_FALLBACK_DEADLINE_S)
         if len(done_map) < len(future_map):

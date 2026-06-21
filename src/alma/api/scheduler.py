@@ -37,6 +37,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from alma.core.concurrency import enter_job_fanout
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -2041,69 +2042,15 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
         # `kill_job_thread(job_id)` can inject JobCancelled even if the job
         # is still in the pre-run set_job_status / DB roundtrip below.
         _register_running_thread(job_id)
+        # Bound this job's nested fan-out (any ThreadPoolExecutor it spawns) to
+        # its policy budget for the duration of the runner. Visible only to
+        # `core.concurrency.bounded_thread_pool` calls on this worker thread, so
+        # interactive request-path fan-out is untouched. Resolved from the job's
+        # own operation_key — fail-open (no clamp) when unclassified.
+        operation_key = (get_job_status(job_id) or {}).get("operation_key")
         try:
-            st = get_job_status(job_id) or {}
-            if st.get("status") == "cancelled" or st.get("cancel_requested"):
-                set_job_status(
-                    job_id,
-                    status="cancelled",
-                    finished_at=datetime.utcnow().isoformat(),
-                    message=st.get("message") or f"Cancelled: {job_id}",
-                )
-                return
-            if st.get("status") in ("scheduled", "queued", "running", None):
-                set_job_status(
-                    job_id,
-                    status="running",
-                    started_at=st.get("started_at") or datetime.utcnow().isoformat(),
-                    message=st.get("message") or f"Running: {job_id}",
-                )
-            result = func(*args, **kwargs)
-            st_after = get_job_status(job_id) or {}
-            if st_after.get("cancel_requested") or st_after.get("status") in ("cancelling", "cancelled"):
-                cancel_result = {
-                    "success": False,
-                    "cancelled": True,
-                    "message": "Operation cancelled",
-                }
-                if isinstance(result, dict):
-                    cancel_result.update(result)
-                    cancel_result["cancelled"] = True
-                    cancel_result["success"] = False
-                set_job_status(
-                    job_id,
-                    status="cancelled",
-                    cancel_requested=True,
-                    finished_at=datetime.utcnow().isoformat(),
-                    message="Operation cancelled",
-                    result=cancel_result,
-                )
-            elif st_after.get("status") not in ("completed", "failed"):
-                # Terminal-message contract: prefer a runner-provided
-                # `message` in the return dict; otherwise fall back to a
-                # bland default.  Pre-2026-04-25 we read whatever
-                # `message` was on the latest in-progress
-                # `set_job_status` call, which left every Activity row
-                # stuck on a stale running line ("Recomputing author
-                # centroid", "Fetching SPECTER2 vectors for 4 papers"…)
-                # even though the job had moved on.  Runners that want a
-                # specific terminal message return
-                # `{..., "message": "Refreshed N → M new"}`.
-                done_message: Optional[str] = None
-                if isinstance(result, dict):
-                    candidate = result.get("message")
-                    if isinstance(candidate, str) and candidate.strip():
-                        done_message = candidate.strip()
-                if not done_message:
-                    done_message = f"Completed: {job_id}"
-                payload = {
-                    "status": "completed",
-                    "finished_at": datetime.utcnow().isoformat(),
-                    "message": done_message,
-                }
-                if isinstance(result, dict):
-                    payload["result"] = result
-                set_job_status(job_id, **payload)
+            with enter_job_fanout(operation_key):
+                _run_job_body()
         except JobCancelled:
             set_job_status(
                 job_id,
@@ -2125,6 +2072,73 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             raise
         finally:
             _unregister_running_thread(job_id)
+
+    def _run_job_body():
+        # The actual run, executed inside the fan-out budget context above.
+        # Exceptions propagate to _wrapped (JobCancelled / failure handling +
+        # thread unregister live there, around the budget context).
+        st = get_job_status(job_id) or {}
+        if st.get("status") == "cancelled" or st.get("cancel_requested"):
+            set_job_status(
+                job_id,
+                status="cancelled",
+                finished_at=datetime.utcnow().isoformat(),
+                message=st.get("message") or f"Cancelled: {job_id}",
+            )
+            return
+        if st.get("status") in ("scheduled", "queued", "running", None):
+            set_job_status(
+                job_id,
+                status="running",
+                started_at=st.get("started_at") or datetime.utcnow().isoformat(),
+                message=st.get("message") or f"Running: {job_id}",
+            )
+        result = func(*args, **kwargs)
+        st_after = get_job_status(job_id) or {}
+        if st_after.get("cancel_requested") or st_after.get("status") in ("cancelling", "cancelled"):
+            cancel_result = {
+                "success": False,
+                "cancelled": True,
+                "message": "Operation cancelled",
+            }
+            if isinstance(result, dict):
+                cancel_result.update(result)
+                cancel_result["cancelled"] = True
+                cancel_result["success"] = False
+            set_job_status(
+                job_id,
+                status="cancelled",
+                cancel_requested=True,
+                finished_at=datetime.utcnow().isoformat(),
+                message="Operation cancelled",
+                result=cancel_result,
+            )
+        elif st_after.get("status") not in ("completed", "failed"):
+            # Terminal-message contract: prefer a runner-provided
+            # `message` in the return dict; otherwise fall back to a
+            # bland default.  Pre-2026-04-25 we read whatever
+            # `message` was on the latest in-progress
+            # `set_job_status` call, which left every Activity row
+            # stuck on a stale running line ("Recomputing author
+            # centroid", "Fetching SPECTER2 vectors for 4 papers"…)
+            # even though the job had moved on.  Runners that want a
+            # specific terminal message return
+            # `{..., "message": "Refreshed N → M new"}`.
+            done_message: Optional[str] = None
+            if isinstance(result, dict):
+                candidate = result.get("message")
+                if isinstance(candidate, str) and candidate.strip():
+                    done_message = candidate.strip()
+            if not done_message:
+                done_message = f"Completed: {job_id}"
+            payload = {
+                "status": "completed",
+                "finished_at": datetime.utcnow().isoformat(),
+                "message": done_message,
+            }
+            if isinstance(result, dict):
+                payload["result"] = result
+            set_job_status(job_id, **payload)
 
     if os.getenv("PYTEST_CURRENT_TEST"):
         # Tests normally run immediate jobs inline so a single call can exercise

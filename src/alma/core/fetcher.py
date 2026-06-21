@@ -14,7 +14,9 @@ import sqlite3
 from scholarly import scholarly
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+
+from alma.core.concurrency import bounded_thread_pool
 import threading
 from tqdm import tqdm
 
@@ -367,7 +369,7 @@ def fetch_selected_pubs(pubs_to_fetch):
 
     fetched_pubs = []
     max_workers = min(4, len(pubs_to_fetch))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with bounded_thread_pool(max_workers) as executor:
         futures = [
             executor.submit(fetch_publication_details, pub) for pub in pubs_to_fetch
         ]

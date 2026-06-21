@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
@@ -333,9 +333,7 @@ def fetch_top_cited_titles_by_author(
             return author_oid.lower(), []
 
     out: dict[str, list[str]] = {}
-    with ThreadPoolExecutor(
-        max_workers=min(6, len(ids)), thread_name_prefix="author-works"
-    ) as pool:
+    with bounded_thread_pool(min(6, len(ids)), thread_name_prefix="author-works") as pool:
         for oid, titles in pool.map(_one, ids):
             out[oid] = titles
     return out

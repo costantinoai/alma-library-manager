@@ -921,7 +921,9 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
             except Exception as exc:
                 logger.debug("S-5 DOI pre-resolve failed: %s", exc)
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+
+    from alma.core.concurrency import bounded_thread_pool
 
     strategy_fns = []
     if strat_related:
@@ -938,7 +940,7 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
         strategy_fns.append(("semantic_scholar", _strat_semantic_scholar))
 
     workers = min(len(strategy_fns), 6) if strategy_fns else 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    with bounded_thread_pool(workers) as pool:
         futures = {pool.submit(fn): name for name, fn in strategy_fns}
         for future in as_completed(futures):
             name = futures[future]

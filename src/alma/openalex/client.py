@@ -1155,9 +1155,11 @@ def _run_chunked_parallel(
                 logger.warning("%s failed for chunk %d: %s", label, idx, e)
         return merged
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    from alma.core.concurrency import bounded_thread_pool
+
+    with bounded_thread_pool(workers) as pool:
         futures = {
             pool.submit(fetch_chunk, idx, chunk): idx
             for idx, chunk in enumerate(chunks)

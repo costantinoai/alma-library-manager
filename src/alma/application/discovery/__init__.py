@@ -8,7 +8,7 @@ import logging
 import sqlite3
 import uuid
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
 from time import perf_counter
 from typing import Any, Optional
@@ -429,7 +429,7 @@ def refresh_lens_recommendations(
                 pass
 
     lane_results: dict[str, Any] = {}
-    lane_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lens-lane-top")
+    lane_pool = bounded_thread_pool(4, thread_name_prefix="lens-lane-top")
     try:
         fut_to_name = {
             lane_pool.submit(_run_lane_with_conn, name, label, fn): name

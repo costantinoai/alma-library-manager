@@ -64,6 +64,15 @@ class JobPolicy:
     max_concurrency: int = 1  # concurrent jobs allowed in this namespace
     may_overlap_maintenance: bool = True  # may run while the maintenance lane drains
     destructive: bool = False  # mutates/removes rows irreversibly
+    # Max width of THIS job's *nested* fan-out (a ThreadPoolExecutor it spawns
+    # internally) while it runs as a background job. `_scheduler_max_workers`
+    # bounds how many jobs run at once; this bounds how wide each one fans out,
+    # so N concurrent jobs can't each open a 12-worker pool and storm SQLite /
+    # the external APIs. `core.concurrency.bounded_thread_pool` reads it; the
+    # interactive request path has no job context and is never clamped. Generous
+    # for latency-sensitive network lanes that carry their own deadlines
+    # (discovery/feed/lenses), tighter for DB-writing namespaces.
+    fanout_budget: int = 4
 
     def __post_init__(self) -> None:
         # Structural invariants every policy must satisfy (cheap, fail-fast).
@@ -74,6 +83,8 @@ class JobPolicy:
             raise ValueError(f"{self.namespace}: destructive jobs must be data_management/maintenance")
         if self.job_class == JobClass.HOUSEKEEPING and ResourceKind.DB_EXCLUSIVE not in self.resources:
             raise ValueError(f"{self.namespace}: housekeeping must declare DB_EXCLUSIVE")
+        if self.fanout_budget < 1:
+            raise ValueError(f"{self.namespace}: fanout_budget must be >= 1")
 
 
 _R = ResourceKind
@@ -112,10 +123,15 @@ JOB_POLICIES: dict[str, JobPolicy] = {p.namespace: p for p in (
     _p("maintenance", JobClass.MAINTENANCE, 30, {_R.DB_WRITER},
        max_concurrency=1, may_overlap_maintenance=False),
     # ---- User / product work (must keep capacity; may overlap maintenance) ---
+    # Discovery/feed/lenses fan out across many retrieval lanes that already
+    # carry per-lane deadlines + 429 abandonment; a generous fanout_budget keeps
+    # a user-initiated (backgrounded) refresh fast while still being a declared,
+    # greppable ceiling rather than an unbounded pool.
     _p("discovery", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER, _R.LOCAL_MODEL},
-       sources=("openalex", "semantic_scholar"), max_concurrency=2),
-    _p("feed", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=2),
-    _p("lenses", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER, _R.LOCAL_MODEL}, max_concurrency=2),
+       sources=("openalex", "semantic_scholar"), max_concurrency=2, fanout_budget=12),
+    _p("feed", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",),
+       max_concurrency=2, fanout_budget=8),
+    _p("lenses", JobClass.USER_PRODUCT, 10, {_R.DB_WRITER, _R.LOCAL_MODEL}, max_concurrency=2, fanout_budget=8),
     _p("publications", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER},
        sources=("openalex", "semantic_scholar", "crossref"), max_concurrency=2),
     _p("imports", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=2),

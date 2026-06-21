@@ -6,7 +6,9 @@ import json
 import logging
 import re
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+
+from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime, timedelta
 import uuid
 from typing import Optional
@@ -1588,8 +1590,8 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         # parallel searches — an observability-only trade-off, not correctness.
         plan_by_monitor: dict[str, dict] = {}
         if non_author_monitors:
-            with ThreadPoolExecutor(
-                max_workers=max(1, min(_FEED_MONITOR_CONCURRENCY, len(non_author_monitors))),
+            with bounded_thread_pool(
+                max(1, min(_FEED_MONITOR_CONCURRENCY, len(non_author_monitors))),
                 thread_name_prefix="feed-monitor",
             ) as monitor_pool:
                 future_map = {
