@@ -52,7 +52,7 @@ import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, TypeVar
 
-from alma.core.db_retry import run_with_lock_retry
+from alma.core.db_retry import commit_with_retry, run_with_lock_retry
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,49 @@ def _drain_deferred() -> None:
             fn()
         except Exception:
             logger.warning("deferred post-gate callback failed", exc_info=True)
+
+def commit_unless_gated(conn: sqlite3.Connection, *, label: str = "db write") -> None:
+    """Caller-owns-transaction commit for SHARED write helpers.
+
+    A write helper that may run EITHER standalone OR nested inside a
+    :func:`run_write_unit` / :func:`write_section` calls this instead of a raw
+    ``conn.commit()``:
+
+    * **gate held by this thread** → no-op. The enclosing unit owns the commit,
+      so committing here would (a) break the unit's atomicity and (b) silently
+      downgrade its ``BEGIN IMMEDIATE`` to a DEFERRED transaction for the rest of
+      the section — re-introducing the read→write upgrade hazard the section
+      exists to prevent. We also assert the gate-holder actually opened a
+      transaction: a held gate with no open txn means the unit forgot its
+      ``BEGIN`` and this helper's writes would be silently lost.
+    * **gate NOT held** → ``commit_with_retry``. A standalone (legacy) caller
+      owns the implicit transaction; commit it with transient-lock retry +
+      logging instead of a bare, un-retried commit.
+
+    This replaces the fragile ``if conn.in_transaction: conn.commit()`` idiom,
+    which committed in *both* cases and thereby broke any enclosing gated unit.
+    The same gate-aware shape was already hand-rolled at
+    ``application/library.add_to_library`` and
+    ``application/feed_monitors.sync_author_monitors``; this is the DRY
+    extraction.
+
+    NOTE — scope: this is the correct, complete fix for the *nested* case. For
+    the standalone case it is a safety net (retry + logging), NOT a substitute
+    for the caller running inside a ``write_section`` / ``run_write_unit``: the
+    standalone helper's writes already ran on a DEFERRED implicit transaction,
+    so the read→write upgrade can still raise SQLITE_BUSY on the staged write,
+    before this commit is ever reached. Background batch writers that interleave
+    writes with network I/O must still be restructured onto ``write_section``.
+    """
+    if gate_held_by_current_thread():
+        assert conn.in_transaction, (
+            f"{label}: writer gate is held but no transaction is open — the "
+            "enclosing run_write_unit/write_section did not BEGIN; this helper's "
+            "writes would be silently lost"
+        )
+        return
+    commit_with_retry(conn, label=label)
+
 
 # Gate waits longer than this are logged so sustained contention shows up
 # in the server log instead of presenting as intermittent mystery latency.
