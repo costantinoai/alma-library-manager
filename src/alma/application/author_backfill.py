@@ -354,6 +354,7 @@ def _fetch_missing_s2_vectors_for_author(
 
     lookups: list[tuple[str, str]] = []
     pending_by_id: dict[str, sqlite3.Row] = {}
+    bad_doi_rows: list[sqlite3.Row] = []
     for row in pending:
         paper_id = str(row["id"])
         pending_by_id[paper_id] = row
@@ -364,28 +365,30 @@ def _fetch_missing_s2_vectors_for_author(
             lookups.append((paper_id, lookup_ids[0]))
             continue
         if str(row["doi"] or "").strip():
-            _upsert_fetch_status(
-                conn,
-                row=row,
-                model=model,
-                status="bad_local_doi",
-                reason=(
-                    "Local DOI fails registry-shape regex; fix the import "
-                    "or rerun hydration to rewrite the DOI before retrying."
-                ),
-                lookup_ids=[],
-                lookup_key=_lookup_key_for_row(row),
-            )
-            summary["bad_local_doi"] += 1
+            bad_doi_rows.append(row)
 
-    # Commit the bad_local_doi status writes above BEFORE the first S2
-    # call: the chunk loop's fetch can stall for minutes under S2 rate
-    # limiting (1 req/s + 429 backoff), and an open write transaction
-    # here held the global writer lock for that whole time — the root
-    # cause of "database is locked" bursts when several follow-triggered
-    # backfills ran at once (verified live 2026-06-05).
-    if conn.in_transaction:
-        conn.commit()
+    # Write the bad_local_doi statuses through the writer GATE before the first
+    # S2 call. Gating matters twice over: BEGIN IMMEDIATE (not a raw DEFERRED
+    # commit that loses the lock-upgrade race under concurrency → "database is
+    # locked"), and the section closes before any network, so the writer lock is
+    # never held across the chunk loop's minutes-long S2 rate-limit / 429 backoff
+    # (the original "database is locked" root cause, verified live 2026-06-05).
+    if bad_doi_rows:
+        with write_section(conn, label="author vectors: bad_local_doi"):
+            for row in bad_doi_rows:
+                _upsert_fetch_status(
+                    conn,
+                    row=row,
+                    model=model,
+                    status="bad_local_doi",
+                    reason=(
+                        "Local DOI fails registry-shape regex; fix the import "
+                        "or rerun hydration to rewrite the DOI before retrying."
+                    ),
+                    lookup_ids=[],
+                    lookup_key=_lookup_key_for_row(row),
+                )
+                summary["bad_local_doi"] += 1
     if not lookups:
         return summary
 
@@ -415,25 +418,25 @@ def _fetch_missing_s2_vectors_for_author(
                 exc,
             )
             summary["vector_fetch_errors"] += len(chunk)
-            for paper_id, lookup_id in chunk:
-                row = pending_by_id.get(paper_id)
-                if row is None:
-                    continue
-                _upsert_fetch_status(
-                    conn,
-                    row=row,
-                    model=model,
-                    status="error",
-                    reason=str(exc),
-                    lookup_ids=[lookup_id],
-                    lookup_key=_lookup_key_for_row(row),
-                )
-            # Release the writer lock before the NEXT chunk's S2 call —
-            # under sustained 429 backoff this error path repeats, and
-            # without a commit the status writes above kept a transaction
-            # open across every backoff sleep (minutes of held lock).
-            if conn.in_transaction:
-                conn.commit()
+            # Gated write of the error statuses (BEGIN IMMEDIATE, committed on
+            # exit). The section opens AFTER the failed fetch and closes before
+            # the next chunk's S2 call, so the writer lock is never held across a
+            # 429 backoff sleep — the repeat-error path used to keep a raw txn
+            # open across every retry.
+            with write_section(conn, label="author vectors: s2_error"):
+                for paper_id, lookup_id in chunk:
+                    row = pending_by_id.get(paper_id)
+                    if row is None:
+                        continue
+                    _upsert_fetch_status(
+                        conn,
+                        row=row,
+                        model=model,
+                        status="error",
+                        reason=str(exc),
+                        lookup_ids=[lookup_id],
+                        lookup_key=_lookup_key_for_row(row),
+                    )
             continue
         by_lookup = {
             str(v.get("_requested_id") or "").strip(): v
@@ -450,59 +453,62 @@ def _fetch_missing_s2_vectors_for_author(
             for v in batch.values()
             if (doi := _doi_from_s2(v))
         }
-        for paper_id, lookup_id in chunk:
-            local_row = pending_by_id.get(paper_id)
-            if local_row is None:
-                continue
-            s2_id = str(local_row["semantic_scholar_id"] or "").strip()
-            doi = canonical_lookup_doi(str(local_row["doi"] or "")) or ""
-            paper = (
-                by_lookup.get(lookup_id)
-                or (by_s2.get(s2_id) if s2_id else None)
-                or (by_doi.get(doi) if doi else None)
-            )
-            if not paper:
-                summary["vectors_missing"] += 1
-                _upsert_fetch_status(
-                    conn,
-                    row=local_row,
-                    model=model,
-                    status="unmatched",
-                    reason=(
-                        "Semantic Scholar returned no paper for current "
-                        "DOI/S2 lookup id"
-                    ),
-                    lookup_ids=[lookup_id],
-                    lookup_key=_lookup_key_for_row(local_row),
+        # Gated write of this chunk's vectors/statuses — opened AFTER the S2
+        # batch fetch above, so the writer lock (BEGIN IMMEDIATE) is held only
+        # for the local writes, never across the network call. The by_* dicts
+        # are in-memory projections of the already-fetched batch.
+        with write_section(conn, label="author vectors: upsert"):
+            for paper_id, lookup_id in chunk:
+                local_row = pending_by_id.get(paper_id)
+                if local_row is None:
+                    continue
+                s2_id = str(local_row["semantic_scholar_id"] or "").strip()
+                doi = canonical_lookup_doi(str(local_row["doi"] or "")) or ""
+                paper = (
+                    by_lookup.get(lookup_id)
+                    or (by_s2.get(s2_id) if s2_id else None)
+                    or (by_doi.get(doi) if doi else None)
                 )
-                continue
-            vec = semantic_scholar.extract_specter2_vector(paper)
-            if not vec:
-                summary["vectors_missing"] += 1
-                _upsert_fetch_status(
+                if not paper:
+                    summary["vectors_missing"] += 1
+                    _upsert_fetch_status(
+                        conn,
+                        row=local_row,
+                        model=model,
+                        status="unmatched",
+                        reason=(
+                            "Semantic Scholar returned no paper for current "
+                            "DOI/S2 lookup id"
+                        ),
+                        lookup_ids=[lookup_id],
+                        lookup_key=_lookup_key_for_row(local_row),
+                    )
+                    continue
+                vec = semantic_scholar.extract_specter2_vector(paper)
+                if not vec:
+                    summary["vectors_missing"] += 1
+                    _upsert_fetch_status(
+                        conn,
+                        row=local_row,
+                        model=model,
+                        status="missing_vector",
+                        reason=(
+                            "Semantic Scholar returned the paper without "
+                            "embedding.specter_v2"
+                        ),
+                        lookup_ids=[lookup_id],
+                        lookup_key=_lookup_key_for_row(local_row),
+                    )
+                    continue
+                if semantic_scholar.upsert_specter2_vector(
                     conn,
-                    row=local_row,
-                    model=model,
-                    status="missing_vector",
-                    reason=(
-                        "Semantic Scholar returned the paper without "
-                        "embedding.specter_v2"
-                    ),
-                    lookup_ids=[lookup_id],
-                    lookup_key=_lookup_key_for_row(local_row),
-                )
-                continue
-            if semantic_scholar.upsert_specter2_vector(
-                conn,
-                paper_id,
-                vec,
-                source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                created_at=datetime.now(timezone.utc).isoformat(),
-            ):
-                vectors_found += 1
-            _clear_fetch_status(conn, paper_id=paper_id, model=model)
-        if conn.in_transaction:
-            conn.commit()
+                    paper_id,
+                    vec,
+                    source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                ):
+                    vectors_found += 1
+                _clear_fetch_status(conn, paper_id=paper_id, model=model)
         if log is not None:
             log(
                 "fetch_vectors",
@@ -627,13 +633,14 @@ def refresh_author_works_and_vectors(
             summary["vectors_fetched"] = int(vector_summary.get("vectors_fetched") or 0)
             summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
             summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
-            # still refresh centroid — embeddings may have just arrived
-            summary["centroid_updated"] = refresh_author_centroid(
-                conn,
-                oid_norm,
-                model=semantic_scholar.S2_SPECTER2_MODEL,
-            )
-            conn.commit()
+            # still refresh centroid — embeddings may have just arrived (gated
+            # local write; no raw commit racing the gate).
+            with write_section(conn, label="author centroid (skip path)"):
+                summary["centroid_updated"] = refresh_author_centroid(
+                    conn,
+                    oid_norm,
+                    model=semantic_scholar.S2_SPECTER2_MODEL,
+                )
             return summary
 
         # Phase 2: paginate through all works.
@@ -702,14 +709,15 @@ def refresh_author_works_and_vectors(
         summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
         summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
 
-        # Phase 5: recompute centroid.
+        # Phase 5: recompute centroid (gated local write — no raw commit racing
+        # the writer gate under concurrent deep-refresh workers).
         _log("centroid", "Recomputing author centroid")
-        summary["centroid_updated"] = refresh_author_centroid(
-            conn,
-            oid_norm,
-            model=semantic_scholar.S2_SPECTER2_MODEL,
-        )
-        conn.commit()
+        with write_section(conn, label="author centroid"):
+            summary["centroid_updated"] = refresh_author_centroid(
+                conn,
+                oid_norm,
+                model=semantic_scholar.S2_SPECTER2_MODEL,
+            )
         return summary
     finally:
         conn.close()

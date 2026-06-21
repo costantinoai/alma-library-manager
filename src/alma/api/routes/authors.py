@@ -61,7 +61,7 @@ from alma.core.resolution import (
 )
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
-from alma.core.db_write import run_write_unit
+from alma.core.db_write import run_write_unit, write_section
 from alma.api.helpers import background_mode_requested, raise_internal
 
 logger = logging.getLogger(__name__)
@@ -507,7 +507,14 @@ def _apply_author_profile_from_openalex(
 
         profile = fetch_author_profile(openalex_id)
 
-    profile_summary = apply_author_profile_update(db, author_id, profile)
+    # Persist through the canonical writer in ONE gated section (BEGIN IMMEDIATE),
+    # with the network fetch above already done — the writer lock is never held
+    # across OpenAlex I/O, and concurrent author refreshes serialize through the
+    # gate instead of racing to "database is locked". Both callers (cache refresh
+    # + identity/profile refresh) are ungated, so self-gating here is the one DRY
+    # place this write obeys the SQLite write discipline.
+    with write_section(db, label="author profile: apply"):
+        profile_summary = apply_author_profile_update(db, author_id, profile)
     if job_id:
         add_job_log(
             job_id,
@@ -1114,8 +1121,8 @@ def _refresh_author_cache_impl(
             pubs = []
 
     now = datetime.utcnow().isoformat()
-    db.execute("UPDATE authors SET last_fetched_at = ? WHERE id = ?", (now, author_id))
-    db.commit()
+    with write_section(db, label="author refresh: last_fetched_at"):
+        db.execute("UPDATE authors SET last_fetched_at = ? WHERE id = ?", (now, author_id))
 
     # Consolidated author-profile refresh (2026-04-24): writes every
     # field OpenAlex returns — canonical display_name, affiliation,
@@ -1150,9 +1157,8 @@ def _refresh_author_cache_impl(
                     step="profile_refresh",
                 )
 
-    centroid_refreshed = refresh_author_centroid_safe(db, openalex_id)
-    if db.in_transaction:
-        db.commit()
+    with write_section(db, label="author refresh: centroid"):
+        centroid_refreshed = refresh_author_centroid_safe(db, openalex_id)
     if job_id:
         add_job_log(
             job_id,
@@ -1272,7 +1278,8 @@ def _refresh_author_identity_profile_impl(
 
     centroid_refreshed = False
     if identity_result["identity_changed"] and openalex_id:
-        centroid_refreshed = refresh_author_centroid_safe(db, openalex_id)
+        with write_section(db, label="author identity refresh: centroid"):
+            centroid_refreshed = refresh_author_centroid_safe(db, openalex_id)
         if job_id:
             add_job_log(
                 job_id,
