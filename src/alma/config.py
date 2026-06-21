@@ -64,8 +64,12 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "slack_channel": None,
     "id_resolution_semantic_scholar_enabled": True,
     "id_resolution_orcid_enabled": True,
+    # Google Scholar scraping is opt-in and OFF by default everywhere (D14):
+    # auto AND manual scrape both default False, alongside the openalex backend
+    # default above. Scholar serves abstracts/identity some venues hide, but it
+    # is brittle/impolite, so the user must deliberately enable it in Settings.
     "id_resolution_scholar_scrape_auto_enabled": False,
-    "id_resolution_scholar_scrape_manual_enabled": True,
+    "id_resolution_scholar_scrape_manual_enabled": False,
 }
 
 

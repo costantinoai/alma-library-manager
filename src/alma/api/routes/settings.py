@@ -237,8 +237,8 @@ class SettingsModel(BaseModel):
         description="Allow automatic Google Scholar scraping fallback in pipelines",
     )
     id_resolution_scholar_scrape_manual_enabled: Optional[bool] = Field(
-        True,
-        description="Allow manual Google Scholar scraping from the Authors UI",
+        False,
+        description="Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default — D14)",
     )
 
     @field_validator('database', 'slack_config_path')
@@ -348,7 +348,7 @@ def get_settings():
             raw.get("id_resolution_scholar_scrape_auto_enabled", False)
         ),
         id_resolution_scholar_scrape_manual_enabled=bool(
-            raw.get("id_resolution_scholar_scrape_manual_enabled", True)
+            raw.get("id_resolution_scholar_scrape_manual_enabled", False)
         ),
     )
 
