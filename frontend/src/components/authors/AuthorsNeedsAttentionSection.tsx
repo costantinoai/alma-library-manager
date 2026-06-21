@@ -1,13 +1,17 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRight, ExternalLink, GitMerge, Loader2, RefreshCw } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw } from 'lucide-react'
 
 import {
+  acceptAuthorUnidentified,
   api,
   discoverAuthorAliases,
+  getAuthorAffiliations,
+  pickAuthorAffiliation,
   resolveMergeConflict,
   setAuthorIdentifiers,
   type Author,
+  type AuthorAffiliationItem,
   type AuthorAlternateProfile,
   type AuthorNeedsAttentionRow,
   type DiscoverAliasesResponse,
@@ -76,6 +80,7 @@ export function useAuthorAttentionRouter(
   const [reviewRow, setReviewRow] = useState<AuthorNeedsAttentionRow | null>(null)
   const [identifierRow, setIdentifierRow] = useState<AuthorNeedsAttentionRow | null>(null)
   const [conflictRow, setConflictRow] = useState<AuthorNeedsAttentionRow | null>(null)
+  const [affiliationRow, setAffiliationRow] = useState<AuthorNeedsAttentionRow | null>(null)
 
   const refreshMutation = useMutation({
     mutationFn: (authorId: string) =>
@@ -109,12 +114,22 @@ export function useAuthorAttentionRouter(
       setConflictRow(row)
       return
     }
-    if (code === 'review_candidates' || code === 'manual_search') {
+    if (code === 'pick_affiliation') {
+      setAffiliationRow(row)
+      return
+    }
+    if (code === 'review_candidates') {
+      // Disambiguating among close OpenAlex candidates needs the detail panel's
+      // candidate picker — the right tool for "pick the correct match".
       const author = opts.authorsById?.get(row.author_id)
       if (author && opts.onOpenDetail) opts.onOpenDetail(author)
       return
     }
-    if (code === 'resolve_now') {
+    // Every other identity failure — no_match (manual_search), transient error
+    // (retry_refresh), followed-without-id (resolve_now) — opens the one focused
+    // identity card: retry auto-resolution, paste an authoritative id, or accept
+    // it can't be identified.
+    if (code === 'manual_search' || code === 'resolve_now' || code === 'retry_refresh') {
       setIdentifierRow(row)
       return
     }
@@ -129,6 +144,7 @@ export function useAuthorAttentionRouter(
       <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
       <AddIdentifierDialog row={identifierRow} onClose={() => setIdentifierRow(null)} />
       <ResolveConflictDialog row={conflictRow} onClose={() => setConflictRow(null)} />
+      <AffiliationPickerDialog row={affiliationRow} onClose={() => setAffiliationRow(null)} />
     </>
   )
 
@@ -592,20 +608,72 @@ function AddIdentifierDialog({
     onError: () => errorToast('Error', 'Could not save identifiers.'),
   })
 
+  // Terminal "give up gracefully": some authors are genuinely not in any index
+  // (students, industry, non-indexed). Accepting marks them dismissed so they
+  // stop nagging — the blocking fix — without fabricating an identifier.
+  const acceptMutation = useMutation({
+    mutationFn: () => acceptAuthorUnidentified(row!.author_id),
+    onSuccess: () => {
+      invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['authors-needs-attention'],
+        ['author-detail', row!.author_id],
+        ['health'],
+      )
+      toast({ title: 'Marked as unidentifiable', description: row?.author_name ?? '' })
+      onClose()
+    },
+    onError: () => errorToast('Error', 'Could not update the author.'),
+  })
+
+  // Auto path: re-run the hierarchical resolver. Cheap, and the right first try
+  // for a transient `error`; for a true `no_match` it usually fails again, which
+  // is exactly when the manual paste / accept below earn their place.
+  const retryMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/authors/${encodeURIComponent(row!.author_id)}/identity-profile-refresh`),
+    onSuccess: () => {
+      invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['authors-needs-attention'],
+        ['activity-operations'],
+        ['author-detail', row!.author_id],
+      )
+      toast({ title: 'Refresh queued', description: 'Auto-resolution is re-running.' })
+      onClose()
+    },
+    onError: () => errorToast('Error', 'Could not queue the refresh.'),
+  })
+
+  const busy = mutation.isPending || acceptMutation.isPending || retryMutation.isPending
   const canSubmit = !!(orcid.trim() || openalexInput.trim() || scholar.trim())
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Add identifiers</DialogTitle>
+          <DialogTitle>Resolve identity</DialogTitle>
           <DialogDescription>
             Paste any authoritative identifier you have for{' '}
-            <span className="font-medium">{row?.author_name}</span>. Whichever one
-            you provide will be used to short-circuit the resolver.
+            <span className="font-medium">{row?.author_name}</span> to short-circuit
+            the resolver — or, if they genuinely can&apos;t be identified, accept that
+            so they stop showing here.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <SubPanel className="flex items-center justify-between gap-2 p-2.5">
+            <span className="text-xs text-slate-500">Try the automatic resolver again first</span>
+            <Button variant="outline" size="sm" onClick={() => retryMutation.mutate()} disabled={busy}>
+              {retryMutation.isPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              Retry auto-resolve
+            </Button>
+          </SubPanel>
           <div className="space-y-1">
             <Label htmlFor="add-id-orcid">ORCID iD</Label>
             <Input
@@ -637,16 +705,214 @@ function AddIdentifierDialog({
             />
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={mutation.isPending}>
-            Cancel
-          </Button>
+        <DialogFooter className="sm:justify-between">
           <Button
-            onClick={() => mutation.mutate()}
-            disabled={!canSubmit || mutation.isPending}
+            variant="ghost"
+            className="text-slate-500 hover:text-slate-700"
+            onClick={() => acceptMutation.mutate()}
+            disabled={busy}
           >
-            {mutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-            Save
+            {acceptMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            Can&apos;t identify
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button onClick={() => mutation.mutate()} disabled={!canSubmit || busy}>
+              {mutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+interface AffiliationOption {
+  institution_name: string
+  score: number
+  sources: string[]
+  isCurrent: boolean
+  openalexId?: string | null
+  ror?: string | null
+}
+
+/** Collapse the raw per-source evidence rows into distinct institutions:
+ *  dedupe by case-insensitive name, keep the best score, union the sources
+ *  (so the user sees "OpenAlex · ORCID"), and surface the highest-signal
+ *  options first. The synthetic `manual` source is the user's own prior pick,
+ *  represented by the highlighted current row — never offered as a choice. */
+function groupAffiliationOptions(items: AuthorAffiliationItem[]): AffiliationOption[] {
+  const byKey = new Map<string, AffiliationOption>()
+  for (const it of items) {
+    const name = (it.institution_name || '').trim()
+    if (!name || it.source === 'manual') continue
+    const key = name.toLowerCase()
+    const score = it.score ?? 0
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, {
+        institution_name: name,
+        score,
+        sources: [it.source],
+        isCurrent: !!it.is_current,
+        openalexId: it.institution_openalex_id,
+        ror: it.institution_ror,
+      })
+    } else {
+      existing.score = Math.max(existing.score, score)
+      if (!existing.sources.includes(it.source)) existing.sources.push(it.source)
+      existing.isCurrent = existing.isCurrent || !!it.is_current
+      existing.openalexId = existing.openalexId || it.institution_openalex_id
+      existing.ror = existing.ror || it.institution_ror
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) => b.score - a.score)
+}
+
+/**
+ * Affiliation picker. Terminal resolution for the `pick_affiliation` action
+ * (reason_code `affiliation_conflict`): the auto sources name different
+ * institutions (the author moved), so no refresh can reconcile them — the user
+ * must choose. Reuses the existing `/authors/{id}/affiliations` evidence + the
+ * `pickAuthorAffiliation` primitive, which records the choice as an
+ * authoritative manual evidence row that outranks every source, survives
+ * refreshes, and clears the conflict for good. A free-text fallback covers the
+ * case where none of the evidence is the right display name.
+ */
+function AffiliationPickerDialog({
+  row,
+  onClose,
+}: {
+  row: AuthorNeedsAttentionRow | null
+  onClose: () => void
+}) {
+  const open = row !== null
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const [custom, setCustom] = useState('')
+
+  useMemo(() => {
+    if (open) setCustom('')
+    return null
+  }, [open, row?.author_id])
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['author-affiliations', row?.author_id],
+    queryFn: () => getAuthorAffiliations(row!.author_id),
+    enabled: open,
+  })
+
+  const mutation = useMutation({
+    mutationFn: (institution_name: string) =>
+      pickAuthorAffiliation(row!.author_id, { institution_name }),
+    onSuccess: (res) => {
+      invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['authors-needs-attention'],
+        ['author-detail', row!.author_id],
+        ['author-affiliations', row!.author_id],
+        ['health'],
+      )
+      toast({ title: 'Affiliation set', description: res.affiliation ?? row?.author_name ?? '' })
+      onClose()
+    },
+    onError: () => errorToast('Error', 'Could not set the affiliation.'),
+  })
+
+  const options = useMemo(() => groupAffiliationOptions(data?.items ?? []), [data])
+  const current = (data?.display_affiliation ?? '').trim()
+  const pending = mutation.isPending
+  const picking = pending ? (mutation.variables as string) : null
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Choose affiliation</DialogTitle>
+          <DialogDescription>
+            Sources disagree on the institution for{' '}
+            <span className="font-medium">{row?.author_name}</span> — usually because they
+            moved. Pick the one to display; it sticks and won&apos;t be flagged again.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          {isLoading ? (
+            <LoadingState message="Loading affiliation evidence..." />
+          ) : options.length === 0 ? (
+            <p className="text-xs text-slate-500">No affiliation evidence on file — type one below.</p>
+          ) : (
+            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+              {options.map((opt) => {
+                const isCurrent = current && opt.institution_name.toLowerCase() === current.toLowerCase()
+                return (
+                  <SubPanel key={opt.institution_name} className="flex items-center gap-2 p-2.5">
+                    <Building2 className="h-4 w-4 shrink-0 text-slate-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-slate-700" title={opt.institution_name}>
+                        {opt.institution_name}
+                      </p>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                        {opt.sources.map((s) => (
+                          <StatusBadge key={s} tone="neutral" size="sm">
+                            {s}
+                          </StatusBadge>
+                        ))}
+                        {opt.isCurrent && (
+                          <StatusBadge tone="info" size="sm">
+                            current role
+                          </StatusBadge>
+                        )}
+                      </div>
+                    </div>
+                    {isCurrent ? (
+                      <span className="flex items-center gap-1 text-xs font-medium text-accent-600">
+                        <Check className="h-3.5 w-3.5" /> Selected
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => mutation.mutate(opt.institution_name)}
+                        disabled={pending}
+                      >
+                        {picking === opt.institution_name && (
+                          <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                        )}
+                        Use this
+                      </Button>
+                    )}
+                  </SubPanel>
+                )
+              })}
+            </div>
+          )}
+          <div className="space-y-1 pt-1">
+            <Label htmlFor="affiliation-custom">Or type an institution</Label>
+            <div className="flex gap-2">
+              <Input
+                id="affiliation-custom"
+                placeholder="e.g. Harvard University"
+                value={custom}
+                onChange={(e) => setCustom(e.target.value)}
+                autoComplete="off"
+              />
+              <Button
+                variant="outline"
+                onClick={() => mutation.mutate(custom.trim())}
+                disabled={!custom.trim() || pending}
+              >
+                Use
+              </Button>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
+            Cancel
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -2713,6 +2713,47 @@ export function setAuthorIdentifiers(
   return api.post(`/authors/${encodeURIComponent(authorId)}/identifiers`, body)
 }
 
+export interface AuthorAffiliationItem {
+  id: number
+  source: string
+  institution_name: string
+  institution_openalex_id?: string | null
+  institution_ror?: string | null
+  role?: string | null
+  is_current?: number
+  confidence?: number | null
+  score?: number
+}
+
+export interface AuthorAffiliationsResponse {
+  author_id: string
+  author_name: string
+  display_affiliation: string | null
+  items: AuthorAffiliationItem[]
+}
+
+/** Read-only scored affiliation evidence used to populate the picker. */
+export function getAuthorAffiliations(authorId: string): Promise<AuthorAffiliationsResponse> {
+  return api.get(`/authors/${encodeURIComponent(authorId)}/affiliations`)
+}
+
+/** Lock an author's display affiliation to a chosen institution (terminal
+ *  resolution of the "affiliation evidence disagrees" needs-attention flag). */
+export function pickAuthorAffiliation(
+  authorId: string,
+  body: { institution_name: string; institution_openalex_id?: string; institution_ror?: string },
+): Promise<{ author_id: string; affiliation: string | null; conflict: boolean }> {
+  return api.post(`/authors/${encodeURIComponent(authorId)}/affiliation`, body)
+}
+
+/** Terminal acknowledgment: mark an author as unidentifiable so it stops
+ *  surfacing in needs-attention / author-health (without inventing an id). */
+export function acceptAuthorUnidentified(
+  authorId: string,
+): Promise<{ author_id: string; id_resolution_status: string }> {
+  return api.post(`/authors/${encodeURIComponent(authorId)}/accept-unidentified`)
+}
+
 export function listAuthorsNeedsAttention(
   limit: number = 50,
 ): Promise<{ total: number; items: AuthorNeedsAttentionRow[] }> {
