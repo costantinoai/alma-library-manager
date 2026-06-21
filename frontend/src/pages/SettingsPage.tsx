@@ -15,6 +15,7 @@ import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolu
 import { ChannelsCard } from '@/components/settings/ChannelsCard'
 import { EmailCard } from '@/components/settings/EmailCard'
 import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard'
+import { FeedAutoRefreshCard } from '@/components/settings/FeedAutoRefreshCard'
 import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
 import { DataManagementCard } from '@/components/settings/DataManagementCard'
@@ -55,6 +56,7 @@ type AnchorId =
   | 'email-digests'
   | 'discovery-weights'
   | 'feed-monitors'
+  | 'feed-auto-refresh'
   | 'ai-config'
   | 'data-management'
   | 'library-management'
@@ -81,6 +83,7 @@ const TOC: TocEntry[] = [
   { id: 'email-digests', label: 'Email digests', section: 'connections' },
   { id: 'discovery-weights', label: 'Discovery weights', section: 'intelligence' },
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
+  { id: 'feed-auto-refresh', label: 'Feed auto-refresh', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
   { id: 'data-management', label: 'Data management', section: 'system' },
   { id: 'library-management', label: 'Library maintenance', section: 'system' },
@@ -295,6 +298,7 @@ export function SettingsPage() {
           <SettingsSection id="intelligence" title="Intelligence" caption="Discovery weights, monitor terms, and AI provider. These cards self-save.">
             <Anchor id="discovery-weights"><DiscoveryWeightsCard /></Anchor>
             <Anchor id="feed-monitors"><FeedMonitorTermsCard /></Anchor>
+            <Anchor id="feed-auto-refresh"><FeedAutoRefreshCard /></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
           </SettingsSection>
 

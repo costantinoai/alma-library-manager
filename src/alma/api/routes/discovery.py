@@ -40,6 +40,7 @@ from alma.core.http_sources import (
     source_diagnostics_scope,
 )
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.db_write import run_write_unit
 from alma.core.redaction import redact_sensitive_text
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
@@ -92,7 +93,8 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
             feedback_decay_days_half=int(kv.get("limits.feedback_decay_days_half", "180")),
         ),
         schedule=DiscoverySchedule(
-            refresh_interval_hours=int(kv.get("schedule.refresh_interval_hours", "0")),
+            refresh_enabled=kv.get("schedule.refresh_enabled", "false").lower() == "true",
+            refresh_interval_hours=int(kv.get("schedule.refresh_interval_hours", "6")),
             graph_maintenance_interval_hours=int(kv.get("schedule.graph_maintenance_interval_hours", "24")),
         ),
         cache=DiscoveryCache(
@@ -297,7 +299,7 @@ def update_discovery_settings(
     """Partially update discovery settings (only supplied fields are changed)."""
     runner = OperationRunner(db)
 
-    def _handler(_ctx):
+    def _apply_settings() -> None:
         if body.weights is not None:
             w = body.weights
             _upsert_setting(db, "weights.source_relevance", str(w.source_relevance))
@@ -331,6 +333,7 @@ def update_discovery_settings(
             _upsert_setting(db, "limits.feedback_decay_days_full", str(lim.feedback_decay_days_full))
             _upsert_setting(db, "limits.feedback_decay_days_half", str(lim.feedback_decay_days_half))
         if body.schedule is not None:
+            _upsert_setting(db, "schedule.refresh_enabled", str(body.schedule.refresh_enabled).lower())
             _upsert_setting(db, "schedule.refresh_interval_hours", str(body.schedule.refresh_interval_hours))
             _upsert_setting(db, "schedule.graph_maintenance_interval_hours", str(body.schedule.graph_maintenance_interval_hours))
         if body.cache is not None:
@@ -369,6 +372,10 @@ def update_discovery_settings(
             if mode not in {"explore", "balanced", "exploit"}:
                 mode = "balanced"
             _upsert_setting(db, "recommendation_mode", mode)
+
+    def _handler(_ctx):
+        # Apply every setting upsert in one gated, atomic write unit.
+        run_write_unit(db, _apply_settings, label="discovery_settings_update")
         return OperationOutcome(status="completed", message="Discovery settings updated", result={"updated": True})
 
     try:
@@ -383,11 +390,15 @@ def update_discovery_settings(
                 reschedule_citation_graph_maintenance,
                 reschedule_discovery_refresh,
             )
+            enabled_row = db.execute(
+                "SELECT value FROM discovery_settings WHERE key = 'schedule.refresh_enabled'"
+            ).fetchone()
             interval_row = db.execute(
                 "SELECT value FROM discovery_settings WHERE key = 'schedule.refresh_interval_hours'"
             ).fetchone()
             if interval_row:
-                reschedule_discovery_refresh(int(interval_row["value"]))
+                refresh_enabled = bool(enabled_row) and str(enabled_row["value"]).strip().lower() == "true"
+                reschedule_discovery_refresh(refresh_enabled, int(interval_row["value"]))
             graph_interval_row = db.execute(
                 "SELECT value FROM discovery_settings WHERE key = 'schedule.graph_maintenance_interval_hours'"
             ).fetchone()
@@ -413,7 +424,12 @@ def reset_discovery_settings(
     runner = OperationRunner(db)
 
     def _handler(_ctx):
-        discovery_app.reset_settings_to_defaults(db)
+        # Gated, atomic restore of every default setting.
+        run_write_unit(
+            db,
+            lambda: discovery_app.reset_settings_to_defaults(db),
+            label="discovery_settings_reset",
+        )
         return OperationOutcome(status="completed", message="Discovery settings reset to defaults")
 
     try:
@@ -642,14 +658,19 @@ def _write_similarity_cache(
         now = _dt.utcnow()
         expires_at = now + timedelta(hours=ttl_hours)
         cache_data = [item.model_dump() for item in items]
-        db.execute(
-            """INSERT OR REPLACE INTO similarity_cache
-               (cache_key, paper_ids, results, created_at, expires_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (cache_key, json.dumps(sorted_ids), json.dumps(cache_data),
-             now.isoformat(), expires_at.isoformat()),
+        # Gated write-behind cache store (best-effort; lock escapes are
+        # swallowed since the caller already has the live results).
+        run_write_unit(
+            db,
+            lambda: db.execute(
+                """INSERT OR REPLACE INTO similarity_cache
+                   (cache_key, paper_ids, results, created_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (cache_key, json.dumps(sorted_ids), json.dumps(cache_data),
+                 now.isoformat(), expires_at.isoformat()),
+            ),
+            label="discovery_similarity_cache_store",
         )
-        db.commit()
     except Exception as exc:
         logger.debug("Cache store failed: %s", redact_sensitive_text(str(exc)))
 
@@ -699,8 +720,14 @@ def discover_similar(
                         cache_key=cache_key,
                         seed_count=len(req.paper_ids),
                     )
-                db.execute("DELETE FROM similarity_cache WHERE cache_key = ?", (cache_key,))
-                db.commit()
+                # Stale entry — evict it in a gated write (best-effort).
+                run_write_unit(
+                    db,
+                    lambda: db.execute(
+                        "DELETE FROM similarity_cache WHERE cache_key = ?", (cache_key,)
+                    ),
+                    label="discovery_similarity_cache_evict",
+                )
         except Exception as exc:
             logger.debug("Cache lookup failed: %s", redact_sensitive_text(str(exc)))
 
@@ -814,7 +841,11 @@ def clear_similarity_cache(
         except sqlite3.OperationalError:
             count = 0
         try:
-            db.execute("DELETE FROM similarity_cache")
+            run_write_unit(
+                db,
+                lambda: db.execute("DELETE FROM similarity_cache"),
+                label="discovery_similarity_cache_clear",
+            )
         except sqlite3.OperationalError:
             count = 0
         return OperationOutcome(
@@ -1253,7 +1284,12 @@ def clear_recommendations(
     runner = OperationRunner(db)
 
     def _handler(_ctx):
-        deleted = discovery_app.clear_recommendations(db)
+        # Gated, atomic clear of the recommendation surface.
+        deleted = run_write_unit(
+            db,
+            lambda: discovery_app.clear_recommendations(db),
+            label="discovery_clear_recommendations",
+        )
         return OperationOutcome(
             status="completed" if deleted > 0 else "noop",
             message=f"Cleared {deleted} recommendations" if deleted > 0 else "No recommendations to clear",

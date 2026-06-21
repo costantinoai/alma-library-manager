@@ -92,7 +92,16 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "monitor_defaults.include_preprints": "true",
     "monitor_defaults.semantic_scholar_bulk": "true",
     "embedding_model": S2_SPECTER2_MODEL,
-    "schedule.refresh_interval_hours": "0",
+    # Auto-refresh is opt-in (default OFF). A periodic job registers only when
+    # its `*_enabled` flag is true AND its interval is > 0. The page toggle
+    # writes the `*_enabled` flag; Settings writes the interval. The interval
+    # default is a sensible 6h so flipping the toggle on "just works" without a
+    # second step. Out of the box everything stays OFF because the flags default
+    # to "false".
+    "schedule.refresh_enabled": "false",
+    "schedule.refresh_interval_hours": "6",
+    "schedule.feed_refresh_enabled": "false",
+    "schedule.feed_refresh_interval_hours": "6",
     "schedule.graph_maintenance_interval_hours": "24",
     "cache.similarity_ttl_hours": "24",
     "recommendation_mode": "balanced",

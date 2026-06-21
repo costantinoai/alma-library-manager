@@ -8,13 +8,15 @@ import sqlite3
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import ActivityJobContext, background_mode_requested, raise_internal
 from alma.api.models import FeedItemResponse, FeedMonitorCreateRequest, FeedMonitorResponse, FeedMonitorUpdateRequest
 from alma.application import feed as feed_app
 from alma.application import feed_monitors as monitor_app
+from alma.application.discovery import lens_crud
+from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
 
 logger = logging.getLogger(__name__)
@@ -28,6 +30,57 @@ router = APIRouter(
 class FeedBulkActionRequest(BaseModel):
     feed_item_ids: list[str]
     action: str
+
+
+class FeedSettings(BaseModel):
+    """Opt-in auto-refresh settings for the feed inbox.
+
+    Persisted in the shared ``discovery_settings`` KV store under the
+    ``schedule.feed_refresh_*`` keys. The Feed page toggle drives
+    ``auto_refresh_enabled``; the interval lives in Settings. Default OFF — the
+    periodic job registers only when enabled AND interval > 0.
+    """
+
+    auto_refresh_enabled: bool = False
+    refresh_interval_hours: int = Field(6, ge=0, le=168)
+
+
+@router.get("/settings", response_model=FeedSettings, summary="Get feed auto-refresh settings")
+def get_feed_settings(db: sqlite3.Connection = Depends(get_db)):
+    """Return the feed inbox auto-refresh opt-in + interval."""
+    kv = lens_crud.read_settings(db)
+    return FeedSettings(
+        auto_refresh_enabled=str(kv.get("schedule.feed_refresh_enabled", "false")).lower() == "true",
+        refresh_interval_hours=int(kv.get("schedule.feed_refresh_interval_hours", "6")),
+    )
+
+
+@router.put("/settings", response_model=FeedSettings, summary="Update feed auto-refresh settings")
+def update_feed_settings(
+    body: FeedSettings,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Persist the feed auto-refresh settings and (re)register the periodic job.
+
+    The two KV upserts run in one gated write unit (SQLite write discipline);
+    rescheduling happens after the commit so the live scheduler matches the new
+    setting without a restart.
+    """
+    def _apply() -> None:
+        lens_crud.upsert_setting(db, "schedule.feed_refresh_enabled", str(body.auto_refresh_enabled).lower())
+        lens_crud.upsert_setting(db, "schedule.feed_refresh_interval_hours", str(body.refresh_interval_hours))
+
+    run_write_unit(db, _apply, label="feed_settings_update")
+
+    try:
+        from alma.api.scheduler import reschedule_feed_refresh
+
+        reschedule_feed_refresh(body.auto_refresh_enabled, body.refresh_interval_hours)
+    except Exception as e:
+        logger.debug("Could not reschedule feed refresh job: %s", e)
+
+    return body
 
 
 def _run_feed_refresh_sync(*, db: sqlite3.Connection, user: dict) -> dict[str, object]:

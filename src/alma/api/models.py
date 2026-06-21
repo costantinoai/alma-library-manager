@@ -575,9 +575,16 @@ class DiscoveryLimits(BaseModel):
 
 
 class DiscoverySchedule(BaseModel):
-    """Schedule settings for automatic recommendation refresh."""
+    """Schedule settings for automatic recommendation refresh.
 
-    refresh_interval_hours: int = Field(0, ge=0, le=168)
+    Auto-refresh is opt-in: the periodic job registers only when
+    ``refresh_enabled`` is true AND ``refresh_interval_hours`` > 0. The
+    Discovery page toggle drives ``refresh_enabled``; the interval lives in
+    Settings.
+    """
+
+    refresh_enabled: bool = False
+    refresh_interval_hours: int = Field(6, ge=0, le=168)
     graph_maintenance_interval_hours: int = Field(24, ge=0, le=168)
 
 

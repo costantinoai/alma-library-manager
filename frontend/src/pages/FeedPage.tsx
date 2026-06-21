@@ -23,6 +23,8 @@ import {
   feedLike,
   feedLove,
   getFeedStatus,
+  getFeedSettings,
+  updateFeedSettings,
   listFeedMonitors,
   listFeedInbox,
   refreshFeedInbox,
@@ -36,7 +38,8 @@ import {
 import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { JargonHint, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
@@ -223,6 +226,37 @@ export function FeedPage() {
     queryFn: getFeedStatus,
     retry: 1,
     refetchInterval: 60_000,
+  })
+
+  // Auto-refresh opt-in. The page toggle and Settings drive the same KV-backed
+  // flag; flipping it here just persists the setting (the backend scheduler is
+  // the executor), so the inbox never blocks on a refresh.
+  const feedSettingsQuery = useQuery({
+    queryKey: ['feed-settings'],
+    queryFn: getFeedSettings,
+    retry: 1,
+    staleTime: 30_000,
+  })
+  const autoRefreshMutation = useMutation({
+    mutationFn: (next: boolean) => {
+      const settings = feedSettingsQuery.data
+      if (!settings) throw new Error('settings not loaded')
+      // Enabling with an unset/zero interval would register no job — coerce to a
+      // sane default (6h) so the page toggle always produces a working schedule.
+      const interval =
+        next && settings.refresh_interval_hours <= 0 ? 6 : settings.refresh_interval_hours
+      return updateFeedSettings({ auto_refresh_enabled: next, refresh_interval_hours: interval })
+    },
+    onSuccess: async (saved) => {
+      await invalidateQueries(queryClient, ['feed-settings'])
+      toast({
+        title: saved.auto_refresh_enabled ? 'Auto-refresh on' : 'Auto-refresh off',
+        description: saved.auto_refresh_enabled
+          ? `The feed inbox will refresh in the background every ${saved.refresh_interval_hours}h.`
+          : 'The inbox will only refresh when you click Refresh Inbox.',
+      })
+    },
+    onError: () => errorToast('Could not update auto-refresh'),
   })
 
   // Scope invalidation narrowly to avoid cascading refetches on unrelated pages.
@@ -522,6 +556,23 @@ export function FeedPage() {
                   : 'Run Refresh Inbox to pull the latest papers.'}
               </TooltipContent>
             </Tooltip>
+            <label className="flex cursor-pointer items-center gap-2 self-end text-xs text-slate-500">
+              <Switch
+                checked={!!feedSettingsQuery.data?.auto_refresh_enabled}
+                disabled={!feedSettingsQuery.data || autoRefreshMutation.isPending}
+                onCheckedChange={(next) => autoRefreshMutation.mutate(next)}
+                aria-label="Toggle feed auto-refresh"
+              />
+              <span>
+                {feedSettingsQuery.data?.auto_refresh_enabled
+                  ? `Auto-refresh every ${feedSettingsQuery.data.refresh_interval_hours}h`
+                  : 'Auto-refresh off'}
+              </span>
+              <JargonHint
+                title="Auto-refresh"
+                description="Opt-in background refresh of the feed inbox on a schedule (set the interval in Settings). It runs without blocking the page — new papers appear automatically. Off by default."
+              />
+            </label>
           </div>
         </div>
       </section>

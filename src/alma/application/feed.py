@@ -19,6 +19,7 @@ from alma.application.feed_query_language import (
 )
 from . import feed_monitors as monitor_app
 from . import library as library_app
+from alma.core.db_write import run_write_unit
 from alma.core.scoring_math import clamp
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
@@ -854,84 +855,96 @@ def apply_feed_action(
     feed_item = get_feed_item(db, feed_item_id) or {}
     now = datetime.utcnow().isoformat()
 
-    if action in {"add", "like", "love"}:
-        target_rating = {"add": 3, "like": 4, "love": 5}[action]
-        current_rating_row = db.execute(
-            "SELECT rating FROM papers WHERE id = ?",
-            (paper_id,),
-        ).fetchone()
-        current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
-        next_rating = max(current_rating, target_rating)
-        library_app.add_to_library(
+    def _persist() -> None:
+        # One atomic feed-action unit (writer gate + BEGIN IMMEDIATE + retry):
+        # membership change → cross-surface reconcile → signal event → settle
+        # the feed rows, all committed together. Replaces the former two-commit
+        # path (record_feedback used to commit, then this function committed
+        # again). `add_to_library` defers its enrichment scheduling past the
+        # gate, and `record_feedback` (the shared engine) no longer commits.
+        if action in {"add", "like", "love"}:
+            target_rating = {"add": 3, "like": 4, "love": 5}[action]
+            current_rating_row = db.execute(
+                "SELECT rating FROM papers WHERE id = ?",
+                (paper_id,),
+            ).fetchone()
+            current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
+            # Monotonic upgrade — never downgrade a paper already rated higher.
+            next_rating = max(current_rating, target_rating)
+            library_app.add_to_library(
+                db,
+                paper_id,
+                rating=next_rating,
+                added_from="feed",
+            )
+        elif action == "dislike":
+            library_app.sink_disliked_paper(db, paper_id)
+        elif action == "dismiss":
+            # Dismiss is signal-only: no Library membership change and — unlike
+            # `dislike` — no hard rating=1 stamp on the paper. The only corpus
+            # effect is the small negative feedback event recorded below; the
+            # paper is hidden from the inbox forever via the `dismissed` resting
+            # status set at the end of this unit.
+            pass
+
+        library_app.sync_surface_resolution(
             db,
             paper_id,
-            rating=next_rating,
-            added_from="feed",
+            action=action,
+            source_surface="feed",
         )
-    elif action == "dislike":
-        library_app.sink_disliked_paper(db, paper_id)
-    elif action == "dismiss":
-        # Dismiss is signal-only: no Library membership change and — unlike
-        # `dislike` — no hard rating=1 stamp on the paper. The only corpus
-        # effect is the small negative feedback event recorded below; the
-        # paper is hidden from the inbox forever via the `dismissed` resting
-        # status set at the end of this function.
-        pass
 
-    library_app.sync_surface_resolution(
-        db,
-        paper_id,
-        action=action,
-        source_surface="feed",
-    )
+        # Record the signal through the shared engine. Best-effort: a failure
+        # here must not lose the user's membership/triage action, so it is
+        # logged and swallowed (same intent as before the migration).
+        try:
+            from alma.services.signal_lab import record_feedback
 
-    try:
-        from alma.services.signal_lab import record_feedback
+            score_breakdown = feed_item.get("score_breakdown") or {}
+            if not isinstance(score_breakdown, dict):
+                score_breakdown = {}
+            record_feedback(
+                db,
+                event_type="feed_action",
+                entity_type="publication",
+                entity_id=paper_id,
+                value={
+                    "action": action,
+                    "rating": {"add": 3, "like": 4, "love": 5, "dislike": 1}.get(action),
+                    # `dismiss` is a small (-1) negative signal with no rating
+                    # stamp — lighter than an explicit `dislike` (which also
+                    # sets the star rating to 1).
+                    "signal_value": {"add": 0, "like": 1, "love": 2, "dislike": -1, "dismiss": -1}.get(action, 0),
+                },
+                context={
+                    "mode": "feed",
+                    "surface": "feed",
+                    "feed_item_id": feed_item_id,
+                    "paper_id": paper_id,
+                    "monitor_id": feed_item.get("monitor_id"),
+                    "monitor_type": feed_item.get("monitor_type"),
+                    "source_type": score_breakdown.get("source_type") or feed_item.get("monitor_type"),
+                    "source_key": score_breakdown.get("source_key") or feed_item.get("monitor_label") or feed_item.get("author_id"),
+                    "acted_at": now,
+                },
+            )
+        except Exception as exc:
+            logger.debug("Feed action feedback recording failed for %s: %s", feed_item_id, exc)
 
-        score_breakdown = feed_item.get("score_breakdown") or {}
-        if not isinstance(score_breakdown, dict):
-            score_breakdown = {}
-        record_feedback(
-            db,
-            event_type="feed_action",
-            entity_type="publication",
-            entity_id=paper_id,
-            value={
-                "action": action,
-                "rating": {"add": 3, "like": 4, "love": 5, "dislike": 1}.get(action),
-                # `dismiss` is a small (-1) negative signal with no rating
-                # stamp — lighter than an explicit `dislike` (which also sets
-                # the star rating to 1).
-                "signal_value": {"add": 0, "like": 1, "love": 2, "dislike": -1, "dismiss": -1}.get(action, 0),
-            },
-            context={
-                "mode": "feed",
-                "surface": "feed",
-                "feed_item_id": feed_item_id,
-                "paper_id": paper_id,
-                "monitor_id": feed_item.get("monitor_id"),
-                "monitor_type": feed_item.get("monitor_type"),
-                "source_type": score_breakdown.get("source_type") or feed_item.get("monitor_type"),
-                "source_key": score_breakdown.get("source_key") or feed_item.get("monitor_label") or feed_item.get("author_id"),
-                "acted_at": now,
-            },
+        # `dismiss` settles every feed row for this paper to the `dismissed`
+        # resting status so `list_feed_items` drops it from the inbox for good;
+        # every other action settles to a status matching its own name.
+        resting_status = "dismissed" if action == "dismiss" else action
+        db.execute(
+            """
+            UPDATE feed_items
+            SET status = ?
+            WHERE paper_id = ?
+            """,
+            (resting_status, paper_id),
         )
-    except Exception as exc:
-        logger.debug("Feed action feedback recording failed for %s: %s", feed_item_id, exc)
 
-    # `dismiss` settles every feed row for this paper to the `dismissed`
-    # resting status so `list_feed_items` drops it from the inbox for good;
-    # every other action settles to a status matching its own name.
-    resting_status = "dismissed" if action == "dismiss" else action
-    db.execute(
-        """
-        UPDATE feed_items
-        SET status = ?
-        WHERE paper_id = ?
-        """,
-        (resting_status, paper_id),
-    )
-    db.commit()
+    run_write_unit(db, _persist, label="feed_action")
 
     return {
         "feed_item_id": feed_item_id,
@@ -961,38 +974,40 @@ def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> Optional[dic
 
     paper_id = row["paper_id"]
 
-    # Restore visibility: every `dismissed` row for this paper goes back to
-    # `new` (dismiss had overwritten all of them, so the prior per-row status
-    # is unrecoverable — `new` is the honest untriaged default).
-    db.execute(
-        """
-        UPDATE feed_items
-        SET status = 'new'
-        WHERE paper_id = ?
-          AND COALESCE(status, 'new') = 'dismissed'
-        """,
-        (paper_id,),
-    )
-
-    # Drop the small negative signal — the most recent feed dismiss event for
-    # this paper. The action lives in the event's `value` JSON.
-    if _table_exists(db, "feedback_events"):
+    def _persist() -> None:
+        # One atomic unit: restore inbox visibility + drop the negative signal.
+        # Restore visibility: every `dismissed` row for this paper goes back to
+        # `new` (dismiss had overwritten all of them, so the prior per-row
+        # status is unrecoverable — `new` is the honest untriaged default).
         db.execute(
             """
-            DELETE FROM feedback_events
-            WHERE id = (
-                SELECT id FROM feedback_events
-                WHERE entity_type = 'publication' AND entity_id = ?
-                  AND event_type = 'feed_action'
-                  AND value LIKE '%"action": "dismiss"%'
-                ORDER BY created_at DESC, rowid DESC
-                LIMIT 1
-            )
+            UPDATE feed_items
+            SET status = 'new'
+            WHERE paper_id = ?
+              AND COALESCE(status, 'new') = 'dismissed'
             """,
             (paper_id,),
         )
 
-    db.commit()
+        # Drop the small negative signal — the most recent feed dismiss event
+        # for this paper. The action lives in the event's `value` JSON.
+        if _table_exists(db, "feedback_events"):
+            db.execute(
+                """
+                DELETE FROM feedback_events
+                WHERE id = (
+                    SELECT id FROM feedback_events
+                    WHERE entity_type = 'publication' AND entity_id = ?
+                      AND event_type = 'feed_action'
+                      AND value LIKE '%"action": "dismiss"%'
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT 1
+                )
+                """,
+                (paper_id,),
+            )
+
+    run_write_unit(db, _persist, label="feed_undo_dismiss")
     return {
         "feed_item_id": feed_item_id,
         "paper_id": paper_id,

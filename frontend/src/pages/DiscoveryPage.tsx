@@ -21,6 +21,8 @@ import {
   dismissRecommendation,
   explainRecommendation,
   getDiscoveryStatus,
+  getDiscoverySettings,
+  updateDiscoverySettings,
   likeRecommendation,
   listLensRecommendations,
   listLenses,
@@ -52,6 +54,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { Switch } from '@/components/ui/switch'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
@@ -242,6 +245,43 @@ export function DiscoveryPage() {
     queryFn: getDiscoveryStatus,
     retry: 1,
     refetchInterval: 60_000,
+  })
+
+  // Auto-refresh opt-in. The page toggle and Settings drive the same KV-backed
+  // flag; flipping it here just persists the setting (the backend scheduler is
+  // the executor), so the page never blocks on a refresh.
+  const discoverySettingsQuery = useQuery({
+    queryKey: ['discovery-settings'],
+    queryFn: getDiscoverySettings,
+    retry: 1,
+    staleTime: 30_000,
+  })
+  const autoRefresh = discoverySettingsQuery.data?.schedule
+  const autoRefreshMutation = useMutation({
+    mutationFn: (next: boolean) => {
+      const settings = discoverySettingsQuery.data
+      if (!settings) throw new Error('settings not loaded')
+      // Enabling with an unset/zero interval would register no job — coerce to a
+      // sane default (6h) so the page toggle always produces a working schedule.
+      const interval =
+        next && settings.schedule.refresh_interval_hours <= 0
+          ? 6
+          : settings.schedule.refresh_interval_hours
+      return updateDiscoverySettings({
+        ...settings,
+        schedule: { ...settings.schedule, refresh_enabled: next, refresh_interval_hours: interval },
+      })
+    },
+    onSuccess: async (saved) => {
+      await invalidateQueries(queryClient, ['discovery-settings'])
+      toast({
+        title: saved.schedule.refresh_enabled ? 'Auto-refresh on' : 'Auto-refresh off',
+        description: saved.schedule.refresh_enabled
+          ? `Discovery will refresh in the background every ${saved.schedule.refresh_interval_hours}h.`
+          : 'Discovery will only refresh when you click Refresh Lens.',
+      })
+    },
+    onError: () => errorToast('Could not update auto-refresh'),
   })
 
   const markActioned = (recId: string) => {
@@ -606,6 +646,23 @@ export function DiscoveryPage() {
                   : 'Run Refresh Lens to generate recommendations.'}
               </TooltipContent>
             </Tooltip>
+            <label className="flex cursor-pointer items-center gap-2 self-end text-xs text-slate-500">
+              <Switch
+                checked={!!autoRefresh?.refresh_enabled}
+                disabled={!discoverySettingsQuery.data || autoRefreshMutation.isPending}
+                onCheckedChange={(next) => autoRefreshMutation.mutate(next)}
+                aria-label="Toggle Discovery auto-refresh"
+              />
+              <span>
+                {autoRefresh?.refresh_enabled
+                  ? `Auto-refresh every ${autoRefresh.refresh_interval_hours}h`
+                  : 'Auto-refresh off'}
+              </span>
+              <JargonHint
+                title="Auto-refresh"
+                description="Opt-in background refresh of Discovery on a schedule (set the interval in Settings). It runs without blocking the page — new recommendations appear automatically. Off by default."
+              />
+            </label>
           </div>
         </div>
       </section>

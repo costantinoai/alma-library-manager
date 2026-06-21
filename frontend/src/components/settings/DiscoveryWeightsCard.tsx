@@ -113,7 +113,8 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
     feedback_decay_days_half: 180,
   },
   schedule: {
-    refresh_interval_hours: 0,
+    refresh_enabled: false,
+    refresh_interval_hours: 6,
     graph_maintenance_interval_hours: 24,
   },
   cache: {
@@ -223,6 +224,7 @@ const discoverySchema = z.object({
     feedback_decay_days_half: z.number().int().min(1).max(3650),
   }),
   schedule: z.object({
+    refresh_enabled: z.boolean(),
     refresh_interval_hours: z.number().int().min(0).max(168),
     graph_maintenance_interval_hours: z.number().int().min(0).max(168),
   }),
@@ -631,9 +633,17 @@ export function DiscoveryWeightsCard() {
                   <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Refresh &amp; Cache
                   </h5>
+                  <ToggleRow
+                    title="Auto-refresh recommendations"
+                    description="Opt in to refresh Discovery in the background on the interval below. Off by default; runs without blocking the page."
+                    checked={!!values.schedule.refresh_enabled}
+                    onCheckedChange={(value) =>
+                      form.setValue('schedule.refresh_enabled', value, { shouldDirty: true })
+                    }
+                  />
                   <SettingsNumberField
                     label="Auto-refresh Interval (Hours)"
-                    description="0 disables automatic Discovery refresh."
+                    description="How often to refresh Discovery when auto-refresh is enabled."
                     value={values.schedule.refresh_interval_hours}
                     min={0}
                     max={168}
