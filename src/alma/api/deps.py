@@ -1152,6 +1152,24 @@ def init_db_schema() -> None:
             except Exception:
                 logger.debug("followed_authors canonicalization skipped during init", exc_info=True)
 
+            # Forward-only maintenance config migration. This runs at startup,
+            # never from a GET: legacy enabled/daily_cap/batch_size keys are
+            # split into validated auto/manual/request controls and destructive
+            # auto-enable intent is forcibly disabled.
+            try:
+                from alma.services.maintenance import migrate_maintenance_config
+
+                corrections = migrate_maintenance_config(conn)
+                if corrections:
+                    logger.warning(
+                        "Corrected %d unsafe/invalid maintenance setting(s): %s",
+                        len(corrections),
+                        corrections,
+                    )
+            except Exception:
+                logger.exception("maintenance config migration failed")
+                raise
+
             # Pin PRAGMA user_version for fresh databases — the bootstrap
             # DDL above just created the current shape, so the legacy
             # migrations must never replay against it. No-op on DBs that

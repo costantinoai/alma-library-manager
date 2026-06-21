@@ -4,11 +4,14 @@ Mounted at ``/api/v1/health``. The canonical data-health *dimensions* are
 served by ``/api/v1/insights/health`` (Pillar 1); this router exposes the
 *maintenance operations* that repair them:
 
-- ``GET  /health/operations`` — every registered maintenance task with its
-  config (enabled / daily cap), the canonical pending-work count, and the
-  most-recent run (status / duration / trigger).
-- ``POST /health/operations/{key}/run`` — run one task now (bounded, idempotent).
-- ``POST /health/operations/{key}/config`` — set enabled / daily_cap.
+- ``GET  /health/operations`` — backend-ordered maintenance stages: every task
+  with its separated config (auto-enable / auto daily cap / remembered manual
+  limit / request batch), the canonical pending-work count, readiness/blocked
+  state, and the most-recent run (status / duration / trigger).
+- ``POST /health/operations/{key}/run`` — run one task now with an atomic spec
+  (the visible Run-now values travel with the click; bounded, idempotent).
+- ``POST /health/operations/{key}/config`` — set any of the four separated
+  controls; impossible values are rejected with 422, never silently clamped.
 
 All reads ride the existing materialised-view + operation_status layers; no
 new tables. The dedicated Health page (Phase 3) is the primary consumer.
@@ -25,6 +28,11 @@ from pydantic import BaseModel, Field
 from alma.api.deps import get_current_user, get_db
 from alma.services import health as health_service
 from alma.services import maintenance
+from alma.services.maintenance_contracts import (
+    MaintenanceRunSpec,
+    MaintenanceTrigger,
+    MaintenanceValidationError,
+)
 
 router = APIRouter()
 
@@ -78,31 +86,43 @@ def estimate_operation(
     key: str,
     scope: Optional[str] = Query(None),
     dry_run: Optional[bool] = Query(None),
-    batch_size: Optional[int] = Query(None, ge=1),
+    max_items: Optional[int] = Query(None, ge=1),
+    request_batch_size: Optional[int] = Query(None, ge=1),
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
     task = maintenance.REGISTRY.get(key)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
-    params: dict = {}
-    if scope is not None:
-        params["scope"] = scope
-    if dry_run is not None:
-        params["dry_run"] = dry_run
-    return maintenance.estimate_task(
-        db, task, _health_payload(db), params=params or None, batch_size=batch_size
-    )
+    try:
+        spec = MaintenanceRunSpec(
+            max_items=max_items or maintenance.get_task_manual_limit(db, task),
+            scope=scope,
+            dry_run=bool(dry_run) if dry_run is not None else bool(task.supports_dry_run),
+            request_batch_size=request_batch_size,
+        )
+        plan = maintenance.plan_task(db, task, spec, health_payload=_health_payload(db))
+    except MaintenanceValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # One plan, one ETA: ``plan.to_wire()`` already carries the bounded-run ETA
+    # (computed from the same ``selected``/scope/batch the launch will use), so
+    # there is no secondary whole-backlog recomputation here.
+    payload = plan.to_wire()
+    payload["key"] = key
+    return payload
 
 
 class RunMaintenanceRequest(BaseModel):
-    """Optional body. ``target_paper_ids`` restricts the run to a specific set (a
-    drilldown 'fix selected'). ``params`` carries run-time controls a task declares
-    in its ``params_spec`` (e.g. ``{"scope": "library"}`` or ``{"dry_run": true}``).
-    Omit both to run the task at its default scope + daily cap."""
+    """Atomic run controls. The visible values travel with the Run click."""
 
-    target_paper_ids: Optional[list[str]] = Field(default=None)
-    params: Optional[dict] = Field(default=None)
+    target_ids: list[str] = Field(default_factory=list)
+    max_items: Optional[int] = Field(default=None, ge=1)
+    request_batch_size: Optional[int] = Field(default=None, ge=1)
+    scope: Optional[str] = None
+    dry_run: bool = False
+    force: bool = False
+    confirmation_token: Optional[str] = None
+    plan_fingerprint: Optional[str] = None
 
 
 @router.post(
@@ -123,21 +143,37 @@ def run_operation(
     task = maintenance.REGISTRY.get(key)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
-    targets = body.target_paper_ids if body else None
-    params = body.params if body else None
-    job_id = maintenance.run_task_now(db, task, target_paper_ids=targets, params=params)
-    if not job_id:
-        # scheduler not importable (e.g. tests/CLI) — surface a clear noop.
-        return {"key": key, "status": "noop", "job_id": None}
-    return {"key": key, "status": "queued", "job_id": job_id}
+    request = body or RunMaintenanceRequest()
+    try:
+        spec = MaintenanceRunSpec(
+            trigger=MaintenanceTrigger.USER,
+            target_ids=request.target_ids,
+            max_items=request.max_items or maintenance.get_task_manual_limit(db, task),
+            request_batch_size=request.request_batch_size,
+            scope=request.scope,
+            dry_run=request.dry_run,
+            force=request.force,
+            confirmation_token=request.confirmation_token,
+            plan_fingerprint=request.plan_fingerprint,
+        )
+        outcome = maintenance.run_task_now(db, task, spec=spec)
+    except MaintenanceValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "key": key,
+        "status": outcome.status,
+        "job_id": outcome.job_id,
+        "plan": outcome.plan.to_wire(),
+    }
 
 
 class MaintenanceConfigRequest(BaseModel):
     """Partial update — only provided fields change."""
 
-    enabled: Optional[bool] = Field(default=None, description="Allow the idle healer to run this task")
-    daily_cap: Optional[int] = Field(default=None, ge=1, description="Max items the healer processes per UTC day")
-    batch_size: Optional[int] = Field(default=None, ge=1, description="API items per request (overridable ops only)")
+    auto_enabled: Optional[bool] = Field(default=None, description="Allow safe idle repair")
+    auto_daily_cap: Optional[int] = Field(default=None, ge=1)
+    remembered_manual_limit: Optional[int] = Field(default=None, ge=1)
+    request_batch_size: Optional[int] = Field(default=None, ge=1)
 
 
 @router.post(
@@ -154,9 +190,17 @@ def set_operation_config(
     task = maintenance.REGISTRY.get(key)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
-    maintenance.set_task_config(
-        db, task, enabled=body.enabled, daily_cap=body.daily_cap, batch_size=body.batch_size
-    )
+    try:
+        maintenance.set_task_config(
+            db,
+            task,
+            auto_enabled=body.auto_enabled,
+            auto_daily_cap=body.auto_daily_cap,
+            remembered_manual_limit=body.remembered_manual_limit,
+            request_batch_size=body.request_batch_size,
+        )
+    except MaintenanceValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return maintenance.describe_task(db, task, _health_payload(db))
 
 
