@@ -28,6 +28,7 @@ from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
     log_prevalence_weights,
 )
+from alma.core.sql_helpers import paper_date_sort_expr
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
 from . import feed_monitors as monitor_app
@@ -515,9 +516,11 @@ def list_author_publications(
 
     order_value = str(order or "citations").strip().lower()
     if order_value == "recent":
+        # Date-recency sort with an added_at fallback for undated rows, plus a
+        # citation tiebreak. Date expression comes from the shared helper.
         order_sql = (
-            "COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0)), "
-            "COALESCE(p.added_at, p.created_at, '')) DESC, COALESCE(p.cited_by_count, 0) DESC"
+            f"{paper_date_sort_expr('p', added_at_fallback=True)} DESC, "
+            "COALESCE(p.cited_by_count, 0) DESC"
         )
     else:
         order_sql = "COALESCE(p.cited_by_count, 0) DESC, COALESCE(p.publication_date, '') DESC, COALESCE(p.year, 0) DESC"

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import raise_internal, row_to_paper_response
+from alma.core.sql_helpers import paper_date_sort_expr
 from alma.api.models import PaperResponse, ErrorResponse
 from alma.application import library as library_app
 from alma.application import authors as authors_app
@@ -211,8 +212,8 @@ def query_publications(
                 dir_sql = "DESC" if o in desc_default else "ASC"
             if o == "recent":
                 ord_clause = (
-                    "COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0)), "
-                    f"COALESCE(p.added_at, p.created_at, '')) {dir_sql}, COALESCE(p.cited_by_count, 0) DESC"
+                    f"{paper_date_sort_expr('p', added_at_fallback=True)} {dir_sql}, "
+                    "COALESCE(p.cited_by_count, 0) DESC"
                 )
             elif o == "title":
                 ord_clause = f"p.title COLLATE NOCASE {dir_sql}"
