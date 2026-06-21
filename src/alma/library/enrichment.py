@@ -18,6 +18,7 @@ from typing import Optional
 import requests
 
 from alma.config import get_api_call_delay
+from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import resolve_paper_openalex_work
 from alma.core.utils import normalize_doi, normalize_orcid, normalize_text as _normalize_text
@@ -393,13 +394,15 @@ def enrich_publication(
     )
 
     if work is None:
-        _set_openalex_resolution_status(
-            conn,
-            paper_id,
-            _OA_NOT_RESOLVED,
-            fail_reason or "not_found",
-        )
-        conn.commit()
+        # _resolve_work (network) already returned above — gate the short
+        # status write instead of a raw commit.
+        with write_section(conn, label="enrich openalex not-resolved"):
+            _set_openalex_resolution_status(
+                conn,
+                paper_id,
+                _OA_NOT_RESOLVED,
+                fail_reason or "not_found",
+            )
         return {
             "enriched": False,
             "reason": fail_reason or "not_found",
@@ -496,28 +499,31 @@ def enrich_publication(
     if (sdgs := work.get("sdgs") or []):
         always_fields["sdgs"] = json.dumps(sdgs)
 
-    fill_only_update_paper(
-        conn,
-        paper_id,
-        fill_fields=fill_fields,
-        always_fields=always_fields,
-        touch_updated_at=False,
-    )
-
-    # Upsert topics, institutions, and authorships
+    # All metadata fetched above (network); the write window below is
+    # local-only — gate it (BEGIN IMMEDIATE + writer gate) instead of a raw
+    # commit, with the source lists read before the section.
     topics = work.get("topics") or []
     institutions = work.get("institutions") or []
     authorships = work.get("authorships") or []
-    _upsert_topics(conn, paper_id, topics)
-    _upsert_institutions(conn, paper_id, institutions)
-    _upsert_publication_authorships(conn, paper_id, authorships)
-    _set_openalex_resolution_status(
-        conn,
-        paper_id,
-        _OA_RESOLVED,
-        f"resolved_via:{match_source or 'unknown'}",
-    )
-    conn.commit()
+    with write_section(conn, label="enrich openalex resolved"):
+        fill_only_update_paper(
+            conn,
+            paper_id,
+            fill_fields=fill_fields,
+            always_fields=always_fields,
+            touch_updated_at=False,
+        )
+
+        # Upsert topics, institutions, and authorships
+        _upsert_topics(conn, paper_id, topics)
+        _upsert_institutions(conn, paper_id, institutions)
+        _upsert_publication_authorships(conn, paper_id, authorships)
+        _set_openalex_resolution_status(
+            conn,
+            paper_id,
+            _OA_RESOLVED,
+            f"resolved_via:{match_source or 'unknown'}",
+        )
 
     return {
         "enriched": True,
@@ -926,7 +932,8 @@ def resolve_imported_authors(
                 rewired_authorship_rows += rewired
                 resolved += 1
 
-    conn.commit()
+    # Caller-owns-transaction: the import callers wrap this in a write_section
+    # (network-free bulk local write). Do NOT commit here.
 
     total = len(imports)
     return {
@@ -1012,7 +1019,8 @@ def materialize_imported_authors(conn: sqlite3.Connection) -> dict:
             linked += 1
             rewired_authorship_rows += rewired
 
-    conn.commit()
+    # Caller-owns-transaction: invoked only from resolve_imported_authors, which
+    # runs inside the importer's write_section. Do NOT commit here.
     return {
         "total_import_rows": len(rows),
         "authors_created": created,

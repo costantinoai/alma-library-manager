@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
+from alma.core.db_write import write_section
 from alma.core.utils import canonical_lookup_doi, normalize_orcid
 
 logger = logging.getLogger(__name__)
@@ -313,26 +314,29 @@ def deduplicate_authors(conn: sqlite3.Connection) -> dict:
         for dup in uniq:
             if dup == keeper:
                 continue
-            _merge_author_metadata(conn, keeper, dup)
-            moved_authorship_records += _merge_author_publications(conn, dup, keeper)
+            # One gated write window per merged author (commit-per-unit-of-work;
+            # all-local, no network — the gate releases between merges so a
+            # concurrent foreground write isn't starved for the whole sweep).
+            with write_section(conn, label="dedup author merge"):
+                _merge_author_metadata(conn, keeper, dup)
+                moved_authorship_records += _merge_author_publications(conn, dup, keeper)
 
-            # followed_authors should keep one row.
-            try:
-                row = conn.execute(
-                    "SELECT followed_at, notify_new_papers FROM followed_authors WHERE author_id = ?",
-                    (dup,),
-                ).fetchone()
-                if row:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO followed_authors (author_id, followed_at, notify_new_papers) VALUES (?, ?, ?)",
-                        (keeper, row["followed_at"], row["notify_new_papers"]),
-                    )
-                    conn.execute("DELETE FROM followed_authors WHERE author_id = ?", (dup,))
-            except Exception:
-                pass
+                # followed_authors should keep one row.
+                try:
+                    row = conn.execute(
+                        "SELECT followed_at, notify_new_papers FROM followed_authors WHERE author_id = ?",
+                        (dup,),
+                    ).fetchone()
+                    if row:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO followed_authors (author_id, followed_at, notify_new_papers) VALUES (?, ?, ?)",
+                            (keeper, row["followed_at"], row["notify_new_papers"]),
+                        )
+                        conn.execute("DELETE FROM followed_authors WHERE author_id = ?", (dup,))
+                except Exception:
+                    pass
 
-            conn.execute("DELETE FROM authors WHERE id = ?", (dup,))
-            conn.commit()
+                conn.execute("DELETE FROM authors WHERE id = ?", (dup,))
             merged_authors += 1
 
     return {
@@ -379,12 +383,16 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
             if dup["id"] == keeper_id:
                 continue
 
-            # Rewire all junction tables to point to keeper
-            _rewire_paper_refs(conn, dup["id"], keeper_id)
+            # One gated write window per merged paper (commit-per-unit-of-work,
+            # all-local). Rewire junctions + merge metadata + delete the dup
+            # atomically.
+            with write_section(conn, label="dedup paper merge"):
+                # Rewire all junction tables to point to keeper
+                _rewire_paper_refs(conn, dup["id"], keeper_id)
 
-            # Merge metadata into keeper (keep richer data)
-            conn.execute(
-                """UPDATE papers
+                # Merge metadata into keeper (keep richer data)
+                conn.execute(
+                    """UPDATE papers
                    SET cited_by_count = MAX(COALESCE(cited_by_count, 0), ?),
                        year = COALESCE(year, ?),
                        abstract = COALESCE(NULLIF(abstract, ''), ?),
@@ -404,27 +412,26 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
                            ELSE ?
                        END
                    WHERE id = ?""",
-                (
-                    dup["cited_by_count"] or 0,
-                    dup["year"],
-                    dup["abstract"],
-                    dup["url"],
-                    dup["doi"],
-                    dup["journal"],
-                    dup["authors"],
-                    dup["openalex_id"],
-                    dup["fwci"],
-                    dup["status"],
-                    dup["rating"] or 0,
-                    dup["notes"],
-                    dup["notes"],
-                    keeper_id,
-                ),
-            )
+                    (
+                        dup["cited_by_count"] or 0,
+                        dup["year"],
+                        dup["abstract"],
+                        dup["url"],
+                        dup["doi"],
+                        dup["journal"],
+                        dup["authors"],
+                        dup["openalex_id"],
+                        dup["fwci"],
+                        dup["status"],
+                        dup["rating"] or 0,
+                        dup["notes"],
+                        dup["notes"],
+                        keeper_id,
+                    ),
+                )
 
-            # Delete duplicate
-            conn.execute("DELETE FROM papers WHERE id = ?", (dup["id"],))
-            conn.commit()
+                # Delete duplicate
+                conn.execute("DELETE FROM papers WHERE id = ?", (dup["id"],))
             merged += 1
             rewired += 1
 
@@ -443,8 +450,8 @@ def run_deduplication(conn: sqlite3.Connection, job_id: Optional[str] = None) ->
         except Exception:
             pass
 
+    # deduplicate_authors commits each merge in its own write_section.
     author_summary = deduplicate_authors(conn)
-    conn.commit()
     if job_id:
         try:
             from alma.api.scheduler import add_job_log
@@ -453,8 +460,8 @@ def run_deduplication(conn: sqlite3.Connection, job_id: Optional[str] = None) ->
         except Exception:
             pass
 
+    # deduplicate_papers commits each merge in its own write_section.
     paper_summary = deduplicate_papers(conn)
-    conn.commit()
     if job_id:
         try:
             from alma.api.scheduler import add_job_log
@@ -467,8 +474,9 @@ def run_deduplication(conn: sqlite3.Connection, job_id: Optional[str] = None) ->
         except Exception:
             pass
 
-    id_summary = ensure_stable_ids(conn)
-    conn.commit()
+    # ensure_stable_ids does only local writes (no network) — gate the window.
+    with write_section(conn, label="dedup stable ids"):
+        id_summary = ensure_stable_ids(conn)
     if job_id:
         try:
             from alma.api.scheduler import add_job_log

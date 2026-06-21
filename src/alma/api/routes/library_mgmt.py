@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from alma.api.deps import get_db, get_current_user, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
-from alma.core.db_write import run_write_unit
+from alma.core.db_write import run_write_unit, write_section
 
 logger = logging.getLogger(__name__)
 
@@ -458,14 +458,17 @@ def _run_reset(job_id: str) -> dict:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        for table in _RESET_TABLES:
-            if table in existing_tables:
-                try:
-                    conn.execute(f"DELETE FROM {table}")  # noqa: S608 -- hardcoded allowlist
-                    tables_cleared.append(table)
-                except sqlite3.OperationalError as exc:
-                    logger.warning("Could not clear table %s: %s", table, exc)
-        conn.commit()
+        # Local DELETEs only — gate the write window (BEGIN IMMEDIATE + writer
+        # gate) instead of a raw commit, so the reset serializes against any
+        # concurrent writer instead of busy-polling.
+        with write_section(conn, label="library reset clear-tables"):
+            for table in _RESET_TABLES:
+                if table in existing_tables:
+                    try:
+                        conn.execute(f"DELETE FROM {table}")  # noqa: S608 -- hardcoded allowlist
+                        tables_cleared.append(table)
+                    except sqlite3.OperationalError as exc:
+                        logger.warning("Could not clear table %s: %s", table, exc)
     finally:
         conn.close()
     _progress(

@@ -18,6 +18,7 @@ from difflib import SequenceMatcher
 
 import requests
 
+from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
     normalize_doi as _normalize_doi,
@@ -1746,14 +1747,16 @@ def backfill_missing_publication_references(
     )
     papers_updated = 0
     references_inserted = 0
-    for openalex_id, paper_group in openalex_to_papers.items():
-        referenced_ids = references_by_work.get(openalex_id)
-        if referenced_ids is None:
-            continue
-        for paper_id in paper_group:
-            references_inserted += _upsert_referenced_works(conn, paper_id, referenced_ids)
-            papers_updated += 1
-    conn.commit()
+    # Network fetch already returned above; the write window is local-only —
+    # gate it (BEGIN IMMEDIATE + writer gate) instead of a raw commit.
+    with write_section(conn, label="openalex backfill_references"):
+        for openalex_id, paper_group in openalex_to_papers.items():
+            referenced_ids = references_by_work.get(openalex_id)
+            if referenced_ids is None:
+                continue
+            for paper_id in paper_group:
+                references_inserted += _upsert_referenced_works(conn, paper_id, referenced_ids)
+                papers_updated += 1
     return {
         "candidates": len(openalex_to_papers),
         "fetched": len(references_by_work),
@@ -1835,14 +1838,16 @@ def materialize_missing_referenced_works(
     )
     _ensure_schema(conn)
     materialized = 0
-    for work_id in target_ids:
-        raw_work = raw_works.get(work_id)
-        if not raw_work:
-            continue
-        normalized = _normalize_work(raw_work)
-        if _upsert_single_paper(conn, normalized):
-            materialized += 1
-    conn.commit()
+    # Network batch fetch already returned above; the upsert window is
+    # local-only — gate it instead of a raw commit.
+    with write_section(conn, label="openalex materialize_referenced_works"):
+        for work_id in target_ids:
+            raw_work = raw_works.get(work_id)
+            if not raw_work:
+                continue
+            normalized = _normalize_work(raw_work)
+            if _upsert_single_paper(conn, normalized):
+                materialized += 1
     return {
         "candidates": len(target_ids),
         "fetched": len(raw_works),

@@ -676,10 +676,12 @@ def run_s2_vector_backfill(
                         refresh_centroids_for_papers,
                     )
 
-                    refresh_centroids_for_papers(
-                        conn, batch_inserted_paper_ids, model=model
-                    )
-                    conn.commit()
+                    # Local-only recompute (no network) — gate its own short
+                    # write window instead of a raw commit.
+                    with write_section(conn, label="s2_vectors centroid refresh"):
+                        refresh_centroids_for_papers(
+                            conn, batch_inserted_paper_ids, model=model
+                        )
                 except Exception:
                     logger.debug(
                         "author centroid refresh skipped after S2 batch",

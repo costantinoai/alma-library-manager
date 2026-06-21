@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
 from alma.core.utils import (
     generate_paper_id,
     normalize_doi as _normalize_doi_core,
@@ -252,74 +253,76 @@ def import_bibtex(
 
     imported_refs: list[str] = []
 
-    for entry in entries:
-        try:
-            norm = _normalize_bibtex_entry(entry)
-            title = norm["title"]
-            if not title:
-                result.failed += 1
-                result.errors.append(f"Entry missing title: {entry.get('key', '?')}")
-                continue
+    # BibTeX was parsed locally above (no network) — the insert loop is the
+    # write window; gate it (BEGIN IMMEDIATE + writer gate) instead of a raw
+    # end-of-loop commit.
+    with write_section(conn, label="import bibtex"):
+        for entry in entries:
+            try:
+                norm = _normalize_bibtex_entry(entry)
+                title = norm["title"]
+                if not title:
+                    result.failed += 1
+                    result.errors.append(f"Entry missing title: {entry.get('key', '?')}")
+                    continue
 
-            notes = f"Imported from BibTeX ({norm['entry_type']})"
+                notes = f"Imported from BibTeX ({norm['entry_type']})"
 
-            # Duplicate check by progressively weaker keys: DOI -> OpenAlex ID
-            # -> exact title -> (year, normalised_title). If a tracked row
-            # already exists, promote that canonical row into Library instead
-            # of silently skipping the user import.
-            existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
-            if existing_id:
-                paper_id, promoted = _promote_existing_import_target(
-                    conn,
-                    existing_id,
-                    added_from="import",
-                )
-                if promoted:
+                # Duplicate check by progressively weaker keys: DOI -> OpenAlex ID
+                # -> exact title -> (year, normalised_title). If a tracked row
+                # already exists, promote that canonical row into Library instead
+                # of silently skipping the user import.
+                existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
+                if existing_id:
+                    paper_id, promoted = _promote_existing_import_target(
+                        conn,
+                        existing_id,
+                        added_from="import",
+                    )
+                    if promoted:
+                        imported_refs.append(paper_id)
+                        result.imported += 1
+                        result.items.append({"paper_id": paper_id, **norm})
+                    else:
+                        result.skipped += 1
+                else:
+                    paper_id = _create_library_paper(
+                        conn,
+                        title=title,
+                        authors=norm["authors"],
+                        doi=norm["doi"],
+                        author_id="import",
+                        notes=notes,
+                        rating=3,
+                        year=norm["year"],
+                        journal=norm["journal"],
+                        abstract=norm["abstract"],
+                        url=norm["url"],
+                    )
                     imported_refs.append(paper_id)
                     result.imported += 1
                     result.items.append({"paper_id": paper_id, **norm})
-                else:
-                    result.skipped += 1
-            else:
-                paper_id = _create_library_paper(
-                    conn,
-                    title=title,
-                    authors=norm["authors"],
-                    doi=norm["doi"],
-                    author_id="import",
-                    notes=notes,
-                    rating=3,
-                    year=norm["year"],
-                    journal=norm["journal"],
-                    abstract=norm["abstract"],
-                    url=norm["url"],
-                )
-                imported_refs.append(paper_id)
-                result.imported += 1
-                result.items.append({"paper_id": paper_id, **norm})
 
-            # Add to collection
-            if collection_id:
-                _add_to_collection(
-                    conn,
-                    collection_id,
-                    paper_id,
-                )
+                # Add to collection
+                if collection_id:
+                    _add_to_collection(
+                        conn,
+                        collection_id,
+                        paper_id,
+                    )
 
-            # Import BibTeX keywords as local tags.
-            for tag_name in norm.get("keywords", []):
-                _find_or_create_tag_and_assign(
-                    conn,
-                    tag_name,
-                    paper_id,
-                )
+                # Import BibTeX keywords as local tags.
+                for tag_name in norm.get("keywords", []):
+                    _find_or_create_tag_and_assign(
+                        conn,
+                        tag_name,
+                        paper_id,
+                    )
 
-        except Exception as exc:
-            result.failed += 1
-            key_label = entry.get("key", "unknown")
-            result.errors.append(f"Failed to import '{key_label}': {exc}")
-
-    conn.commit()
+            except Exception as exc:
+                result.failed += 1
+                key_label = entry.get("key", "unknown")
+                result.errors.append(f"Failed to import '{key_label}': {exc}")
 
     # Fast local author-linking step so imported rows are reassigned immediately.
     _resolve_imported_authors_inline(conn)
@@ -563,107 +566,109 @@ def import_zotero(
 
     imported_refs: list[str] = []
 
-    for item in items:
-        try:
-            norm = _normalize_zotero_item(item)
-            title = norm["title"]
-            if not title:
-                result.failed += 1
-                result.errors.append(
-                    f"Zotero item missing title (key={item.get('key', '?')})"
-                )
-                continue
+    # Zotero items were fetched above (network); the insert loop is local —
+    # gate it (BEGIN IMMEDIATE + writer gate) instead of a raw end-of-loop
+    # commit.
+    with write_section(conn, label="import zotero"):
+        for item in items:
+            try:
+                norm = _normalize_zotero_item(item)
+                title = norm["title"]
+                if not title:
+                    result.failed += 1
+                    result.errors.append(
+                        f"Zotero item missing title (key={item.get('key', '?')})"
+                    )
+                    continue
 
-            # Resolve membership keys to full "Parent / Child" paths. Drop any
-            # blanks (orphan keys whose collection metadata wasn't returned).
-            resolved_paths: list[str] = []
-            seen_paths: set[str] = set()
-            for ck in norm.get("zotero_collections", []):
-                path = zotero_collection_path_map.get(ck, "").strip()
-                if path and path not in seen_paths:
-                    resolved_paths.append(path)
-                    seen_paths.add(path)
-            norm["zotero_collections"] = resolved_paths
+                # Resolve membership keys to full "Parent / Child" paths. Drop any
+                # blanks (orphan keys whose collection metadata wasn't returned).
+                resolved_paths: list[str] = []
+                seen_paths: set[str] = set()
+                for ck in norm.get("zotero_collections", []):
+                    path = zotero_collection_path_map.get(ck, "").strip()
+                    if path and path not in seen_paths:
+                        resolved_paths.append(path)
+                        seen_paths.add(path)
+                norm["zotero_collections"] = resolved_paths
 
-            # Build notes from tags
-            tag_info = ""
-            if norm["zotero_tags"]:
-                tag_info = f"\nTags: {', '.join(norm['zotero_tags'])}"
-            coll_info = ""
-            if resolved_paths:
-                coll_info = f"\nZotero collections: {', '.join(resolved_paths)}"
+                # Build notes from tags
+                tag_info = ""
+                if norm["zotero_tags"]:
+                    tag_info = f"\nTags: {', '.join(norm['zotero_tags'])}"
+                coll_info = ""
+                if resolved_paths:
+                    coll_info = f"\nZotero collections: {', '.join(resolved_paths)}"
 
-            notes = f"Imported from Zotero ({norm['item_type']}){tag_info}{coll_info}"
+                notes = f"Imported from Zotero ({norm['item_type']}){tag_info}{coll_info}"
 
-            # Duplicate check. Existing tracked rows should be promoted into the
-            # saved Library instead of being left as non-library duplicates.
-            existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
-            if existing_id:
-                paper_id, promoted = _promote_existing_import_target(
-                    conn,
-                    existing_id,
-                    added_from="import",
-                )
-                if promoted:
+                # Duplicate check. Existing tracked rows should be promoted into the
+                # saved Library instead of being left as non-library duplicates.
+                existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
+                if existing_id:
+                    paper_id, promoted = _promote_existing_import_target(
+                        conn,
+                        existing_id,
+                        added_from="import",
+                    )
+                    if promoted:
+                        imported_refs.append(paper_id)
+                        result.imported += 1
+                        result.items.append({"paper_id": paper_id, **norm})
+                    else:
+                        result.skipped += 1
+                else:
+                    paper_id = _create_library_paper(
+                        conn,
+                        title=title,
+                        authors=norm["authors"],
+                        doi=norm["doi"],
+                        author_id="import",
+                        notes=notes.strip(),
+                        rating=3,
+                        year=norm["year"],
+                        journal=norm["journal"],
+                        abstract=norm["abstract"],
+                        url=norm["url"],
+                    )
                     imported_refs.append(paper_id)
                     result.imported += 1
                     result.items.append({"paper_id": paper_id, **norm})
-                else:
-                    result.skipped += 1
-            else:
-                paper_id = _create_library_paper(
-                    conn,
-                    title=title,
-                    authors=norm["authors"],
-                    doi=norm["doi"],
-                    author_id="import",
-                    notes=notes.strip(),
-                    rating=3,
-                    year=norm["year"],
-                    journal=norm["journal"],
-                    abstract=norm["abstract"],
-                    url=norm["url"],
-                )
-                imported_refs.append(paper_id)
-                result.imported += 1
-                result.items.append({"paper_id": paper_id, **norm})
 
-            # Add to local collection
-            if local_collection_id:
-                _add_to_collection(
-                    conn,
-                    local_collection_id,
-                    paper_id,
-                )
+                # Add to local collection
+                if local_collection_id:
+                    _add_to_collection(
+                        conn,
+                        local_collection_id,
+                        paper_id,
+                    )
 
-            # Create local collections mirroring Zotero collections. Names
-            # carry the full "Parent / Child" path so the Zotero hierarchy is
-            # preserved (ALMa's collections.name is flat + UNIQUE).
-            for coll_path in resolved_paths:
-                mirror_coll_id = _find_or_create_collection(
-                    conn, coll_path, color="#8B5CF6"
-                )
-                _add_to_collection(
-                    conn,
-                    mirror_coll_id,
-                    paper_id,
-                )
+                # Create local collections mirroring Zotero collections. Names
+                # carry the full "Parent / Child" path so the Zotero hierarchy is
+                # preserved (ALMa's collections.name is flat + UNIQUE).
+                for coll_path in resolved_paths:
+                    mirror_coll_id = _find_or_create_collection(
+                        conn, coll_path, color="#8B5CF6"
+                    )
+                    _add_to_collection(
+                        conn,
+                        mirror_coll_id,
+                        paper_id,
+                    )
 
-            # Import Zotero tags as local tags
-            for tag_name in norm.get("zotero_tags", []):
-                _find_or_create_tag_and_assign(
-                    conn,
-                    tag_name,
-                    paper_id,
+                # Import Zotero tags as local tags
+                for tag_name in norm.get("zotero_tags", []):
+                    _find_or_create_tag_and_assign(
+                        conn,
+                        tag_name,
+                        paper_id,
+                    )
+
+            except Exception as exc:
+                result.failed += 1
+                result.errors.append(
+                    f"Failed to import Zotero item '{item.get('key', '?')}': {exc}"
                 )
-
-        except Exception as exc:
-            result.failed += 1
-            result.errors.append(
-                f"Failed to import Zotero item '{item.get('key', '?')}': {exc}"
-            )
-
-    conn.commit()
 
     # Fast local author-linking step so imported rows are reassigned immediately.
     _resolve_imported_authors_inline(conn)
@@ -946,78 +951,80 @@ def import_zotero_rdf(
 
     imported_refs: list[str] = []
 
-    for item in items:
-        try:
-            title = item["title"]
-            notes = f"Imported from Zotero RDF ({item.get('item_type', 'item')})"
-            existing_id = _find_existing_paper(conn, item.get("doi", ""), "", title, item.get("year"))
-            if existing_id:
-                paper_id, promoted = _promote_existing_import_target(
-                    conn,
-                    existing_id,
-                    added_from="import",
-                )
-                if promoted:
+    # RDF was parsed locally above (no network); gate the insert loop instead
+    # of a raw end-of-loop commit.
+    with write_section(conn, label="import zotero rdf"):
+        for item in items:
+            try:
+                title = item["title"]
+                notes = f"Imported from Zotero RDF ({item.get('item_type', 'item')})"
+                existing_id = _find_existing_paper(conn, item.get("doi", ""), "", title, item.get("year"))
+                if existing_id:
+                    paper_id, promoted = _promote_existing_import_target(
+                        conn,
+                        existing_id,
+                        added_from="import",
+                    )
+                    if promoted:
+                        imported_refs.append(paper_id)
+                        result.imported += 1
+                        result.items.append({"paper_id": paper_id, **item})
+                    else:
+                        result.skipped += 1
+                else:
+                    paper_id = _create_library_paper(
+                        conn,
+                        title=title,
+                        authors=item.get("authors", ""),
+                        doi=item.get("doi", ""),
+                        author_id="import",
+                        notes=notes,
+                        rating=3,
+                        year=item.get("year"),
+                        journal=item.get("journal"),
+                        abstract=item.get("abstract"),
+                        url=item.get("url"),
+                    )
                     imported_refs.append(paper_id)
                     result.imported += 1
                     result.items.append({"paper_id": paper_id, **item})
-                else:
-                    result.skipped += 1
-            else:
-                paper_id = _create_library_paper(
-                    conn,
-                    title=title,
-                    authors=item.get("authors", ""),
-                    doi=item.get("doi", ""),
-                    author_id="import",
-                    notes=notes,
-                    rating=3,
-                    year=item.get("year"),
-                    journal=item.get("journal"),
-                    abstract=item.get("abstract"),
-                    url=item.get("url"),
-                )
-                imported_refs.append(paper_id)
-                result.imported += 1
-                result.items.append({"paper_id": paper_id, **item})
 
-            if local_collection_id:
-                _add_to_collection(
-                    conn,
-                    local_collection_id,
-                    paper_id,
-                )
+                if local_collection_id:
+                    _add_to_collection(
+                        conn,
+                        local_collection_id,
+                        paper_id,
+                    )
 
-            # Mirror each Zotero collection the item belongs to as a local
-            # collection (purple chip; same color as the Web API path). Names
-            # carry the full "Parent / Child" path so nesting is preserved
-            # and same-named siblings under different parents stay distinct.
-            # The single paper_id is reused, so a paper in N Zotero
-            # collections produces 1 papers row + N collection_items rows
-            # (never N papers rows).
-            for coll_path in item.get("zotero_collections") or []:
-                if not coll_path:
-                    continue
-                mirror_coll_id = _find_or_create_collection(
-                    conn, coll_path, color="#8B5CF6"
-                )
-                _add_to_collection(
-                    conn,
-                    mirror_coll_id,
-                    paper_id,
-                )
+                # Mirror each Zotero collection the item belongs to as a local
+                # collection (purple chip; same color as the Web API path). Names
+                # carry the full "Parent / Child" path so nesting is preserved
+                # and same-named siblings under different parents stay distinct.
+                # The single paper_id is reused, so a paper in N Zotero
+                # collections produces 1 papers row + N collection_items rows
+                # (never N papers rows).
+                for coll_path in item.get("zotero_collections") or []:
+                    if not coll_path:
+                        continue
+                    mirror_coll_id = _find_or_create_collection(
+                        conn, coll_path, color="#8B5CF6"
+                    )
+                    _add_to_collection(
+                        conn,
+                        mirror_coll_id,
+                        paper_id,
+                    )
 
-            for tag_name in item.get("keywords", []):
-                _find_or_create_tag_and_assign(
-                    conn,
-                    tag_name,
-                    paper_id,
-                )
-        except Exception as exc:
-            result.failed += 1
-            result.errors.append(f"Failed to import RDF item '{item.get('title', '?')}': {exc}")
+                for tag_name in item.get("keywords", []):
+                    _find_or_create_tag_and_assign(
+                        conn,
+                        tag_name,
+                        paper_id,
+                    )
+            except Exception as exc:
+                result.failed += 1
+                result.errors.append(f"Failed to import RDF item '{item.get('title', '?')}': {exc}")
 
-    conn.commit()
     _resolve_imported_authors_inline(conn)
     _trigger_background_enrichment(result, imported_refs)
     return result
@@ -1152,7 +1159,9 @@ def _create_library_paper(
             now,
         ),
     )
-    conn.commit()
+    # Caller-owns-transaction: inside the import loops' write_section this
+    # no-ops (the loop owns the commit); standalone callers commit with retry.
+    commit_unless_gated(conn, label="_create_library_paper")
 
     # Same chain hook the Library / Feed / Discovery insert sites use:
     # write a pending `paper_enrichment_status` row and auto-schedule
@@ -1266,8 +1275,10 @@ def _resolve_imported_authors_inline(conn: sqlite3.Connection) -> None:
     try:
         from alma.library.enrichment import resolve_imported_authors
 
-        resolve_imported_authors(conn)
-        conn.commit()
+        # resolve_imported_authors is caller-owns-transaction (network-free
+        # bulk local writes); gate the whole window here.
+        with write_section(conn, label="import author-linking (inline)"):
+            resolve_imported_authors(conn)
     except Exception as exc:
         logger.warning("Inline import author-linking failed: %s", exc)
 
@@ -1700,7 +1711,11 @@ def _trigger_background_enrichment(
                         (
                             "author_linking",
                             "Author linking to tracked profiles",
-                            lambda sid: resolve_imported_authors(conn),
+                            lambda sid: run_write_unit(
+                                conn,
+                                lambda: resolve_imported_authors(conn),
+                                label="import author-linking (staged)",
+                            ),
                         ),
                         (
                             "resolve_ids",

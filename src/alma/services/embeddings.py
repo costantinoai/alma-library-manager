@@ -383,10 +383,12 @@ def run_embedding_computation(
                             refresh_centroids_for_papers,
                         )
 
-                        refresh_centroids_for_papers(
-                            conn, inserted_paper_ids, model=model_hf_id
-                        )
-                        conn.commit()
+                        # Local-only recompute (no network) — gate its own short
+                        # write window instead of a raw commit.
+                        with write_section(conn, label="embeddings centroid refresh"):
+                            refresh_centroids_for_papers(
+                                conn, inserted_paper_ids, model=model_hf_id
+                            )
                     except Exception:
                         logger.debug(
                             "author centroid refresh skipped after batch insert",
