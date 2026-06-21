@@ -58,9 +58,19 @@ here — subsystem *trends and analytics* are in
 
 ## Repair operations
 
-The bulk of the page: the bounded background jobs that actually fix the corpus,
-grouped **Corpus & embeddings** / **Authors** / **Other maintenance**,
-worst-first, with healthy + idle ops collapsed into an "All clear" strip.
+The bulk of the page: the bounded background jobs that actually fix the corpus.
+Grouping and order come **entirely from the backend plan** (`GET
+/health/operations` returns ordered `stages`) — the full repair DAG, 15
+operations across 11 dependency-ordered stages (author identity → canonicalization
+→ works → paper identity → metadata → canonicalize → S2 vectors → local embeddings
+→ derived data → cleanup → housekeeping). The frontend renders those stages
+verbatim with no hard-coded task lists; worst-first within a stage, healthy + idle
+ops collapsed into an "All clear" strip.
+
+A **Recommended next** banner points at the first actionable, non-blocked,
+**safe** operation in dependency order (never a destructive or manual-gate op).
+**Run step** runs just that one; **Run sequence** auto-advances through the safe
+steps — re-planning as each finishes and stopping at the first manual-review gate.
 
 The card unit is the **operation**, not the dimension, because the mapping is
 many-to-many — `corpus_metadata` rehydration alone repairs seven data
@@ -70,10 +80,13 @@ dimensions. Each **RepairCard** shows:
   references / topics / authors / DOI / date / URL, embedding coverage,
   fetchable S2 vectors, locally-computable embeddings, the retry ledger — each
   with a **severity** and a click-through to the affected papers.
-- **The controls to act**, once per operation: **Run now** processes a bounded
-  batch; **Auto-repair** is an opt-in toggle within a **daily cap**; network
-  operations expose a **scope** selector, a **dry-run** preview, and (where it
-  matters) an API **batch size**.
+- **The controls to act**, once per operation, as three SEPARATE numbers (no
+  more "daily cap" doubling as run size): a **manual run limit** (units for one
+  click, sent atomically with Run), an **auto daily cap** (unattended units per
+  UTC day), and a **request batch size** (upstream IDs per HTTP call, endpoint-
+  bounded). Invalid values are **rejected (422), never silently clamped**.
+  Destructive operations (dedup/merge, orphan GC, library dedup) have **no
+  Auto-repair toggle** and require an explicit confirmation before applying.
 - A **cost** tag — *local* (your database), *network* (OpenAlex / Crossref /
   Semantic Scholar), or *compute* (local SPECTER2).
 
@@ -114,9 +127,12 @@ nothing a dimension surfaces is hidden just because there's no operation for it.
 
 The same operations can run unattended: the **idle healer** repairs the corpus
 in the background — but only the tasks you opt in, never beyond their daily cap,
-one task per tick, worst-severity first. It is **off by default end to end**;
-`ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch (see
-[Background jobs](../operations/background-jobs.md)).
+one task per tick, worst-severity first. Every tick passes the **typed job-policy
+admission check**: the maintenance lane is serialized (one maintenance job at a
+time, across *all* maintenance namespaces) and worker capacity is reserved for
+user/product work, so a backlog drain never starves a click. It is **off by
+default end to end**; `ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch
+(see [Background jobs](../operations/background-jobs.md)).
 
 ## How fresh is this?
 
@@ -130,9 +146,9 @@ when the snapshot was last assessed.
 ```
 GET  /api/v1/insights/health                                   # canonical data dimensions + totals (the ribbon)
 GET  /api/v1/insights/diagnostics/sections/operational         # system-component states + remediation targets
-GET  /api/v1/health/operations                                 # ops: status, ETA, params_spec, config, last run
+GET  /api/v1/health/operations                                 # ordered stages + recommended_next + ops (status, ETA, config, last run)
 GET  /api/v1/health/operations/{key}/estimate?scope=&dry_run=&batch_size=  # scope/batch-aware count + ETA
-POST /api/v1/health/operations/{key}/run                       # run now ({ target_paper_ids?, params? })
-POST /api/v1/health/operations/{key}/config                    # { enabled?, daily_cap?, batch_size? }
+POST /api/v1/health/operations/{key}/run                       # run now — atomic spec { max_items?, target_ids?, request_batch_size?, scope?, dry_run?, confirmation_token?, plan_fingerprint? }
+POST /api/v1/health/operations/{key}/config                    # { auto_enabled?, auto_daily_cap?, remembered_manual_limit?, request_batch_size? } — invalid → 422
 GET  /api/v1/health/dimensions/{key}/items                     # affected papers (drilldown, paginated)
 ```
