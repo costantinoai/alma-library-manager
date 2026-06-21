@@ -44,6 +44,8 @@ import sqlite3
 from datetime import datetime
 from typing import Iterable, Optional
 
+from alma.core.db_write import run_after_gate_release
+
 logger = logging.getLogger(__name__)
 
 
@@ -256,22 +258,31 @@ def soft_remove_author(
     db.execute(
         "UPDATE authors SET status = 'removed' WHERE id = ?", (aid,),
     )
-    # `_persist_job_log` opens its own connection so we don't have to
-    # commit here — but the caller usually does, both for the GC's own
-    # sake and because most callers are inside a write-batch.
-    try:
-        from alma.api.scheduler import add_job_log
+    # The audit line goes through the scheduler's OWN connection (`add_job_log`
+    # → `_persist_job_log`). Most callers run this inside a `run_write_unit` /
+    # `write_section` (unfollow + paper-removal + remove-route cascades), so
+    # writing that second connection here would open a write while THIS thread
+    # holds the writer gate — write-discipline rule #3 (second-connection write
+    # inside an open write txn). DEFER it past the gate: `run_after_gate_release`
+    # fires it right after the caller's unit commits, or inline when no gate is
+    # held. Best-effort — never fail the soft-remove because of an audit line.
+    name = row["name"]
+    log_job = job_id or "author_gc_eager"
 
-        log_job = job_id or "author_gc_eager"
-        add_job_log(
-            log_job,
-            f"Soft-removed orphan author {row['name'] or aid} ({aid}) — {reason}",
-            step="gc_author_soft_removed",
-            data={"author_id": aid, "name": row["name"], "reason": reason, "at": now},
-        )
-    except Exception:
-        # Audit logging is best-effort; do not fail the GC because of it.
-        logger.debug("Audit log for soft-remove failed for %s", aid, exc_info=True)
+    def _audit() -> None:
+        try:
+            from alma.api.scheduler import add_job_log
+
+            add_job_log(
+                log_job,
+                f"Soft-removed orphan author {name or aid} ({aid}) — {reason}",
+                step="gc_author_soft_removed",
+                data={"author_id": aid, "name": name, "reason": reason, "at": now},
+            )
+        except Exception:
+            logger.debug("Audit log for soft-remove failed for %s", aid, exc_info=True)
+
+    run_after_gate_release(_audit)
     return True
 
 
@@ -370,13 +381,22 @@ def garbage_collect_orphan_authors(
     db: sqlite3.Connection,
     *,
     dry_run: bool = False,
+    limit: int,
     job_id: Optional[str] = None,
 ) -> dict:
-    """Sweep: find every still-active author that's now orphan.
+    """Sweep: find still-active orphan authors and soft-remove up to ``limit``.
 
     Returns a summary dict suitable for the scheduler's terminal-
     message contract:
       {success, scanned, collected, dry_run, sample, message}
+
+    `limit` is the run's total budget — the number of authors this run may
+    *collect* (the unit is one author). Once `collected` reaches it the sweep
+    stops early, leaving the rest pending for the next run, so neither a
+    Run-now/healer tick nor the admin full-sweep endpoint can ever collect more
+    than the budget it asked for. It is a REQUIRED, explicit contract: every
+    caller declares its budget (the maintenance tick passes the registry cap;
+    the admin route passes its full-sweep budget). There is no unbounded mode.
 
     `sample` is the first 25 collected (id + name) so the Activity row
     can show *what* got collected without having to spool every entry
@@ -384,6 +404,7 @@ def garbage_collect_orphan_authors(
     populates `collected` + `sample` so the user can preview before
     pulling the trigger.
     """
+    cap = max(1, int(limit))
     candidates = db.execute(
         """
         SELECT a.id, a.name
@@ -397,6 +418,10 @@ def garbage_collect_orphan_authors(
     sample: list[dict] = []
     collected = 0
     for row in candidates:
+        # One shared budget: stop as soon as the cap is reached (also
+        # short-circuits the remaining per-row orphan checks).
+        if collected >= cap:
+            break
         aid = (row["id"] or "").strip()
         if not aid:
             continue

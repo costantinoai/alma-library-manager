@@ -169,6 +169,125 @@ def refresh_centroids_for_papers(
     return updated
 
 
+# -- centroid-only recompute (task-29 Checkpoint C: split from deep refresh) ---
+#
+# The monolithic `refresh_author_works_and_vectors` paginated works, fetched S2
+# vectors, AND recomputed the centroid in one call. Step 9 of the canonical
+# maintenance order ("recompute touched author centroids") is a *separate*
+# operation: vectors change (S2 fetch / local embed) → only the centroid needs
+# refreshing, with no network and no works re-pagination. These two functions
+# back the standalone `author_centroids` maintenance task so a centroid refresh
+# is bounded, cheap, and local-only.
+
+
+def _authors_needing_centroid_sql() -> str:
+    """Shared SELECT body for the count + the recompute selection so the Health
+    card's pending number is exactly what a run would touch. A centroid 'needs
+    recompute' when it is missing, when its stored `paper_count` no longer
+    matches the author's current embedded-paper count (vectors added/removed),
+    or when it predates the newest embedding for that author (a vector was
+    refreshed in place). Both callers bind the embedding model twice (the
+    `pe.model` filter and the `author_centroids` join)."""
+    return """
+        SELECT lower(trim(a.openalex_id)) AS oid,
+               COUNT(DISTINCT pe.paper_id) AS emb_count,
+               ac.paper_count             AS centroid_count,
+               MAX(pe.created_at)         AS newest_emb,
+               ac.updated_at              AS centroid_at,
+               ac.author_openalex_id      AS centroid_oid
+        FROM authors a
+        JOIN publication_authors pa
+          ON lower(trim(pa.openalex_id)) = lower(trim(a.openalex_id))
+        JOIN publication_embeddings pe
+          ON pe.paper_id = pa.paper_id AND pe.model = ?
+        LEFT JOIN author_centroids ac
+          ON ac.author_openalex_id = lower(trim(a.openalex_id)) AND ac.model = ?
+        WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
+        GROUP BY oid
+        HAVING ac.author_openalex_id IS NULL
+            OR ac.paper_count <> emb_count
+            OR ac.updated_at < MAX(pe.created_at)
+        ORDER BY oid
+    """
+
+
+def _centroid_model(conn: sqlite3.Connection, model: Optional[str]) -> str:
+    if model:
+        return model
+    from alma.discovery.similarity import get_active_embedding_model
+
+    return get_active_embedding_model(conn) or semantic_scholar.S2_SPECTER2_MODEL
+
+
+def count_authors_needing_centroid(
+    conn: sqlite3.Connection, *, model: Optional[str] = None
+) -> int:
+    """How many authors have an out-of-date centroid (the `author_centroids`
+    maintenance task's pending count). Never raises — a schema gap reports 0."""
+    resolved = _centroid_model(conn, model)
+    try:
+        rows = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({_authors_needing_centroid_sql()})",
+            (resolved, resolved),
+        ).fetchone()
+        return int((rows["n"] if rows else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
+def recompute_author_centroids(
+    conn: sqlite3.Connection,
+    *,
+    limit: int,
+    model: Optional[str] = None,
+    job_id: Optional[str] = None,
+    set_job_status: Optional[Callable[..., Any]] = None,
+    add_job_log: Optional[Callable[..., Any]] = None,
+    is_cancellation_requested: Optional[Callable[[str], bool]] = None,
+) -> dict:
+    """Recompute stale/missing author centroids from EXISTING local embeddings.
+
+    Bounded by `limit` (unit = one author). Pure-local: no network, no works
+    pagination — just `refresh_author_centroid` over the authors whose centroid
+    drifted from their embedding set. Each author's recompute is its own short
+    writer-gated section (no I/O inside), so a long run never holds the write
+    lock across the loop and cancellation lands cleanly on an author boundary.
+    """
+    cap = max(1, int(limit))
+    resolved = _centroid_model(conn, model)
+    # Gather the work list first (read-only), then write per author.
+    rows = conn.execute(
+        _authors_needing_centroid_sql() + " LIMIT ?",
+        (resolved, resolved, cap),
+    ).fetchall()
+    oids = [str(r["oid"]) for r in rows if r["oid"]]
+    total = len(oids)
+    summary = {"selected": total, "processed": 0, "updated": 0, "cancelled": False}
+    if set_job_status and job_id:
+        set_job_status(job_id, status="running", total=total, processed=0)
+    for idx, oid in enumerate(oids, start=1):
+        if is_cancellation_requested and job_id and is_cancellation_requested(job_id):
+            summary["cancelled"] = True
+            break
+        try:
+            with write_section(conn, label="recompute_author_centroids"):
+                if refresh_author_centroid(conn, oid, model=resolved):
+                    summary["updated"] += 1
+        except Exception as exc:  # one bad author never aborts the sweep
+            logger.warning("centroid recompute failed for %s: %s", oid, exc)
+        summary["processed"] = idx
+        if set_job_status and job_id and (idx % 25 == 0 or idx == total):
+            set_job_status(job_id, processed=idx, total=total)
+    if add_job_log and job_id:
+        add_job_log(
+            job_id,
+            f"Recomputed {summary['updated']} author centroid(s) of {total} stale "
+            f"({'cancelled' if summary['cancelled'] else 'complete'})",
+            step="centroids_done",
+        )
+    return summary
+
+
 def _fetch_missing_s2_vectors_for_author(
     conn: sqlite3.Connection,
     openalex_id: str,

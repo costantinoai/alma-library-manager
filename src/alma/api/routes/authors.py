@@ -34,7 +34,7 @@ from alma.api.models import (
 from alma.api.deps import get_db, get_current_user, normalize_author_id, open_db_connection
 from alma.api.deps import _data_dir, _db_path  # internal helpers for path resolution
 from alma.core.backend import fetch_publications_by_id, _settings as _fb_settings
-from alma.core.utils import canonical_lookup_doi, normalize_doi, normalize_orcid
+from alma.core.utils import canonical_lookup_doi, normalize_doi, normalize_orcid, repair_display_text
 from alma.config import get_db_path, get_fetch_year
 from alma.config import get_all_settings
 from alma.api.models import PublicationResponse
@@ -59,12 +59,78 @@ from alma.core.resolution import (
 )
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
+from alma.core.db_write import run_write_unit
 from alma.api.helpers import background_mode_requested, raise_internal
 
 logger = logging.getLogger(__name__)
 
 # Backward-compatible patch target retained for identifier-resolution tests.
 _resolve_oa_meta = _resolve_oa
+
+
+def _log_author_action(
+    db: sqlite3.Connection,
+    action: str,
+    message: str,
+    *,
+    author_id: str | None = None,
+    data: dict | None = None,
+    job_id: str | None = None,
+) -> None:
+    """Record ONE Activity entry for a foreground author "…"-menu action.
+
+    The secondary author operations (confirm OpenAlex / identifiers, set
+    identifiers / type, soft-remove, empty cache, resolve conflict, follow-
+    from-paper, merge) run synchronously with no background-job envelope, yet
+    the user needs them visible and auditable in Activity. This writes a
+    single *completed* ``operation_status`` row, keyed under
+    ``authors.action.<action>`` so it groups with the background author jobs;
+    `list_all_job_statuses` merges the `operation_status` table into the
+    Activity list, so the row (its `message` + structured `result`) shows up.
+
+    Written through the request's OWN ``db`` connection inside a short
+    ``run_write_unit`` — NOT via the scheduler's separate connection. That
+    matters: the scheduler's `set_job_status` opens a plain (SQLite
+    ``BEGIN DEFERRED``) transaction on a second connection, which acquires the
+    write lock lazily and so loses the read→write upgrade race under a burst of
+    near-simultaneous actions (silently dropping the row). Routing the write
+    through the gated `db` instead means it is serialized behind the writer
+    gate (``BEGIN IMMEDIATE`` + lock retry, both free from `run_write_unit`)
+    and can never hit that hazard.
+
+    Call this AFTER the action's own write unit has returned: it commits as its
+    own independent unit, so a logging hiccup never touches the user's write
+    (the whole thing is best-effort — failures are swallowed). ``job_id`` lets
+    a caller that already owns a job id (the merge route, whose per-alt audit
+    lines the application layer logs under that id) reuse it so the status row
+    and those logs form ONE Activity entry.
+    """
+    from alma.core.operations.activity import persist_operation_status
+    from alma.core.operations.models import OperationContext
+
+    now = datetime.utcnow().isoformat()
+    jid = job_id or f"author_action_{uuid.uuid4().hex[:10]}"
+    ctx = OperationContext(
+        operation_key=f"authors.action.{action}",
+        trigger_source="user",
+        actor="api_user",
+        correlation_id=jid,
+        operation_id=jid,
+        started_at=now,
+        finished_at=now,
+        status="completed",
+        message=message,
+        result={"author_id": author_id, **(data or {})},
+    )
+
+    try:
+        run_write_unit(
+            db,
+            lambda: persist_operation_status(db, ctx),
+            label=f"log_author_action:{action}",
+        )
+    except Exception:
+        logger.debug("author action activity log skipped (%s)", action, exc_info=True)
 
 def _deep_refresh_max_workers_default() -> int:
     """Resolve the deep-refresh concurrency cap from the env, with a
@@ -89,6 +155,14 @@ def _deep_refresh_max_workers_default() -> int:
 
 
 _DEEP_REFRESH_MAX_WORKERS = _deep_refresh_max_workers_default()
+
+# Explicit budget for the admin "process every eligible row in one run" sweep
+# endpoints (refresh-all / dedup-all / gc-all / rehydrate-all). The bounded
+# maintenance runners now take a REQUIRED limit (no hidden unbounded mode); these
+# routes intentionally process the whole eligible set, so they pass this explicit,
+# greppable full-sweep budget rather than relying on a None default. It matches
+# the runners' internal 100k clamp ceiling, i.e. "all" for a single-user corpus.
+_FULL_SWEEP_BUDGET = 100_000
 
 
 _RESOLUTION_STATUSES = {
@@ -1244,6 +1318,7 @@ def _deep_refresh_all_impl(
     *,
     job_id: Optional[str] = None,
     scope: str = "corpus",
+    limit: int,
 ) -> dict:
     """Run full deep refresh for all refreshable authors.
 
@@ -1285,11 +1360,19 @@ def _deep_refresh_all_impl(
 
     scope = (scope or "followed").strip().lower()
     rows = select_authors_for_scope(db, scope)
+    eligible = len(rows)
+    # One total budget (REQUIRED, explicit): bound the author pool to the run's
+    # cap — the unit is one author. The maintenance tick passes the registry cap;
+    # the admin route passes its full-sweep budget. Scope picks the pool, the cap
+    # bounds how many of it this run touches. There is no unbounded mode.
+    cap = max(1, int(limit))
+    if len(rows) > cap:
+        rows = rows[:cap]
     total = len(rows)
     if total == 0:
         if job_id:
             add_job_log(job_id, f"No authors found for deep refresh (scope={scope})", step="preflight")
-        return {"success": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "failures": [], "scope": scope}
+        return {"success": True, "total": 0, "refreshed": 0, "skipped": 0, "failed": 0, "failures": [], "scope": scope, "eligible": eligible}
 
     refreshed = 0
     skipped = 0
@@ -1298,9 +1381,10 @@ def _deep_refresh_all_impl(
     processed = 0
 
     if job_id:
+        bounded = f" (capped from {eligible} eligible)" if eligible > total else ""
         add_job_log(
             job_id,
-            f"Deep refresh all started for {total} authors (scope={scope})",
+            f"Deep refresh all started for {total} authors (scope={scope}){bounded}",
             step="preflight",
         )
         set_job_status(
@@ -2070,6 +2154,13 @@ def follow_author_from_paper(
         if not requested_author_name:
             raise HTTPException(status_code=422, detail="author_name cannot be empty")
 
+        # ---- Phase 1: resolve the paper's author identity --------------
+        # All network resolution happens OUTSIDE the write units; each write
+        # window is its own gated `run_write_unit`, so the writer is never
+        # held across OpenAlex I/O (write-discipline rule #2). Previously the
+        # paper UPDATE below opened an implicit transaction that stayed open
+        # across `resolve_author_identity` — exactly the held-across-network
+        # hazard this split removes.
         authorship = _best_publication_author_match(
             db,
             paper_id=payload.paper_id,
@@ -2077,6 +2168,7 @@ def follow_author_from_paper(
         )
         matched_via = "paper_authorship" if authorship else "resolution"
         if authorship is None:
+            # NETWORK: resolve the paper's OpenAlex work (no DB writes here).
             paper_resolution = resolve_paper_openalex_work(
                 {
                     "id": str(paper_row["id"] or "").strip(),
@@ -2093,37 +2185,44 @@ def follow_author_from_paper(
             )
             resolved_work = paper_resolution.work or {}
             if resolved_work:
-                db.execute(
-                    """
-                    UPDATE papers
-                    SET openalex_id = COALESCE(NULLIF(openalex_id, ''), ?),
-                        doi = COALESCE(NULLIF(doi, ''), ?),
-                        abstract = COALESCE(NULLIF(abstract, ''), ?),
-                        year = COALESCE(year, ?),
-                        publication_date = COALESCE(NULLIF(publication_date, ''), ?),
-                        journal = COALESCE(NULLIF(journal, ''), ?),
-                        authors = COALESCE(NULLIF(authors, ''), ?)
-                    WHERE id = ?
-                    """,
-                    (
-                        str(resolved_work.get("openalex_id") or "").strip() or None,
-                        str(resolved_work.get("doi") or "").strip() or None,
-                        str(resolved_work.get("abstract") or "").strip() or None,
-                        resolved_work.get("year"),
-                        str(resolved_work.get("publication_date") or "").strip() or None,
-                        str(resolved_work.get("journal") or "").strip() or None,
-                        str(resolved_work.get("authors") or "").strip() or None,
+                # Write unit 1: persist the paper enrichment + sidecars
+                # atomically (fill-only). Idempotent — COALESCE/NULLIF + an
+                # upsert — so a lock retry re-runs cleanly.
+                def _persist_paper() -> None:
+                    db.execute(
+                        """
+                        UPDATE papers
+                        SET openalex_id = COALESCE(NULLIF(openalex_id, ''), ?),
+                            doi = COALESCE(NULLIF(doi, ''), ?),
+                            abstract = COALESCE(NULLIF(abstract, ''), ?),
+                            year = COALESCE(year, ?),
+                            publication_date = COALESCE(NULLIF(publication_date, ''), ?),
+                            journal = COALESCE(NULLIF(journal, ''), ?),
+                            authors = COALESCE(NULLIF(authors, ''), ?)
+                        WHERE id = ?
+                        """,
+                        (
+                            str(resolved_work.get("openalex_id") or "").strip() or None,
+                            str(resolved_work.get("doi") or "").strip() or None,
+                            str(resolved_work.get("abstract") or "").strip() or None,
+                            resolved_work.get("year"),
+                            str(resolved_work.get("publication_date") or "").strip() or None,
+                            str(resolved_work.get("journal") or "").strip() or None,
+                            str(resolved_work.get("authors") or "").strip() or None,
+                            payload.paper_id,
+                        ),
+                    )
+                    upsert_work_sidecars(
+                        db,
                         payload.paper_id,
-                    ),
-                )
-                upsert_work_sidecars(
-                    db,
-                    payload.paper_id,
-                    topics=resolved_work.get("topics"),
-                    institutions=resolved_work.get("institutions"),
-                    authorships=resolved_work.get("authorships"),
-                    referenced_works=resolved_work.get("referenced_works"),
-                )
+                        topics=resolved_work.get("topics"),
+                        institutions=resolved_work.get("institutions"),
+                        authorships=resolved_work.get("authorships"),
+                        referenced_works=resolved_work.get("referenced_works"),
+                    )
+
+                run_write_unit(db, _persist_paper, label="follow_from_paper:paper_enrich")
+                # Re-match now that the sidecar authorships are committed (read).
                 authorship = _best_publication_author_match(
                     db,
                     paper_id=payload.paper_id,
@@ -2136,30 +2235,51 @@ def follow_author_from_paper(
         matched_openalex = str((authorship["openalex_id"] if authorship else "") or "").strip() or None
         matched_orcid = str((authorship["orcid"] if authorship else "") or "").strip() or None
 
-        settings = _id_resolution_settings()
-        resolution = resolve_author_identity(
-            db,
-            author_name=matched_name or requested_author_name,
-            openalex_id=matched_openalex,
-            orcid=matched_orcid,
-            sample_titles=[str(paper_row["title"] or "").strip()],
-            use_semantic_scholar=settings["semantic_scholar_enabled"],
-            use_orcid=settings["orcid_enabled"],
-            use_scholar_scrape_auto=settings["scholar_scrape_auto_enabled"],
-        )
-
-        resolved_openalex = resolution.openalex_id or (_norm_oaid(matched_openalex) if matched_openalex else None)
-        resolved_scholar = resolution.scholar_id or None
-        resolved_orcid = resolution.orcid or matched_orcid
-        primary_id = resolved_scholar or resolved_openalex or resolved_orcid
+        # Identity. When the paper's authorship already gives us the author's
+        # OpenAlex id (the common case — it is the canonical author id in ALMa),
+        # follow on THAT id immediately and DEFER the hierarchical identity
+        # enrichment (S2 / ORCID / Scholar) to the background hydration sweep
+        # scheduled after the commit below. resolve_author_identity is a
+        # synchronous, multi-source, rate-limit-prone network walk — observed at
+        # ~86 s on the request path when OpenAlex/S2 were saturated by a
+        # maintenance burst — and the follow does not need it to be correct: the
+        # OpenAlex id alone identifies the author and dedups existing rows. We
+        # only resolve synchronously when the paper yields no OpenAlex id at all
+        # (rare: the author isn't in the resolved work's authorships).
+        if matched_openalex:
+            resolution = None
+            resolved_openalex = _norm_oaid(matched_openalex)
+            resolved_scholar = None
+            resolved_orcid = normalize_orcid(matched_orcid) if matched_orcid else None
+            primary_id = resolved_openalex
+            status_value = "resolved_manual"
+            reason_value = "Author followed from paper (identity enrichment deferred to background)"
+        else:
+            # NETWORK (rare): no authorship id — resolve a stable identity now,
+            # because we have nothing but a display name to follow on.
+            settings = _id_resolution_settings()
+            resolution = resolve_author_identity(
+                db,
+                author_name=matched_name or requested_author_name,
+                openalex_id=matched_openalex,
+                orcid=matched_orcid,
+                sample_titles=[str(paper_row["title"] or "").strip()],
+                use_semantic_scholar=settings["semantic_scholar_enabled"],
+                use_orcid=settings["orcid_enabled"],
+                use_scholar_scrape_auto=settings["scholar_scrape_auto_enabled"],
+            )
+            resolved_openalex = resolution.openalex_id or (_norm_oaid(matched_openalex) if matched_openalex else None)
+            resolved_scholar = resolution.scholar_id or None
+            resolved_orcid = resolution.orcid or matched_orcid
+            primary_id = resolved_scholar or resolved_openalex or resolved_orcid
+            status_value = resolution.status if resolution.status != "no_match" else "resolved_manual"
+            reason_value = summarize_author_resolution(resolution) or "Author followed from paper"
         if not primary_id:
             raise HTTPException(
                 status_code=422,
                 detail="Could not resolve a stable author identity from this paper author",
             )
 
-        status_value = resolution.status if resolution.status != "no_match" else "resolved_manual"
-        reason_value = summarize_author_resolution(resolution) or "Author followed from paper"
         now_iso = datetime.utcnow().isoformat()
         existing = _find_existing_author_row(
             db,
@@ -2168,74 +2288,90 @@ def follow_author_from_paper(
             scholar_id=resolved_scholar,
             orcid=resolved_orcid,
         )
+        created = existing is None
+        author_id = (str(existing["id"] or "").strip() or primary_id) if existing else primary_id
 
-        created = False
-        author_id = primary_id
-        if existing:
-            author_id = str(existing["id"] or "").strip() or primary_id
-            _apply_author_resolution_result(db, author_id, resolution)
-            db.execute(
-                """
-                UPDATE authors
-                SET name = COALESCE(NULLIF(name, ''), ?),
-                    id_resolution_status = COALESCE(NULLIF(id_resolution_status, ''), ?),
-                    id_resolution_reason = COALESCE(NULLIF(id_resolution_reason, ''), ?),
-                    id_resolution_updated_at = ?,
-                    author_type = 'followed'
-                WHERE id = ?
-                """,
-                (
-                    matched_name or requested_author_name,
-                    status_value,
-                    reason_value[:1000],
-                    now_iso,
-                    author_id,
-                ),
-            )
-        else:
-            created = True
-            db.execute(
-                """
-                INSERT INTO authors (
-                    name, id, openalex_id, scholar_id, orcid,
-                    id_resolution_status, id_resolution_reason, id_resolution_updated_at,
-                    author_type, added_at
+        # ---- Phase 2: persist the follow (one atomic write unit) -------
+        # Upsert the author row, snapshot the prior follow state, then sync
+        # the three follow tables and clear any gap-radar negative signal —
+        # all in one transaction. Returns (was_followed, needs_sweep) so the
+        # post-commit scheduling below runs with the gate released.
+        def _persist_follow() -> tuple[bool, bool]:
+            if existing:
+                # resolution is None on the fast path (identity came straight from
+                # the paper authorship) — the background sweep enriches instead.
+                if resolution is not None:
+                    _apply_author_resolution_result(db, author_id, resolution)
+                db.execute(
+                    """
+                    UPDATE authors
+                    SET name = COALESCE(NULLIF(name, ''), ?),
+                        id_resolution_status = COALESCE(NULLIF(id_resolution_status, ''), ?),
+                        id_resolution_reason = COALESCE(NULLIF(id_resolution_reason, ''), ?),
+                        id_resolution_updated_at = ?,
+                        author_type = 'followed'
+                    WHERE id = ?
+                    """,
+                    (
+                        matched_name or requested_author_name,
+                        status_value,
+                        reason_value[:1000],
+                        now_iso,
+                        author_id,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followed', ?)
-                """,
-                (
-                    matched_name or requested_author_name or primary_id,
-                    primary_id,
-                    _norm_oaid(resolved_openalex) if resolved_openalex else None,
-                    resolved_scholar,
-                    normalize_orcid(resolved_orcid),
-                    status_value,
-                    reason_value[:1000],
-                    now_iso,
-                    now_iso,
-                ),
-            )
-            author_id = primary_id
+            else:
+                db.execute(
+                    """
+                    INSERT INTO authors (
+                        name, id, openalex_id, scholar_id, orcid,
+                        id_resolution_status, id_resolution_reason, id_resolution_updated_at,
+                        author_type, added_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'followed', ?)
+                    """,
+                    (
+                        repair_display_text(matched_name or requested_author_name or primary_id),
+                        primary_id,
+                        _norm_oaid(resolved_openalex) if resolved_openalex else None,
+                        resolved_scholar,
+                        normalize_orcid(resolved_orcid),
+                        status_value,
+                        reason_value[:1000],
+                        now_iso,
+                        now_iso,
+                    ),
+                )
 
-        already_followed = db.execute(
-            "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
-            (author_id,),
-        ).fetchone() is not None
-        needs_hydration_sweep = _sync_follow_state(db, author_id, followed=True)
+            # Snapshot follow state BEFORE _sync_follow_state may insert it.
+            was_followed = db.execute(
+                "SELECT 1 FROM followed_authors WHERE author_id = ? LIMIT 1",
+                (author_id,),
+            ).fetchone() is not None
+            needs_sweep = _sync_follow_state(db, author_id, followed=True)
 
-        try:
-            feedback_author_id = _norm_oaid(resolved_openalex) if resolved_openalex else author_id
-            if feedback_author_id:
-                from alma.application.gap_radar import clear_missing_author_feedback
+            # Clear any "missing author" negative signal (best-effort; same
+            # connection/txn, so it can't deadlock — only swallow data errors).
+            try:
+                feedback_author_id = _norm_oaid(resolved_openalex) if resolved_openalex else author_id
+                if feedback_author_id:
+                    from alma.application.gap_radar import clear_missing_author_feedback
 
-                clear_missing_author_feedback(db, feedback_author_id)
-        except Exception:
-            pass
+                    clear_missing_author_feedback(db, feedback_author_id)
+            except Exception:
+                logger.debug("clear_missing_author_feedback skipped for %s", author_id, exc_info=True)
 
-        db.commit()
-        # Post-commit: scheduler-connection writes can't contend with us now
-        # (see apply_follow_state on the in-transaction self-deadlock).
-        if needs_hydration_sweep:
+            return (was_followed, needs_sweep)
+
+        already_followed, needs_hydration_sweep = run_write_unit(
+            db, _persist_follow, label="follow_author_from_paper"
+        )
+
+        # Post-commit (gate + write lock released): scheduler-connection
+        # writes can't contend with us now (apply_follow_state self-deadlock).
+        # Also sweep when we DEFERRED identity resolution (resolution is None on
+        # the fast path) so the background completes the enrichment we skipped.
+        if needs_hydration_sweep or resolution is None:
             try:
                 from alma.services.author_hydrate import (
                     schedule_pending_author_hydration_sweep,
@@ -2252,6 +2388,13 @@ def follow_author_from_paper(
                 schedule_followed_author_historical_backfill(author_id, trigger="paper_author_follow")
             except Exception as exc:
                 logger.debug("Could not queue historical backfill for %s: %s", author_id, exc)
+        _log_author_action(
+            db,
+            "follow_from_paper",
+            f"Followed {matched_name or requested_author_name} from paper {payload.paper_id}",
+            author_id=author_id,
+            data={"created": created, "matched_via": matched_via},
+        )
 
         author_data = authors_app.get_author(db, author_id)
         if author_data is None:
@@ -2912,12 +3055,30 @@ def set_author_identifiers(
         now,
     ])
     params.append(author_id)
-    db.execute(
-        f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
-        params,
-    )
-    db.commit()
 
+    # One atomic, serialized write unit for the single identifier UPDATE.
+    # `params` is fully built above (once), so re-running the unit on a lock
+    # retry simply re-issues the same statement — idempotent.
+    def _persist() -> None:
+        db.execute(
+            f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+
+    run_write_unit(db, _persist, label="set_author_identifiers")
+    _log_author_action(
+        db,
+        "set_identifiers",
+        f"Set manual identifiers for author {author_id}",
+        author_id=author_id,
+        data={
+            "orcid": body.orcid,
+            "openalex_id": body.openalex_id,
+            "scholar_id": body.scholar_id,
+        },
+    )
+
+    # Read-back for the response — OUTSIDE the unit (reads need no gate).
     refreshed = db.execute(
         "SELECT id, name, openalex_id, orcid, scholar_id, id_resolution_status FROM authors WHERE id = ?",
         (author_id,),
@@ -2965,13 +3126,17 @@ def merge_author_profiles_route(
     _user: dict = Depends(get_current_user),
 ):
     from alma.application.author_merge import merge_author_profiles
-    from alma.core.db_write import run_write_unit
 
     if not body.alt_author_ids and not body.alt_openalex_ids:
         raise HTTPException(
             status_code=400,
             detail="Provide at least one of alt_author_ids or alt_openalex_ids",
         )
+
+    # One job id ties the application-layer per-alt audit logs (emitted by
+    # merge_author_profiles post-commit) and the user-facing Activity status
+    # row below into a SINGLE Activity entry.
+    job_id = f"author_merge_{uuid.uuid4().hex[:10]}"
 
     def _do_merge() -> dict:
         # The merge is one atomic transaction, serialized behind the writer
@@ -2984,14 +3149,37 @@ def merge_author_profiles_route(
             body.alt_author_ids,
             alt_openalex_ids=body.alt_openalex_ids,
             field_choices=body.field_choices,
+            job_id=job_id,
         )
 
     try:
-        return run_write_unit(db, _do_merge, label="merge_author_profiles")
+        summary = run_write_unit(db, _do_merge, label="merge_author_profiles")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise_internal(f"Failed to merge profiles into {author_id}", exc)
+
+    # Surface the merge in the Activity list. The rich per-alt audit lines
+    # are already logged by the application layer under this same job_id;
+    # here we add the completed status row (its headline status line) so the
+    # merge appears as one coherent Activity entry.
+    _log_author_action(
+        db,
+        "merge",
+        (
+            f"Merged {summary['alts_processed']} profile(s) into {author_id}: "
+            f"{summary['papers_reassigned']} papers reassigned, "
+            f"{len(summary['conflicts'])} conflict(s) to review"
+        ),
+        author_id=author_id,
+        data={
+            "alts_processed": summary["alts_processed"],
+            "papers_reassigned": summary["papers_reassigned"],
+            "conflicts": summary["conflicts"],
+        },
+        job_id=job_id,
+    )
+    return summary
 
 
 class ResolveConflictRequest(BaseModel):
@@ -3027,33 +3215,48 @@ def resolve_merge_conflict(
     if row["status"] != "unresolved":
         raise HTTPException(status_code=400, detail=f"Conflict already {row['status']}")
 
+    # Decide the outcome up front (pure compute on the already-read row);
+    # the field allowlist + 400 are control-flow, kept OUTSIDE the unit.
     now = datetime.utcnow().isoformat()
-    new_status = ""
+    target_field: str | None = None
+    new_value: object = None
     if body.choice == "primary":
         new_status = "resolved_keep_primary"
     elif body.choice == "alt":
-        # Overwrite the primary author's column with the alt's value.
-        # Field is allowlisted — only hard-identifier columns get into
-        # author_merge_conflicts in the first place.
+        # When 'alt' wins, overwrite the primary author's column with the
+        # alt's value. Field is allowlisted — only hard-identifier columns
+        # get into author_merge_conflicts in the first place.
         field = str(row["field"])
         if field not in {"orcid", "scholar_id", "semantic_scholar_id"}:
             raise HTTPException(status_code=400, detail=f"Unknown conflict field: {field}")
-        new_value = (
-            normalize_orcid(row["alt_value"]) if field == "orcid" else row["alt_value"]
-        )
-        db.execute(
-            f"UPDATE authors SET {field} = ? WHERE id = ?",  # noqa: S608 — allowlist above
-            (new_value, row["primary_author_id"]),
-        )
+        target_field = field
+        new_value = normalize_orcid(row["alt_value"]) if field == "orcid" else row["alt_value"]
         new_status = "resolved_use_alt"
     else:
         new_status = "dismissed"
 
-    db.execute(
-        "UPDATE author_merge_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
-        (new_status, now, conflict_id),
+    # One atomic write unit: apply the chosen value to the primary (only when
+    # 'alt' won) AND mark the conflict resolved together, serialized behind
+    # the writer gate.
+    def _persist() -> None:
+        if target_field is not None:
+            db.execute(
+                f"UPDATE authors SET {target_field} = ? WHERE id = ?",  # noqa: S608 — allowlist above
+                (new_value, row["primary_author_id"]),
+            )
+        db.execute(
+            "UPDATE author_merge_conflicts SET status = ?, resolved_at = ? WHERE id = ?",
+            (new_status, now, conflict_id),
+        )
+
+    run_write_unit(db, _persist, label="resolve_merge_conflict")
+    _log_author_action(
+        db,
+        "resolve_conflict",
+        f"Resolved merge conflict {conflict_id}: {new_status}",
+        author_id=str(row["primary_author_id"]),
+        data={"conflict_id": conflict_id, "choice": body.choice, "status": new_status},
     )
-    db.commit()
     return {
         "conflict_id": conflict_id,
         "status": new_status,
@@ -3211,8 +3414,21 @@ def remove_author(
     from alma.application.author_lifecycle import soft_remove_author
 
     try:
-        changed = soft_remove_author(db, author_id, reason="manual remove (author detail)")
-        db.commit()
+        # soft_remove_author is caller-owns-transaction; wrap it in one
+        # serialized, atomic unit (D3 soft-remove: status='removed'). It is
+        # idempotent, so a lock retry re-runs it cleanly.
+        changed = run_write_unit(
+            db,
+            lambda: soft_remove_author(db, author_id, reason="manual remove (author detail)"),
+            label="remove_author",
+        )
+        if changed:
+            _log_author_action(
+                db,
+                "remove",
+                f"Soft-removed author {author_id}",
+                author_id=author_id,
+            )
         return {"author_id": author_id, "status": "removed" if changed else "noop"}
     except Exception as e:
         raise_internal(f"Failed to remove author {author_id}", e)
@@ -3251,17 +3467,42 @@ def update_author_type(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Author with ID {author_id} not found",
         )
-    db.execute(
-        "UPDATE authors SET author_type = ? WHERE id = ?",
-        (author_type, author_id),
-    )
-    _sync_follow_state(db, author_id, followed=(author_type == "followed"))
-    db.commit()
+    # One atomic write unit: flip the author_type and keep followed_authors /
+    # feed_monitors in sync together. _sync_follow_state returns True when a
+    # hydration row was enqueued — the sweep must be scheduled AFTER commit
+    # (in-transaction scheduling self-deadlocks; see apply_follow_state).
+    def _persist() -> bool:
+        db.execute(
+            "UPDATE authors SET author_type = ? WHERE id = ?",
+            (author_type, author_id),
+        )
+        return _sync_follow_state(db, author_id, followed=(author_type == "followed"))
+
+    needs_hydration_sweep = run_write_unit(db, _persist, label="update_author_type")
+
+    # Post-commit (gate released): scheduler-connection work is safe now.
+    if needs_hydration_sweep:
+        try:
+            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+
+            schedule_pending_author_hydration_sweep(
+                reason="author_type_change",
+                target_author_ids=[author_id],
+            )
+        except Exception as exc:
+            logger.debug("author hydration sweep skipped for %s: %s", author_id, exc)
     if author_type == "followed":
         try:
             schedule_followed_author_historical_backfill(author_id, trigger="author_type_follow")
         except Exception as exc:
             logger.debug("Could not queue historical backfill for %s: %s", author_id, exc)
+    _log_author_action(
+        db,
+        "set_type",
+        f"Set author {author_id} type to {author_type}",
+        author_id=author_id,
+        data={"author_type": author_type},
+    )
     d = authors_app.get_author(db, author_id)
     if d is None:
         raise HTTPException(
@@ -3554,28 +3795,39 @@ def confirm_openalex_for_author(
     user: dict = Depends(get_current_user),
 ):
     try:
-        # Ensure author exists
+        # Ensure author exists (read — outside the write unit).
         row = db.execute("SELECT name FROM authors WHERE id=?", (author_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Author not found")
-        # Fetch author details to retrieve ORCID
+        # Fetch author details to retrieve ORCID. NETWORK call — kept OUTSIDE
+        # the write unit so the writer gate is never held across OpenAlex I/O
+        # (write-discipline rule #2: gather first, then write).
         from alma.openalex.client import _get_author_details as _get_oa_det
-        # Normalize OpenAlex id to bare key (A...)
-        oid = _norm_oaid(payload.openalex_id)
+        oid = _norm_oaid(payload.openalex_id)  # normalize to bare key (A...)
         det = _get_oa_det(oid) or {}
         orcid = (det.get("orcid") or "").strip() or None
-        # Update
-        db.execute(
-            "UPDATE authors SET openalex_id=?, orcid=COALESCE(?, orcid) WHERE id=?",
-            (oid, normalize_orcid(orcid), author_id),
-        )
-        _set_resolution_status(
+
+        # One serialized, atomic write unit: attach the OpenAlex id + ORCID
+        # and stamp the manual-resolution status together (gate + BEGIN
+        # IMMEDIATE + lock retry); a retry re-runs the whole unit cleanly.
+        def _persist() -> None:
+            db.execute(
+                "UPDATE authors SET openalex_id=?, orcid=COALESCE(?, orcid) WHERE id=?",
+                (oid, normalize_orcid(orcid), author_id),
+            )
+            _set_resolution_status(
+                db, author_id, "resolved_manual", f"OpenAlex manually confirmed ({oid})"
+            )
+
+        run_write_unit(db, _persist, label="confirm_openalex_for_author")
+        # Make the action visible/auditable in Activity (post-gate).
+        _log_author_action(
             db,
-            author_id,
-            "resolved_manual",
-            f"OpenAlex manually confirmed ({oid})",
+            "confirm_openalex",
+            f"Confirmed OpenAlex {oid} for {row['name'] or author_id}",
+            author_id=author_id,
+            data={"openalex_id": oid, "orcid": orcid},
         )
-        db.commit()
         return {"success": True, "author_id": author_id, "openalex_id": oid, "orcid": orcid}
     except HTTPException:
         raise
@@ -3687,6 +3939,7 @@ def confirm_identifiers_for_author(
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
 
+    # Build the column set up front (pure compute — no writes yet).
     updates: list[str] = []
     params: list[Any] = []
     if payload.openalex_id is not None:
@@ -3695,16 +3948,36 @@ def confirm_identifiers_for_author(
     if payload.scholar_id is not None:
         updates.append("scholar_id = ?")
         params.append((payload.scholar_id or "").strip())
-    if updates:
-        params.append(author_id)
-        db.execute(f"UPDATE authors SET {', '.join(updates)} WHERE id = ?", tuple(params))
 
     status_value = (payload.status or "resolved_manual").strip().lower()
     if status_value not in _RESOLUTION_STATUSES:
         status_value = "resolved_manual"
     reason = (payload.reason or "Identifiers manually confirmed").strip()
-    _set_resolution_status(db, author_id, status_value, reason)
-    db.commit()
+
+    # One atomic write unit: set the chosen identifiers (if any) and stamp
+    # the resolution status together, serialized behind the writer gate.
+    # `params + [author_id]` builds a fresh arg list each call so a lock
+    # retry of the unit can't double-append the id (idempotent unit).
+    def _persist() -> None:
+        if updates:
+            db.execute(
+                f"UPDATE authors SET {', '.join(updates)} WHERE id = ?",
+                tuple(params + [author_id]),
+            )
+        _set_resolution_status(db, author_id, status_value, reason)
+
+    run_write_unit(db, _persist, label="confirm_identifiers_for_author")
+    _log_author_action(
+        db,
+        "confirm_identifiers",
+        f"Confirmed identifiers for author {author_id} ({status_value})",
+        author_id=author_id,
+        data={
+            "openalex_id": payload.openalex_id,
+            "scholar_id": payload.scholar_id,
+            "status": status_value,
+        },
+    )
     return {"success": True, "author_id": author_id, "status": status_value}
 
 
@@ -4475,7 +4748,7 @@ def deep_refresh_all_authors(
 
     if not background:
         try:
-            return _deep_refresh_all_impl(db, scope=scope_value)
+            return _deep_refresh_all_impl(db, scope=scope_value, limit=_FULL_SWEEP_BUDGET)
         except Exception as e:
             raise_internal("Deep refresh all failed", e)
 
@@ -4509,7 +4782,7 @@ def deep_refresh_all_authors(
     def _runner() -> dict:
         conn = open_db_connection()
         try:
-            return _deep_refresh_all_impl(conn, job_id=job_id, scope=scope_value)
+            return _deep_refresh_all_impl(conn, job_id=job_id, scope=scope_value, limit=_FULL_SWEEP_BUDGET)
         finally:
             conn.close()
 
@@ -4547,7 +4820,8 @@ def rehydrate_author_metadata(
 
     if not background:
         try:
-            return run_author_metadata_rehydration(limit=limit, force=force)
+            # Explicit budget: the query `limit` when given, else the full sweep.
+            return run_author_metadata_rehydration(limit=limit or _FULL_SWEEP_BUDGET, force=force)
         except Exception as e:
             raise_internal("Author metadata hydration failed", e)
 
@@ -4592,7 +4866,7 @@ def rehydrate_author_metadata(
 
         return run_author_metadata_rehydration(
             job_id,
-            limit=limit,
+            limit=limit or _FULL_SWEEP_BUDGET,
             force=force,
             set_job_status=_set_status,
             add_job_log=_add_log,
@@ -4655,7 +4929,7 @@ def dedup_authors_by_orcid_endpoint(
 
     if not background:
         try:
-            return dedup_followed_authors_by_orcid(db)
+            return dedup_followed_authors_by_orcid(db, limit=_FULL_SWEEP_BUDGET)
         except Exception as e:
             raise_internal("Author ORCID dedup sweep failed", e)
 
@@ -4683,7 +4957,7 @@ def dedup_authors_by_orcid_endpoint(
     def _runner() -> dict:
         conn = open_db_connection()
         try:
-            return dedup_followed_authors_by_orcid(conn, job_id=job_id)
+            return dedup_followed_authors_by_orcid(conn, limit=_FULL_SWEEP_BUDGET, job_id=job_id)
         finally:
             conn.close()
 
@@ -4730,7 +5004,7 @@ def garbage_collect_orphan_authors_endpoint(
 
     if not background:
         try:
-            return garbage_collect_orphan_authors(db, dry_run=dry_run)
+            return garbage_collect_orphan_authors(db, dry_run=dry_run, limit=_FULL_SWEEP_BUDGET)
         except Exception as e:
             raise_internal("Author GC sweep failed", e)
 
@@ -4762,7 +5036,7 @@ def garbage_collect_orphan_authors_endpoint(
     def _runner() -> dict:
         conn = open_db_connection()
         try:
-            return garbage_collect_orphan_authors(conn, dry_run=dry_run, job_id=job_id)
+            return garbage_collect_orphan_authors(conn, dry_run=dry_run, limit=_FULL_SWEEP_BUDGET, job_id=job_id)
         finally:
             conn.close()
 
@@ -4945,27 +5219,42 @@ def empty_author_cache(
                    WHERE pa.openalex_id = ?""",
                 (oa_id,),
             ).fetchone()["c"]
-            # Delete papers only linked to this author, then clean junction rows
-            db.execute(
-                """DELETE FROM papers WHERE id IN (
-                       SELECT pa.paper_id FROM publication_authors pa
-                       WHERE pa.openalex_id = ?
-                       AND NOT EXISTS (
-                           SELECT 1 FROM publication_authors pa2
-                           JOIN authors a2 ON a2.openalex_id = pa2.openalex_id
-                           WHERE pa2.paper_id = pa.paper_id AND a2.id != ?
-                       )
-                   )""",
-                (oa_id, author_id),
-            )
-            db.execute(
-                "DELETE FROM publication_authors WHERE openalex_id = ?",
-                (oa_id,),
-            )
+
+            # One atomic, gated unit: drop the author's papers that aren't
+            # shared with another author, then the junction rows. Previously
+            # these DELETEs ran ungated and relied on the request teardown to
+            # commit — racing background writers could surface "database is
+            # locked". Both statements are idempotent, so a lock retry is safe.
+            def _persist() -> None:
+                db.execute(
+                    """DELETE FROM papers WHERE id IN (
+                           SELECT pa.paper_id FROM publication_authors pa
+                           WHERE pa.openalex_id = ?
+                           AND NOT EXISTS (
+                               SELECT 1 FROM publication_authors pa2
+                               JOIN authors a2 ON a2.openalex_id = pa2.openalex_id
+                               WHERE pa2.paper_id = pa.paper_id AND a2.id != ?
+                           )
+                       )""",
+                    (oa_id, author_id),
+                )
+                db.execute(
+                    "DELETE FROM publication_authors WHERE openalex_id = ?",
+                    (oa_id,),
+                )
+
+            run_write_unit(db, _persist, label="empty_author_cache")
         else:
             before = 0
         after = 0
         logger.info("Emptied cache for %s: deleted %d", author_id, before)
+        _log_author_action(
+            db,
+            "empty_cache",
+            f"Emptied cache for author {author_id} (deleted {int(before)})",
+            author_id=author_id,
+            data={"deleted": int(before)},
+        )
         return {"success": True, "author_id": author_id, "deleted": int(before), "remaining": int(after)}
     except HTTPException:
         raise

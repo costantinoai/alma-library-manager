@@ -42,6 +42,7 @@ import uuid
 from datetime import datetime
 from typing import Iterable, Mapping, Optional
 
+from alma.core.db_write import run_after_gate_release, write_section
 from alma.core.utils import normalize_orcid
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,42 @@ _MANUAL_CHOICE_FIELDS: frozenset[str] = frozenset(
         "semantic_scholar_id",
     }
 )
+
+
+def record_author_alias(
+    db: sqlite3.Connection,
+    primary_author_id: str,
+    alt_openalex_id: str,
+    *,
+    alt_author_id: Optional[str] = None,
+    source: str,
+) -> bool:
+    """Record one ``author_alt_identifiers`` row; return True if newly inserted.
+
+    The single writer for author aliases — merge (row + row-less paths),
+    ORCID-discovery hydration, and the ORCID dedup sweep all funnel here so the
+    column order, id/timestamp generation, and the idempotent
+    ``INSERT OR IGNORE`` (UNIQUE on ``primary_author_id, alt_openalex_id``) live
+    in ONE place. Pass the per-call provenance via ``source`` (e.g.
+    ``manual_merge`` / ``orcid_discovery`` / ``orcid_sweep``). Caller owns the
+    transaction — this does not commit.
+    """
+    cur = db.execute(
+        """
+        INSERT OR IGNORE INTO author_alt_identifiers
+            (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            uuid.uuid4().hex,
+            primary_author_id,
+            alt_openalex_id,
+            alt_author_id,
+            source,
+            datetime.utcnow().isoformat(),
+        ),
+    )
+    return bool(cur.rowcount)
 
 
 def _union_json_list(primary_raw: object, alt_raw: object) -> Optional[str]:
@@ -609,14 +646,9 @@ def merge_author_profiles(
         # 4. Drop the alt from followed_authors and soft-remove the row.
         _drop_follow_and_soft_remove(db, alt_id)
 
-        # 5. Record the alias so the rail / dossier knows.
-        db.execute(
-            """
-            INSERT OR IGNORE INTO author_alt_identifiers
-                (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
-            VALUES (?, ?, ?, ?, 'manual_merge', ?)
-            """,
-            (uuid.uuid4().hex, primary_id, alt_oid, alt_id, now),
+        # 5. Record the alias so the rail / dossier knows (one alias writer).
+        record_author_alias(
+            db, primary_id, alt_oid, alt_author_id=alt_id, source="manual_merge"
         )
 
         # 5. Audit log entry — DEFERRED to after commit. add_job_log opens
@@ -668,14 +700,7 @@ def merge_author_profiles(
         )
         summary["papers_reassigned"] += upd_cur.rowcount or 0
 
-        db.execute(
-            """
-            INSERT OR IGNORE INTO author_alt_identifiers
-                (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
-            VALUES (?, ?, ?, NULL, 'manual_merge', ?)
-            """,
-            (uuid.uuid4().hex, primary_id, alt_oid, now),
-        )
+        record_author_alias(db, primary_id, alt_oid, source="manual_merge")
 
         pending_audit_logs.append(
             (
@@ -731,32 +756,58 @@ def merge_author_profiles(
         except Exception as exc:
             logger.debug("author hydration enqueue skipped after merge %s: %s", primary_id, exc)
 
-    db.commit()
+    # Caller owns the transaction — the route wraps this in `run_write_unit`
+    # and the dedup sweep wraps each merge in a `write_section`, so the whole
+    # merge commits atomically as ONE unit (no mid-unit commit here).
 
-    # ---- Post-commit, best-effort side effects (no longer hold the writer) ----
-    # Flush the deferred audit log now that operation_logs writes won't
-    # collide with our own (now-released) write lock.
-    if pending_audit_logs:
-        try:
-            from alma.api.scheduler import add_job_log
+    # Post-commit, best-effort side effects, DEFERRED until the writer gate
+    # (and the SQLite write lock) is released. `add_job_log` and the hydration
+    # sweep persist through their OWN connections, so running them while we
+    # still held the writer would contend / self-deadlock (write-discipline
+    # rule #3). `run_after_gate_release` fires them right after the caller's
+    # commit — or immediately if no gate is held.
+    def _post_commit() -> None:
+        if pending_audit_logs:
+            try:
+                from alma.api.scheduler import add_job_log
 
-            for message, data in pending_audit_logs:
-                add_job_log(job_id or "author_merge", message, step="author_merged", data=data)
-        except Exception:
-            logger.debug("Audit log flush failed after merge", exc_info=True)
+                for message, data in pending_audit_logs:
+                    add_job_log(job_id or "author_merge", message, step="author_merged", data=data)
+                # One clear summary line so the outcome is legible in Activity:
+                # what folded in, how many papers moved, conflicts to review.
+                if summary["alts_processed"]:
+                    add_job_log(
+                        job_id or "author_merge",
+                        (
+                            f"Merge complete → {primary_row['name'] or primary_id}: "
+                            f"{summary['alts_processed']} identit(ies) folded, "
+                            f"{summary['papers_reassigned']} papers reassigned, "
+                            f"{summary['papers_dropped_as_dup']} dropped as duplicate, "
+                            f"{len(summary['conflicts'])} conflict(s) to review"
+                        ),
+                        step="author_merge_summary",
+                        data={
+                            "primary_author_id": primary_id,
+                            "alt_openalex_ids": summary["alt_openalex_ids"],
+                            "conflicts": summary["conflicts"],
+                            "fields_unioned": summary["fields_unioned"],
+                        },
+                    )
+            except Exception:
+                logger.debug("Audit log flush failed after merge", exc_info=True)
 
-    # Kick the hydration sweep that processes the row enqueued above.
-    if should_schedule_sweep:
-        try:
-            from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
+        if should_schedule_sweep:
+            try:
+                from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
 
-            schedule_pending_author_hydration_sweep(
-                reason="author_merge",
-                target_author_ids=[primary_id],
-            )
-        except Exception as exc:
-            logger.debug("author hydration sweep skip after merge %s: %s", primary_id, exc)
+                schedule_pending_author_hydration_sweep(
+                    reason="author_merge",
+                    target_author_ids=[primary_id],
+                )
+            except Exception as exc:
+                logger.debug("author hydration sweep skip after merge %s: %s", primary_id, exc)
 
+    run_after_gate_release(_post_commit)
     return summary
 
 
@@ -938,10 +989,12 @@ def record_orcid_aliases(
             "recorded": 0,
         }
 
+    # Network discovery runs FIRST, before any writes, so the writer lock is
+    # never held across the OpenAlex calls (the caller's hydration loop commits
+    # per source around this).
     discovery = discover_aliases_via_orcid(primary_oid, mailto=mailto, known_orcid=known_orcid)
     aliases = discovery.get("aliases") or []
     recorded = 0
-    now = datetime.utcnow().isoformat()
     for alias in aliases:
         alt_oid = str(alias.get("openalex_id") or "").strip()
         if not alt_oid:
@@ -954,17 +1007,12 @@ def record_orcid_aliases(
             (alt_oid,),
         ).fetchone()
         local_alt_id = str(local_row["id"]) if local_row else None
-        cur = db.execute(
-            """
-            INSERT OR IGNORE INTO author_alt_identifiers
-                (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
-            VALUES (?, ?, ?, ?, 'orcid_discovery', ?)
-            """,
-            (uuid.uuid4().hex, primary_id, alt_oid, local_alt_id, now),
-        )
-        recorded += cur.rowcount or 0
-    if recorded:
-        db.commit()
+        if record_author_alias(
+            db, primary_id, alt_oid, alt_author_id=local_alt_id, source="orcid_discovery"
+        ):
+            recorded += 1
+    # Caller owns the transaction — no commit here (the hydration runner
+    # commits per source; see author_hydrate._hydrate_openalex).
     discovery["primary_author_id"] = primary_id
     discovery["recorded"] = recorded
     return discovery
@@ -994,6 +1042,7 @@ def dedup_followed_authors_by_orcid(
     *,
     mailto: Optional[str] = None,
     sleep_between_calls: float = 0.05,
+    limit: int,
     job_id: Optional[str] = None,
 ) -> dict:
     """Sweep every followed author for ORCID-based split profiles.
@@ -1025,11 +1074,13 @@ def dedup_followed_authors_by_orcid(
         "message": str,
       }
 
-    The destructive step (`merge_author_profiles`) is run with the
-    SAME `db` connection so the whole sweep stays in the operation's
-    audit trail. Caller is responsible for committing — we commit
-    inside the merge helper, so by sweep-end every effect is
-    durable.
+    The destructive step (`merge_author_profiles`) runs on the SAME `db`
+    connection so the whole sweep stays in the operation's audit trail. Each
+    merge / alias write is committed in its OWN gated ``write_section``, while
+    the ORCID/OpenAlex discovery for the next target runs OUTSIDE every section
+    — so the writer lock is never held across a network call (write
+    discipline). Idempotent: a re-run skips already-merged rows and
+    ``INSERT OR IGNORE`` makes alias records safe.
     """
     ensure_alt_identifiers_table(db)
 
@@ -1093,11 +1144,21 @@ def dedup_followed_authors_by_orcid(
     initial_targets = list(followed_rows)
     import time
 
+    # Total budget (REQUIRED, explicit): bound the number of ORCID/OpenAlex
+    # discovery scans this run — the unit is one followed author, one network
+    # round-trip each. The maintenance tick passes the registry cap; the admin
+    # sweep route passes its full-sweep budget. The remainder carries over to the
+    # next run. There is no unbounded mode.
+    cap = max(1, int(limit))
+
     for target in initial_targets:
         # Short-circuit if the target was already merged AWAY in a
         # previous iteration of this sweep.
         if target["openalex_id"].lower() not in by_oid:
             continue
+
+        if summary["scanned"] >= cap:
+            break
 
         summary["scanned"] += 1
         try:
@@ -1140,10 +1201,15 @@ def dedup_followed_authors_by_orcid(
                 else:
                     primary, alt = a, b
                 try:
-                    merge_result = merge_author_profiles(
-                        db, primary["author_id"], [alt["author_id"]],
-                        job_id=job_id,
-                    )
+                    # ORCID discovery already happened above (outside any
+                    # section); commit this merge in its own gated section so
+                    # the writer is released before the next target's network
+                    # call. A failure rolls back only this merge.
+                    with write_section(db, label="author_dedup_merge"):
+                        merge_result = merge_author_profiles(
+                            db, primary["author_id"], [alt["author_id"]],
+                            job_id=job_id,
+                        )
                 except Exception as exc:  # pragma: no cover
                     logger.warning(
                         "Auto-merge failed for %s ← %s: %s",
@@ -1181,21 +1247,16 @@ def dedup_followed_authors_by_orcid(
                     (alt_oid,),
                 ).fetchone()
                 local_alt_id = str(local_row["id"]) if local_row else None
-                cur = db.execute(
-                    """
-                    INSERT OR IGNORE INTO author_alt_identifiers
-                        (id, primary_author_id, alt_openalex_id, alt_author_id, source, created_at)
-                    VALUES (?, ?, ?, ?, 'orcid_sweep', ?)
-                    """,
-                    (
-                        uuid.uuid4().hex,
+                # One alias writer, committed in its own gated section.
+                with write_section(db, label="author_dedup_alias"):
+                    inserted = record_author_alias(
+                        db,
                         target["author_id"],
                         alt_oid,
-                        local_alt_id,
-                        datetime.utcnow().isoformat(),
-                    ),
-                )
-                if cur.rowcount:
+                        alt_author_id=local_alt_id,
+                        source="orcid_sweep",
+                    )
+                if inserted:
                     summary["aliases_recorded"] += 1
                     if len(summary["sample"]) < 25:
                         summary["sample"].append(
@@ -1211,7 +1272,8 @@ def dedup_followed_authors_by_orcid(
         if sleep_between_calls > 0:
             time.sleep(sleep_between_calls)
 
-    db.commit()
+    # No final commit: every merge/alias was committed in its own
+    # write_section above (network stayed outside each section).
     summary["message"] = (
         f"Author dedup sweep: {summary['merged']} merged, "
         f"{summary['aliases_recorded']} aliases recorded across "
