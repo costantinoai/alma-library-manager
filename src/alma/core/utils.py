@@ -6,6 +6,7 @@ the codebase, particularly for text normalization and data transformations.
 
 import re
 import sqlite3
+import unicodedata
 import urllib.parse
 import uuid
 from datetime import datetime
@@ -50,6 +51,34 @@ def normalize_text(value: str) -> str:
     Useful for fuzzy title matching, name comparisons, and deduplication.
     """
     return " ".join(re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).split())
+
+
+# Dotless-ı (U+0131) immediately followed by a combining mark (U+0300–U+036F).
+# This is the signature of a precomposed letter (e.g. `í`) that leaked through a
+# LaTeX-aware export as a dotless-ı plus a separate combining accent.
+_DOTLESS_I_PLUS_COMBINING_RE = re.compile("ı([̀-ͯ])")
+
+
+def repair_display_text(value: Optional[str]) -> str:
+    """Repair LaTeX-leaked dotless-ı + combining marks, then NFC-normalize.
+
+    The durable, write-time twin of the frontend ``repairDisplayText`` (applied
+    at the API-client boundary). When a name/title passes through a LaTeX-aware
+    pipeline, a precomposed letter such as ``í`` can leak as a dotless-ı
+    (U+0131) followed by a combining acute (U+0301), which renders as ``ı́``.
+    We restore the dotted ``i`` so the combining mark composes, then NFC-
+    normalize to the precomposed form.
+
+    Lossless: diacritics are preserved (re-composed), never stripped — a no-op
+    on clean or empty text. Apply at the persistence chokepoints (author names,
+    paper titles, journals, author lists, abstracts) so the DB stores clean
+    text. Distinct from the deliberately lossy comparison helpers
+    :func:`normalize_text` / :func:`normalize_title_key` — do NOT use those for
+    durable writes.
+    """
+    if not value:
+        return value or ""
+    return unicodedata.normalize("NFC", _DOTLESS_I_PLUS_COMBINING_RE.sub("i\\1", value))
 
 
 _TITLE_KEY_NOISE_RE = re.compile(r"[^a-z0-9]+")

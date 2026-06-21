@@ -764,18 +764,18 @@ def _upsert_authorships(
     try:
         conn.execute("DELETE FROM publication_authors WHERE paper_id = ?", (paper_id,))
         inserted = 0
-        from alma.core.utils import normalize_orcid
+        from alma.core.utils import normalize_orcid, repair_display_text
 
         for a in authorships or []:
             oaid = (a.get("openalex_id") or "").strip()
-            dname = (a.get("display_name") or "").strip()
+            dname = repair_display_text((a.get("display_name") or "").strip())
             orcid = normalize_orcid(a.get("orcid")) or ""
             position = (a.get("position") or "").strip()
             is_corr = 1 if a.get("is_corresponding") else 0
             insts = a.get("institutions") or []
             inst_name = ""
             if insts and isinstance(insts, list):
-                inst_name = (insts[0].get("name") or "").strip() if isinstance(insts[0], dict) else ""
+                inst_name = repair_display_text((insts[0].get("name") or "").strip()) if isinstance(insts[0], dict) else ""
             if oaid and dname:
                 conn.execute(
                     """INSERT OR REPLACE INTO publication_authors
@@ -831,9 +831,9 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     import uuid
     from datetime import datetime
 
-    from alma.core.utils import normalize_doi, resolve_existing_paper_id
+    from alma.core.utils import normalize_doi, repair_display_text, resolve_existing_paper_id
 
-    title = (w.get("title") or "").strip()
+    title = repair_display_text((w.get("title") or "").strip())
     if not title:
         return None
 
@@ -851,9 +851,9 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     openalex_id = _normalize_openalex_work_id((w.get("openalex_id") or "").strip()) or None
     doi = normalize_doi((w.get("doi") or "").strip()) or None
     url = (w.get("pub_url") or "").strip()
-    journal = (w.get("journal") or "").strip()
-    authors_str = (w.get("authors") or "").strip()
-    abstract = (w.get("abstract") or "").strip()
+    journal = repair_display_text((w.get("journal") or "").strip())
+    authors_str = repair_display_text((w.get("authors") or "").strip())
+    abstract = repair_display_text((w.get("abstract") or "").strip())
     year = w.get("year")
     pub_date = w.get("publication_date")
     topics = w.get("topics") or []

@@ -13,6 +13,22 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Mapping
 
+from alma.core.utils import repair_display_text
+
+# Display-text columns on ``papers`` that get NFC + dotless-ı repair at write
+# time (mirrors the frontend repair allowlist). Identifier / URL / date columns
+# are deliberately excluded — they must round-trip byte-for-byte.
+_DISPLAY_TEXT_FIELDS = frozenset({"title", "authors", "journal", "abstract", "tldr"})
+
+
+def _normalize_write_value(field: str, value: Any) -> Any:
+    """Strip strings; additionally repair display-text fields (NFC + dotless-ı)."""
+    if not isinstance(value, str):
+        return value
+    if field in _DISPLAY_TEXT_FIELDS:
+        return repair_display_text(value).strip()
+    return value.strip()
+
 
 def _is_empty(value: Any) -> bool:
     if value is None:
@@ -102,11 +118,11 @@ def fill_only_update_paper(
 
     for field, value in (fill_fields or {}).items():
         if _usable(value) and _is_empty(row[field]):
-            updates[str(field)] = value.strip() if isinstance(value, str) else value
+            updates[str(field)] = _normalize_write_value(str(field), value)
 
     for field, value in (fill_null_fields or {}).items():
         if _usable(value) and row[field] is None:
-            updates[str(field)] = value.strip() if isinstance(value, str) else value
+            updates[str(field)] = _normalize_write_value(str(field), value)
 
     for field, value in (max_int_fields or {}).items():
         try:
@@ -123,14 +139,14 @@ def fill_only_update_paper(
     for field, value in (always_fields or {}).items():
         if not _usable(value):
             continue
-        normalized = value.strip() if isinstance(value, str) else value
+        normalized = _normalize_write_value(str(field), value)
         if row[field] != normalized:
             updates[str(field)] = normalized
 
     for field, value in (prefer_specific_date_fields or {}).items():
         if not _usable(value):
             continue
-        normalized = value.strip() if isinstance(value, str) else value
+        normalized = _normalize_write_value(str(field), value)
         existing = row[field]
         # Upgrade only when the new date is a real day (not Jan 1) and
         # the existing slot is empty or itself a Jan-1 fallback. A new
