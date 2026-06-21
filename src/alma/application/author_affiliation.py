@@ -13,6 +13,16 @@ from typing import Any
 _NAME_RE = re.compile(r"[^a-z0-9]+")
 
 
+# A user's explicit affiliation pick is recorded as evidence under this source.
+# It is NOT one of the auto sources (openalex/orcid/crossref/semantic_scholar),
+# so a per-source refresh (which deletes WHERE source=<that source>) never wipes
+# it — the pick survives every future hydration.
+_MANUAL_SOURCE = "manual"
+# Far above any auto candidate's max (orcid employment 1.0 + bonuses ≈ 1.7), so a
+# manual pick is always selected, unambiguously.
+_MANUAL_AFFILIATION_SCORE = 100.0
+
+
 @dataclass(frozen=True)
 class AffiliationDecision:
     author_id: str
@@ -64,6 +74,11 @@ def _year(value: object) -> int | None:
 def _base_score(source: str, role: str) -> float:
     source_key = str(source or "").strip().lower()
     role_key = str(role or "").strip().lower()
+    # A user's manual pick is authoritative: it must outscore every auto source
+    # (and all their bonuses) so `recompute_display_affiliation` always selects
+    # it and the conflict detector treats it as resolved (D-affiliation-lock).
+    if source_key == _MANUAL_SOURCE:
+        return _MANUAL_AFFILIATION_SCORE
     if source_key == "orcid" and role_key == "employment":
         return 1.0
     if source_key == "openalex" and role_key == "last_known_institution":
@@ -152,6 +167,79 @@ def score_affiliation_candidates(
     return candidates
 
 
+def _candidates_conflict(candidates: list[dict[str, Any]]) -> bool:
+    """True iff the top-2 affiliation candidates genuinely disagree.
+
+    Single source of truth for "is this an affiliation conflict?" — shared by
+    `recompute_display_affiliation` and `list_affiliation_conflicts` (the logic
+    used to be duplicated and could drift). A conflict is two close-scored
+    candidates from different sources naming different institutions.
+
+    A user's manual pick (source='manual') sits at the top (it outscores all
+    auto evidence) and means the conflict is RESOLVED — the user decided which
+    institution to show — so it is never re-flagged even though the underlying
+    auto sources still disagree. This is the terminal acknowledgment that stops
+    the affiliation health step blocking forever.
+    """
+    if not candidates:
+        return False
+    top = candidates[0]
+    if str(top.get("source") or "").strip().lower() == _MANUAL_SOURCE:
+        return False
+    if len(candidates) < 2:
+        return False
+    second = candidates[1]
+    first_score = float(top.get("score") or 0.0)
+    second_score = float(second.get("score") or 0.0)
+    return bool(
+        first_score > 0
+        and second_score >= first_score * 0.9
+        and str(top.get("source") or "") != str(second.get("source") or "")
+        and _name_key(str(top.get("institution_name") or "")) != _name_key(str(second.get("institution_name") or ""))
+    )
+
+
+def record_manual_affiliation(
+    conn: sqlite3.Connection,
+    author_id: str,
+    *,
+    institution_name: str,
+    institution_openalex_id: str | None = None,
+    institution_ror: str | None = None,
+) -> AffiliationDecision:
+    """Lock an author's display affiliation to a user-chosen institution.
+
+    Records the pick as an authoritative ``source='manual'`` evidence row,
+    reusing the evidence table + scoring primitive so the pick (a) outscores
+    every auto source, (b) survives auto-refresh (per-source replace deletes
+    only its own source, never 'manual'), and (c) suppresses the
+    affiliation-conflict flag (the user decided). Replaces any prior manual
+    pick (one lock at a time), then recomputes + persists the display
+    affiliation. Caller owns the transaction (no commit here).
+    """
+    author_key = str(author_id or "").strip()
+    name = str(institution_name or "").strip()
+    if not author_key or not name:
+        raise ValueError("author_id and institution_name are required")
+    ensure_author_affiliation_evidence_table(conn)
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        "DELETE FROM author_affiliation_evidence WHERE author_id = ? AND source = ?",
+        (author_key, _MANUAL_SOURCE),
+    )
+    conn.execute(
+        """
+        INSERT INTO author_affiliation_evidence
+            (author_id, source, institution_openalex_id, institution_ror,
+             institution_name, role, start_date, end_date, is_current,
+             evidence_url, confidence, observed_at)
+        VALUES (?, ?, ?, ?, ?, 'manual_pick', '', NULL, 1, NULL, 1.0, ?)
+        """,
+        (author_key, _MANUAL_SOURCE, institution_openalex_id, institution_ror, name, now),
+    )
+    return recompute_display_affiliation(conn, author_key)
+
+
 def recompute_display_affiliation(conn: sqlite3.Connection, author_id: str) -> AffiliationDecision:
     """Pick and persist the display affiliation from evidence rows."""
     author_key = str(author_id or "").strip()
@@ -175,23 +263,7 @@ def recompute_display_affiliation(conn: sqlite3.Connection, author_id: str) -> A
             (selected, author_key),
         )
 
-    conflict = False
-    if len(candidates) >= 2:
-        second = candidates[1]
-        first_score = float(top.get("score") or 0.0)
-        second_score = float(second.get("score") or 0.0)
-        first_source = str(top.get("source") or "")
-        second_source = str(second.get("source") or "")
-        first_name = _name_key(str(top.get("institution_name") or ""))
-        second_name = _name_key(str(second.get("institution_name") or ""))
-        if (
-            first_score > 0
-            and second_score >= first_score * 0.9
-            and first_source != second_source
-            and first_name != second_name
-        ):
-            conflict = True
-
+    conflict = _candidates_conflict(candidates)
     return AffiliationDecision(author_key, selected, changed, conflict, candidates)
 
 
@@ -214,23 +286,11 @@ def list_affiliation_conflicts(conn: sqlite3.Connection, *, limit: int = 100) ->
     out: list[dict[str, Any]] = []
     for row in rows:
         candidates = score_affiliation_candidates(conn, str(row["id"]))
-        if len(candidates) < 2:
+        # Same conflict test as recompute (manual pick → resolved, not a conflict).
+        if not _candidates_conflict(candidates):
             continue
         first = candidates[0]
         second = candidates[1]
-        first_score = float(first.get("score") or 0.0)
-        second_score = float(second.get("score") or 0.0)
-        first_source = str(first.get("source") or "")
-        second_source = str(second.get("source") or "")
-        first_name = _name_key(str(first.get("institution_name") or ""))
-        second_name = _name_key(str(second.get("institution_name") or ""))
-        if not (
-            first_score > 0
-            and second_score >= first_score * 0.9
-            and first_source != second_source
-            and first_name != second_name
-        ):
-            continue
         out.append(
             {
                 "author_id": str(row["id"]),

@@ -127,9 +127,13 @@ _AUTHOR_STATUS_RANK: tuple[tuple[str, int], ...] = (
 
 # A *followed* author with no OpenAlex id — the resolver never bridged them.
 # Ranks just below the explicit failure statuses (severity 3 in the endpoint).
+# ``dismissed`` is the user's terminal "can't be identified — stop flagging"
+# acknowledgment: excluded here so an accepted author never re-surfaces as a
+# fixable gap (the exact-status counts already skip it, being a new status).
 _AUTHOR_FOLLOWED_UNRESOLVED_SQL = (
     "EXISTS (SELECT 1 FROM followed_authors fa WHERE fa.author_id = a.id) "
-    "AND COALESCE(a.openalex_id, '') = ''"
+    "AND COALESCE(a.openalex_id, '') = '' "
+    "AND COALESCE(a.id_resolution_status, '') != 'dismissed'"
 )
 
 
@@ -783,7 +787,12 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
       (SELECT COUNT(*) FROM authors),
       (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
       (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),
-      (SELECT COUNT(*) FROM followed_authors)
+      (SELECT COUNT(*) FROM followed_authors),
+      -- Affiliation-conflict counts feed this view, so any evidence change
+      -- (a manual pick OR an auto-refresh replacing source rows) must
+      -- invalidate it — otherwise the ribbon shows a stale conflict count.
+      (SELECT COUNT(*) FROM author_affiliation_evidence),
+      (SELECT COALESCE(MAX(observed_at), '') FROM author_affiliation_evidence)
 """
 
 

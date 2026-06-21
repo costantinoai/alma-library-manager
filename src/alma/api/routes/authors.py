@@ -174,6 +174,9 @@ _RESOLUTION_STATUSES = {
     "needs_manual_review",
     "no_match",
     "error",
+    # User-acknowledged terminal: "this author can't be identified — stop
+    # flagging it." Excluded from needs-attention + author-health counts.
+    "dismissed",
 }
 
 
@@ -4899,6 +4902,102 @@ def get_author_affiliations(
     if not payload.get("found", True):
         raise HTTPException(status_code=404, detail="Author not found")
     return payload
+
+
+class PickAffiliationRequest(BaseModel):
+    institution_name: str = Field(..., description="Institution to display for this author")
+    institution_openalex_id: Optional[str] = None
+    institution_ror: Optional[str] = None
+
+
+@router.post(
+    "/{author_id}/affiliation",
+    summary="Lock an author's display affiliation to a chosen institution",
+    description=(
+        "Terminal resolution for the 'affiliation evidence disagrees across "
+        "sources' needs-attention flag (the `pick_affiliation` action). Records "
+        "the choice as an authoritative manual evidence row that outranks every "
+        "auto source and survives future refreshes, so the display affiliation "
+        "sticks and the conflict clears for good. Gated write + Activity row."
+    ),
+)
+def pick_author_affiliation(
+    author_id: str,
+    req: PickAffiliationRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_affiliation import record_manual_affiliation
+
+    name = (req.institution_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="institution_name is required")
+    if not db.execute("SELECT 1 FROM authors WHERE id = ?", (author_id,)).fetchone():
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    # Network-free, single write unit (gate + BEGIN IMMEDIATE + lock retry).
+    decision = run_write_unit(
+        db,
+        lambda: record_manual_affiliation(
+            db,
+            author_id,
+            institution_name=name,
+            institution_openalex_id=(req.institution_openalex_id or None),
+            institution_ror=(req.institution_ror or None),
+        ),
+        label="pick_affiliation",
+    )
+    _log_author_action(
+        db,
+        "pick_affiliation",
+        f"Set display affiliation to {name}",
+        author_id=author_id,
+        data={"institution_name": name, "conflict": decision.conflict},
+    )
+    return {
+        "author_id": author_id,
+        "affiliation": decision.selected_affiliation,
+        "conflict": decision.conflict,
+    }
+
+
+@router.post(
+    "/{author_id}/accept-unidentified",
+    summary="Accept an author as unidentifiable (terminal — stops needs-attention flagging)",
+    description=(
+        "Terminal acknowledgment for an identity gap the resolver genuinely "
+        "can't close (no_match / needs_manual_review / error / followed-without-"
+        "id). Sets id_resolution_status='dismissed' so the author stops "
+        "surfacing in needs-attention and the author-health counts — WITHOUT "
+        "inventing an identifier. The user can still resolve it later by pasting "
+        "an id (which flips it to resolved_manual). Gated write + Activity row."
+    ),
+)
+def accept_author_unidentified(
+    author_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    row = db.execute("SELECT name FROM authors WHERE id = ?", (author_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Author not found")
+    now = datetime.utcnow().isoformat()
+
+    def _persist():
+        db.execute(
+            "UPDATE authors SET id_resolution_status = 'dismissed', "
+            "id_resolution_updated_at = ? WHERE id = ?",
+            (now, author_id),
+        )
+
+    run_write_unit(db, _persist, label="accept_unidentified")
+    _log_author_action(
+        db,
+        "accept_unidentified",
+        f"Accepted {row['name'] or author_id} as unidentifiable",
+        author_id=author_id,
+    )
+    return {"author_id": author_id, "id_resolution_status": "dismissed"}
 
 
 @router.post(
