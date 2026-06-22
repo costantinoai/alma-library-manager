@@ -90,6 +90,14 @@ interface ForceGraphProps {
   selectedClusterId?: number | null
   showClusterLabels?: boolean
   showWordCloud?: boolean
+  /** Render relationship edges. Off by default — on a big graph drawing every
+      edge each frame is the perf bottleneck; a focused cluster always shows its
+      own edges regardless. */
+  showEdges?: boolean
+  /** Word-cloud density multiplier (how MANY words) and size multiplier (how
+      BIG), driven by the studio sliders. 1 = default. */
+  wordCloudDensity?: number
+  wordCloudSize?: number
   clusters?: ClusterSummary[]
   physics?: GraphPhysicsConfig
   /** Edge layers to render (Phase 3 / I-11). undefined ⇒ show every layer. */
@@ -107,6 +115,9 @@ export function ForceGraph({
   selectedClusterId = null,
   showClusterLabels = false,
   showWordCloud = false,
+  showEdges = false,
+  wordCloudDensity = 1,
+  wordCloudSize = 1,
   clusters = [],
   physics,
   visibleLayers,
@@ -389,14 +400,20 @@ export function ForceGraph({
       const selectionActive = selectedClusterId !== null
       // Largest clusters first so the most prominent themes win a tight budget.
       const ordered = [...centroids.entries()].sort((a, b) => b[1].count - a[1].count)
-      // Total words + words-per-cluster both grow with zoom. A focused cluster
-      // bypasses the budget and shows its full cloud.
+      // Total words + words-per-cluster grow with zoom; the Density slider scales
+      // the budget on top of that. A focused cluster bypasses the budget.
+      const density = Math.max(0.2, wordCloudDensity || 1)
       let budget = selectionActive
         ? Number.MAX_SAFE_INTEGER
         : Math.round(
-            Math.min(WORDCLOUD_MAX_BUDGET, Math.max(WORDCLOUD_MIN_BUDGET, 8 * globalScale ** 1.6)),
+            Math.min(
+              WORDCLOUD_MAX_BUDGET,
+              Math.max(WORDCLOUD_MIN_BUDGET, 8 * globalScale ** 1.6 * density),
+            ),
           )
-      const perCluster = selectionActive ? 12 : Math.max(1, Math.min(8, Math.round(globalScale)))
+      const perCluster = selectionActive
+        ? 12
+        : Math.max(1, Math.min(10, Math.round(globalScale * density)))
 
       ctx.save()
       ctx.textAlign = 'center'
@@ -426,10 +443,12 @@ export function ForceGraph({
         // Cross-cluster prominence: a bigger cluster's words read larger so the
         // eye lands on the dominant themes first.
         const clusterScale = 0.7 + 0.6 * (stat.count / maxCount)
-        const baseFont = (isSelected ? 13 : 10) / globalScale
+        // Size slider scales the base font on top of the prominence scaling.
+        const sizeScale = Math.max(0.3, wordCloudSize || 1)
+        const baseFont = ((isSelected ? 13 : 10) * sizeScale) / globalScale
         const shown = terms.slice(0, wordCount)
         const slice = (2 * Math.PI) / Math.max(1, shown.length)
-        ctx.globalAlpha = isSelected ? 0.95 : 0.7
+        ctx.globalAlpha = isSelected ? 0.95 : 0.8
         shown.forEach((entry, idx) => {
           // Within-cluster prominence: the most distinctive term is biggest.
           const weightScale = 0.55 + 0.9 * (entry.weight / maxWeight)
@@ -442,9 +461,10 @@ export function ForceGraph({
           const paddingX = 3 / globalScale
           const paddingY = 2 / globalScale
           const width = ctx.measureText(entry.term).width
-          ctx.fillStyle = 'rgba(255,255,255,0.88)'
+          ctx.fillStyle = 'rgba(255,255,255,0.9)'
           ctx.fillRect(tx - width / 2 - paddingX, ty - fontSize / 2 - paddingY, width + paddingX * 2, fontSize + paddingY * 2)
-          ctx.fillStyle = isSelected ? '#0F172A' : '#334155'
+          // Black text (requested) on the white chip — maximum legibility.
+          ctx.fillStyle = '#000000'
           ctx.fillText(entry.term, tx, ty)
         })
       }
@@ -500,22 +520,23 @@ export function ForceGraph({
     }
   }, [clusterLookup, graphData.nodes, selectedClusterId, showClusterLabels])
 
-  // Edge level-of-detail (perf). On a large graph, drawing every edge on every
-  // pan/zoom frame is the dominant cost and makes the corpus feel laggy. Edges
-  // are also visual noise when zoomed out (a hairball). So on large graphs we
-  // HIDE edges until you zoom past EDGE_ZOOM_THRESHOLD (fit ≈ 1×), at which
-  // point you're looking at a local region where edges are meaningful and few
-  // enough to draw smoothly. Focusing a cluster always shows its edges. Small
-  // graphs always draw edges. Reads the live zoom ref so it tracks zoom without
-  // a React re-render; the canvas already repaints on zoom, picking up the change.
+  // Edge rendering policy (perf). Drawing every edge on every pan/zoom frame is
+  // the dominant cost on a big graph, so edges are OFF by default; the studio's
+  // Edges toggle turns them on. Even when on, a LARGE graph hides them until you
+  // zoom past EDGE_ZOOM_THRESHOLD (fit ≈ 1×) — at that point you're in a local
+  // region where edges are meaningful and few enough to draw smoothly. Focusing
+  // a cluster always shows THAT cluster's edges regardless, so you can inspect a
+  // neighbourhood without turning the global layer on. Reads the live zoom ref
+  // so it tracks zoom without a React re-render (the canvas repaints on zoom).
   const EDGE_ZOOM_THRESHOLD = 2.2
   const linkVisibility = useCallback(
     () => {
-      if (!isLargeGraph) return true
       if (selectedClusterId !== null) return true
+      if (!showEdges) return false
+      if (!isLargeGraph) return true
       return zoomRef.current >= EDGE_ZOOM_THRESHOLD
     },
-    [isLargeGraph, selectedClusterId],
+    [isLargeGraph, selectedClusterId, showEdges],
   )
 
   const linkColor = useCallback((link: Record<string, unknown>) => {

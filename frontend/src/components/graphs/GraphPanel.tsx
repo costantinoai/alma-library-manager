@@ -114,9 +114,19 @@ export function GraphPanel() {
   const [labelMode, setLabelMode] = useState<LabelMode>('cluster')
   const [colorBy, setColorBy] = useState<ColorBy>('cluster')
   const [sizeBy, setSizeBy] = useState<SizeBy>('citations')
-  const [showEdges, setShowEdges] = useState(true)
+  // Edges OFF by default — rendering thousands on every frame is the corpus
+  // perf hit; the toggle turns them on (and a focused cluster always shows its
+  // own edges). This is a pure RENDER flag now; edges are always in the payload
+  // so toggling is instant.
+  const [showEdges, setShowEdges] = useState(false)
   const [showTopics, setShowTopics] = useState(false)
   const [showWordCloud, setShowWordCloud] = useState(false)
+  // Cluster name labels at each centroid — a real toggle now (default off),
+  // instead of being force-on for the author view (which read as "words always on").
+  const [showClusterLabels, setShowClusterLabels] = useState(false)
+  // Word-cloud density (how many words) + size (how big) sliders.
+  const [wordCloudDensity, setWordCloudDensity] = useState(1)
+  const [wordCloudSize, setWordCloudSize] = useState(1)
   const [includeCorpus, setIncludeCorpus] = useState(false)
   // Typed edge layers toggled OFF (Phase 3 / I-11). Empty ⇒ all layers shown.
   const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
@@ -134,8 +144,11 @@ export function GraphPanel() {
   const { toast } = useToast()
 
   const scope = includeCorpus ? 'corpus' : 'library'
+  // show_edges is hardcoded true so the edges are always in the (cached) payload
+  // — the Edges toggle is a client-side RENDER flag, so flipping it never
+  // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=${showEdges}&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}`
     : `?scope=${scope}&cluster_resolution=${clusterResolution}`
 
   // Only the params that actually change the FETCH belong in the key. The author
@@ -143,7 +156,7 @@ export function GraphPanel() {
   // be in its key (else toggling them would refetch + flash a spinner).
   const queryKey =
     activeView === 'paper-map'
-      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showEdges, showTopics, scope, clusterResolution]
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution]
       : ['graph', 'author-network', scope, clusterResolution]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
@@ -407,6 +420,12 @@ export function GraphPanel() {
             onShowTopicsChange={setShowTopics}
             showWordCloud={showWordCloud}
             onShowWordCloudChange={setShowWordCloud}
+            showClusterLabels={showClusterLabels}
+            onShowClusterLabelsChange={setShowClusterLabels}
+            wordCloudDensity={wordCloudDensity}
+            onWordCloudDensityChange={setWordCloudDensity}
+            wordCloudSize={wordCloudSize}
+            onWordCloudSizeChange={setWordCloudSize}
             includeCorpus={includeCorpus}
             onIncludeCorpusChange={setIncludeCorpus}
             clusterResolution={clusterResolution}
@@ -451,7 +470,7 @@ export function GraphPanel() {
                       Zoom in to reveal edges, or select a cluster to see its connections.
                     </p>
                   )}
-                {layerKeys.length > 0 && (
+                {showEdges && layerKeys.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-medium text-slate-500">Edge layers</span>
                     {layerKeys.map((key) => {
@@ -488,21 +507,14 @@ export function GraphPanel() {
                   highlightSearch={searchQuery}
                   selectedNodeId={selectedNode?.id || null}
                   selectedClusterId={selectedClusterId}
-                  showClusterLabels={
-                    activeView === 'author-network' || showTopics || labelMode !== 'cluster'
-                  }
+                  showClusterLabels={showClusterLabels}
                   showWordCloud={showWordCloud}
+                  showEdges={showEdges}
+                  wordCloudDensity={wordCloudDensity}
+                  wordCloudSize={wordCloudSize}
                   clusters={clusters}
                   physics={physics}
-                  // Author edges on/off is a client-side gate (the author payload
-                  // always carries edges): an empty layer set hides them all.
-                  visibleLayers={
-                    activeView === 'author-network' && !showEdges
-                      ? []
-                      : layerKeys.length
-                        ? visibleLayers
-                        : undefined
-                  }
+                  visibleLayers={layerKeys.length ? visibleLayers : undefined}
                 />
               </div>
             ) : (

@@ -45,6 +45,12 @@ interface GraphControlsProps {
   onShowTopicsChange?: (show: boolean) => void
   showWordCloud?: boolean
   onShowWordCloudChange?: (show: boolean) => void
+  showClusterLabels?: boolean
+  onShowClusterLabelsChange?: (show: boolean) => void
+  wordCloudDensity?: number
+  onWordCloudDensityChange?: (value: number) => void
+  wordCloudSize?: number
+  onWordCloudSizeChange?: (value: number) => void
   includeCorpus?: boolean
   onIncludeCorpusChange?: (include: boolean) => void
   clusterResolution?: number
@@ -153,6 +159,12 @@ export function GraphControls({
   onShowTopicsChange,
   showWordCloud = false,
   onShowWordCloudChange,
+  showClusterLabels = false,
+  onShowClusterLabelsChange,
+  wordCloudDensity = 1,
+  onWordCloudDensityChange,
+  wordCloudSize = 1,
+  onWordCloudSizeChange,
   includeCorpus = false,
   onIncludeCorpusChange,
   clusterResolution = 1.0,
@@ -432,6 +444,57 @@ export function GraphControls({
               )}
             </div>
           )}
+
+          {/* Shared overlay controls (both views): cluster-name labels + word-cloud
+              density/size — only meaningful when the word cloud is on. */}
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            {onShowClusterLabelsChange && (
+              <label
+                className="flex items-center gap-1.5 text-xs text-slate-600"
+                title="Show each cluster's name at its centre."
+              >
+                <Checkbox
+                  checked={showClusterLabels}
+                  onCheckedChange={(checked) => onShowClusterLabelsChange(checked === true)}
+                />
+                <span className="font-medium">Cluster labels</span>
+              </label>
+            )}
+            {showWordCloud && onWordCloudDensityChange && (
+              <label
+                className="flex items-center gap-2 text-xs text-slate-600"
+                title="How many word-cloud terms to show (also grows as you zoom in)."
+              >
+                <span className="font-medium whitespace-nowrap">Words</span>
+                <input
+                  type="range"
+                  min={0.3}
+                  max={2.5}
+                  step={0.1}
+                  value={wordCloudDensity}
+                  onChange={(e) => onWordCloudDensityChange(Number(e.target.value))}
+                  className="w-24 accent-alma-600"
+                />
+              </label>
+            )}
+            {showWordCloud && onWordCloudSizeChange && (
+              <label
+                className="flex items-center gap-2 text-xs text-slate-600"
+                title="Word-cloud text size."
+              >
+                <span className="font-medium whitespace-nowrap">Word size</span>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={2.5}
+                  step={0.1}
+                  value={wordCloudSize}
+                  onChange={(e) => onWordCloudSizeChange(Number(e.target.value))}
+                  className="w-24 accent-alma-600"
+                />
+              </label>
+            )}
+          </div>
 
           {(method || note) && (
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
