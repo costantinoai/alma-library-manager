@@ -9,9 +9,16 @@ from typing import Any, Optional
 
 import numpy as np
 
+from alma.ai.cooccurrence import cooccurrence_pairs
 from alma.core.scope import Scope
 
 logger = logging.getLogger(__name__)
+
+# Co-authorship df cap: a paper with more than this many authors is a
+# mega-consortium — it would emit df²/2 author pairs (the O(n²) blow-up) and its
+# authors aren't meaningful pairwise collaborators. Dropped from the co-authorship
+# layer, the same IDF intuition the bibliographic coupling applies to references.
+_COAUTHOR_PAPER_DF_CAP = 100
 
 # Optional dependency
 try:
@@ -612,36 +619,35 @@ def build_coauthor_network(
     # mutual k-NN over the 768-d author embeddings, and productivity stats never
     # enter edge geometry (they stay node metadata).
 
-    # Direct co-authorship signal: how many papers two authors share.
-    # Under the v3 schema this is a clean junction-table lookup —
-    # ``publication_authors`` already tracks every (paper, author) link.
+    # Direct co-authorship signal: how many papers two authors share. Authors are
+    # keyed by the papers they wrote and paired via the shared cooccurrence
+    # primitive — ONE indexed scan, NOT the old double-``IN`` self-join that paired
+    # ~16k authors against ~16k authors and made the corpus author network unusable
+    # (the same self-join blow-up that cost the paper map 372s). The df cap drops
+    # mega-consortium papers: a 1000-author paper emits df²/2 = 500k pairs and
+    # doesn't make all its authors meaningful collaborators anyway.
     shared_pairs: dict[tuple[str, str], int] = {}
     max_shared = 0
     try:
         placeholders = ",".join(["?"] * len(author_ids))
         shared_status_filter = Scope.parse(scope).paper_filter("p")
-        shared_rows = conn.execute(
+        coauth_rows = conn.execute(
             f"""
-            SELECT pa1.openalex_id AS a1,
-                   pa2.openalex_id AS a2,
-                   COUNT(DISTINCT pa1.paper_id) AS shared
-            FROM publication_authors pa1
-            JOIN publication_authors pa2
-              ON pa1.paper_id = pa2.paper_id
-             AND pa1.openalex_id < pa2.openalex_id
-            JOIN papers p ON p.id = pa1.paper_id
-            WHERE pa1.openalex_id IN ({placeholders})
-              AND pa2.openalex_id IN ({placeholders}){shared_status_filter}
-            GROUP BY pa1.openalex_id, pa2.openalex_id
+            SELECT pa.openalex_id AS aid, pa.paper_id AS pid
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE pa.openalex_id IN ({placeholders}){shared_status_filter}
+              AND TRIM(COALESCE(pa.openalex_id, '')) <> ''
             """,
-            author_ids + author_ids,
+            author_ids,
         ).fetchall()
-        for row in shared_rows:
-            a1 = row["a1"] if isinstance(row, sqlite3.Row) else row[0]
-            a2 = row["a2"] if isinstance(row, sqlite3.Row) else row[1]
-            shared = int(row["shared"] if isinstance(row, sqlite3.Row) else row[2])
-            shared_pairs[(a1, a2)] = shared
-            max_shared = max(max_shared, shared)
+        author_papers: dict[str, set[str]] = defaultdict(set)
+        for row in coauth_rows:
+            aid = row["aid"] if isinstance(row, sqlite3.Row) else row[0]
+            pid = row["pid"] if isinstance(row, sqlite3.Row) else row[1]
+            author_papers[str(aid)].add(str(pid))
+        shared_pairs = cooccurrence_pairs(author_papers, max_feature_df=_COAUTHOR_PAPER_DF_CAP)
+        max_shared = max(shared_pairs.values(), default=0)
     except Exception as exc:
         logger.warning("Could not compute shared-paper overlap: %s", exc)
 
@@ -717,9 +723,16 @@ def build_coauthor_network(
 
     if len(embedded_ids) >= 3:
         emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
+        # Same accel fixtures as the paper map (task #21): compute ONE shared cosine
+        # kNN over the author embeddings and feed it to both the clustering substrate
+        # and the 2-D projection, so a corpus-scale author network does one neighbour
+        # search instead of two (bounded epochs apply automatically inside accel).
+        from alma.ai import accel
+
+        shared_knn = accel.shared_cosine_knn(emb_map)
         # Cluster-detail control (parity with the paper map): resolution >1 splits
         # into more, finer author communities; <1 merges into broader ones.
-        result = cluster_publications(emb_map, resolution=cluster_resolution)
+        result = cluster_publications(emb_map, resolution=cluster_resolution, precomputed_knn=shared_knn)
         clustering_method = result.method
         for c_idx, cluster in enumerate(result.clusters):
             for aid in cluster.member_keys:
@@ -733,8 +746,9 @@ def build_coauthor_network(
         }
         try:
             # 2-D layout from the same SPECTER2 input via the cosine UMAP path,
-            # so visual neighbourhood and clusters share one geometry.
-            semantic_coords = project_embeddings(emb_map)
+            # so visual neighbourhood and clusters share one geometry (reusing the
+            # shared kNN computed above — the paper map's fixture, applied here).
+            semantic_coords = project_embeddings(emb_map, precomputed_knn=shared_knn)
             coords_by_author.update(semantic_coords)
             # Fused multi-view layout (task 19, parity with the paper map): blend
             # semantic + co-authorship + bibliographic-coupling into the POSITIONS
@@ -864,16 +878,15 @@ def _author_bibliographic_coupling(
     a1 < a2 for deterministic keys. Silently returns ({}, 0) when the
     ``publication_references`` table is missing.
 
-    Same df-cap as the paper-level coupling: a reference shared by more than
-    ``max_ref_df`` authors couples them all pairwise (O(df²) join rows) and is
-    non-discriminative, so we drop it before the self-join.
+    Authors are keyed by their cited works and paired via the shared
+    ``cooccurrence_pairs`` primitive (one indexed scan, NOT a self-join). Its
+    ``max_ref_df`` cap drops references cited by more than that many authors —
+    non-discriminative AND the O(df²) blow-up — the same IDF intuition as the
+    paper-level coupling.
     """
     if not author_ids or not _table_exists(conn, "publication_references"):
         return {}, 0
 
-    # Pull DISTINCT (author, ref) once, then pair in Python with an inverted
-    # index + df cap (same reasoning as the paper-level coupling — a SQL
-    # self-join on a hub reference explodes regardless of the planner).
     placeholders = ",".join(["?"] * len(author_ids))
     status_filter = Scope.parse(scope).paper_filter("p")
     try:
@@ -893,24 +906,14 @@ def _author_bibliographic_coupling(
         logger.warning("Bibliographic coupling query failed: %s", exc)
         return {}, 0
 
-    ref_authors: dict[str, set[str]] = defaultdict(set)
+    author_refs: dict[str, set[str]] = defaultdict(set)
     for row in rows:
         aid = row["author_id"] if isinstance(row, sqlite3.Row) else row[0]
         ref = row["ref"] if isinstance(row, sqlite3.Row) else row[1]
-        ref_authors[str(ref)].add(str(aid))
+        author_refs[str(aid)].add(str(ref))
 
-    pairs: dict[tuple[str, str], int] = defaultdict(int)
-    for members in ref_authors.values():
-        n = len(members)
-        if n < 2 or n > max_ref_df:  # singleton or non-discriminative hub ref
-            continue
-        ordered = sorted(members)
-        for i in range(n):
-            a1 = ordered[i]
-            for j in range(i + 1, n):
-                pairs[(a1, ordered[j])] += 1
-    max_shared = max(pairs.values(), default=0)
-    return dict(pairs), max_shared
+    pairs = cooccurrence_pairs(author_refs, max_feature_df=max_ref_df)
+    return pairs, max(pairs.values(), default=0)
 
 
 def _author_mean_embeddings(

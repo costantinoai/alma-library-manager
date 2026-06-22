@@ -50,7 +50,15 @@ from __future__ import annotations
 #            shared graph is the same neighbour graph, but the bounded epochs +
 #            shared-SGD orientation shift the layout marginally, so the cached
 #            corpus map rebuilds once.
-PROJECTION_ALGO_VERSION = "2026.07-5"
+# 2026.07-6: co-occurrence DRY (all four coupling/co-authorship layers now go
+#            through one alma.ai.cooccurrence primitive). The author co-authorship
+#            self-join became an inverted index WITH a mega-consortium df cap
+#            (papers with >100 authors no longer couple all their authors), so the
+#            author-network edge set changes — the cached author networks rebuild.
+#            Paper-map edges are unchanged (co-authorship has no cap; bib coupling
+#            logic is identical), but the shared version forces one idempotent
+#            paper-map rebuild too.
+PROJECTION_ALGO_VERSION = "2026.07-6"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.

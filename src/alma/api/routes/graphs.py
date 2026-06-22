@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
+from alma.ai.cooccurrence import cooccurrence_pairs
 from alma.application import materialized_views as mv
 from alma.ai.graph_versions import (
     CLUSTERING_ALGO_VERSION,
@@ -2036,10 +2037,7 @@ def _build_embedding_paper_map(
         # graph's row indices align.
         from alma.ai import accel
 
-        shared_knn = None
-        if len(embeddings) >= accel.SHARED_KNN_MIN_N:
-            knn_vectors = np.array(list(embeddings.values()), dtype=np.float32)
-            shared_knn = accel.cosine_knn(knn_vectors, n_neighbors=accel.SHARED_KNN_NEIGHBORS)
+        shared_knn = accel.shared_cosine_knn(embeddings)
 
         # Stability re-fits UMAP several times, so only pay for it on the
         # persisting REBUILD path — never on a synchronous custom-options GET.
@@ -2455,10 +2453,12 @@ def _paper_coauthorship(
 ) -> dict[tuple[str, str], int]:
     """Pairs of papers that share at least ``min_shared_authors`` authors.
 
-    Co-authorship edge layer for the paper map (Phase 3 / I-11): a self-join of
-    ``publication_authors`` on the (case-folded) OpenAlex author id, counting
-    distinct shared authors per paper pair. Uses the ``idx_pubauthors_oid_lower``
-    expression index. Silently returns {} when the table is missing.
+    Co-authorship edge layer for the paper map (Phase 3 / I-11): papers keyed by
+    their (case-folded) OpenAlex author ids, paired via the shared
+    ``cooccurrence_pairs`` primitive (one indexed scan + inverted index, NOT a
+    self-join). No df cap — the "feature" is an author, and a prolific author who
+    wrote many papers in the set legitimately co-authors them all. Silently
+    returns {} when the table is missing.
     """
     if not paper_ids or not table_exists(conn, "publication_authors"):
         return {}
@@ -2466,27 +2466,21 @@ def _paper_coauthorship(
     try:
         rows = conn.execute(
             f"""
-            SELECT pa1.paper_id AS a, pa2.paper_id AS b, COUNT(*) AS shared
-            FROM publication_authors pa1
-            JOIN publication_authors pa2
-              ON lower(pa1.openalex_id) = lower(pa2.openalex_id)
-             AND pa1.paper_id < pa2.paper_id
-            WHERE pa1.paper_id IN ({placeholders})
-              AND pa2.paper_id IN ({placeholders})
-              AND TRIM(COALESCE(pa1.openalex_id, '')) <> ''
-            GROUP BY pa1.paper_id, pa2.paper_id
-            HAVING shared >= ?
+            SELECT paper_id, lower(openalex_id) AS oid
+            FROM publication_authors
+            WHERE paper_id IN ({placeholders})
+              AND TRIM(COALESCE(openalex_id, '')) <> ''
             """,
-            list(paper_ids) + list(paper_ids) + [min_shared_authors],
+            list(paper_ids),
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
-    pairs: dict[tuple[str, str], int] = {}
+    paper_authors: dict[str, list[str]] = defaultdict(list)
     for r in rows:
-        a = r["a"] if isinstance(r, sqlite3.Row) else r[0]
-        b = r["b"] if isinstance(r, sqlite3.Row) else r[1]
-        pairs[(a, b)] = int(r["shared"] if isinstance(r, sqlite3.Row) else r[2])
-    return pairs
+        pid = r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]
+        oid = r["oid"] if isinstance(r, sqlite3.Row) else r[1]
+        paper_authors[str(pid)].append(str(oid))
+    return cooccurrence_pairs(paper_authors, min_shared=min_shared_authors)
 
 
 def _paper_bibliographic_coupling(
@@ -2498,18 +2492,15 @@ def _paper_bibliographic_coupling(
 ) -> dict[tuple[str, str], int]:
     """Return pairs of papers that share at least `min_shared_refs` references.
 
-    Bibliographic coupling signal for the paper map. Silently returns {}
-    when the publication_references table is missing.
+    Bibliographic coupling signal for the paper map (papers keyed by their
+    referenced works, paired via the shared ``cooccurrence_pairs`` primitive).
+    Silently returns {} when the publication_references table is missing.
 
-    PERF + QUALITY (the corpus self-join was 372s = 93% of the build): a
-    reference cited by ``df`` papers in the set produces ``df²`` join rows, so
-    field-defining works cited by thousands of papers each generate MILLIONS of
-    pairs — and those couplings are non-discriminative noise (everyone cites the
-    famous review). We drop references with ``df > max_ref_df`` BEFORE the
-    self-join via a document-frequency CTE — the bibliographic analogue of IDF.
-    This caps the blow-up (372s → well under a second on the corpus) and makes
-    coupling mean "shared SPECIALISED references". Tiny sets (the library) are
-    unaffected since few references there clear the cap.
+    PERF + QUALITY (the corpus self-join was 372s = 93% of the build): the
+    ``max_ref_df`` cap drops references cited by more than that many papers — the
+    O(df²) pair explosion AND non-discriminative noise (everyone cites the famous
+    review). The cap, the bibliographic analogue of IDF, lives in the shared
+    primitive now; one indexed paper_id scan builds the paper→refs map it pairs.
     """
     if not paper_ids:
         return {}
@@ -2522,13 +2513,6 @@ def _paper_bibliographic_coupling(
     if not row:
         return {}
 
-    # Pull (paper, ref) once via the indexed paper_id scan, then build the
-    # coupling in Python with an inverted index (ref → papers). A SQL self-join
-    # can't be made reliably fast here: on the base table a hub reference cited
-    # by thousands of papers still explodes (df² rows), and pushing it through a
-    # CTE to cap the df loses the referenced_work_id index and gets WORSE. In
-    # Python we cap each reference's fan-out explicitly, so the work is bounded by
-    # `max_ref_df²` per reference regardless of the planner.
     placeholders = ",".join(["?"] * len(paper_ids))
     try:
         rows = conn.execute(
@@ -2543,25 +2527,12 @@ def _paper_bibliographic_coupling(
     except sqlite3.OperationalError:
         return {}
 
-    ref_papers: dict[str, set[str]] = defaultdict(set)
+    paper_refs: dict[str, list[str]] = defaultdict(list)
     for r in rows:
         pid = r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]
         ref = r["referenced_work_id"] if isinstance(r, sqlite3.Row) else r[1]
-        ref_papers[str(ref)].add(str(pid))
-
-    pairs: dict[tuple[str, str], int] = defaultdict(int)
-    for members in ref_papers.values():
-        n = len(members)
-        # Skip singletons (no pair) and over-common references (non-discriminative
-        # AND the O(n²) blow-up) — the bibliographic analogue of IDF.
-        if n < 2 or n > max_ref_df:
-            continue
-        ordered = sorted(members)
-        for i in range(n):
-            a = ordered[i]
-            for j in range(i + 1, n):
-                pairs[(a, ordered[j])] += 1
-    return {pair: shared for pair, shared in pairs.items() if shared >= min_shared_refs}
+        paper_refs[str(pid)].append(str(ref))
+    return cooccurrence_pairs(paper_refs, min_shared=min_shared_refs, max_feature_df=max_ref_df)
 
 
 def _add_topic_overlay(

@@ -183,6 +183,23 @@ def cosine_knn(
         return None
 
 
+def shared_cosine_knn(embeddings: dict, keys: Optional[list] = None) -> Optional[KnnGraph]:
+    """The ONE cosine kNN graph to share across a cluster+project pair on the same
+    embeddings — the DRY fixture used by BOTH the paper map and the author network.
+
+    Returns the shared graph when the set is large enough that a second neighbour
+    search would be wasteful (``>= SHARED_KNN_MIN_N``), else ``None`` so each fit
+    builds its own (small sets are cheap and may use a different n_neighbors).
+    ``keys`` pins the row order; default is the dict's own order (which both fits
+    also use), so the graph's indices align.
+    """
+    keys = list(keys if keys is not None else embeddings)
+    if len(keys) < SHARED_KNN_MIN_N:
+        return None
+    vectors = np.array([embeddings[k] for k in keys], dtype=np.float32)
+    return cosine_knn(vectors, n_neighbors=SHARED_KNN_NEIGHBORS)
+
+
 # ── UMAP dispatch ────────────────────────────────────────────────────────────
 
 def _gpu_umap_fit(
