@@ -342,6 +342,112 @@ def enqueue_rebuild(view_key: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Parameterized (dynamic) variants — durable cache with a custom freshness policy
+# ---------------------------------------------------------------------------
+
+# The registry above caches ONE payload per REGISTERED view. Some surfaces (the
+# graph studio) expose an UNBOUNDED key space of variants — a paper map at any
+# cluster_resolution, any fused-layout weight mix, any colour/size — that can't be
+# pre-registered. These get their own durable row in the same `materialized_views`
+# table keyed ``<base_view_key>:v=<options-hash>``, but with a CALLER-SUPPLIED
+# freshness policy instead of an exact fingerprint match: a graph variant is a
+# full re-cluster, so it should be served while the underlying data has only
+# drifted a little and rebuilt once a real PROPORTION changed (see the gauge in
+# graphs.py). This replaces the old in-process LRU: durable across restarts,
+# bounded per base view, and invalidated by real data change rather than a TTL.
+
+# How many variant rows to retain per base view before evicting the
+# least-recently-computed. Bounds table growth the way the old LRU's max-size did.
+VARIANT_ROWS_PER_BASE = 32
+
+
+def get_or_build_variant(
+    conn: sqlite3.Connection,
+    *,
+    view_key: str,
+    build_fn: Callable[[sqlite3.Connection], dict],
+    make_fingerprint: Callable[[], str],
+    is_fresh: Callable[[str], bool],
+) -> dict:
+    """Durable cache for a DYNAMIC view with a custom freshness policy.
+
+    Unlike :func:`get` (registry-backed, exact-fingerprint, SWR background
+    rebuild), this serves an unbounded key space:
+
+    * ``is_fresh(stored_fingerprint) -> bool`` decides whether the cached row is
+      still good. Graph variants pass a PROPORTIONAL gauge — fresh while the data
+      drifted below a threshold AND every algo version matches — so a cached
+      variant survives small corpus churn and rebuilds on a real shift or a code
+      change.
+    * ``make_fingerprint() -> str`` produces the signature stored on (re)build
+      (the gauge's build-time data size + watermark + versions).
+
+    On a fresh hit the cached payload is returned. Otherwise ``build_fn`` runs
+    INLINE (a variant miss has nothing to serve stale, so there is no background
+    SWR — same as the prior in-memory cache, but the result is now durable), the
+    payload is persisted with the fresh fingerprint, and the per-base row set is
+    pruned to :data:`VARIANT_ROWS_PER_BASE`.
+    """
+    row = _read_row(conn, view_key)
+    if row is not None:
+        cached = _decode_payload(row.get("payload"))
+        if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
+            return cached
+
+    started = perf_counter()
+    payload = build_fn(conn)
+    if not isinstance(payload, dict):
+        raise TypeError(
+            f"variant build_fn for {view_key!r} returned {type(payload).__name__}, expected dict"
+        )
+    compute_ms = int(round((perf_counter() - started) * 1000))
+    try:
+        _write_row(
+            conn,
+            view_key=view_key,
+            fingerprint=make_fingerprint(),
+            payload=payload,
+            compute_ms=compute_ms,
+        )
+        _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
+    except Exception:  # noqa: BLE001 — cache write must never break the response
+        logger.exception("materialized_views: failed to persist variant %s", view_key)
+    return payload
+
+
+def _variant_base(view_key: str) -> str:
+    """The base view key of a variant row (everything before the ``:v=`` suffix)."""
+    return view_key.split(":v=", 1)[0]
+
+
+def _prune_variant_rows(conn: sqlite3.Connection, base_view_key: str, *, keep: int) -> None:
+    """Evict all but the ``keep`` most-recently-computed variant rows for a base.
+
+    Variant rows are ``<base>:v=<hash>``; the base view's own row (no ``:v=``) and
+    other bases are untouched. The base may contain ``_`` (``paper_map``), a LIKE
+    single-char wildcard, so it is escaped to avoid matching a sibling base.
+    """
+    pattern = base_view_key.replace("\\", "\\\\").replace("_", "\\_") + ":v=%"
+    try:
+        conn.execute(
+            r"""
+            DELETE FROM materialized_views
+            WHERE view_key LIKE ? ESCAPE '\'
+              AND view_key NOT IN (
+                  SELECT view_key FROM materialized_views
+                  WHERE view_key LIKE ? ESCAPE '\'
+                  ORDER BY computed_at DESC
+                  LIMIT ?
+              )
+            """,
+            (pattern, pattern, int(keep)),
+        )
+        commit_unless_gated(conn, label="materialized_views._prune_variant_rows")
+    except sqlite3.OperationalError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
 

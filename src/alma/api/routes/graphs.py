@@ -4,12 +4,12 @@ import json
 import logging
 import math
 import sqlite3
-import time
 import uuid
 import hashlib
-from collections import Counter, OrderedDict, defaultdict
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query
@@ -73,38 +73,147 @@ class GraphData(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-# In-memory cache for CUSTOM-options paper-map builds (a non-default
-# cluster_resolution, colour/size encoding, or fused layout). The DEFAULT options
-# ride the materialized-view layer; custom variants used to fully recompute on
-# EVERY request — so nudging the cluster-detail slider on the corpus re-clustered
-# 8k papers each step, pure waste. This memoizes recent variant payloads by their
-# option signature so a repeat request returns instantly. Pure in-process READ
-# cache (no DB write — GET stays pure, I-2); bounded by size + TTL so it can't go
-# stale for long or grow unbounded. The DURABLE, data-fingerprinted variant cache
-# (survives restarts, invalidates on real corpus change) is task 20 — this is the
-# cheap session-level win the waste complaint asked for.
-_PAPER_MAP_VARIANT_CACHE: "OrderedDict[tuple, tuple[float, GraphData]]" = OrderedDict()
-_VARIANT_CACHE_MAX = 24
-_VARIANT_CACHE_TTL_S = 600.0
+# ---------------------------------------------------------------------------
+# Durable, proportionally-invalidated variant cache (task #20)
+# ---------------------------------------------------------------------------
+#
+# DEFAULT-options maps ride the materialized-view layer (exact fingerprint + a
+# CHEAP incremental layout, so new papers appear promptly). CUSTOM variants — a
+# non-default cluster_resolution, a fused-layout weight mix, a colour/size encoding
+# — are a FULL re-cluster (8k papers on the corpus), so recomputing on every slider
+# tick or every paper insert is pure waste. They are cached durably in the
+# `materialized_views` table via `mv.get_or_build_variant`, keyed by their option
+# hash and invalidated PROPORTIONALLY: a cached variant is served while the
+# underlying data has drifted below a threshold and rebuilt once a real proportion
+# changed (or any algo version changed). This replaces the prior in-process LRU —
+# it now survives restarts and tracks real data change instead of a wall-clock TTL.
+
+# Rebuild a variant once more than this fraction of the shown data has changed
+# (added / removed / modified) since it was built. Small enough to stay honest on
+# a growing library, large enough that one-off inserts don't churn an expensive
+# full re-cluster. The default view does NOT use this (its incremental rebuild is
+# cheap and should reflect new papers immediately).
+_VARIANT_DRIFT_THRESHOLD = 0.10
 
 
-def _variant_cache_get(key: tuple) -> Optional[GraphData]:
-    entry = _PAPER_MAP_VARIANT_CACHE.get(key)
-    if entry is None:
-        return None
-    ts, payload = entry
-    if time.monotonic() - ts > _VARIANT_CACHE_TTL_S:
-        _PAPER_MAP_VARIANT_CACHE.pop(key, None)
-        return None
-    _PAPER_MAP_VARIANT_CACHE.move_to_end(key)  # mark most-recently-used
-    return payload
+@dataclass(frozen=True)
+class _VariantDataGauge:
+    """Proportional freshness gauge for a durable graph variant.
+
+    DRY across the paper map AND the author network: both render structure derived
+    from the SAME papers-in-scope (the author graph's clusters/edges come from
+    co-authorship), so one gauge over paper drift serves both. (Follow-state only
+    restyles author nodes — a cheap visual overlay — so it deliberately does NOT
+    force an expensive full author re-cluster; the default author view still picks
+    follow changes up exactly.)
+
+    The gauge encodes the build-time data size + watermark + algo versions into the
+    stored fingerprint string. A cached variant is FRESH iff:
+      * every algo/model version still matches (a code or model change always
+        invalidates — proportional tolerance is for DATA, never for logic), and
+      * data drift — ``max(net count change, items modified since build) /
+        build-time count`` — is below :data:`_VARIANT_DRIFT_THRESHOLD`.
+    """
+
+    versions: tuple[str, ...]
+    count_sql: str
+    watermark_sql: str
+    changed_since_sql: str
+
+    def _scalar(self, conn: sqlite3.Connection, sql: str, params: tuple = ()) -> Any:
+        row = conn.execute(sql, params).fetchone()
+        return row[0] if row else None
+
+    def signature(self, conn: sqlite3.Connection) -> str:
+        """Build-time signature to persist (current size + watermark + versions)."""
+        return json.dumps(
+            {
+                "v": list(self.versions),
+                "n": int(self._scalar(conn, self.count_sql) or 0),
+                "t": str(self._scalar(conn, self.watermark_sql) or ""),
+            },
+            sort_keys=True,
+        )
+
+    def is_fresh(self, conn: sqlite3.Connection, stored: str) -> bool:
+        """True when the cached variant is still within the drift tolerance."""
+        try:
+            meta = json.loads(stored)
+        except (TypeError, ValueError):
+            return False
+        if tuple(meta.get("v") or []) != self.versions:
+            return False  # algo/model version changed → always rebuild
+        built_n = int(meta.get("n") or 0)
+        current_n = int(self._scalar(conn, self.count_sql) or 0)
+        if built_n <= 0:
+            return current_n == 0  # built on empty data; fresh only if still empty
+        changed = int(self._scalar(conn, self.changed_since_sql, (str(meta.get("t") or ""),)) or 0)
+        drift = max(abs(current_n - built_n), changed) / built_n
+        return drift < _VARIANT_DRIFT_THRESHOLD
 
 
-def _variant_cache_put(key: tuple, payload: GraphData) -> None:
-    _PAPER_MAP_VARIANT_CACHE[key] = (time.monotonic(), payload)
-    _PAPER_MAP_VARIANT_CACHE.move_to_end(key)
-    while len(_PAPER_MAP_VARIANT_CACHE) > _VARIANT_CACHE_MAX:
-        _PAPER_MAP_VARIANT_CACHE.popitem(last=False)  # evict least-recently-used
+def _paper_scope_gauge(conn: sqlite3.Connection, scope: Scope) -> _VariantDataGauge:
+    """Proportional gauge over papers-in-scope — shared by both graph variant caches.
+
+    The version tuple folds in the active embedding model so a model switch
+    invalidates variants exactly (not proportionally); data drift is measured on
+    the scoped ``papers`` set (count + ``updated_at`` watermark), which captures
+    adds, removes, and edits.
+    """
+    filt = scope.paper_filter("p", leading_and=False)
+    where = f" WHERE {filt}" if filt else ""
+    try:
+        from alma.discovery.similarity import get_active_embedding_model
+
+        model = get_active_embedding_model(conn) or ""
+    except Exception:
+        model = ""
+    return _VariantDataGauge(
+        versions=(CLUSTERING_ALGO_VERSION, PROJECTION_ALGO_VERSION, LABELLING_VERSION, model),
+        count_sql=f"SELECT COUNT(*) FROM papers p{where}",
+        watermark_sql=f"SELECT COALESCE(MAX(p.updated_at), '') FROM papers p{where}",
+        changed_since_sql="SELECT COUNT(*) FROM papers p WHERE p.updated_at > ?"
+        + (f" AND {filt}" if filt else ""),
+    )
+
+
+def _variant_view_key(base_view_key: str, signature: tuple) -> str:
+    """Durable cache key for a graph variant: ``<base>:v=<hash-of-options>``.
+
+    Only the layout/render options go into the hash; the DATA drift is tracked
+    separately by the gauge, so corpus growth invalidates a variant without
+    changing its key (the row is reused across rebuilds, keeping rows bounded).
+    """
+    blob = "|".join(str(x) for x in signature).encode("utf-8")
+    return f"{base_view_key}:v={hashlib.sha1(blob).hexdigest()[:16]}"
+
+
+def _serve_graph_variant(
+    conn: sqlite3.Connection,
+    *,
+    base_view_key: str,
+    options: tuple,
+    scope: Scope,
+    build_fn: "Callable[[sqlite3.Connection], dict]",
+) -> GraphData:
+    """Serve a graph variant from the durable, proportionally-invalidated cache.
+
+    The ONE path shared by the paper-map and author-network variant routes (DRY):
+    key the variant by its options, gauge freshness by papers-in-scope drift, and
+    return a validated GraphData. ``build_fn(conn) -> payload dict`` does the
+    cache-miss build (a pure read of the underlying layout, persisting only the
+    variant payload — never the resolution-1.0 publication layout, I-2).
+    """
+    variant_key = _variant_view_key(base_view_key, options)
+    gauge = _paper_scope_gauge(conn, scope)
+    payload = mv.get_or_build_variant(
+        conn,
+        view_key=variant_key,
+        build_fn=build_fn,
+        make_fingerprint=lambda: gauge.signature(conn),
+        is_fresh=lambda stored: gauge.is_fresh(conn, stored),
+    )
+    return GraphData(**payload)
 
 
 @router.get("/paper-map", response_model=GraphData)
@@ -149,56 +258,53 @@ def get_paper_map(
         envelope = mv.get(conn, view_key)
         return _graph_data_from_envelope(envelope)
 
-    # Custom-options path: build live, but memoize the result by its option
-    # signature so a repeat request (e.g. re-opening the same cluster_resolution,
-    # or a fused layout you already viewed) returns instantly instead of
-    # recomputing. Avoids the "re-cluster the whole corpus on every slider tick"
-    # waste.
-    variant_key = (
-        scope.view_key("paper_map"),
-        label_mode,
-        color_by,
-        size_by,
-        show_topics,
-        round(cluster_resolution, 3),
-        round(w_semantic, 3),
-        round(w_coauthorship, 3),
-        round(w_bibliographic, 3),
-    )
-    cached_variant = _variant_cache_get(variant_key)
-    if cached_variant is not None:
-        return cached_variant
+    # Custom-options path: build live, but cache durably + proportionally (task
+    # #20) so a repeat request (the same slider position, a fused layout you already
+    # viewed) returns instantly, AND the cache survives restarts + invalidates once a
+    # real proportion of the corpus has changed — not on every paper insert.
+    def _build_variant(c: sqlite3.Connection) -> dict:
+        ai_state = _get_graph_ai_state(c)
+        graph_options = {
+            "label_mode": label_mode,
+            "color_by": color_by,
+            "size_by": size_by,
+            "show_edges": show_edges,
+            "scope": scope,
+            "cluster_resolution": cluster_resolution,
+            # PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT (not
+            # renormalized). {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
+            "layout_weights": {
+                "semantic": w_semantic,
+                "coauthorship": w_coauthorship,
+                "bibliographic_coupling": w_bibliographic,
+            },
+        }
+        embeddings = _load_embeddings(c, scope=scope)
+        if embeddings and len(embeddings) >= 5:
+            # I-2: a variant build is a pure read of publication_clusters — build the
+            # layout in-memory and do NOT persist it (the MV rebuild path is the only
+            # writer of the resolution-1.0 incremental layout). Only the variant
+            # PAYLOAD is persisted, to the materialized_views cache.
+            result = _build_embedding_paper_map(
+                c, embeddings, ai_state=ai_state, graph_options=graph_options, persist=False
+            )
+        else:
+            result = _build_text_paper_map(c, scope=scope, ai_state=ai_state)
+        if show_topics:
+            result = _add_topic_overlay(c, result)
+        return result.model_dump()
 
-    ai_state = _get_graph_ai_state(conn)
-    graph_options = {
-        "label_mode": label_mode,
-        "color_by": color_by,
-        "size_by": size_by,
-        "show_edges": show_edges,
-        "scope": scope,
-        "cluster_resolution": cluster_resolution,
-        # PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT (not
-        # renormalized). {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
-        "layout_weights": {
-            "semantic": w_semantic,
-            "coauthorship": w_coauthorship,
-            "bibliographic_coupling": w_bibliographic,
-        },
-    }
-    embeddings = _load_embeddings(conn, scope=scope)
-    if embeddings and len(embeddings) >= 5:
-        # I-2: custom-options GET is a pure read — build the layout in-memory and
-        # do NOT persist (no write/commit mid-response). The MV rebuild path is the
-        # only writer of publication_clusters.
-        result = _build_embedding_paper_map(
-            conn, embeddings, ai_state=ai_state, graph_options=graph_options, persist=False
-        )
-    else:
-        result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
-    if show_topics:
-        result = _add_topic_overlay(conn, result)
-    _variant_cache_put(variant_key, result)
-    return result
+    return _serve_graph_variant(
+        conn,
+        base_view_key=scope.view_key("paper_map"),
+        options=(
+            label_mode, color_by, size_by, show_topics,
+            round(cluster_resolution, 3), round(w_semantic, 3),
+            round(w_coauthorship, 3), round(w_bibliographic, 3),
+        ),
+        scope=scope,
+        build_fn=_build_variant,
+    )
 
 
 @router.get("/author-network", response_model=GraphData)
@@ -216,8 +322,11 @@ def get_author_network(
 
     The default (resolution 1.0, pure-semantic layout) is served from the
     materialised view. A non-default cluster_resolution OR a fused layout (a
-    non-zero co-authorship / bib-coupling weight) bypasses the cache and builds
-    inline — a pure read (no persistence), mirroring the paper map (I-2).
+    non-zero co-authorship / bib-coupling weight) is a variant — served from the
+    SAME durable, proportionally-invalidated cache as the paper map (task #20):
+    build once, reuse across restarts, rebuild only when a real proportion of the
+    underlying papers has changed. The build itself is a pure read (no
+    publication-layout persistence), mirroring the paper map (I-2).
     """
     scope = Scope.parse(scope)
     fused = w_coauthorship > 0 or w_bibliographic > 0
@@ -225,17 +334,29 @@ def get_author_network(
         view_key = scope.view_key("author_network")
         envelope = mv.get(conn, view_key)
         return _graph_data_from_envelope(envelope)
-    payload = _build_author_network_payload(
+
+    def _build_variant(c: sqlite3.Connection) -> dict:
+        return _build_author_network_payload(
+            c,
+            scope=scope,
+            cluster_resolution=cluster_resolution,
+            layout_weights={
+                "semantic": w_semantic,
+                "coauthorship": w_coauthorship,
+                "bibliographic_coupling": w_bibliographic,
+            },
+        )
+
+    # Same durable, proportionally-invalidated cache as the paper map — gauged on
+    # papers-in-scope drift (the author graph derives from co-authorship).
+    return _serve_graph_variant(
         conn,
+        base_view_key=scope.view_key("author_network"),
+        options=(round(cluster_resolution, 3), round(w_semantic, 3),
+                 round(w_coauthorship, 3), round(w_bibliographic, 3)),
         scope=scope,
-        cluster_resolution=cluster_resolution,
-        layout_weights={
-            "semantic": w_semantic,
-            "coauthorship": w_coauthorship,
-            "bibliographic_coupling": w_bibliographic,
-        },
+        build_fn=_build_variant,
     )
-    return GraphData(**payload)
 
 
 def _build_author_network_payload(
@@ -1902,6 +2023,24 @@ def _build_embedding_paper_map(
 
     # 3) Full rebuild: clustering + 2D projection.
     if layout_mode == "embeddings_full":
+        # task #21 perf: the 5-D clustering substrate and the 2-D display
+        # projection are two UMAP fits over the SAME cosine neighbourhood. At
+        # corpus scale the k-NN search dominates and is identical for both, so we
+        # build it ONCE here and hand it to both via `precomputed_knn`, halving the
+        # neighbour search. The shared graph is the same neighbour graph either fit
+        # would have built (the 2-D layout differs only by a random orientation,
+        # immaterial for a cached viz); the win is pure wall-clock. Small libraries
+        # skip it (their
+        # search is already cheap and n_neighbors can differ from the shared width).
+        # `embeddings` iteration order is stable and shared by both fits, so the
+        # graph's row indices align.
+        from alma.ai import accel
+
+        shared_knn = None
+        if len(embeddings) >= accel.SHARED_KNN_MIN_N:
+            knn_vectors = np.array(list(embeddings.values()), dtype=np.float32)
+            shared_knn = accel.cosine_knn(knn_vectors, n_neighbors=accel.SHARED_KNN_NEIGHBORS)
+
         # Stability re-fits UMAP several times, so only pay for it on the
         # persisting REBUILD path — never on a synchronous custom-options GET.
         # `cluster_resolution` (default 1.0) is the user-facing detail knob.
@@ -1909,6 +2048,7 @@ def _build_embedding_paper_map(
             embeddings,
             compute_stability=persist,
             resolution=float(opts.get("cluster_resolution", 1.0) or 1.0),
+            precomputed_knn=shared_knn,
         )
         clusters = clustering.clusters
         node_probabilities = clustering.probabilities
@@ -1916,7 +2056,7 @@ def _build_embedding_paper_map(
         for cluster, label in zip(clusters, labels):
             cluster.label = label
             labels_by_cluster[int(cluster.cluster_id)] = str(label or "")
-        coords = project_embeddings(embeddings)
+        coords = project_embeddings(embeddings, precomputed_knn=shared_knn)
         for cluster in clusters:
             cid = int(cluster.cluster_id)
             cluster_members[cid] = list(cluster.member_keys)
