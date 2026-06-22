@@ -119,7 +119,9 @@ export function GraphPanel() {
   })
 
   const rebuildMutation = useMutation({
-    mutationFn: () => api.post<{ status?: string; job_id?: string }>('/graphs/rebuild'),
+    // I-3: pass the displayed scope so Rebuild refreshes the graph the user is
+    // actually viewing (Corpus rebuild was silently rebuilding Library before).
+    mutationFn: () => api.post<{ status?: string; job_id?: string }>(`/graphs/rebuild?scope=${scope}`),
     onSuccess: (result) => {
       void invalidateQueries(
         queryClient,
@@ -127,9 +129,9 @@ export function GraphPanel() {
         ...(result?.status === 'queued' && result.job_id ? [['activity-operations']] : []),
       )
       if (result?.status === 'queued' && result.job_id) {
-        toast({ title: 'Graph rebuild queued', description: `Job ${result.job_id} is running.` })
+        toast({ title: `Graph rebuild queued (${scope})`, description: `Job ${result.job_id} is running.` })
       } else {
-        toast({ title: 'Graph rebuild complete' })
+        toast({ title: `Graph rebuild complete (${scope})` })
       }
     },
   })

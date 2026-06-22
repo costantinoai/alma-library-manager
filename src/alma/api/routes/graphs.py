@@ -267,14 +267,21 @@ def _build_topic_map_payload(conn: sqlite3.Connection) -> dict:
     ).model_dump()
 
 
-def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None) -> dict:
-    """Rebuild all graph caches phase-by-phase.
+def _rebuild_graphs_impl(
+    conn: sqlite3.Connection, *, scope: Scope = Scope.library, job_id: str | None = None
+) -> dict:
+    """Rebuild the graph caches for ``scope`` phase-by-phase.
 
     Each phase (clear / reference backfill / paper_map / author_network /
     topic_map) commits before the next one begins, so the SQLite writer
     lock is released between phases. Before this change the whole rebuild
     ran under one implicit transaction and concurrent reads showed p95 of
     ~3.5s during the job (see ``tasks/10_ACTIVITY_CONCURRENCY.md``).
+
+    I-3: paper_map + author_network rebuild the view for the requested
+    ``scope`` (not a hardcoded ``:library``), so clicking "Rebuild" while
+    viewing Corpus actually refreshes the Corpus graph the user is looking
+    at. ``topic_map`` is scope-agnostic and always rebuilt.
     """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.openalex.client import backfill_missing_publication_references
@@ -351,10 +358,10 @@ def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None)
     _mark_progress(2, "paper_map")
     try:
         if job_id:
-            add_job_log(job_id, "Rebuilding paper map", step="paper_map")
-        mv.rebuild(conn, "graph:paper_map:library")
+            add_job_log(job_id, f"Rebuilding paper map ({scope.label()})", step="paper_map")
+        mv.rebuild(conn, scope.view_key("paper_map"))
         _flush()
-        rebuilt.append("paper_map")
+        rebuilt.append(scope.view_key("paper_map"))
     except Exception as e:
         _flush()
         logger.warning("Failed to rebuild paper_map: %s", e)
@@ -370,10 +377,10 @@ def _rebuild_graphs_impl(conn: sqlite3.Connection, *, job_id: str | None = None)
     _mark_progress(3, "author_network")
     try:
         if job_id:
-            add_job_log(job_id, "Rebuilding author network", step="author_network")
-        mv.rebuild(conn, "graph:author_network:library")
+            add_job_log(job_id, f"Rebuilding author network ({scope.label()})", step="author_network")
+        mv.rebuild(conn, scope.view_key("author_network"))
         _flush()
-        rebuilt.append("author_network")
+        rebuilt.append(scope.view_key("author_network"))
     except Exception as e:
         _flush()
         logger.warning("Failed to rebuild author_network: %s", e)
@@ -756,17 +763,21 @@ def refresh_cluster_labels(
 
 @router.post("/rebuild")
 def rebuild_graphs(
+    scope: str = Query("library", description="library (default) or corpus — the scope to rebuild"),
     background: bool = Query(True, description="Run rebuild in background and track in Activity"),
     conn: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
-    """Rebuild all graph caches."""
+    """Rebuild the graph caches for the requested scope (I-3: scope-aware)."""
     from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
 
+    scope_obj = Scope.parse(scope)
     if not background:
-        return _rebuild_graphs_impl(conn)
+        return _rebuild_graphs_impl(conn, scope=scope_obj)
 
-    operation_key = "graphs.rebuild_all"
+    # Scope-specific operation key so a Library rebuild and a Corpus rebuild are
+    # distinct in-flight jobs (one must not dedupe against the other).
+    operation_key = f"graphs.rebuild_all:{scope_obj}"
     existing = find_active_job(operation_key)
     if existing:
         return activity_envelope(
@@ -789,7 +800,7 @@ def rebuild_graphs(
     def _runner() -> dict:
         bg_conn = open_db_connection()
         try:
-            return _rebuild_graphs_impl(bg_conn, job_id=job_id)
+            return _rebuild_graphs_impl(bg_conn, scope=scope_obj, job_id=job_id)
         finally:
             bg_conn.close()
 
