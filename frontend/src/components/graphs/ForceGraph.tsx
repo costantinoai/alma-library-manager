@@ -27,6 +27,10 @@ interface RenderedNode extends Record<string, unknown> {
   y: number
   vx?: number
   vy?: number
+  // Pinned position (d3-force keeps a node fixed when fx/fy are set). Used for
+  // the static-layout fast path on large graphs (I-10).
+  fx?: number
+  fy?: number
   _initX: number
   _initY: number
   color: string
@@ -36,6 +40,12 @@ interface RenderedNode extends Record<string, unknown> {
   metadata: Record<string, unknown>
   _highlighted: boolean
 }
+
+// Above this node count we DON'T run the force simulation — the backend already
+// ships a UMAP layout, so we pin every node to those coordinates and render
+// statically (I-10). Running d3-force charge+link over thousands of nodes for
+// 100 cooldown ticks (each re-rendering every node) was the corpus-graph lag.
+const LARGE_GRAPH_THRESHOLD = 1200
 
 interface RenderedLink extends Record<string, unknown> {
   source: string | RenderedNode
@@ -179,12 +189,28 @@ export function ForceGraph({
         } satisfies RenderedLink,
       ]
     })
+    // Static-layout fast path (I-10): on large graphs, pin every node to its
+    // backend UMAP coordinate so d3-force has nothing to solve — the canvas
+    // only repaints on pan/zoom instead of on every simulation tick.
+    if (nodes.length > LARGE_GRAPH_THRESHOLD) {
+      for (const node of nodes) {
+        ;(node as RenderedNode).fx = node._initX
+        ;(node as RenderedNode).fy = node._initY
+      }
+    }
     return { nodes, links }
   }, [data, dimensions.width, dimensions.height, highlightSearch, visibleLayers])
+
+  const isLargeGraph = graphData.nodes.length > LARGE_GRAPH_THRESHOLD
 
   useEffect(() => {
     const graph = fgRef.current
     if (!graph || !physics) {
+      return
+    }
+    // Large graphs render statically from the pinned UMAP layout — no force
+    // tuning, no reheat (the simulation is what made the corpus graph lag).
+    if (isLargeGraph) {
       return
     }
     // Disable the built-in center force so precomputed cluster coordinates
@@ -214,7 +240,7 @@ export function ForceGraph({
       ;(node as { vx?: number; vy?: number }).vy = 0
     }
     graph.d3ReheatSimulation()
-  }, [physics, graphData])
+  }, [physics, graphData, isLargeGraph])
 
   const handleNodeClick = useCallback((node: Record<string, unknown>) => {
     if (onNodeClick) {
@@ -237,7 +263,9 @@ export function ForceGraph({
     const nodeType = String(node.node_type || 'paper')
 
     ctx.save()
-    ctx.globalAlpha = dimmed ? 0.18 : 1
+    // Slightly translucent fills so overlapping dots read as density and edges
+    // stay visible underneath; selection/dim states keep their own alpha.
+    ctx.globalAlpha = dimmed ? 0.15 : 0.8
 
     if (isSelectedCluster) {
       ctx.beginPath()
@@ -286,6 +314,31 @@ export function ForceGraph({
 
     ctx.restore()
   }, [physics?.nodeScale, physics?.baseSize, selectedClusterId, selectedNodeId, showLabels])
+
+  // Hit area for hover/click. Without this, react-force-graph derives the
+  // clickable region from a default node size, so only the centre of a
+  // custom-drawn dot was reactive. We paint the SAME shape + radius the node is
+  // drawn with, so the whole dot (whatever its size) is clickable/hoverable.
+  const nodePointerAreaPaint = useCallback(
+    (node: Record<string, unknown>, color: string, ctx: CanvasRenderingContext2D) => {
+      const size = (((node.size as number) || 1) * (physics?.nodeScale || 1)) * (physics?.baseSize ?? 6)
+      const nodeX = Number(node.x || 0)
+      const nodeY = Number(node.y || 0)
+      ctx.fillStyle = color
+      ctx.beginPath()
+      if (String(node.node_type || 'paper') === 'topic') {
+        ctx.moveTo(nodeX, nodeY - size)
+        ctx.lineTo(nodeX + size, nodeY)
+        ctx.lineTo(nodeX, nodeY + size)
+        ctx.lineTo(nodeX - size, nodeY)
+        ctx.closePath()
+      } else {
+        ctx.arc(nodeX, nodeY, size, 0, 2 * Math.PI)
+      }
+      ctx.fill()
+    },
+    [physics?.nodeScale, physics?.baseSize],
+  )
 
   const renderClusterWordClouds = useCallback(
     (ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -481,6 +534,7 @@ export function ForceGraph({
         width={dimensions.width}
         height={height}
         nodeCanvasObject={nodeCanvasObject}
+        nodePointerAreaPaint={nodePointerAreaPaint}
         nodeLabel={nodeLabel}
         onNodeClick={handleNodeClick}
         onRenderFramePost={(ctx: unknown, globalScale: number) => {
@@ -492,7 +546,12 @@ export function ForceGraph({
         linkWidth={linkWidth}
         linkOpacity={linkOpacity}
         d3VelocityDecay={physics?.velocityDecay ?? 0.4}
-        cooldownTicks={physics?.cooldownTicks || 100}
+        // Static UMAP layout on large graphs (I-10): 0 ticks → no simulation,
+        // the canvas only repaints on interaction. Small graphs keep the
+        // interactive physics.
+        cooldownTicks={isLargeGraph ? 0 : (physics?.cooldownTicks || 100)}
+        warmupTicks={0}
+        enableNodeDrag={!isLargeGraph}
         enableZoomInteraction={true}
         enablePanInteraction={true}
       />
