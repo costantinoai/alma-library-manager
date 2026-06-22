@@ -585,6 +585,123 @@ def _select_label_terms(
     return chosen
 
 
+def score_cluster_terms(
+    cluster_member_texts: dict[int, list[str]],
+    *,
+    ngram_range: tuple[int, int] = (1, 2),
+    max_features: int = 4000,
+    top_k: int = 40,
+) -> dict[int, list[tuple[str, float]]]:
+    """Per-cluster ranked terms by PREVALENCE-WEIGHTED c-TF-IDF.
+
+    The plain BERTopic c-TF-IDF concatenates a cluster into ONE document, so a
+    term typed many times in a single verbose paper scores as highly as a term
+    shared across the whole cluster — surfacing non-co-occurring vocabulary in
+    cluster labels and word clouds (confirmed on the live library: big clusters
+    were labelled with terms present in only 20–30 % of their papers).
+
+    The fix: multiply each term's class-based TF-IDF (its distinctiveness vs
+    other clusters) by its within-cluster PREVALENCE — the fraction of the
+    cluster's papers that actually contain it. A term must be both distinctive
+    AND recur across the cluster to rank, so labels read as the shared topic
+    rather than one paper's idiosyncrasy. Terms confined to a single paper of a
+    multi-paper cluster are dropped outright.
+
+    Single source of truth for both :func:`label_clusters_tfidf` and the paper-
+    map word clouds. Aggregates per cluster through a SPARSE membership matrix
+    so it never densifies the (n_papers × n_terms) matrix — safe on the corpus.
+
+    Returns ``{cluster_id: [(term, score), ...]}`` ranked desc, ≤ ``top_k`` each.
+    """
+    cids = sorted(cluster_member_texts.keys())
+    if not cids:
+        return {}
+
+    # Flatten to PAPER-level docs so within-cluster document frequency is
+    # measurable; remember which cluster row each paper-doc belongs to.
+    paper_docs: list[str] = []
+    paper_cluster_row: list[int] = []
+    paper_count = {cid: 0 for cid in cids}
+    for ci, cid in enumerate(cids):
+        for text in cluster_member_texts[cid]:
+            if text and text.strip():
+                paper_docs.append(text)
+                paper_cluster_row.append(ci)
+                paper_count[cid] += 1
+    if not paper_docs:
+        return {cid: [] for cid in cids}
+
+    from scipy.sparse import csr_matrix
+    from sklearn.feature_extraction.text import CountVectorizer
+
+    n_classes = len(cids)
+    n_papers = len(paper_docs)
+    # df thresholds at the PAPER level now: a term must appear in ≥2 papers
+    # globally (drops hapax) once the graph is big enough to afford it.
+    min_df = 2 if n_papers >= 8 else 1
+    max_df = 0.95 if n_papers >= 8 else 1.0
+    try:
+        vectorizer = CountVectorizer(
+            stop_words=_build_label_stop_words(),
+            ngram_range=ngram_range,
+            min_df=min_df,
+            max_df=max_df,
+            token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
+            lowercase=True,
+            max_features=max_features,
+        )
+        counts = vectorizer.fit_transform(paper_docs)  # (n_papers, n_terms) sparse
+    except ValueError:
+        return {cid: [] for cid in cids}
+    feature_names = vectorizer.get_feature_names_out()
+
+    # Cluster aggregates via a sparse (n_classes × n_papers) membership matrix —
+    # M @ counts stays sparse and only the small (n_classes × n_terms) result is
+    # densified.
+    membership = csr_matrix(
+        (np.ones(n_papers), (paper_cluster_row, np.arange(n_papers))),
+        shape=(n_classes, n_papers),
+    )
+    class_counts = np.asarray((membership @ counts).todense(), dtype=np.float64)
+    binary = counts.copy()
+    binary.data = np.ones_like(binary.data)
+    class_doc_freq = np.asarray((membership @ binary).todense(), dtype=np.float64)
+
+    # c-TF-IDF (BERTopic class formula): tf in class × log(1 + A / f_x).
+    class_sizes = class_counts.sum(axis=1)
+    class_sizes_safe = np.maximum(class_sizes, 1.0)
+    tf = class_counts / class_sizes_safe[:, None]
+    A = float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
+    f_x = np.maximum(class_counts.sum(axis=0), 1.0)
+    idf = np.log1p(A / f_x)
+    cf_idf = tf * idf[None, :]
+
+    # Prevalence: fraction of the cluster's papers containing the term.
+    paper_n = np.array([paper_count[cid] for cid in cids], dtype=np.float64)
+    prevalence = class_doc_freq / np.maximum(paper_n, 1.0)[:, None]
+    score = cf_idf * prevalence
+
+    out: dict[int, list[tuple[str, float]]] = {}
+    for ci, cid in enumerate(cids):
+        row = score[ci]
+        df_row = class_doc_freq[ci]
+        # In a real (≥4-paper) cluster a label term must recur in ≥2 papers;
+        # tiny clusters keep the single-paper term.
+        floor = 2.0 if paper_n[ci] >= 4 else 1.0
+        ranked: list[tuple[str, float]] = []
+        for idx in np.argsort(-row, kind="stable")[: top_k * 2]:
+            value = float(row[idx])
+            if value <= 0.0:
+                break
+            if df_row[idx] < floor:
+                continue
+            ranked.append((str(feature_names[idx]), round(value, 5)))
+            if len(ranked) >= top_k:
+                break
+        out[cid] = ranked
+    return out
+
+
 def label_clusters_tfidf(
     clusters: list[Cluster],
     texts: dict[str, str],
@@ -592,16 +709,11 @@ def label_clusters_tfidf(
 ) -> list[str]:
     """Generate distinctive cluster labels via class-based TF-IDF (c-TF-IDF).
 
-    For each cluster, scores (1, 2)-gram terms by their frequency in
-    that cluster (treated as a single class) weighted by inverse class
-    frequency across all clusters, following the BERTopic formula
-
-    ``c-TF-IDF_x_in_class = tf_x_in_class * log(1 + A / f_x)``
-
-    where ``A`` is the average per-class word count and ``f_x`` is the
-    total frequency of term ``x`` across all class documents. This
-    favours terms that are *characteristic* of a single cluster over
-    terms that are merely frequent in it.
+    Terms are ranked by :func:`score_cluster_terms` — the BERTopic class-based
+    TF-IDF (``tf_x_in_class * log(1 + A / f_x)``) multiplied by the term's
+    within-cluster PREVALENCE (fraction of the cluster's papers containing it),
+    so a label term must be both *characteristic* of the cluster AND *shared*
+    across its papers, not just frequent in a single verbose one.
 
     The vocabulary is restricted to alpha tokens (length ≥ 2), with
     sklearn's English stop-words plus a domain stop-list (``study``,
@@ -624,83 +736,21 @@ def label_clusters_tfidf(
     if not clusters:
         return []
 
-    from sklearn.feature_extraction.text import CountVectorizer
-
-    # 1) One "class document" per cluster.
-    cluster_docs: list[str] = []
-    for cluster in clusters:
-        parts = [
-            texts[k]
-            for k in cluster.member_keys
-            if k in texts and texts[k]
+    # Prevalence-weighted c-TF-IDF (shared scorer) → terms that are both
+    # distinctive AND recur across the cluster's papers. Then the bigram-absorbs-
+    # unigram pass turns the top terms into a phrase label.
+    member_texts = {
+        cluster.cluster_id: [
+            texts[k] for k in cluster.member_keys if k in texts and texts[k]
         ]
-        cluster_docs.append(" ".join(parts) if parts else "")
-
-    if not any(doc.strip() for doc in cluster_docs):
-        return [f"Cluster {c.cluster_id + 1}" for c in clusters]
-
-    n_classes = len(cluster_docs)
-
-    # min_df=1 on tiny graphs avoids "vocabulary is empty" — bigrams in a
-    # 3-cluster graph will mostly be hapax. max_df=0.95 strips terms that
-    # appear in nearly every cluster (boilerplate that survived the
-    # stop-list); on tiny graphs we relax it.
-    min_df = 2 if n_classes >= 5 else 1
-    max_df = 0.95 if n_classes >= 4 else 1.0
-
-    try:
-        vectorizer = CountVectorizer(
-            stop_words=_build_label_stop_words(),
-            ngram_range=(1, 2),
-            min_df=min_df,
-            max_df=max_df,
-            token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
-            lowercase=True,
-            max_features=4000,
-        )
-        counts = vectorizer.fit_transform(cluster_docs)
-    except ValueError:
-        # Empty vocabulary after filtering — fall back to placeholders.
-        return [f"Cluster {c.cluster_id + 1}" for c in clusters]
-
-    counts_arr = counts.toarray().astype(np.float64)
-    feature_names = vectorizer.get_feature_names_out()
-
-    # 2) c-TF-IDF — BERTopic class-based formula. ``A`` is the average
-    # number of tokens per class document; ``f_x`` is the total
-    # frequency of term ``x`` across all classes. ``log(1 + A/f_x)``
-    # rewards terms used heavily in one class but rare in the corpus.
-    class_sizes = counts_arr.sum(axis=1)  # (n_classes,)
-    class_sizes_safe = np.maximum(class_sizes, 1.0)
-    tf = counts_arr / class_sizes_safe[:, None]  # (n_classes, n_terms)
-
-    A = float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
-    f_x = counts_arr.sum(axis=0)  # (n_terms,)
-    f_x_safe = np.maximum(f_x, 1.0)
-    idf = np.log1p(A / f_x_safe)  # (n_terms,)
-
-    cf_idf = tf * idf[None, :]  # (n_classes, n_terms)
+        for cluster in clusters
+    }
+    scored = score_cluster_terms(member_texts, ngram_range=(1, 2), top_k=top_n * 4)
 
     labels: list[str] = []
-    for class_idx in range(n_classes):
-        row = cf_idf[class_idx]
-        # Stable sort by score descending. Ties break by feature index,
-        # which is alphabetical (sklearn vocab order) → deterministic.
-        sorted_idx = np.argsort(-row, kind="stable")
-        # Oversample top_n*4 candidates so the bigram-vs-unigram
-        # absorption logic has room to drop redundant picks.
-        candidates: list[tuple[str, float]] = []
-        for idx in sorted_idx[: top_n * 4]:
-            score = float(row[idx])
-            if score <= 0.0:
-                break
-            candidates.append((str(feature_names[idx]), score))
-
-        chosen = _select_label_terms(candidates, top_n)
+    for cluster in clusters:
+        chosen = _select_label_terms(scored.get(cluster.cluster_id, []), top_n)
         labels.append(
-            ", ".join(chosen)
-            if chosen
-            else f"Cluster {clusters[class_idx].cluster_id + 1}"
+            ", ".join(chosen) if chosen else f"Cluster {cluster.cluster_id + 1}"
         )
-
     return labels

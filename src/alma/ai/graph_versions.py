@@ -45,9 +45,12 @@ PROJECTION_ALGO_VERSION = "2026.07-2"
 #            per-point membership probability + coverage + stability (I-6).
 CLUSTERING_ALGO_VERSION = "2026.07-3"
 
-# Cluster-label generation (ai/cluster_labels.py): representative selection,
-# c-TF-IDF terms, the label-signature content hash.
-LABELLING_VERSION = "2026.07-1"
+# Cluster-label generation (ai/clustering.py score_cluster_terms): c-TF-IDF
+# term selection + word clouds, and the label-signature content hash.
+# 2026.07-2: prevalence-weighted c-TF-IDF — terms must recur across the
+#            cluster's papers, not just be frequent in one (fixes non-co-
+#            occurring words in labels + word clouds).
+LABELLING_VERSION = "2026.07-2"
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding

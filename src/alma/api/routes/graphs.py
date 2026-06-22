@@ -1457,67 +1457,28 @@ def _build_word_clouds_for_clusters(
     *,
     top_n: int = 10,
 ) -> dict[int, list[dict[str, Any]]]:
-    """TF-IDF top terms per cluster, treating each cluster as one document.
+    """Per-cluster word clouds via the shared prevalence-weighted c-TF-IDF.
 
-    Picks the words that are *over-represented* in a cluster compared to
-    the rest of the map — `max_df=0.7` drops terms that appear in >70% of
-    clusters (generic filler / common vocab) and `min_df=1` keeps rare
-    terms that show up in exactly one cluster. The custom
-    ``token_pattern`` rejects short tokens, pure numerics, and
-    punctuation noise before TF-IDF weights them.
+    Uses the SAME ``score_cluster_terms`` scorer as the cluster labels (DRY), so
+    a word cloud surfaces terms that are both distinctive to the cluster AND
+    shared across its papers — not vocabulary that appears a lot in one verbose
+    paper but in no others (the non-co-occurring-words artefact).
     """
-    from sklearn.feature_extraction.text import TfidfVectorizer
+    from alma.ai.clustering import score_cluster_terms
 
     sorted_cids = sorted(cluster_members.keys())
     if not sorted_cids:
         return {}
-    if len(sorted_cids) < 2:
-        return {cid: [] for cid in sorted_cids}
 
-    docs: list[str] = []
-    for cid in sorted_cids:
-        parts: list[str] = []
-        for paper_id in cluster_members[cid]:
-            text = cluster_texts.get(paper_id, "")
-            if text:
-                parts.append(text)
-        docs.append(" ".join(parts))
-
-    if not any(docs):
-        return {cid: [] for cid in sorted_cids}
-
-    try:
-        vectorizer = TfidfVectorizer(
-            max_features=3000,
-            stop_words="english",
-            ngram_range=(1, 2),
-            min_df=1,
-            max_df=0.7,
-            token_pattern=r"(?u)\b[A-Za-z][A-Za-z\-]{2,}\b",
-        )
-        matrix = vectorizer.fit_transform(docs)
-    except ValueError:
-        return {cid: [] for cid in sorted_cids}
-
-    feature_names = vectorizer.get_feature_names_out()
-    word_clouds: dict[int, list[dict[str, Any]]] = {}
-    for i, cid in enumerate(sorted_cids):
-        row = matrix[i].toarray().flatten()
-        top_idx = row.argsort()[-top_n:][::-1]
-        terms: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for idx in top_idx:
-            weight = float(row[idx])
-            if weight <= 0:
-                continue
-            term = str(feature_names[idx])
-            token = term.strip().lower()
-            if not token or token in seen:
-                continue
-            seen.add(token)
-            terms.append({"term": term, "weight": round(weight, 4)})
-        word_clouds[cid] = terms
-    return word_clouds
+    member_texts = {
+        cid: [cluster_texts.get(paper_id, "") for paper_id in cluster_members[cid]]
+        for cid in sorted_cids
+    }
+    scored = score_cluster_terms(member_texts, ngram_range=(1, 2), top_k=top_n)
+    return {
+        cid: [{"term": term, "weight": round(weight, 4)} for term, weight in ranked[:top_n]]
+        for cid, ranked in scored.items()
+    }
 
 
 def _load_embeddings(

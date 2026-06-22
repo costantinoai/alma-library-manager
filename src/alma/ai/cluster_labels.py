@@ -33,8 +33,16 @@ logger = logging.getLogger(__name__)
 
 
 def compute_cluster_signature(member_ids: Iterable[str]) -> str:
-    """Stable hash of a cluster's member set, independent of ordering."""
+    """Stable hash of a cluster's member set + the labelling-logic version.
+
+    The cache invalidates itself when membership changes (different members →
+    different hash) AND when the labelling LOGIC changes (the version bumps),
+    so a c-TF-IDF improvement re-keys every cached label instead of serving the
+    stale text under an unchanged member set (I-13)."""
+    from alma.ai.graph_versions import LABELLING_VERSION
+
     serialised = "\n".join(sorted(str(m) for m in member_ids if m))
+    serialised = f"{LABELLING_VERSION}\n{serialised}"
     return hashlib.sha1(serialised.encode("utf-8")).hexdigest()
 
 
