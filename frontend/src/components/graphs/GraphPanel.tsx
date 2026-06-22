@@ -5,9 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ConceptCallout } from '@/components/ui/concept-callout'
 import { api, refreshClusterLabels, type GraphData, type GraphNode } from '@/api/client'
 import { ForceGraph, type GraphPhysicsConfig, LAYER_COLORS, LAYER_LABELS } from './ForceGraph'
 import { GraphControls } from './GraphControls'
+import { InsightsPaperDrilldown, type DrilldownTarget } from '@/components/insights/InsightsPaperDrilldown'
+import { formatPercent } from '@/lib/format'
 import { useToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
@@ -109,6 +112,8 @@ export function GraphPanel() {
   // Cluster detail knob (Phase 3): 1.0 = default; >1 finer (more clusters),
   // <1 coarser. A non-default value bypasses the MV cache (live re-cluster).
   const [clusterResolution, setClusterResolution] = useState(1.0)
+  // I-19: the paper-list drilldown opened from a cluster (null = closed).
+  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
@@ -198,6 +203,18 @@ export function GraphPanel() {
   // Typed edge layers (Phase 3 / I-11): per-layer counts from metadata drive
   // the filter chips; `visibleLayers` is the set NOT toggled off.
   const edgeLayers = (data?.metadata?.edge_layers || {}) as Record<string, number>
+  // I-14: the clustering method/diagnostics the backend already emits — surfaced
+  // in a panel so the projection's honesty (coverage, retained outliers,
+  // stability) is visible, not just implied by the dots.
+  const clustering = (data?.metadata?.clustering || {}) as {
+    method?: string
+    n_clusters?: number
+    outlier_count?: number
+    coverage?: number
+    stability?: number | null
+    params?: Record<string, unknown>
+  }
+  const hasClustering = clustering.n_clusters !== undefined
   const layerKeys = useMemo(
     () => Object.keys(edgeLayers).filter((key) => (edgeLayers[key] || 0) > 0),
     [edgeLayers],
@@ -238,6 +255,30 @@ export function GraphPanel() {
 
   return (
     <div className="space-y-4">
+      {/* I-14: in-page explainer for the studio's vocabulary so the geometry is
+          read correctly (positions = similarity, not force physics; outliers are
+          honest; edges are typed). One ConceptCallout per surface, near the top. */}
+      <ConceptCallout
+        eyebrow="How to read this"
+        summary="Dots are positioned by content similarity; color marks a discovered cluster; edges are typed relationships."
+      >
+        <p>
+          Each node is a paper (or author) placed by a non-linear projection of its
+          768-dimensional embedding, so <strong>near = similar in content</strong> —
+          the layout is geometry, not a force simulation you should read into.
+        </p>
+        <p className="mt-2">
+          <strong>Clusters</strong> are discovered by density (HDBSCAN), not imposed:
+          a paper too sparse to assign confidently stays an{' '}
+          <strong>outlier</strong> (slate, unclustered) rather than being forced into
+          the nearest group. <strong>Coverage</strong> is the share of nodes that did
+          get a confident cluster; <strong>stability</strong> is how repeatable the
+          clustering is across re-projections. <strong>Edges</strong> are typed —
+          semantic (embedding neighbours), bibliographic coupling (shared
+          references), co-authorship — and each layer can be toggled.
+        </p>
+      </ConceptCallout>
+
       <div className="flex gap-2">
         {(Object.keys(VIEW_CONFIG) as GraphView[]).map((view) => {
           const viewConfig = VIEW_CONFIG[view]
@@ -383,6 +424,80 @@ export function GraphPanel() {
             )}
           </div>
 
+          {/* I-14: method & diagnostics panel — the projection/clustering facts the
+              backend already emits, made visible so the map's honesty is legible. */}
+          {data && data.nodes.length > 0 && hasClustering && (
+            <div className="mt-4 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4">
+              <div className="mb-3 flex items-baseline justify-between gap-2">
+                <p className="text-sm font-semibold text-alma-800">Method &amp; diagnostics</p>
+                <span className="text-xs text-slate-400">
+                  {scope === 'corpus' ? 'Corpus' : 'Library'} scope
+                  {clusterResolution !== 1.0 ? ` · resolution ${clusterResolution.toFixed(1)}×` : ''}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                <Diagnostic label="Layout" value={method || '—'} />
+                <Diagnostic label="Clusters" value={String(clustering.n_clusters ?? '—')} />
+                <Diagnostic
+                  label="Coverage"
+                  value={clustering.coverage != null ? formatPercent(clustering.coverage, 0) : '—'}
+                  hint="share of nodes confidently clustered"
+                />
+                <Diagnostic
+                  label="Outliers"
+                  value={String(clustering.outlier_count ?? 0)}
+                  hint="nodes too sparse to assign"
+                />
+                <Diagnostic
+                  label="Stability"
+                  value={clustering.stability != null ? clustering.stability.toFixed(2) : 'n/a'}
+                  hint="repeatability across re-projections (mean ARI)"
+                />
+                <Diagnostic
+                  label="Method"
+                  value={String(clustering.method || '—')}
+                  hint={
+                    clustering.params
+                      ? Object.entries(clustering.params)
+                          .map(([k, v]) => `${k}=${v}`)
+                          .join(', ')
+                      : undefined
+                  }
+                />
+              </div>
+
+              {clusters.length > 0 && (
+                <details className="mt-3 rounded-sm border border-[var(--color-border)] bg-surface-2">
+                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-600">
+                    Clusters ({clusters.length}) — accessible list
+                  </summary>
+                  {/* Keyboard/SR alternative to the canvas: a real list of clusters
+                      that selects the active cluster on click (I-14 a11y). */}
+                  <ul className="max-h-64 divide-y divide-[var(--color-border)] overflow-y-auto">
+                    {clusters.map((cluster) => {
+                      const active = cluster.id === selectedClusterId
+                      return (
+                        <li key={cluster.id}>
+                          <button
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => setSelectedClusterId(cluster.id)}
+                            className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
+                              active ? 'bg-accent-soft text-alma-folio' : 'text-slate-700 hover:bg-surface-1'
+                            }`}
+                          >
+                            <span className="min-w-0 flex-1 truncate">{cluster.label}</span>
+                            <span className="shrink-0 text-xs text-slate-400">{cluster.size} papers</span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
             <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm shadow-sm">
               <div className="mb-3 flex items-center justify-between gap-2">
@@ -419,6 +534,23 @@ export function GraphPanel() {
                         <Badge variant="outline" className="text-[10px]">via {selectedCluster.label_model}</Badge>
                       )}
                     </div>
+                    {/* I-19: drill from this cluster to ALL its papers (not just
+                        the 4 representatives below), via the shared route. */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() =>
+                        setDrilldown({
+                          filterType: 'cluster',
+                          filterValue: String(selectedCluster.id),
+                          scope,
+                          title: `Papers in cluster: ${selectedCluster.label}`,
+                        })
+                      }
+                    >
+                      View all {selectedCluster.size} papers
+                    </Button>
                   </div>
                   {selectedCluster.top_topics && selectedCluster.top_topics.length > 0 && (
                     <div>
@@ -527,6 +659,20 @@ export function GraphPanel() {
           </div>
         </CardContent>
       </Card>
+
+      <InsightsPaperDrilldown target={drilldown} onClose={() => setDrilldown(null)} />
+    </div>
+  )
+}
+
+/** Small labelled stat for the Method & diagnostics panel (I-14). */
+function Diagnostic({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-sm bg-surface-2 px-3 py-2" title={hint}>
+      <p className="text-[11px] uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate text-sm font-medium text-alma-800" title={value}>
+        {value}
+      </p>
     </div>
   )
 }

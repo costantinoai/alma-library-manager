@@ -414,6 +414,42 @@ export function getHealthDimensionItems(
   )
 }
 
+// I-19: one parameterized drilldown behind every Insights figure (a graph
+// cluster, or a topic / journal / institution / year / source bar). Rows are
+// the standard Publication shape; `total` is the honest denominator.
+export type InsightsDrilldownFilter =
+  | 'cluster'
+  | 'topic'
+  | 'journal'
+  | 'institution'
+  | 'year'
+  | 'source'
+
+export interface InsightsPapersResponse {
+  filter_type: string
+  filter_value: string
+  scope: string
+  total: number
+  limit: number
+  offset: number
+  items: Publication[]
+}
+
+export function getInsightsPapers(
+  filterType: InsightsDrilldownFilter,
+  filterValue: string,
+  { scope = 'library', limit = 30, offset = 0 }: { scope?: string; limit?: number; offset?: number } = {},
+): Promise<InsightsPapersResponse> {
+  const params = new URLSearchParams({
+    filter_type: filterType,
+    filter_value: filterValue,
+    scope,
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return api.get<InsightsPapersResponse>(`/insights/papers?${params.toString()}`)
+}
+
 export function runMaintenanceOperation(
   key: string,
   request: MaintenanceRunRequest,

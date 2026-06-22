@@ -31,7 +31,7 @@ import {
   YAxis,
 } from 'recharts'
 
-import type { AIStatus, InsightsData } from '@/api/client'
+import type { AIStatus, InsightsData, InsightsDrilldownFilter } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -39,6 +39,10 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Progress } from '@/components/ui/progress'
 import { Toggle } from '@/components/ui/toggle'
 import { ActionCardHeader, MetricTile, SectionHeader } from '@/components/shared'
+import {
+  InsightsPaperDrilldown,
+  type DrilldownTarget,
+} from '@/components/insights/InsightsPaperDrilldown'
 import { formatNumber, truncate } from '@/lib/utils'
 
 interface Palette {
@@ -95,9 +99,19 @@ export function InsightsOverviewTab({
 
   const [showJournalPapers, setShowJournalPapers] = useState(true)
   const [showJournalAvgCitations, setShowJournalAvgCitations] = useState(true)
+  // I-19: paper-list drilldown opened from a chart bar (null = closed).
+  const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
+
+  // One helper so every bar drills through the SAME shared route/dialog. recharts
+  // passes the datum on the bar `onClick`; we read the un-truncated `drillValue`
+  // (or the raw field) so the filter matches the real Library value.
+  const openDrilldown = (filterType: InsightsDrilldownFilter, value: unknown, label: string) => {
+    const v = value == null ? '' : String(value)
+    if (v) setDrilldown({ filterType, filterValue: v, scope: 'library', title: label })
+  }
 
   const topJournalsData = useMemo(
-    () => top_journals.map((j) => ({ ...j, journal: truncate(j.journal, 30) })),
+    () => top_journals.map((j) => ({ ...j, journal: truncate(j.journal, 30), drillValue: j.journal })),
     [top_journals],
   )
   const embeddingModels = aiStatus?.embeddings?.models ?? []
@@ -124,6 +138,13 @@ export function InsightsOverviewTab({
 
   return (
     <div className="space-y-6">
+      {/* I-20: every figure on this tab is scoped to the saved Library and is an
+          all-time aggregate. State it once so no number is read as corpus-wide. */}
+      <p className="text-xs text-slate-400">
+        All figures cover your <span className="font-medium text-slate-500">saved Library</span> (all-time).
+        Click a topic, journal, institution, or year to see the papers behind it.
+      </p>
+
       {/* ── Summary Cards ── */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <MetricTile
@@ -175,7 +196,17 @@ export function InsightsOverviewTab({
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                 <Tooltip {...tooltipStyle} />
                 <Legend />
-                <Bar yAxisId="left" dataKey="count" name="Papers" fill={colors.blue} radius={[2, 2, 0, 0]} />
+                <Bar
+                  yAxisId="left"
+                  dataKey="count"
+                  name="Papers"
+                  fill={colors.blue}
+                  radius={[2, 2, 0, 0]}
+                  cursor="pointer"
+                  onClick={(d: { year?: number | string }) =>
+                    openDrilldown('year', d?.year, `Papers from ${d?.year}`)
+                  }
+                />
                 <Line
                   yAxisId="right"
                   type="monotone"
@@ -220,7 +251,7 @@ export function InsightsOverviewTab({
             ) : (
               <ResponsiveContainer width="100%" height={Math.max(250, top_topics.length * 28)}>
                 <BarChart
-                  data={top_topics.map((t) => ({ ...t, term: truncate(t.term, 25) }))}
+                  data={top_topics.map((t) => ({ ...t, term: truncate(t.term, 25), drillValue: t.term }))}
                   layout="vertical"
                   margin={{ left: 10 }}
                 >
@@ -228,7 +259,16 @@ export function InsightsOverviewTab({
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                   <YAxis dataKey="term" type="category" width={140} tick={{ fontSize: 11, fill: '#152642' }} stroke="#D9CBAF" />
                   <Tooltip {...tooltipStyle} />
-                  <Bar dataKey="count" name="Papers" fill={colors.cyan} radius={[0, 2, 2, 0]} />
+                  <Bar
+                    dataKey="count"
+                    name="Papers"
+                    fill={colors.cyan}
+                    radius={[0, 2, 2, 0]}
+                    cursor="pointer"
+                    onClick={(d: { drillValue?: string }) =>
+                      openDrilldown('topic', d?.drillValue, `Papers in topic: ${d?.drillValue}`)
+                    }
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -290,6 +330,10 @@ export function InsightsOverviewTab({
                     fill={colors.blue}
                     radius={[0, 2, 2, 0]}
                     hide={!showJournalPapers}
+                    cursor="pointer"
+                    onClick={(d: { drillValue?: string }) =>
+                      openDrilldown('journal', d?.drillValue, `Papers in journal: ${d?.drillValue}`)
+                    }
                   />
                   <Bar
                     dataKey="avg_citations"
@@ -315,6 +359,7 @@ export function InsightsOverviewTab({
                   data={top_institutions.map((i) => ({
                     ...i,
                     label: truncate(i.institution_name, 25),
+                    drillValue: i.institution_name,
                   }))}
                   layout="vertical"
                   margin={{ left: 10 }}
@@ -332,7 +377,16 @@ export function InsightsOverviewTab({
                       return inst ? `${inst.institution_name} (${inst.country_code})` : label
                     }}
                   />
-                  <Bar dataKey="count" name="Publications" fill={colors.green} radius={[0, 2, 2, 0]} />
+                  <Bar
+                    dataKey="count"
+                    name="Publications"
+                    fill={colors.green}
+                    radius={[0, 2, 2, 0]}
+                    cursor="pointer"
+                    onClick={(d: { drillValue?: string }) =>
+                      openDrilldown('institution', d?.drillValue, `Papers from: ${d?.drillValue}`)
+                    }
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -509,6 +563,8 @@ export function InsightsOverviewTab({
           </CardContent>
         </Card>
       </div>
+
+      <InsightsPaperDrilldown target={drilldown} onClose={() => setDrilldown(null)} />
     </div>
   )
 }
