@@ -7,7 +7,14 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { api, refreshClusterLabels, type GraphData, type GraphNode } from '@/api/client'
-import { ForceGraph, type GraphPhysicsConfig, LAYER_COLORS, LAYER_LABELS } from './ForceGraph'
+import {
+  ForceGraph,
+  type GraphPhysicsConfig,
+  LAYER_COLORS,
+  LAYER_LABELS,
+  LARGE_GRAPH_THRESHOLD,
+  LARGE_GRAPH_EDGE_THRESHOLD,
+} from './ForceGraph'
 import { GraphControls } from './GraphControls'
 import { InsightsPaperDrilldown, type DrilldownTarget } from '@/components/insights/InsightsPaperDrilldown'
 import { formatPercent } from '@/lib/format'
@@ -369,6 +376,17 @@ export function GraphPanel() {
               </div>
             ) : data && data.nodes.length > 0 ? (
               <div className="flex flex-col gap-2">
+                {/* On a large graph edges are hidden until you zoom in (perf +
+                    they're a hairball when zoomed out) — say so, so an empty
+                    edge view at fit doesn't read as "no edges". */}
+                {showEdges &&
+                  selectedClusterId === null &&
+                  (data.nodes.length > LARGE_GRAPH_THRESHOLD ||
+                    data.edges.length > LARGE_GRAPH_EDGE_THRESHOLD) && (
+                    <p className="text-xs text-slate-400">
+                      Zoom in to reveal edges, or select a cluster to see its connections.
+                    </p>
+                  )}
                 {layerKeys.length > 0 && (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-medium text-slate-500">Edge layers</span>

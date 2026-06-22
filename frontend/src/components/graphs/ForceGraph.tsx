@@ -46,11 +46,11 @@ interface RenderedNode extends Record<string, unknown> {
 // ships a UMAP layout, so we pin every node to those coordinates and render
 // statically (I-10). Running d3-force charge+link over thousands of nodes for
 // 100 cooldown ticks (each re-rendering every node) was the corpus-graph lag.
-const LARGE_GRAPH_THRESHOLD = 1200
+export const LARGE_GRAPH_THRESHOLD = 1200
 // The force simulation's link force is what makes a heavily-edged graph lag, so
 // we also go static (pinned) once there are many edges — even if the node count
 // is modest (e.g. the author network: ~260 nodes but ~1900 typed edges).
-const LARGE_GRAPH_EDGE_THRESHOLD = 1500
+export const LARGE_GRAPH_EDGE_THRESHOLD = 1500
 
 interface RenderedLink extends Record<string, unknown> {
   source: string | RenderedNode
@@ -113,6 +113,9 @@ export function ForceGraph({
 }: ForceGraphProps) {
   const fgRef = useRef<InstanceType<typeof ForceGraph2D>>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Live zoom factor, updated on every pan/zoom. Read by linkVisibility so the
+  // edge level-of-detail (below) reacts to zoom without a React re-render.
+  const zoomRef = useRef(1)
   const [dimensions, setDimensions] = useState({ width: width || 800, height })
 
   useEffect(() => {
@@ -314,7 +317,11 @@ export function ForceGraph({
       ctx.stroke()
     }
 
-    if (showLabels || highlighted || isSelectedNode || globalScale > 2) {
+    // Node names follow the "Labels" toggle ONLY (default off), plus a search
+    // highlight or an explicit selection. The old `globalScale > 2` clause
+    // force-painted a name on EVERY node once you zoomed in — on the corpus that
+    // dumped thousands of overlapping labels and tanked zoom responsiveness.
+    if (showLabels || highlighted || isSelectedNode) {
       ctx.font = `${fontSize}px sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
@@ -351,44 +358,84 @@ export function ForceGraph({
     [physics?.nodeScale, physics?.baseSize],
   )
 
+  // Word-cloud level of detail. The static UMAP layout is pre-scaled to the
+  // viewport, so a fit-to-view graph sits at globalScale ≈ 1 whether it's an
+  // 86-node library or an 8k-node corpus — which makes the zoom factor itself a
+  // clean, scale-invariant "how much detail?" signal. At fit we show only a
+  // handful of the most prominent clusters' top term; zooming in raises BOTH the
+  // total word budget and the words-per-cluster; a focused cluster always shows
+  // its full cloud. This replaces "every cluster × 10 terms, always", which
+  // buried the corpus in ~1,800 overlapping words.
+  const WORDCLOUD_MIN_BUDGET = 10 // total words at fit-to-view
+  const WORDCLOUD_MAX_BUDGET = 220 // hard cap when deeply zoomed in
+
   const renderClusterWordClouds = useCallback(
     (ctx: CanvasRenderingContext2D, globalScale: number) => {
       if (!showWordCloud || graphData.nodes.length === 0) {
         return
       }
-      const centroids = new Map<number, { x: number; y: number; radius: number; count: number }>()
+      const centroids = new Map<number, { x: number; y: number; count: number }>()
+      let maxCount = 1
       for (const node of graphData.nodes) {
         if (typeof node.cluster_id !== 'number') continue
-        const entry = centroids.get(node.cluster_id) || { x: 0, y: 0, radius: 0, count: 0 }
+        const entry = centroids.get(node.cluster_id) || { x: 0, y: 0, count: 0 }
         entry.x += Number(node.x || 0)
         entry.y += Number(node.y || 0)
-        entry.radius = Math.max(entry.radius, Number(node.size || 1))
         entry.count += 1
         centroids.set(node.cluster_id, entry)
+        if (entry.count > maxCount) maxCount = entry.count
       }
-      for (const [clusterId, stat] of centroids.entries()) {
+
+      const selectionActive = selectedClusterId !== null
+      // Largest clusters first so the most prominent themes win a tight budget.
+      const ordered = [...centroids.entries()].sort((a, b) => b[1].count - a[1].count)
+      // Total words + words-per-cluster both grow with zoom. A focused cluster
+      // bypasses the budget and shows its full cloud.
+      let budget = selectionActive
+        ? Number.MAX_SAFE_INTEGER
+        : Math.round(
+            Math.min(WORDCLOUD_MAX_BUDGET, Math.max(WORDCLOUD_MIN_BUDGET, 8 * globalScale ** 1.6)),
+          )
+      const perCluster = selectionActive ? 12 : Math.max(1, Math.min(8, Math.round(globalScale)))
+
+      ctx.save()
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      for (const [clusterId, stat] of ordered) {
+        if (budget <= 0) break
         const cluster = clusterLookup.get(clusterId)
         const terms = cluster?.word_cloud || []
         if (!terms.length || stat.count === 0) continue
-        const isSelected = selectedClusterId !== null && clusterId === selectedClusterId
-        const dimmed = selectedClusterId !== null && !isSelected
-        if (dimmed) continue
+        const isSelected = clusterId === selectedClusterId
+        // When a cluster is focused, show ONLY it — the rest is noise around the
+        // thing you're inspecting.
+        if (selectionActive && !isSelected) continue
+
         const cx = stat.x / stat.count
         const cy = stat.y / stat.count
-        const maxWeight = terms[0]?.weight || 1
-        // Radial ring sized from the cluster span so terms hover around it.
+        const wordCount = Math.min(
+          isSelected ? Math.min(terms.length, 12) : perCluster,
+          terms.length,
+          budget,
+        )
+        if (wordCount <= 0) continue
+        budget -= wordCount
+
         const approxRadius = Math.max(40, Math.min(180, 20 + stat.count * 1.6))
-        const baseFont = Math.max(isSelected ? 11 : 9, isSelected ? 14 : 11) / globalScale
-        ctx.save()
-        ctx.globalAlpha = isSelected ? 0.9 : 0.65
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        const slice = (2 * Math.PI) / terms.length
-        terms.slice(0, 10).forEach((entry, idx) => {
-          const scale = 0.5 + 0.8 * (entry.weight / maxWeight)
-          const fontSize = baseFont * scale * (isSelected ? 1.25 : 1)
+        const maxWeight = terms[0]?.weight || 1
+        // Cross-cluster prominence: a bigger cluster's words read larger so the
+        // eye lands on the dominant themes first.
+        const clusterScale = 0.7 + 0.6 * (stat.count / maxCount)
+        const baseFont = (isSelected ? 13 : 10) / globalScale
+        const shown = terms.slice(0, wordCount)
+        const slice = (2 * Math.PI) / Math.max(1, shown.length)
+        ctx.globalAlpha = isSelected ? 0.95 : 0.7
+        shown.forEach((entry, idx) => {
+          // Within-cluster prominence: the most distinctive term is biggest.
+          const weightScale = 0.55 + 0.9 * (entry.weight / maxWeight)
+          const fontSize = baseFont * weightScale * clusterScale * (isSelected ? 1.25 : 1)
           const angle = idx * slice + clusterId * 0.37
-          const radius = approxRadius * (0.75 + 0.25 * scale) / globalScale
+          const radius = (approxRadius * (0.7 + 0.3 * weightScale)) / globalScale
           const tx = cx + radius * Math.cos(angle)
           const ty = cy + radius * Math.sin(angle)
           ctx.font = `600 ${fontSize}px ui-sans-serif, system-ui, sans-serif`
@@ -400,8 +447,8 @@ export function ForceGraph({
           ctx.fillStyle = isSelected ? '#0F172A' : '#334155'
           ctx.fillText(entry.term, tx, ty)
         })
-        ctx.restore()
       }
+      ctx.restore()
     },
     [clusterLookup, graphData.nodes, selectedClusterId, showWordCloud],
   )
@@ -452,6 +499,24 @@ export function ForceGraph({
       ctx.restore()
     }
   }, [clusterLookup, graphData.nodes, selectedClusterId, showClusterLabels])
+
+  // Edge level-of-detail (perf). On a large graph, drawing every edge on every
+  // pan/zoom frame is the dominant cost and makes the corpus feel laggy. Edges
+  // are also visual noise when zoomed out (a hairball). So on large graphs we
+  // HIDE edges until you zoom past EDGE_ZOOM_THRESHOLD (fit ≈ 1×), at which
+  // point you're looking at a local region where edges are meaningful and few
+  // enough to draw smoothly. Focusing a cluster always shows its edges. Small
+  // graphs always draw edges. Reads the live zoom ref so it tracks zoom without
+  // a React re-render; the canvas already repaints on zoom, picking up the change.
+  const EDGE_ZOOM_THRESHOLD = 2.2
+  const linkVisibility = useCallback(
+    () => {
+      if (!isLargeGraph) return true
+      if (selectedClusterId !== null) return true
+      return zoomRef.current >= EDGE_ZOOM_THRESHOLD
+    },
+    [isLargeGraph, selectedClusterId],
+  )
 
   const linkColor = useCallback((link: Record<string, unknown>) => {
     if (selectedClusterId === null) {
@@ -584,6 +649,10 @@ export function ForceGraph({
         linkColor={linkColor}
         linkWidth={linkWidth}
         linkOpacity={linkOpacity}
+        linkVisibility={linkVisibility}
+        onZoom={(transform: { k: number }) => {
+          zoomRef.current = transform.k
+        }}
         d3VelocityDecay={physics?.velocityDecay ?? 0.4}
         // Static UMAP layout on large graphs (I-10): 0 ticks → no simulation,
         // the canvas only repaints on interaction. Small graphs keep the
