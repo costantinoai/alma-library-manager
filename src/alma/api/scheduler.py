@@ -38,6 +38,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from alma.core.concurrency import enter_job_fanout
+from alma.core.db_retry import commit_with_retry
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -1080,7 +1081,11 @@ def evaluate_scheduled_alerts() -> None:
                 # the dedup record is lost, so the same paper re-fires on
                 # the next sweep.  Same class of fix as
                 # `routes/alerts.py:evaluate_alert` in v0.10.0.
-                conn.commit()
+                # evaluate_digest's writes (dedup / history / last_evaluated_at)
+                # all run AFTER its search + Slack send, so the lock is never
+                # held across network; commit_with_retry flushes them with
+                # transient-lock retry on this own (scheduler) connection.
+                commit_with_retry(conn, label="evaluate_scheduled_alerts")
                 if result is None:
                     continue
                 sent_total += int(result.get("papers_sent") or 0)
@@ -1224,7 +1229,7 @@ def refresh_recommendations_periodic() -> None:
                     name="Library Global",
                     context_type="library_global",
                 )
-                conn.commit()
+                commit_with_retry(conn, label="refresh_recommendations_periodic bootstrap")
                 lenses = [new_lens]
             except sqlite3.OperationalError as exc:
                 logger.warning(
@@ -1258,7 +1263,9 @@ def refresh_recommendations_periodic() -> None:
                 result = refresh_lens_recommendations(
                     conn, lens["id"], trigger_source="scheduler"
                 )
-                conn.commit()
+                # refresh_lens_recommendations self-gates its lane writes; this
+                # flushes any residual on the scheduler's own connection.
+                commit_with_retry(conn, label="refresh_recommendations_periodic")
                 inserted = (result or {}).get("inserted", 0)
                 total_inserted += inserted
                 lens_results.append({
@@ -1390,7 +1397,9 @@ def maintain_citation_graph_periodic() -> None:
         conn = open_db_connection()
         try:
             result = backfill_missing_publication_references(conn, limit=500)
-            conn.commit()
+            # backfill_missing_publication_references self-gates its upsert window
+            # (write_section); this flushes any residual on this own connection.
+            commit_with_retry(conn, label="maintain_citation_graph_periodic")
             set_job_status(
                 job_id,
                 status="completed",
