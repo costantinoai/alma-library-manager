@@ -410,8 +410,15 @@ export function ForceGraph({
     const esc = (v: unknown) =>
       String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const rows: string[] = []
-    if (meta.cluster_label) {
-      rows.push(`<div style="opacity:.85">Cluster: ${esc(meta.cluster_label)}</div>`)
+    // Cluster line — honest about uncertainty (I-6): outliers say so, and a
+    // clustered node shows HDBSCAN's membership confidence when we have it.
+    if (meta.is_outlier) {
+      rows.push(`<div style="opacity:.85">Unclustered — too sparse to assign confidently</div>`)
+    } else if (meta.cluster_label) {
+      const conf = meta.cluster_confidence
+      const confTxt =
+        typeof conf === 'number' ? ` · ${Math.round(conf * 100)}% confidence` : ''
+      rows.push(`<div style="opacity:.85">Cluster: ${esc(meta.cluster_label)}${confTxt}</div>`)
     }
     const isAuthor = node.node_type === 'author' || meta.pub_count != null
     if (isAuthor) {
