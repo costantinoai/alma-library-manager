@@ -372,10 +372,9 @@ export function GraphControls({
             </div>
           )}
 
-          {/* PROTOTYPE (task 19): fused multi-view layout. Library + paper-map
-              only (dense O(N²)). Semantic carries the remaining weight, so 0/0 is
-              the normal pure-semantic map. */}
-          {isPaperMap && !includeCorpus && onLayoutSemanticWeightChange && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
+          {/* PROTOTYPE (task 19): fused multi-view layout. Library scope only
+              (dense O(N²)) — both the paper map AND the author network. */}
+          {!includeCorpus && onLayoutSemanticWeightChange && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
             <div className="mt-3 rounded-sm border border-dashed border-edge-2 bg-surface-2 p-3">
               <div className="mb-1 flex items-center gap-2">
                 <span className="text-xs font-semibold text-alma-800">Layout basis</span>
@@ -385,7 +384,7 @@ export function GraphControls({
                 Blend what drives the <em>positions</em>. Each weight is independent (they
                 don&apos;t need to add up) — all three are used together. The default
                 (semantic 1, others 0) is the trustworthy similarity map; raise a weight to
-                also pull co-authors or reference-sharing papers together. Clusters stay
+                also pull co-authoring or reference-sharing nodes together. Clusters stay
                 semantic.
               </p>
               <div className="flex flex-wrap items-center gap-4">

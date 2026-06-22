@@ -163,7 +163,7 @@ export function GraphPanel() {
   // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
     ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
-    : `?scope=${scope}&cluster_resolution=${clusterResolution}`
+    : `?scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
 
   // Only the params that actually change the FETCH belong in the key. The author
   // view's color/size/edges encodings are applied client-side, so they must NOT
@@ -171,7 +171,7 @@ export function GraphPanel() {
   const queryKey =
     activeView === 'paper-map'
       ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, wSem, wCo, wBib]
-      : ['graph', 'author-network', scope, clusterResolution]
+      : ['graph', 'author-network', scope, clusterResolution, wSem, wCo, wBib]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
     queryFn: () => api.get<GraphData>(`/graphs/${activeView}${queryParams}`),

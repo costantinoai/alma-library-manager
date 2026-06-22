@@ -395,6 +395,7 @@ def build_coauthor_network(
     *,
     scope: str = "library",
     cluster_resolution: float = 1.0,
+    layout_weights: Optional[dict[str, float]] = None,
 ) -> dict:
     """Build a multi-signal "research neighbourhood" author network (I-11).
 
@@ -724,7 +725,23 @@ def build_coauthor_network(
         try:
             # 2-D layout from the same SPECTER2 input via the cosine UMAP path,
             # so visual neighbourhood and clusters share one geometry.
-            coords_by_author.update(project_embeddings(emb_map))
+            semantic_coords = project_embeddings(emb_map)
+            coords_by_author.update(semantic_coords)
+            # Fused multi-view layout (task 19, parity with the paper map): blend
+            # semantic + co-authorship + bibliographic-coupling into the POSITIONS
+            # when weights are set. Clusters stay semantic; anchored at the
+            # semantic layout (init) for stability. Dense O(N²) ⇒ capped.
+            lw = layout_weights or {}
+            fused_on = (
+                float(lw.get("coauthorship", 0) or 0) > 0
+                or float(lw.get("bibliographic_coupling", 0) or 0) > 0
+            )
+            if fused_on and len(embedded_ids) <= 1500:
+                fused = fuse_layout(
+                    emb_map, shared_pairs, bib_pairs, weights=lw, init_coords=semantic_coords
+                )
+                if fused:
+                    coords_by_author.update(fused)
         except Exception as exc:
             logger.warning("Author embedding projection failed; using fallback layout: %s", exc)
 

@@ -207,28 +207,43 @@ def get_author_network(
     cluster_resolution: float = Query(
         1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"
     ),
+    w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic weight in the fused author layout"),
+    w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused author layout"),
+    w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused author layout"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get author network visualization data.
 
-    The default (resolution 1.0) is served from the materialised view (cache
-    hit returns instantly). A non-default cluster_resolution bypasses the cache
-    and re-clusters inline — a pure read (no persistence), mirroring the paper
-    map's custom-options path (I-2).
+    The default (resolution 1.0, pure-semantic layout) is served from the
+    materialised view. A non-default cluster_resolution OR a fused layout (a
+    non-zero co-authorship / bib-coupling weight) bypasses the cache and builds
+    inline — a pure read (no persistence), mirroring the paper map (I-2).
     """
     scope = Scope.parse(scope)
-    if abs(cluster_resolution - 1.0) < 1e-6:
+    fused = w_coauthorship > 0 or w_bibliographic > 0
+    if abs(cluster_resolution - 1.0) < 1e-6 and not fused:
         view_key = scope.view_key("author_network")
         envelope = mv.get(conn, view_key)
         return _graph_data_from_envelope(envelope)
     payload = _build_author_network_payload(
-        conn, scope=scope, cluster_resolution=cluster_resolution
+        conn,
+        scope=scope,
+        cluster_resolution=cluster_resolution,
+        layout_weights={
+            "semantic": w_semantic,
+            "coauthorship": w_coauthorship,
+            "bibliographic_coupling": w_bibliographic,
+        },
     )
     return GraphData(**payload)
 
 
 def _build_author_network_payload(
-    conn: sqlite3.Connection, *, scope: str, cluster_resolution: float = 1.0
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    cluster_resolution: float = 1.0,
+    layout_weights: Optional[dict] = None,
 ) -> dict:
     """Compute the author-network GraphData (as a dict) for the given scope.
 
@@ -238,7 +253,12 @@ def _build_author_network_payload(
     from alma.ai.cluster_labels import compute_cluster_signature, fetch_cached_labels
     from alma.ai.projections import build_coauthor_network
 
-    raw = build_coauthor_network(conn, scope=scope, cluster_resolution=cluster_resolution)
+    raw = build_coauthor_network(
+        conn,
+        scope=scope,
+        cluster_resolution=cluster_resolution,
+        layout_weights=layout_weights,
+    )
 
     author_cluster_signatures: dict[int, str] = {}
     for cluster in raw.get("clusters", []):
