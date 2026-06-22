@@ -41,6 +41,7 @@ from fastapi import Depends, HTTPException
 
 from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal, safe_div, table_exists
+from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.application import materialized_views as mv
 from alma.api.routes.insights import (
     router,
@@ -1382,7 +1383,11 @@ for _section, (_fp_sql, _build_fn) in _SECTION_BUILDS.items():
     mv.register(
         mv.View(
             key=_section_view_key(_section),
-            fingerprint_sql=_fp_sql,
+            # I-4: stamp the Insights logic version into every diagnostics-section
+            # fingerprint so a CODE fix to a section's computation (e.g. the I-24
+            # embedding-dimension fix) invalidates its cached payload — input data
+            # alone can't, which is why a corrected metric used to stay stale.
+            fingerprint_sql=with_version(_fp_sql, INSIGHTS_LOGIC_VERSION),
             build_fn=_build_fn,
             operation_key=f"materialize.insights.diag.{_section}",
         )
