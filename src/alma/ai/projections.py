@@ -846,6 +846,7 @@ def _author_bibliographic_coupling(
     author_ids: list[str],
     *,
     scope: str = "library",
+    max_ref_df: int = 50,
 ) -> tuple[dict[tuple[str, str], int], int]:
     """Count shared references between every pair of authors.
 
@@ -853,29 +854,29 @@ def _author_bibliographic_coupling(
     *both* authors. Returns ({(a1, a2): count}, max_count) with
     a1 < a2 for deterministic keys. Silently returns ({}, 0) when the
     ``publication_references`` table is missing.
+
+    Same df-cap as the paper-level coupling: a reference shared by more than
+    ``max_ref_df`` authors couples them all pairwise (O(df²) join rows) and is
+    non-discriminative, so we drop it before the self-join.
     """
     if not author_ids or not _table_exists(conn, "publication_references"):
         return {}, 0
 
+    # Pull DISTINCT (author, ref) once, then pair in Python with an inverted
+    # index + df cap (same reasoning as the paper-level coupling — a SQL
+    # self-join on a hub reference explodes regardless of the planner).
     placeholders = ",".join(["?"] * len(author_ids))
     status_filter = Scope.parse(scope).paper_filter("p")
     try:
         rows = conn.execute(
             f"""
-            WITH author_refs AS (
-                SELECT DISTINCT pa.openalex_id AS author_id,
-                                r.referenced_work_id AS ref
-                FROM publication_references r
-                JOIN papers p ON p.id = r.paper_id
-                JOIN publication_authors pa ON pa.paper_id = r.paper_id
-                WHERE pa.openalex_id IN ({placeholders}){status_filter}
-            )
-            SELECT ar1.author_id AS a1,
-                   ar2.author_id AS a2,
-                   COUNT(*) AS shared_refs
-            FROM author_refs ar1
-            JOIN author_refs ar2 ON ar1.ref = ar2.ref AND ar1.author_id < ar2.author_id
-            GROUP BY ar1.author_id, ar2.author_id
+            SELECT DISTINCT pa.openalex_id AS author_id,
+                            r.referenced_work_id AS ref
+            FROM publication_references r
+            JOIN papers p ON p.id = r.paper_id
+            JOIN publication_authors pa ON pa.paper_id = r.paper_id
+            WHERE pa.openalex_id IN ({placeholders}){status_filter}
+              AND TRIM(COALESCE(r.referenced_work_id, '')) <> ''
             """,
             author_ids,
         ).fetchall()
@@ -883,16 +884,24 @@ def _author_bibliographic_coupling(
         logger.warning("Bibliographic coupling query failed: %s", exc)
         return {}, 0
 
-    pairs: dict[tuple[str, str], int] = {}
-    max_shared = 0
+    ref_authors: dict[str, set[str]] = defaultdict(set)
     for row in rows:
-        a1 = row["a1"] if isinstance(row, sqlite3.Row) else row[0]
-        a2 = row["a2"] if isinstance(row, sqlite3.Row) else row[1]
-        count = int(row["shared_refs"] if isinstance(row, sqlite3.Row) else row[2])
-        pairs[(a1, a2)] = count
-        if count > max_shared:
-            max_shared = count
-    return pairs, max_shared
+        aid = row["author_id"] if isinstance(row, sqlite3.Row) else row[0]
+        ref = row["ref"] if isinstance(row, sqlite3.Row) else row[1]
+        ref_authors[str(ref)].add(str(aid))
+
+    pairs: dict[tuple[str, str], int] = defaultdict(int)
+    for members in ref_authors.values():
+        n = len(members)
+        if n < 2 or n > max_ref_df:  # singleton or non-discriminative hub ref
+            continue
+        ordered = sorted(members)
+        for i in range(n):
+            a1 = ordered[i]
+            for j in range(i + 1, n):
+                pairs[(a1, ordered[j])] += 1
+    max_shared = max(pairs.values(), default=0)
+    return dict(pairs), max_shared
 
 
 def _author_mean_embeddings(

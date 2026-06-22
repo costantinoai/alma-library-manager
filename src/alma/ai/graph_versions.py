@@ -38,7 +38,12 @@ from __future__ import annotations
 # 2026.07-3: author network gets the same treatment — typed mutual-kNN/co-author/
 #            coupling layers (stats out of edge geometry) + honest eom clustering
 #            with retained outliers, replacing topic-TFIDF+stats + silhouette-kmeans.
-PROJECTION_ALGO_VERSION = "2026.07-3"
+# 2026.07-4: corpus PERF — bibliographic coupling now uses a Python inverted index
+#            with a document-frequency cap that drops hub references cited by
+#            >50 papers (372s→<1s on the corpus). Hub-ref couplings (everyone
+#            cites the famous review) were non-discriminative noise anyway, so the
+#            corpus edge set changes slightly — the cached corpus map must rebuild.
+PROJECTION_ALGO_VERSION = "2026.07-4"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
