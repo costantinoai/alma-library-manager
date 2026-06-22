@@ -21,7 +21,8 @@ from alma.application.feed_query_language import (
 )
 from . import feed_monitors as monitor_app
 from . import library as library_app
-from alma.core.db_write import run_write_unit
+from alma.core.db_retry import commit_with_retry
+from alma.core.db_write import run_write_unit, write_section
 from alma.core.scoring_math import clamp
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
@@ -85,9 +86,12 @@ def _commit_if_pending(db: sqlite3.Connection) -> None:
     commit per unit of work"): any implicit transaction left open from a
     previous iteration's DML will hold the writer lock across the next
     network call or CPU-heavy phase and freeze concurrent page reads.
+
+    Uses ``commit_with_retry`` rather than a raw commit so a transient
+    cross-process lock at the flush boundary is retried, not dropped.
     """
     if db.in_transaction:
-        db.commit()
+        commit_with_retry(db, label="feed flush")
 
 
 def clear_feed_items_for_monitor(db: sqlite3.Connection, monitor_id: str) -> int:
@@ -1119,20 +1123,13 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     except Exception:
         pass
 
-    # ── Score each feed item ──
-    # Batch the per-item UPDATEs: committing once per item on a several-
-    # hundred-item loop holds the writer lock in a rapid stutter, which
-    # compounds with concurrent Activity log writes (set_job_status +
-    # add_job_log each open their own connection and commit). Committing
-    # every ``_SCORE_COMMIT_BATCH`` items keeps mid-run visibility for
-    # other readers while cutting the number of WAL fsyncs by ~50×. See
-    # ``tasks/lessons.md`` — "Chunking has to reach the innermost tight
-    # write loop".
-    _SCORE_COMMIT_BATCH = 50
-    _SCORE_PROGRESS_BATCH = 25
+    # ── Phase 1: score (CPU-bound, NO writes, gate NOT held) ──
+    # score_candidate uses the centroids/texts built above; there is no network
+    # or DB write per item, so the (potentially expensive) scoring of several
+    # hundred items must NOT hold the writer lock. Collect (signal, breakdown,
+    # feed_item_id) tuples, then persist them in Phase 2.
     total_rows = len(feed_rows)
-    scored = 0
-    uncommitted = 0
+    scored_updates: list[tuple[int, str, str]] = []
     for fr in feed_rows:
         try:
             candidate = dict(fr)
@@ -1177,32 +1174,35 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
 
             signal_value = max(0, min(100, int(round(score))))
             breakdown_json = _json.dumps(breakdown, default=str)
-
-            db.execute(
-                "UPDATE feed_items SET signal_value = ?, score_breakdown = ? WHERE id = ?",
-                (signal_value, breakdown_json, fr["feed_item_id"]),
-            )
-            scored += 1
-            uncommitted += 1
-            if uncommitted >= _SCORE_COMMIT_BATCH:
-                db.commit()
-                uncommitted = 0
-            if ctx is not None and (scored % _SCORE_PROGRESS_BATCH == 0):
-                # Intentionally don't push processed/total here: the
-                # caller already set them to "monitors complete" for
-                # the progress bar. Scoring item counts live in the
-                # message text so the bar stays on one scale.
-                ctx.log_step(
-                    "score_progress",
-                    f"Feed refresh: scored {scored}/{total_rows} new items",
-                    data={"scored": scored, "total": total_rows},
-                )
+            scored_updates.append((signal_value, breakdown_json, fr["feed_item_id"]))
         except Exception as exc:
             logger.debug("Failed to score feed item %s: %s", fr["feed_item_id"], exc)
             continue
 
-    if uncommitted:
-        db.commit()
+    # ── Phase 2: persist in writer-gated chunks ──
+    # Each chunk is one BEGIN IMMEDIATE + writer-gate window (write_section); a
+    # bounded chunk keeps the lock window short and mid-run visibility for other
+    # readers while cutting WAL fsyncs vs per-item commits. The scoring above is
+    # already done, so the gate is held only for the short batch of UPDATEs.
+    _SCORE_COMMIT_BATCH = 50
+    scored = 0
+    for start in range(0, len(scored_updates), _SCORE_COMMIT_BATCH):
+        chunk = scored_updates[start:start + _SCORE_COMMIT_BATCH]
+        with write_section(db, label="feed score batch"):
+            for signal_value, breakdown_json, feed_item_id in chunk:
+                db.execute(
+                    "UPDATE feed_items SET signal_value = ?, score_breakdown = ? WHERE id = ?",
+                    (signal_value, breakdown_json, feed_item_id),
+                )
+        scored += len(chunk)
+        if ctx is not None:
+            # Item counts live in the message text (not processed/total) so the
+            # caller's "monitors complete" progress bar stays on one scale.
+            ctx.log_step(
+                "score_progress",
+                f"Feed refresh: scored {scored}/{total_rows} new items",
+                data={"scored": scored, "total": total_rows},
+            )
 
     logger.info("Scored %d feed items via 10-signal pipeline", scored)
     return scored
@@ -1337,7 +1337,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
 
     monitor_app.sync_author_monitors(db)
     prune_feed_items_for_missing_monitors(db)
-    db.commit()
+    commit_with_retry(db, label="feed refresh setup")
     monitors = [monitor for monitor in monitor_app.list_feed_monitors(db) if monitor.get("enabled", True)]
     monitors_total = len(monitors)
     if not monitors:
@@ -1442,7 +1442,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         result=diag,
                         error=error_text,
                     )
-                db.commit()
+                commit_with_retry(db, label="feed refresh")
                 _log("author_fetch_error", f"Feed refresh: author monitor batch fetch failed: {exc}")
             else:
                 for oa_author_id, monitor in author_by_openalex.items():
@@ -1495,7 +1495,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                         result=diag,
                         error=None,
                     )
-                    db.commit()
+                    commit_with_retry(db, label="feed refresh")
                     monitor_idx += 1
                     _log(
                         "author_monitor_done",
@@ -1523,7 +1523,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 result=diag,
                 error=str(monitor.get("health_reason") or "author_monitor_degraded"),
             )
-            db.commit()
+            commit_with_retry(db, label="feed refresh")
             monitor_idx += 1
 
         # End of author phase — release the writer lock before the
@@ -1628,7 +1628,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                     result=diag,
                     error=error_reason,
                 )
-                db.commit()
+                commit_with_retry(db, label="feed refresh")
                 monitor_idx += 1
                 continue
 
@@ -1698,7 +1698,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 result=diag,
                 error=None,
             )
-            db.commit()
+            commit_with_retry(db, label="feed refresh")
             monitor_idx += 1
             _log(
                 "monitor_done",
@@ -1829,7 +1829,7 @@ def refresh_feed_monitor(
             result=diag,
             error="monitor_disabled",
         )
-        db.commit()
+        commit_with_retry(db, label="feed refresh monitor")
         return diag
 
     from_year = _resolve_feed_from_year(discovery_settings)
@@ -1854,7 +1854,7 @@ def refresh_feed_monitor(
                     result=diag,
                     error=str(monitor.get("health_reason") or "author_monitor_degraded"),
                 )
-                db.commit()
+                commit_with_retry(db, label="feed refresh")
                 return diag
 
             openalex_id = str(monitor.get("openalex_id") or "").strip()
@@ -1925,7 +1925,7 @@ def refresh_feed_monitor(
                     result=diag,
                     error=error_text,
                 )
-                db.commit()
+                commit_with_retry(db, label="feed refresh")
                 return diag
 
             if not monitor_query or not search_query:
@@ -1945,7 +1945,7 @@ def refresh_feed_monitor(
                     result=diag,
                     error="missing_query",
                 )
-                db.commit()
+                commit_with_retry(db, label="feed refresh")
                 return diag
 
             _log(
@@ -2015,7 +2015,7 @@ def refresh_feed_monitor(
             result=diag,
             error=None if not diag.get("reason") else str(diag.get("reason")),
         )
-        db.commit()
+        commit_with_retry(db, label="feed refresh monitor")
         http_source_diagnostics = source_diag.summary()
 
     # S-4: one bounded hydration sweep for this monitor's new papers.
