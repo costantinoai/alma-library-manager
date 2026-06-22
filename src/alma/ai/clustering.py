@@ -8,14 +8,19 @@ Two responsibilities:
       L2-normalise rows  →  UMAP n_components=5 (cosine)
                          →  HDBSCAN(metric=euclidean, leaf)
 
-  L2-normalising before the cosine UMAP makes "euclidean on the reduced
-  space" rank-equivalent to cosine in the original 768-d space, which
-  is the geometry SPECTER2 was trained for. UMAP-reducing first solves
-  the curse of dimensionality — HDBSCAN's density estimate is
-  unreliable in 768-d at our scale (50–500 papers), but tractable in
-  ~5-d. Falls back to HDBSCAN on the normalised raw vectors when UMAP
-  is unavailable or N is too small for a useful reduction, and to
-  silhouette-driven MiniBatchKMeans when HDBSCAN collapses or isn't
+  L2-normalising rows makes euclidean distance rank-equivalent to
+  cosine IN THE ORIGINAL 768-d space (the geometry SPECTER2 was trained
+  for). UMAP then reduces to ~5-d purely as a *clustering substrate*: it
+  tames the curse of dimensionality (HDBSCAN's density estimate is
+  unreliable in 768-d at our 50–500-paper scale, tractable in ~5-d).
+  IMPORTANT (I-8): UMAP is a NONLINEAR projection — it does NOT preserve
+  that cosine equivalence "by construction", nor does it preserve
+  density. Euclidean on the reduced space is therefore an *approximate*
+  clustering geometry, not an exact semantic metric; treat the 2-D map
+  as a visualization/clustering aid with distortion, not a faithful
+  distance space. Falls back to HDBSCAN on the normalised raw vectors
+  when UMAP is unavailable or N is too small for a useful reduction, and
+  to silhouette-driven MiniBatchKMeans when HDBSCAN collapses or isn't
   installed.
 * :func:`label_clusters_tfidf` — assign distinctive phrasal labels via
   class-based TF-IDF (the BERTopic c-TF-IDF formula). Uses (1, 2)-grams
@@ -271,8 +276,10 @@ def cluster_publications(
     which is what the user asked for. The 2-d display layout is
     computed independently by the caller via ``project_embeddings``;
     both pipelines read the same L2-normalised SPECTER2 input with
-    cosine UMAP, so visual proximity now agrees with cluster
-    boundaries by construction.
+    cosine UMAP, so visual proximity BROADLY agrees with cluster
+    boundaries — but they are two SEPARATE nonlinear UMAP projections
+    (5-d for clustering, 2-d for display), so the agreement is
+    approximate, NOT exact "by construction" (I-8).
 
     Args:
         embeddings: Map of paper_id -> embedding vector (raw, unscaled
