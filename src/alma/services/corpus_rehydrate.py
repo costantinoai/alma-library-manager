@@ -1056,16 +1056,14 @@ def _run_abstract_recovery_phase(
         row = _read_hydration_row(conn, paper_id)
         if row is None or _abstract_present(row):
             continue
+        # _hydrate_via_abstract_recovery does its network probe OUTSIDE the gate
+        # and commits its own gated write_section, so the writer lock is never
+        # held across this paper's (or the next paper's) remote fetch.
         status, filled = _hydrate_via_abstract_recovery(conn, paper_id, row)
         summary["attempted"] += 1
         summary[status] += 1
         if "abstract" in filled:
             summary["abstract_filled"] += 1
-        # Commit EVERY paper: `_hydrate_via_abstract_recovery` fetches from
-        # the network before writing, so a per-paper commit releases the
-        # writer lock before the NEXT paper's remote call — committing every
-        # 20 held the lock across up to 19 network fetches.
-        conn.commit()
         if idx % 20 == 0 or idx == len(paper_ids):
             set_job_status(
                 job_id,
@@ -1077,7 +1075,8 @@ def _run_abstract_recovery_phase(
                     f"{int(summary['abstract_filled'])} abstracts filled"
                 ),
             )
-    conn.commit()
+    # No final commit: each paper's writes were committed inside its own
+    # _hydrate_via_abstract_recovery write_section.
     add_job_log(
         job_id,
         "Phase 3 abstract recovery complete",
@@ -1339,9 +1338,8 @@ def _run_title_resolution_phase(
         summary["attempted"] += 1
         if filled:
             summary["resolved"] += 1
-        # Commit every paper so the writer lock is released before the
-        # next remote call.
-        conn.commit()
+        # No commit here: _resolve_identifiers_via_title gates its own writes
+        # (id fills + ledger) in write_section, with all network outside.
 
     add_job_log(
         job_id,
@@ -1505,7 +1503,8 @@ def run_corpus_metadata_rehydration(
         processed = 0
         for start in range(0, total, batch_size):
             if is_cancellation_requested(job_id):
-                conn.commit()
+                # Nothing pending on `conn`: the previous batch's write_section
+                # already committed. Just report cancellation and return.
                 set_job_status(
                     job_id,
                     status="cancelled",
@@ -2187,14 +2186,18 @@ def _resolve_identifiers_via_title(
         oa_id_raw = str(best_oa.get("id") or "").strip()
         oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
         new_doi = _canonical(str(best_oa.get("doi") or "")) or ""
-        changed = fill_only_update_paper(
-            conn,
-            paper_id,
-            fill_fields={
-                **({"openalex_id": oa_id} if oa_id else {}),
-                **({"doi": new_doi} if new_doi else {}),
-            },
-        )
+        # OpenAlex search (network) is done — gate the short id fill. In this
+        # branch S2 is then skipped (the row now has an identifier), so no
+        # network follows this write.
+        with write_section(conn, label="title-resolution oa fill"):
+            changed = fill_only_update_paper(
+                conn,
+                paper_id,
+                fill_fields={
+                    **({"openalex_id": oa_id} if oa_id else {}),
+                    **({"doi": new_doi} if new_doi else {}),
+                },
+            )
         for field in changed:
             if field in ("openalex_id", "doi"):
                 fields_filled.append(field)
@@ -2257,14 +2260,16 @@ def _resolve_identifiers_via_title(
             new_s2_id = str(best_s2.get("semantic_scholar_id") or "").strip()
             new_doi = _canonical(str(best_s2.get("doi") or "")) or ""
             if new_s2_id or new_doi:
-                changed = fill_only_update_paper(
-                    conn,
-                    paper_id,
-                    fill_fields={
-                        **({"semantic_scholar_id": new_s2_id} if new_s2_id else {}),
-                        **({"doi": new_doi} if new_doi else {}),
-                    },
-                )
+                # S2 search (network) is done — gate the short id fill.
+                with write_section(conn, label="title-resolution s2 fill"):
+                    changed = fill_only_update_paper(
+                        conn,
+                        paper_id,
+                        fill_fields={
+                            **({"semantic_scholar_id": new_s2_id} if new_s2_id else {}),
+                            **({"doi": new_doi} if new_doi else {}),
+                        },
+                    )
                 for field in changed:
                     if field in ("semantic_scholar_id", "doi") and field not in fields_filled:
                         fields_filled.append(field)
@@ -2293,17 +2298,19 @@ def _resolve_identifiers_via_title(
         status_value = "terminal_no_match"
         reason = "title_search_no_candidates_above_threshold"
         retry = None
-    _write_ledger(
-        conn,
-        paper_id=paper_id,
-        source=TITLE_RESOLUTION_SOURCE,
-        lookup_key=lookup_key,
-        status=status_value,
-        reason=reason,
-        fields_filled=fields_filled,
-        fields_key="title_resolution_v1",
-        retry_after=retry,
-    )
+    # All network done above — gate the ledger write.
+    with write_section(conn, label="title-resolution ledger"):
+        _write_ledger(
+            conn,
+            paper_id=paper_id,
+            source=TITLE_RESOLUTION_SOURCE,
+            lookup_key=lookup_key,
+            status=status_value,
+            reason=reason,
+            fields_filled=fields_filled,
+            fields_key="title_resolution_v1",
+            retry_after=retry,
+        )
     return (status_value, fields_filled)
 
 
@@ -2500,41 +2507,50 @@ def _hydrate_via_abstract_recovery(
                 urls.append(value)
 
     lookup_key = "|".join(urls[:3]) or (f"doi:{doi}" if doi else "")
-    fields_filled: list[str] = []
+
+    # Network phase — probe candidate landing pages for an abstract. NO DB
+    # writes here, so the writer lock is never held across these HTTP fetches.
+    abstract = ""
     reason = "no_candidate_urls"
     for url in urls:
         if url.lower().endswith(".pdf"):
             continue
-        abstract = _fetch_html_abstract(url)
-        if not abstract:
+        fetched = _fetch_html_abstract(url)
+        if not fetched:
             reason = "no_html_meta_abstract"
             continue
-        fields_filled = fill_only_update_paper(
-            conn,
-            paper_id,
-            fill_fields={"abstract": abstract},
-        )
+        abstract = fetched
         reason = "html_meta_abstract"
         break
 
-    if fields_filled:
-        status_value = "enriched"
-        retry: timedelta | None = None
-    else:
-        status_value = "unchanged"
-        retry = UNCHANGED_RETRY_AFTER
-
-    _write_ledger(
-        conn,
-        paper_id=paper_id,
-        source=ABSTRACT_RECOVERY_SOURCE,
-        lookup_key=lookup_key,
-        status=status_value,
-        reason=reason,
-        fields_filled=fields_filled,
-        fields_key="abstract_recovery_html_meta_v1",
-        retry_after=retry,
-    )
+    # Write phase — one gated window (BEGIN IMMEDIATE + writer gate) with the
+    # network already done. The caller no longer commits per paper.
+    fields_filled: list[str] = []
+    retry: timedelta | None
+    with write_section(conn, label="abstract recovery"):
+        if abstract:
+            fields_filled = fill_only_update_paper(
+                conn,
+                paper_id,
+                fill_fields={"abstract": abstract},
+            )
+        if fields_filled:
+            status_value = "enriched"
+            retry = None
+        else:
+            status_value = "unchanged"
+            retry = UNCHANGED_RETRY_AFTER
+        _write_ledger(
+            conn,
+            paper_id=paper_id,
+            source=ABSTRACT_RECOVERY_SOURCE,
+            lookup_key=lookup_key,
+            status=status_value,
+            reason=reason,
+            fields_filled=fields_filled,
+            fields_key="abstract_recovery_html_meta_v1",
+            retry_after=retry,
+        )
     return (status_value, fields_filled)
 
 

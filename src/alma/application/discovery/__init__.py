@@ -41,6 +41,8 @@ def _jsonable_numeric(value: Any) -> Any:
         return tolist()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from .. import library as library_app
+from alma.core.db_retry import commit_with_retry
+
 from ..feed import _commit_if_pending
 
 # --- D-9: re-exported from .lens_crud (moved out of this god-module) ---
@@ -420,7 +422,11 @@ def refresh_lens_recommendations(
             return _run_lane_subtask(lane_name, lambda: fn(conn), label=label)
         finally:
             try:
-                conn.commit()  # persist graph-lane reference-backfill writes
+                # Defensive flush of the lane's own connection. The lane's real
+                # writes (e.g. reference backfill) already self-gate + commit via
+                # write_section in their helpers; this just retries the residual
+                # commit on transient lock instead of a raw, un-retried one.
+                commit_with_retry(conn, label=f"discovery lane {lane_name}")
             except Exception:
                 pass
             try:
