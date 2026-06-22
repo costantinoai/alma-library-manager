@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
-from alma.core.db_write import write_section
+from alma.core.db_write import commit_unless_gated, write_section
 from alma.core.utils import (
     canonical_lookup_doi,
     normalize_doi,
@@ -664,10 +664,11 @@ def refresh_author_works_and_vectors(
                 processed=summary["works_fetched"],
                 total=total_hint or summary["works_fetched"],
             )
-            # Release writer lock between HTTP calls (lesson: commit
-            # before every remote call on bulk jobs).
-            if conn.in_transaction:
-                conn.commit()
+            # Release the writer lock (if anything is pending) before the next
+            # paginated HTTP call — lesson: commit before every remote call on
+            # bulk jobs. commit_unless_gated flushes when standalone, no-ops if
+            # ever called from inside a gated unit.
+            commit_unless_gated(conn, label="author_backfill fetch_works flush")
             cursor = page.get("next_cursor")
 
         # Phase 3: upsert each work + publication_authors row. All works are
