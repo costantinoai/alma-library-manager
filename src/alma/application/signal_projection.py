@@ -98,32 +98,27 @@ def normalize_feedback_event_value(event_type: str, raw_value: Any = None) -> fl
     return 0.0
 
 
-def load_projected_paper_signals(
+def compute_paper_signal_map(
     db: sqlite3.Connection,
     *,
     half_life_days: float = _EVENT_HALF_LIFE_DAYS,
     max_age_days: float = _EVENT_MAX_AGE_DAYS,
-    author_only: bool = False,
-) -> ProjectedPaperSignals:
-    """Load paper feedback and project it onto adjacent ranking signals.
+) -> dict[str, float]:
+    """Per-paper NET preference signal (roughly [-1, 1] before squashing).
 
-    Feedback events are the canonical source. Library ratings
-    (`papers.rating`) and legacy recommendation actions
-    (`recommendations.user_action`) are also folded in at reduced
-    weight so the projection layer reflects every per-paper preference
-    statement the user has made — not just events emitted after the
-    canonical write path landed. The downstream per-paper projections
-    (authors / topics / venues / keywords / tags / semantic / citation
-    neighbours) fan out automatically; no per-source duplication.
+    The single source of truth for "how did the user feel about this paper":
+    time-decayed feedback_events (via :func:`normalize_feedback_event_value`),
+    Library ratings, and the reliably-stamped recommendation actions
+    (save/read/dismiss/seen). Both the discovery signal fan-out
+    (:func:`load_projected_paper_signals`) and the Insights outcome projection
+    (:mod:`alma.application.recommendation_outcomes`) consume THIS map, so
+    "positive"/"negative" means the same thing everywhere.
 
-    ``author_only`` skips the paper/topic/venue/tag/semantic/citation
-    projections and computes ONLY the author + author-name maps. The
-    semantic-neighbour pass is an O(seeds × embedded-papers) numpy loop
-    (~0.7s on a few-thousand-paper corpus), so a caller that consumes
-    only ``.author`` / ``.author_name`` (the author signal) should not pay
-    for the paper-level fan-out it then throws away.
+    Crucially this respects D6: like/love/dislike land in ``feedback_events``,
+    NOT in ``recommendations.user_action`` — so the positive signal comes from
+    the events/ratings, never from a ``user_action='like'`` read that is always
+    empty.
     """
-
     now = datetime.now(timezone.utc)
     paper_events: dict[str, float] = defaultdict(float)
 
@@ -164,6 +159,38 @@ def load_projected_paper_signals(
         now=now,
         half_life_days=half_life_days,
         max_age_days=max_age_days,
+    )
+    return paper_events
+
+
+def load_projected_paper_signals(
+    db: sqlite3.Connection,
+    *,
+    half_life_days: float = _EVENT_HALF_LIFE_DAYS,
+    max_age_days: float = _EVENT_MAX_AGE_DAYS,
+    author_only: bool = False,
+) -> ProjectedPaperSignals:
+    """Load paper feedback and project it onto adjacent ranking signals.
+
+    Feedback events are the canonical source. Library ratings
+    (`papers.rating`) and legacy recommendation actions
+    (`recommendations.user_action`) are also folded in at reduced
+    weight so the projection layer reflects every per-paper preference
+    statement the user has made — not just events emitted after the
+    canonical write path landed. The downstream per-paper projections
+    (authors / topics / venues / keywords / tags / semantic / citation
+    neighbours) fan out automatically; no per-source duplication.
+
+    ``author_only`` skips the paper/topic/venue/tag/semantic/citation
+    projections and computes ONLY the author + author-name maps. The
+    semantic-neighbour pass is an O(seeds × embedded-papers) numpy loop
+    (~0.7s on a few-thousand-paper corpus), so a caller that consumes
+    only ``.author`` / ``.author_name`` (the author signal) should not pay
+    for the paper-level fan-out it then throws away.
+    """
+
+    paper_events = compute_paper_signal_map(
+        db, half_life_days=half_life_days, max_age_days=max_age_days
     )
 
     out = ProjectedPaperSignals()

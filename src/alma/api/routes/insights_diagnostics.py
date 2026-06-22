@@ -34,6 +34,7 @@ they ride the cache instead of recomputing.
 from __future__ import annotations
 
 import sqlite3
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -43,6 +44,10 @@ from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal, safe_div, table_exists
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.application import materialized_views as mv
+from alma.application.recommendation_outcomes import (
+    build_recommendation_outcomes,
+    count_outcomes,
+)
 from alma.api.routes.insights import (
     router,
     _aggregate_http_source_diagnostics,
@@ -334,108 +339,74 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
             datetime.utcnow() - timedelta(days=365)
         ).date().isoformat()
 
-        total_row = db.execute(
-            """
-            SELECT
-                COUNT(*) AS total,
-                COALESCE(SUM(CASE WHEN COALESCE(user_action, '') = '' THEN 1 ELSE 0 END), 0) AS active_unseen
-            FROM recommendations
-            """
-        ).fetchone()
+        # I-21/D6: positive/negative engagement is sourced from the canonical
+        # outcome projection (feedback/ratings/lifecycle), never the like/dismiss
+        # user_action that D6 never stamps. `active_unseen` is genuine exposure
+        # (no stamped action at all), which IS reliable, so it stays.
+        outcomes = build_recommendation_outcomes(db)
         recommendation_totals = {
-            "total": _safe_int(total_row["total"]) if total_row else 0,
-            "active_unseen": _safe_int(total_row["active_unseen"])
-            if total_row
-            else 0,
+            "total": len(outcomes),
+            "active_unseen": sum(1 for o in outcomes if not o.is_seen),
         }
 
-        source_rows = db.execute(
-            """
-            SELECT
-                COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type,
-                COALESCE(NULLIF(source_api, ''), 'unknown') AS source_api,
-                COUNT(*) AS count,
-                ROUND(COALESCE(AVG(score), 0), 3) AS avg_score,
-                COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed,
-                COALESCE(SUM(CASE WHEN user_action = 'seen' THEN 1 ELSE 0 END), 0) AS seen
-            FROM recommendations
-            GROUP BY
-                COALESCE(NULLIF(source_type, ''), 'unknown'),
-                COALESCE(NULLIF(source_api, ''), 'unknown')
-            ORDER BY count DESC, avg_score DESC
-            """
-        ).fetchall()
-        for row in source_rows:
-            count = _safe_int(row["count"])
-            liked = _safe_int(row["liked"])
-            dismissed = _safe_int(row["dismissed"])
+        source_groups: dict[tuple[str, str], list] = defaultdict(list)
+        for o in outcomes:
+            source_groups[(o.source_type, o.source_api)].append(o)
+        for (source_type, source_api), recs in source_groups.items():
+            counts = count_outcomes(recs)
+            scores = [r.score for r in recs if r.score is not None]
+            avg_score = round(sum(scores) / len(scores), 3) if scores else 0.0
             source_quality.append(
                 {
-                    "source_type": row["source_type"],
-                    "source_api": row["source_api"],
-                    "count": count,
-                    "avg_score": _safe_float(row["avg_score"]),
-                    "liked": liked,
-                    "dismissed": dismissed,
-                    "seen": _safe_int(row["seen"]),
-                    "engagement_rate": (
-                        round((liked + dismissed) / count, 3) if count else 0.0
-                    ),
+                    "source_type": source_type,
+                    "source_api": source_api,
+                    "count": counts.total,
+                    "avg_score": avg_score,
+                    # `liked` = all positive outcomes for this source (this view
+                    # has no separate `saved` column); `dismissed` = negatives.
+                    "liked": counts.positive,
+                    "dismissed": counts.dismissed,
+                    "seen": counts.seen_action,
+                    "engagement_rate": counts.engagement_rate,
                 }
             )
+        source_quality.sort(key=lambda s: (-s["count"], -s["avg_score"]))
 
         # Single grouped query for ALL branch source mixes — replaces
         # the per-branch sub-select that previously ran inside the
         # ``for row in branch_rows`` loop (N+1).
         source_mix_by_branch = _fetch_branch_source_mix(db)
 
-        branch_rows = db.execute(
-            """
-            SELECT
-                COALESCE(NULLIF(branch_id, ''), NULL) AS branch_id,
-                COALESCE(NULLIF(branch_label, ''), NULL) AS branch_label,
-                COUNT(*) AS count,
-                ROUND(COALESCE(AVG(score), 0), 3) AS avg_score,
-                COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                COALESCE(SUM(CASE WHEN user_action = 'save' THEN 1 ELSE 0 END), 0) AS saved,
-                COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed,
-                COALESCE(SUM(CASE WHEN COALESCE(user_action, '') = '' THEN 1 ELSE 0 END), 0) AS unseen,
-                COALESCE(SUM(CASE WHEN branch_mode = 'core' THEN 1 ELSE 0 END), 0) AS core_count,
-                COALESCE(SUM(CASE WHEN branch_mode = 'explore' THEN 1 ELSE 0 END), 0) AS explore_count,
-                COALESCE(SUM(
-                    CASE
-                        WHEN COALESCE(substr(p.publication_date, 1, 10), '') >= ? THEN 1
-                        ELSE 0
-                    END
-                ), 0) AS recent_count,
-                COUNT(DISTINCT COALESCE(NULLIF(source_type, ''), 'unknown')) AS unique_sources
-            FROM recommendations r
-            LEFT JOIN papers p ON p.id = r.paper_id
-            WHERE COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> ''
-            GROUP BY COALESCE(NULLIF(branch_id, ''), NULL), COALESCE(NULLIF(branch_label, ''), NULL)
-            ORDER BY count DESC, avg_score DESC
-            """,
-            (recent_publication_cutoff,),
-        ).fetchall()
-        for row in branch_rows:
-            count = _safe_int(row["count"])
-            liked = _safe_int(row["liked"])
-            saved = _safe_int(row["saved"])
-            dismissed = _safe_int(row["dismissed"])
-            unseen = _safe_int(row["unseen"])
-            core_count = _safe_int(row["core_count"])
-            explore_count = _safe_int(row["explore_count"])
-            recent_count = _safe_int(row["recent_count"])
-            unique_sources = _safe_int(row["unique_sources"])
+        branch_groups: dict[tuple[Any, Any], list] = defaultdict(list)
+        for o in outcomes:
+            if not (o.branch_id or o.branch_label):
+                continue
+            branch_groups[(o.branch_id, o.branch_label)].append(o)
+        for (branch_id, branch_label_raw), recs in branch_groups.items():
+            counts = count_outcomes(recs)
+            count = counts.total
+            # `saved` = deliberate library-save action; `liked` = the OTHER
+            # positives (likes/loves/ratings, which live in feedback_events).
+            # saved + liked == positives, so positive_rate stays
+            # (saved+liked)/count — now sourced from real signal (I-21).
+            saved = counts.saved
+            liked = counts.liked
+            dismissed = counts.dismissed
+            unseen = counts.unseen
+            scores = [r.score for r in recs if r.score is not None]
+            avg_score = round(sum(scores) / len(scores), 3) if scores else 0.0
+            core_count = sum(1 for r in recs if (r.branch_mode or "") == "core")
+            explore_count = sum(1 for r in recs if (r.branch_mode or "") == "explore")
+            recent_count = sum(
+                1 for r in recs
+                if (r.publication_date or "")[:10] >= recent_publication_cutoff
+            )
+            unique_sources = len({r.source_type for r in recs})
             positive_rate = safe_div(liked + saved, count)
             dismiss_rate = safe_div(dismissed, count)
             recent_share = safe_div(recent_count, count)
             dominant_mode = "core" if core_count >= explore_count else "explore"
-            branch_id = row["branch_id"]
-            branch_label = (
-                row["branch_label"] or row["branch_id"] or "Unnamed branch"
-            )
+            branch_label = branch_label_raw or branch_id or "Unnamed branch"
             mix_key = branch_id or branch_label
             source_mix = (source_mix_by_branch.get(mix_key) or [])[:4]
 
@@ -468,7 +439,7 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
                     "branch_id": branch_id,
                     "branch_label": branch_label,
                     "count": count,
-                    "avg_score": _safe_float(row["avg_score"]),
+                    "avg_score": avg_score,
                     "liked": liked,
                     "saved": saved,
                     "dismissed": dismissed,
@@ -490,6 +461,7 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
                     "tuning_hint": tuning_hint,
                 }
             )
+        branch_quality.sort(key=lambda b: (-b["count"], -b["avg_score"]))
 
     return {
         "summary": recommendation_totals,
@@ -709,24 +681,18 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
 
     workflow_snapshot = _library_workflow_snapshot(db)
     total_library = max(1, _safe_int(workflow_snapshot.get("total_library")))
+    # D2/I-22: there is no triage backlog to penalise ("saved means saved").
+    # Library Workflow now measures reading PROGRESS only — the share of the
+    # saved library that has been read or is currently being read.
     workflow_score = max(
         0,
         min(
             100,
             round(
-                (
-                    (
-                        (1.0 - safe_div(_safe_int(workflow_snapshot.get("untriaged_count")), total_library))
-                        * 0.7
-                    )
-                    + (
-                        safe_div(
-                            _safe_int(workflow_snapshot.get("done_count"))
-                            + _safe_int(workflow_snapshot.get("reading_count")),
-                            total_library,
-                        )
-                        * 0.3
-                    )
+                safe_div(
+                    _safe_int(workflow_snapshot.get("done_count"))
+                    + _safe_int(workflow_snapshot.get("reading_count")),
+                    total_library,
                 )
                 * 100
             ),
@@ -911,12 +877,13 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
             "score": workflow_score,
             "status": _status_band(workflow_score),
             "summary": (
-                f"{_safe_int(workflow_snapshot.get('untriaged_count'))} untriaged and "
-                f"{_safe_int(workflow_snapshot.get('queued_count'))} queued papers."
+                f"{_safe_int(workflow_snapshot.get('reading_count'))} reading, "
+                f"{_safe_int(workflow_snapshot.get('done_count'))} done of "
+                f"{_safe_int(workflow_snapshot.get('total_library'))} saved papers."
             ),
             "detail": (
-                "Workflow score rewards triaged acquisitions and progress through "
-                "the reading queue."
+                "Workflow score reflects how much of your saved library you have "
+                "read or are actively reading (D2: a save is not a reading chore)."
             ),
         },
         {
@@ -1127,20 +1094,8 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 "priority": "low",
             }
         )
-    if _safe_int(workflow_snapshot.get("untriaged_count")) >= 5:
-        recommended_actions.append(
-            {
-                "id": "triage_library_backlog",
-                "title": "Triage the library backlog",
-                "detail": (
-                    f"{_safe_int(workflow_snapshot.get('untriaged_count'))} library "
-                    "papers still have no reading status."
-                ),
-                "page": "library",
-                "params": {"tab": "all"},
-                "priority": "high",
-            }
-        )
+    # D2/I-22: no "triage the library backlog" action — saving a paper is not a
+    # reading chore, so an unread save is not a problem to nag about.
     background_corpus_papers = _safe_int(authors_summary.get("background_corpus_papers"))
     tracked_total = _safe_int(authors_summary.get("tracked_authors"))
     if background_corpus_papers <= max(3, tracked_total):

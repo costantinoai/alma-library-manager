@@ -2,6 +2,7 @@
 
 import logging
 import sqlite3
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,10 +10,15 @@ from pydantic import BaseModel
 
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import json_loads, raise_internal, safe_div, table_exists
+from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.core.db_write import run_write_unit
 from alma.application import materialized_views as mv
 from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 from alma.application.followed_authors import get_followed_author_backfill_status
+from alma.application.recommendation_outcomes import (
+    build_recommendation_outcomes,
+    count_outcomes,
+)
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -175,9 +181,13 @@ def _bool_setting(value: Any, default: bool = False) -> bool:
 
 
 def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
+    # D2: 'queued' and the derived 'untriaged' backlog were removed — "saved
+    # means saved", a save is not a reading chore. Insights reports only the
+    # real reading-progress states (reading/done/excluded) + the uncollected
+    # count, and never scores or nags about a triage backlog (I-22).
     _defaults = {
-        "total_library": 0, "queued_count": 0, "reading_count": 0,
-        "done_count": 0, "excluded_count": 0, "untriaged_count": 0,
+        "total_library": 0, "reading_count": 0,
+        "done_count": 0, "excluded_count": 0,
         "uncollected_count": 0,
     }
     if not table_exists(db, "papers"):
@@ -186,17 +196,9 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
         """
         SELECT
             COALESCE(SUM(CASE WHEN status = 'library' THEN 1 ELSE 0 END), 0) AS total_library,
-            COALESCE(SUM(CASE WHEN reading_status = 'queued' THEN 1 ELSE 0 END), 0) AS queued_count,
             COALESCE(SUM(CASE WHEN reading_status = 'reading' THEN 1 ELSE 0 END), 0) AS reading_count,
             COALESCE(SUM(CASE WHEN reading_status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
-            COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'library'
-                     AND (reading_status IS NULL OR TRIM(reading_status) = '')
-                    THEN 1 ELSE 0
-                END
-            ), 0) AS untriaged_count
+            COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count
         FROM papers
         """
     ).fetchone()
@@ -223,11 +225,9 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
 
     return {
         "total_library": int((row["total_library"] if row else 0) or 0),
-        "queued_count": int((row["queued_count"] if row else 0) or 0),
         "reading_count": int((row["reading_count"] if row else 0) or 0),
         "done_count": int((row["done_count"] if row else 0) or 0),
         "excluded_count": int((row["excluded_count"] if row else 0) or 0),
-        "untriaged_count": int((row["untriaged_count"] if row else 0) or 0),
         "uncollected_count": uncollected_count,
     }
 
@@ -267,35 +267,33 @@ def _build_refresh_trend(
 
 
 def _build_recommendation_action_trend(db: sqlite3.Connection, *, days: int = 30) -> list[dict[str, Any]]:
+    """Daily engagement trend from the canonical outcome projection (I-21/D6).
+
+    ``liked`` / ``dismissed`` no longer read ``recommendations.user_action``
+    (which never records like/love/dislike — D6); they reflect the real
+    positive / negative outcome from feedback_events + ratings + lifecycle.
+    ``saved`` and ``seen`` keep their reliable ``user_action`` meaning.
+    """
     if not table_exists(db, "recommendations"):
         return []
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    rows = db.execute(
-        """
-        SELECT
-            substr(COALESCE(action_at, created_at), 1, 10) AS day,
-            COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-            COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed,
-            COALESCE(SUM(CASE WHEN user_action = 'save' THEN 1 ELSE 0 END), 0) AS saved,
-            COALESCE(SUM(CASE WHEN user_action = 'seen' THEN 1 ELSE 0 END), 0) AS seen
-        FROM recommendations
-        WHERE COALESCE(action_at, created_at) >= ?
-        GROUP BY substr(COALESCE(action_at, created_at), 1, 10)
-        ORDER BY day ASC
-        """,
-        (since,),
-    ).fetchall()
-    return [
-        {
-            "date": row["day"],
-            "liked": int(row["liked"] or 0),
-            "dismissed": int(row["dismissed"] or 0),
-            "saved": int(row["saved"] or 0),
-            "seen": int(row["seen"] or 0),
-        }
-        for row in rows
-        if row["day"]
-    ]
+    by_day: dict[str, list] = defaultdict(list)
+    for rec in build_recommendation_outcomes(db, since=since):
+        if rec.day:
+            by_day[rec.day].append(rec)
+    out: list[dict[str, Any]] = []
+    for day in sorted(by_day):
+        counts = count_outcomes(by_day[day])
+        out.append(
+            {
+                "date": day,
+                "liked": counts.liked,
+                "dismissed": counts.dismissed,
+                "saved": counts.saved,
+                "seen": counts.seen_action,
+            }
+        )
+    return out
 
 
 def _compute_alert_usefulness_score(*, total_runs: int, failed_runs: int, empty_runs: int, papers_sent: int, sent_runs: int) -> int:
@@ -385,44 +383,41 @@ def _build_branch_trends(
     if not table_exists(db, "recommendations"):
         return []
     since = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
-    rows = db.execute(
-        """
-        SELECT
-            COALESCE(NULLIF(branch_id, ''), NULL) AS branch_id,
-            COALESCE(NULLIF(branch_label, ''), 'Unnamed branch') AS branch_label,
-            substr(COALESCE(action_at, created_at), 1, 10) AS day,
-            COUNT(*) AS total,
-            COALESCE(SUM(CASE WHEN user_action IN ('like', 'save') THEN 1 ELSE 0 END), 0) AS positive,
-            COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed
-        FROM recommendations
-        WHERE (COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> '')
-          AND substr(COALESCE(action_at, created_at), 1, 10) >= ?
-        GROUP BY COALESCE(NULLIF(branch_id, ''), NULL), COALESCE(NULLIF(branch_label, ''), 'Unnamed branch'), substr(COALESCE(action_at, created_at), 1, 10)
-        ORDER BY day ASC
-        """,
-        (since,),
-    ).fetchall()
-    if not rows:
+
+    # Group authoritative outcomes by (branch, day). `positive`/`dismissed` now
+    # come from the real outcome (feedback/ratings/lifecycle), not the
+    # like/save user_action that D6 never stamps (I-21).
+    by_branch_day: dict[tuple[str, str], list] = defaultdict(list)
+    branch_meta: dict[str, dict[str, Any]] = {}
+    for rec in build_recommendation_outcomes(db, since=since):
+        if not (rec.branch_id or rec.branch_label) or not rec.day:
+            continue
+        branch_key = str(rec.branch_id or rec.branch_label or "branch")
+        by_branch_day[(branch_key, rec.day)].append(rec)
+        branch_meta.setdefault(
+            branch_key,
+            {
+                "branch_id": rec.branch_id,
+                "branch_label": rec.branch_label or rec.branch_id or "Unnamed branch",
+            },
+        )
+    if not branch_meta:
         return []
 
     by_branch: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        branch_key = str(row["branch_id"] or row["branch_label"] or "branch")
+    for (branch_key, day), recs in by_branch_day.items():
+        counts = count_outcomes(recs)
         item = by_branch.setdefault(
             branch_key,
-            {
-                "branch_id": row["branch_id"],
-                "branch_label": row["branch_label"] or row["branch_id"] or "Unnamed branch",
-                "daily": [],
-            },
+            {**branch_meta[branch_key], "daily": []},
         )
         item["daily"].append(
             {
-                "date": row["day"],
-                "total": int(row["total"] or 0),
-                "positive": int(row["positive"] or 0),
-                "dismissed": int(row["dismissed"] or 0),
-                "positive_rate": round(safe_div(float(row["positive"] or 0), max(1.0, float(row["total"] or 0))), 3),
+                "date": day,
+                "total": counts.total,
+                "positive": counts.positive,
+                "dismissed": counts.dismissed,
+                "positive_rate": counts.positive_rate,
             }
         )
 
@@ -1977,18 +1972,12 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "by_lens": [],
         }
         if table_exists(db, "recommendations"):
-            r = db.execute(
-                "SELECT COUNT(*) AS total, "
-                "COALESCE(SUM(CASE WHEN user_action = 'seen' THEN 1 ELSE 0 END), 0) AS seen, "
-                "COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked, "
-                "COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed "
-                "FROM recommendations"
-            ).fetchone()
-            total_recs = r["total"]
-            seen = r["seen"]
-            liked = r["liked"]
-            dismissed = r["dismissed"]
-            engagement = ((liked + dismissed) / total_recs) if total_recs else 0.0
+            # I-21/D6: `liked`/`dismissed` come from the authoritative outcome
+            # projection (feedback/ratings/lifecycle), not the like/dismiss
+            # user_action that D6 never stamps. `seen` is real exposure (any
+            # stamped action). `by_lens` (volume + avg score) is provenance, not
+            # engagement, so it stays a plain group-by.
+            counts = count_outcomes(build_recommendation_outcomes(db))
 
             rows = db.execute(
                 "SELECT COALESCE(lens_id, 'unknown') AS lens_id, COUNT(*) AS count, "
@@ -1998,11 +1987,11 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             by_lens = [dict(r) for r in rows]
 
             rec_data = {
-                "total": total_recs,
-                "seen": seen,
-                "liked": liked,
-                "dismissed": dismissed,
-                "engagement_rate": round(engagement, 3),
+                "total": counts.total,
+                "seen": counts.seen,
+                "liked": counts.positive,
+                "dismissed": counts.dismissed,
+                "engagement_rate": counts.engagement_rate,
                 "by_lens": by_lens,
             }
 
@@ -2084,7 +2073,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
 mv.register(
     mv.View(
         key="insights:overview",
-        fingerprint_sql="""
+        # with_version stamps INSIGHTS_LOGIC_VERSION into the fingerprint so a
+        # COMPUTATION change (I-21: rec engagement now from the outcome
+        # projection, not the always-empty user_action='like') invalidates the
+        # cached payload — without it the data inputs are unchanged and the stale
+        # numbers would serve indefinitely (the exact I-4 trap).
+        fingerprint_sql=with_version(
+            """
             SELECT
               (SELECT COUNT(*) FROM papers WHERE status = 'library'),
               (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
@@ -2093,7 +2088,9 @@ mv.register(
               (SELECT COUNT(*) FROM followed_authors),
               (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
               (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
-        """,
+            """,
+            INSIGHTS_LOGIC_VERSION,
+        ),
         build_fn=_build_insights_payload,
         operation_key="materialize.insights.overview",
     )

@@ -68,17 +68,22 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
     except Exception as exc:
         logger.warning("weekly_research_brief: active_authors query failed: %s", exc)
 
-    # Recommendations engagement this week
+    # Recommendations engagement this week. I-21/D6: `liked`/`dismissed` come
+    # from the canonical outcome projection (feedback/ratings/lifecycle), not the
+    # like/dismiss user_action that D6 never stamps.
     rec_stats = {"total": 0, "liked": 0, "dismissed": 0}
     try:
-        r = conn.execute(
-            """SELECT COUNT(*) AS total,
-                      COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                      COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed
-               FROM recommendations WHERE created_at >= ?""",
-            (week_ago,),
-        ).fetchone()
-        rec_stats = {"total": r["total"], "liked": r["liked"], "dismissed": r["dismissed"]}
+        from alma.application.recommendation_outcomes import (
+            build_recommendation_outcomes,
+            count_outcomes,
+        )
+
+        counts = count_outcomes(build_recommendation_outcomes(conn, since=week_ago))
+        rec_stats = {
+            "total": counts.total,
+            "liked": counts.positive,
+            "dismissed": counts.dismissed,
+        }
     except Exception as exc:
         logger.warning("weekly_research_brief: rec_stats query failed: %s", exc)
 
@@ -234,28 +239,35 @@ def signal_impact(conn: sqlite3.Connection) -> dict[str, Any]:
     liked_signals: dict[str, list[float]] = {k: [] for k in signal_keys}
     dismissed_signals: dict[str, list[float]] = {k: [] for k in signal_keys}
 
+    # I-21/D6: bucket by the authoritative POSITIVE / NEGATIVE outcome
+    # (feedback/ratings/lifecycle), not `user_action IN ('like','dismiss')` —
+    # like/dislike never land in user_action, so the old query only ever saw the
+    # dismiss side and silently dropped every real positive.
     try:
-        rows = conn.execute(
-            """SELECT score_breakdown, user_action
-               FROM recommendations
-               WHERE user_action IN ('like', 'dismiss')
-                 AND score_breakdown IS NOT NULL
-                 AND score_breakdown != ''"""
-        ).fetchall()
-
         import json
-        for r in rows:
+
+        from alma.application.recommendation_outcomes import build_recommendation_outcomes
+
+        for rec in build_recommendation_outcomes(conn):
+            breakdown = (rec.score_breakdown or "").strip()
+            if not breakdown:
+                continue
+            if rec.is_positive:
+                target = liked_signals
+            elif rec.is_negative:
+                target = dismissed_signals
+            else:
+                continue
             try:
-                bd = json.loads(r["score_breakdown"])
-                target = liked_signals if r["user_action"] == "like" else dismissed_signals
-                for key in signal_keys:
-                    sig = bd.get(key)
-                    if isinstance(sig, dict) and "weighted" in sig:
-                        target[key].append(sig["weighted"])
-                    elif isinstance(sig, (int, float)):
-                        target[key].append(float(sig))
+                bd = json.loads(breakdown)
             except (json.JSONDecodeError, TypeError):
                 continue
+            for key in signal_keys:
+                sig = bd.get(key)
+                if isinstance(sig, dict) and "weighted" in sig:
+                    target[key].append(sig["weighted"])
+                elif isinstance(sig, (int, float)):
+                    target[key].append(float(sig))
     except Exception as e:
         logger.warning("Failed to compute signal impact: %s", e)
 

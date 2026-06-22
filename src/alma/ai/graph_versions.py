@@ -47,9 +47,12 @@ LABELLING_VERSION = "2026.07-1"
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding
-# dimension, the outcome projection swap, removed obsolete semantics). Bumped to
-# 2026.07-2 to invalidate the diagnostics/overview MVs cached with the pre-fix math.
-INSIGHTS_LOGIC_VERSION = "2026.07-2"
+# dimension, the outcome projection swap, removed obsolete semantics). Bump to
+# invalidate the diagnostics/overview MVs cached with the pre-fix math.
+# 2026.07-2: float16 embedding dim, papers-per-author, institution grouping.
+# 2026.07-3: I-21 canonical outcome projection (engagement no longer reads the
+#            always-empty user_action='like') + I-22 removed queued/untriaged.
+INSIGHTS_LOGIC_VERSION = "2026.07-3"
 
 
 def with_version(fingerprint_sql: str, *versions: str) -> str:
