@@ -617,11 +617,18 @@ def build_coauthor_network(
         ]
         for cid, members in cluster_members.items()
     }
-    scored_terms = score_cluster_terms(member_topic_docs, ngram_range=(1, 2), top_k=4)
+    scored_terms = score_cluster_terms(member_topic_docs, ngram_range=(1, 2), top_k=10)
     cluster_topic_labels: dict[int, str] = {}
+    cluster_word_clouds: dict[int, list[dict[str, Any]]] = {}
     for cid in cluster_members:
-        terms = [term for term, _w in scored_terms.get(cid, [])][:2]
+        ranked = scored_terms.get(cid, [])
+        terms = [term for term, _w in ranked][:2]
         cluster_topic_labels[cid] = ", ".join(terms) if terms else f"Cluster {cid + 1}"
+        # Per-cluster word cloud (same scorer) so the author view has parity with
+        # the paper map's word-cloud toggle.
+        cluster_word_clouds[cid] = [
+            {"term": term, "weight": round(weight, 4)} for term, weight in ranked[:10]
+        ]
 
     # Ensure coords exist for every author. Authors without embeddings are
     # scattered around the edge so they don't pile on top of each other.
@@ -671,6 +678,7 @@ def build_coauthor_network(
             "id": int(cid),
             "label": cluster_topic_labels.get(cid, f"Cluster {cid + 1}"),
             "size": len(members),
+            "word_cloud": cluster_word_clouds.get(cid, []),
             "member_ids": [author_ids[idx] for idx in members],
         }
         for cid, members in sorted(cluster_members.items(), key=lambda kv: kv[0])

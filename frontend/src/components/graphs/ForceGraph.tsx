@@ -1,5 +1,6 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
+import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import type { GraphData, GraphNode } from '@/api/client'
 
 export interface GraphPhysicsConfig {
@@ -46,6 +47,10 @@ interface RenderedNode extends Record<string, unknown> {
 // statically (I-10). Running d3-force charge+link over thousands of nodes for
 // 100 cooldown ticks (each re-rendering every node) was the corpus-graph lag.
 const LARGE_GRAPH_THRESHOLD = 1200
+// The force simulation's link force is what makes a heavily-edged graph lag, so
+// we also go static (pinned) once there are many edges — even if the node count
+// is modest (e.g. the author network: ~260 nodes but ~1900 typed edges).
+const LARGE_GRAPH_EDGE_THRESHOLD = 1500
 
 interface RenderedLink extends Record<string, unknown> {
   source: string | RenderedNode
@@ -191,8 +196,12 @@ export function ForceGraph({
     })
     // Static-layout fast path (I-10): on large graphs, pin every node to its
     // backend UMAP coordinate so d3-force has nothing to solve — the canvas
-    // only repaints on pan/zoom instead of on every simulation tick.
-    if (nodes.length > LARGE_GRAPH_THRESHOLD) {
+    // only repaints on pan/zoom instead of on every simulation tick. Triggered
+    // by node OR edge count (the link force is the real cost).
+    if (
+      nodes.length > LARGE_GRAPH_THRESHOLD ||
+      links.length > LARGE_GRAPH_EDGE_THRESHOLD
+    ) {
       for (const node of nodes) {
         ;(node as RenderedNode).fx = node._initX
         ;(node as RenderedNode).fy = node._initY
@@ -201,7 +210,9 @@ export function ForceGraph({
     return { nodes, links }
   }, [data, dimensions.width, dimensions.height, highlightSearch, visibleLayers])
 
-  const isLargeGraph = graphData.nodes.length > LARGE_GRAPH_THRESHOLD
+  const isLargeGraph =
+    graphData.nodes.length > LARGE_GRAPH_THRESHOLD ||
+    graphData.links.length > LARGE_GRAPH_EDGE_THRESHOLD
 
   useEffect(() => {
     const graph = fgRef.current
@@ -526,8 +537,36 @@ export function ForceGraph({
     return `<div style="max-width:280px;line-height:1.35"><div style="font-weight:600;margin-bottom:2px">${esc(node.name)}</div>${rows.join('')}</div>`
   }, [])
 
+  // Navigation helpers (I-14): the canvas was hard to navigate — no fit, no
+  // zoom affordance. zoomToFit also runs on every engine-stop so the graph
+  // always opens framed (and re-frames after a static layout settles instantly).
+  const handleZoomToFit = useCallback(() => {
+    const g = fgRef.current as { zoomToFit?: (ms?: number, px?: number) => void } | null
+    g?.zoomToFit?.(400, 48)
+  }, [])
+  const adjustZoom = useCallback((factor: number) => {
+    const g = fgRef.current as { zoom?: (k?: number, ms?: number) => number } | null
+    if (!g?.zoom) return
+    const current = g.zoom() || 1
+    g.zoom(current * factor, 200)
+  }, [])
+
+  const zoomButtonClass =
+    'flex h-7 w-7 items-center justify-center rounded-sm border border-edge-2 bg-surface-3 text-slate-600 shadow-sm transition-colors hover:bg-surface-4'
+
   return (
-    <div ref={containerRef} className="w-full" style={{ height }}>
+    <div ref={containerRef} className="relative w-full" style={{ height }}>
+      <div className="absolute right-2 top-2 z-10 flex flex-col gap-1">
+        <button type="button" onClick={() => adjustZoom(1.4)} title="Zoom in" aria-label="Zoom in" className={zoomButtonClass}>
+          <ZoomIn className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={() => adjustZoom(0.7)} title="Zoom out" aria-label="Zoom out" className={zoomButtonClass}>
+          <ZoomOut className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={handleZoomToFit} title="Fit graph to view" aria-label="Fit graph to view" className={zoomButtonClass}>
+          <Maximize2 className="h-4 w-4" />
+        </button>
+      </div>
       <ForceGraph2D
         ref={fgRef}
         graphData={graphData}
@@ -554,6 +593,7 @@ export function ForceGraph({
         enableNodeDrag={!isLargeGraph}
         enableZoomInteraction={true}
         enablePanInteraction={true}
+        onEngineStop={handleZoomToFit}
       />
     </div>
   )

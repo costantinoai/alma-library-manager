@@ -89,6 +89,7 @@ function RangeControl({
   max,
   step,
   onChange,
+  hint,
 }: {
   label: string
   value: number
@@ -96,9 +97,10 @@ function RangeControl({
   max: number
   step: number
   onChange: (value: number) => void
+  hint?: string
 }) {
   return (
-    <label className="space-y-1 text-xs text-slate-600">
+    <label className="space-y-1 text-xs text-slate-600" title={hint}>
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{label}</span>
         <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">{value}</span>
@@ -265,7 +267,10 @@ export function GraphControls({
                 />
               )}
               {onShowEdgesChange && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                <label
+                  className="flex items-center gap-1.5 text-xs text-slate-600"
+                  title="Draw the typed relationship edges (semantic / shared-references / shared-authors). Use the layer chips above the map to filter which kinds show."
+                >
                   <Checkbox
                     checked={showEdges}
                     onCheckedChange={(checked) => onShowEdgesChange(checked === true)}
@@ -274,7 +279,10 @@ export function GraphControls({
                 </label>
               )}
               {onShowTopicsChange && (
-                <label className="flex items-center gap-1.5 text-xs text-slate-600">
+                <label
+                  className="flex items-center gap-1.5 text-xs text-slate-600"
+                  title="Overlay topic nodes on the map and draw a link from each paper to its topics."
+                >
                   <Checkbox
                     checked={showTopics}
                     onCheckedChange={(checked) => onShowTopicsChange(checked === true)}
@@ -306,15 +314,31 @@ export function GraphControls({
               )}
             </div>
           )}
-          {!isPaperMap && onIncludeCorpusChange && (
+          {!isPaperMap && (
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs text-slate-600" title="Include every stored paper (not just your Library) when computing author stats">
-                <Checkbox
-                  checked={includeCorpus}
-                  onCheckedChange={(checked) => onIncludeCorpusChange(checked === true)}
-                />
-                <span className="font-medium">Include full corpus</span>
-              </label>
+              {onShowWordCloudChange && (
+                <label
+                  className="flex items-center gap-1.5 text-xs text-slate-600"
+                  title="Render a per-cluster word cloud above each centroid from the cluster's authors' topic terms"
+                >
+                  <Checkbox
+                    checked={showWordCloud}
+                    onCheckedChange={(checked) => onShowWordCloudChange(checked === true)}
+                  />
+                  <Cloud className="h-3 w-3 text-slate-500" />
+                  <span className="font-medium">Word cloud</span>
+                </label>
+              )}
+              {onIncludeCorpusChange && (
+                <label className="flex items-center gap-1.5 text-xs text-slate-600" title="Include every stored paper (not just your Library) when computing author stats + the neighbourhood">
+                  <Checkbox
+                    checked={includeCorpus}
+                    onCheckedChange={(checked) => onIncludeCorpusChange(checked === true)}
+                  />
+                  <span className="font-medium">Include full corpus</span>
+                </label>
+              )}
+              <span className="text-[11px] text-slate-400">Use the edge-layer chips above the map to show/hide semantic · shared-author · shared-reference links.</span>
             </div>
           )}
 
@@ -343,13 +367,13 @@ export function GraphControls({
               )}
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              <RangeControl label="Repulsion" value={physics.repulsion} min={-200} max={0} step={5} onChange={(value) => onPhysicsChange({ repulsion: value })} />
-              <RangeControl label="Link Distance" value={physics.linkDistance} min={20} max={220} step={5} onChange={(value) => onPhysicsChange({ linkDistance: value })} />
-              <RangeControl label="Link Attraction" value={physics.linkStrength} min={0} max={2} step={0.05} onChange={(value) => onPhysicsChange({ linkStrength: value })} />
-              <RangeControl label="Velocity Decay" value={physics.velocityDecay} min={0.05} max={0.9} step={0.01} onChange={(value) => onPhysicsChange({ velocityDecay: value })} />
-              <RangeControl label="Cooldown" value={physics.cooldownTicks} min={20} max={300} step={10} onChange={(value) => onPhysicsChange({ cooldownTicks: value })} />
-              <RangeControl label="Node Scale" value={physics.nodeScale} min={0.6} max={2.5} step={0.05} onChange={(value) => onPhysicsChange({ nodeScale: value })} />
-              <RangeControl label="Base Size" value={physics.baseSize} min={2} max={20} step={0.5} onChange={(value) => onPhysicsChange({ baseSize: value })} />
+              <RangeControl label="Repulsion" value={physics.repulsion} min={-200} max={0} step={5} onChange={(value) => onPhysicsChange({ repulsion: value })} hint="How strongly nodes push each other apart. More negative = more spread out. (Small graphs only — large graphs use the fixed embedding layout.)" />
+              <RangeControl label="Link Distance" value={physics.linkDistance} min={20} max={220} step={5} onChange={(value) => onPhysicsChange({ linkDistance: value })} hint="The resting length of an edge — higher pulls connected nodes farther apart." />
+              <RangeControl label="Link Attraction" value={physics.linkStrength} min={0} max={2} step={0.05} onChange={(value) => onPhysicsChange({ linkStrength: value })} hint="How hard edges pull their endpoints together. Higher = tighter clusters." />
+              <RangeControl label="Velocity Decay" value={physics.velocityDecay} min={0.05} max={0.9} step={0.01} onChange={(value) => onPhysicsChange({ velocityDecay: value })} hint="Friction — how quickly motion settles. Higher = the layout stops sooner." />
+              <RangeControl label="Cooldown" value={physics.cooldownTicks} min={20} max={300} step={10} onChange={(value) => onPhysicsChange({ cooldownTicks: value })} hint="How many simulation steps to run before freezing the layout." />
+              <RangeControl label="Node Scale" value={physics.nodeScale} min={0.6} max={2.5} step={0.05} onChange={(value) => onPhysicsChange({ nodeScale: value })} hint="Multiplier on every node's size — purely visual." />
+              <RangeControl label="Base Size" value={physics.baseSize} min={2} max={20} step={0.5} onChange={(value) => onPhysicsChange({ baseSize: value })} hint="The base radius all node sizes scale from — purely visual." />
             </div>
           </div>
         )}

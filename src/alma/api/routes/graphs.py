@@ -2149,7 +2149,7 @@ def _retracted_paper_ids(conn: sqlite3.Connection, paper_ids: list[str]) -> set[
     except sqlite3.OperationalError:
         return set()
     return {
-        (row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows
+        str(row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows
     }
 
 

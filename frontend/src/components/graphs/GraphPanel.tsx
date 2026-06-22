@@ -312,11 +312,11 @@ export function GraphPanel() {
               </span>
             )}
             {isLoading ? (
-              <div className="flex h-[560px] items-center justify-center">
+              <div className="flex h-[72vh] min-h-[640px] items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
               </div>
             ) : error ? (
-              <div className="flex h-[560px] flex-col items-center justify-center text-slate-500">
+              <div className="flex h-[72vh] min-h-[640px] flex-col items-center justify-center text-slate-500">
                 <AlertCircle className="mb-2 h-8 w-8" />
                 <p className="text-sm">Failed to load graph data</p>
                 <p className="mt-1 text-xs text-slate-400">{graphErrorMessage}</p>
@@ -354,21 +354,23 @@ export function GraphPanel() {
                 )}
                 <ForceGraph
                   data={data}
-                  height={560}
+                  height={Math.max(640, Math.round(window.innerHeight * 0.72))}
                   onNodeClick={handleNodeClick}
                   showLabels={showLabels}
                   highlightSearch={searchQuery}
                   selectedNodeId={selectedNode?.id || null}
                   selectedClusterId={selectedClusterId}
-                  showClusterLabels={activeView === 'paper-map' && (showTopics || labelMode !== 'cluster')}
-                  showWordCloud={activeView === 'paper-map' && showWordCloud}
+                  showClusterLabels={
+                    activeView === 'author-network' || showTopics || labelMode !== 'cluster'
+                  }
+                  showWordCloud={showWordCloud}
                   clusters={clusters}
                   physics={physics}
                   visibleLayers={layerKeys.length ? visibleLayers : undefined}
                 />
               </div>
             ) : (
-              <div className="flex h-[560px] flex-col items-center justify-center text-slate-500">
+              <div className="flex h-[72vh] min-h-[640px] flex-col items-center justify-center text-slate-500">
                 <Map className="mb-2 h-8 w-8" />
                 <p className="text-sm">No data available</p>
                 <p className="mt-1 text-xs text-slate-400">Add authors and refresh to generate graph data</p>
