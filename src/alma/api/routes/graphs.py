@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
 from alma.ai.cooccurrence import cooccurrence_pairs
+from alma.ai.embedding_graph import CouplingSpec, build_typed_edges
 from alma.application import materialized_views as mv
 from alma.ai.graph_versions import (
     CLUSTERING_ALGO_VERSION,
@@ -1796,7 +1797,6 @@ def _build_embedding_paper_map(
     so a read request never writes + commits mid-response.
     """
     from alma.ai.clustering import cluster_publications, label_clusters_tfidf
-    from alma.ai.neighbor_graph import mutual_knn_edges
     from alma.ai.projections import project_embeddings
 
     opts = graph_options or {}
@@ -2259,61 +2259,36 @@ def _build_embedding_paper_map(
             )
         )
 
-    # Typed, filterable edge LAYERS (Phase 3 / I-11). The old intra-cluster
-    # cliques asserted a relationship that was really just "same HDBSCAN
-    # cluster"; we replace them with edges that each MEAN something specific and
-    # carry their own `edge_type` so the UI can show/hide each layer:
-    #   • semantic               — mutual k-NN in the 768-d SPECTER2 space
-    #   • bibliographic_coupling — papers that share ≥3 references
-    #   • co_authorship          — papers that share ≥1 author
-    # Citation/h-index stats NEVER enter edge geometry — they are node metadata.
+    # Typed, filterable edge LAYERS (Phase 3 / I-11) — built through the SHARED
+    # embedding_graph.build_typed_edges, the SAME edge code the author network uses
+    # (semantic mutual-kNN + structural coupling layers, one edge per pair per type
+    # so the UI can filter). Retracted papers keep their node but get no edges, so a
+    # retracted work is never drawn as a hub. Citation/h-index NEVER enter edge
+    # geometry — they are node metadata. The coupling pair dicts are reused for the
+    # post-persist fused layout above, so we hand them in precomputed.
     edges: list[GraphEdge] = []
     edge_layers: dict[str, int] = {}
     if show_edges:
-        # Retracted papers must not anchor neighbourhoods — they stay as nodes
-        # but get no edges, so a retracted work is never drawn as central.
         retracted = _retracted_paper_ids(conn, paper_ids)
-        semantic_embeddings = {
-            pid: vec for pid, vec in embeddings.items() if pid not in retracted
-        }
-        seen_pairs: set[tuple[str, str, str]] = set()
-
-        def _add_edge(a: str, b: str, weight: float, edge_type: str) -> None:
-            # One edge per unordered pair PER TYPE: a pair may be connected in
-            # more than one layer (e.g. both semantic and shared-author), and the
-            # UI filters per type, so we keep them distinct rather than merging.
-            key = (a, b, edge_type) if a < b else (b, a, edge_type)
-            if a == b or key in seen_pairs:
-                return
-            seen_pairs.add(key)
-            edges.append(
-                GraphEdge(
-                    source=key[0], target=key[1],
-                    weight=round(float(weight), 3), edge_type=edge_type,
-                )
-            )
-            edge_layers[edge_type] = edge_layers.get(edge_type, 0) + 1
-
-        # 1) Semantic neighbourhood — mutual k-NN in embedding space.
-        for a, b, sim in mutual_knn_edges(semantic_embeddings, k=8, min_similarity=0.45):
-            _add_edge(a, b, sim, "semantic")
-
-        # 2) Bibliographic coupling — shared references (same literature base).
-        coupling = _paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3)
-        max_shared = max(coupling.values(), default=0)
-        for (a, b), shared in coupling.items():
-            if a in retracted or b in retracted:
-                continue
-            weight = 0.4 + 0.5 * (shared / max_shared if max_shared else 0.0)
-            _add_edge(a, b, weight, "bibliographic_coupling")
-
-        # 3) Co-authorship — papers that share at least one author.
-        coauthor = _paper_coauthorship(conn, paper_ids, min_shared_authors=1)
-        for (a, b), shared in coauthor.items():
-            if a in retracted or b in retracted:
-                continue
-            weight = min(1.0, 0.4 + 0.2 * shared)
-            _add_edge(a, b, weight, "co_authorship")
+        edge_dicts, edge_layers = build_typed_edges(
+            embeddings,
+            coupling_specs=[
+                CouplingSpec(
+                    edge_type="bibliographic_coupling",
+                    pairs=_paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3),
+                    weight_floor=0.4, weight_span=0.5,
+                ),
+                CouplingSpec(
+                    edge_type="co_authorship",
+                    pairs=_paper_coauthorship(conn, paper_ids, min_shared_authors=1),
+                    weight_floor=0.4, weight_span=0.2, weight_mode="linear_capped",
+                ),
+            ],
+            semantic_k=8,
+            semantic_min_similarity=0.45,
+            exclude_ids=frozenset(retracted),
+        )
+        edges = [GraphEdge(**e) for e in edge_dicts]
 
     # Topic clusters only — the Unclustered group is reported as a count in the
     # clustering metadata, never as a pseudo-topic with a TF-IDF label (I-6).

@@ -50,7 +50,11 @@ class CouplingSpec:
     """
 
     edge_type: str
-    entity_features: Mapping[str, Iterable[str]]
+    # Supply EITHER entity_features (the pipeline pairs them via cooccurrence_pairs)
+    # OR precomputed pairs (when the adapter already computed them — e.g. the paper
+    # map reuses the same pair dict for edges AND its post-persist fused layout).
+    entity_features: Mapping[str, Iterable[str]] = field(default_factory=dict)
+    pairs: Optional[dict[tuple[str, str], int]] = None
     min_shared: int = 1
     max_feature_df: Optional[int] = None
     weight_floor: float = 0.4
@@ -58,6 +62,14 @@ class CouplingSpec:
     weight_mode: str = "normalized"  # "normalized" | "linear_capped"
     top_k_per_node: Optional[int] = None  # sparsify to each node's strongest k
     use_for_fusion: bool = False  # feed this layer's pairs into fuse_layout
+
+    def shared_pairs(self) -> dict[tuple[str, str], int]:
+        """The coupling pairs — precomputed if given, else paired on demand."""
+        if self.pairs is not None:
+            return self.pairs
+        return cooccurrence_pairs(
+            self.entity_features, min_shared=self.min_shared, max_feature_df=self.max_feature_df
+        )
 
 
 @dataclass
@@ -145,11 +157,7 @@ def build_typed_edges(
 
     # 2..N) Structural coupling layers via the shared co-occurrence primitive.
     for spec in coupling_specs:
-        pairs = cooccurrence_pairs(
-            spec.entity_features,
-            min_shared=spec.min_shared,
-            max_feature_df=spec.max_feature_df,
-        )
+        pairs = spec.shared_pairs()
         if spec.top_k_per_node:
             pairs = _top_k_pairs_per_node(pairs, spec.top_k_per_node)
         max_shared = max(pairs.values(), default=0)
@@ -223,11 +231,7 @@ def build_embedding_graph(
     if fused_on and len(ids) <= 1500:
         try:
             fusion = {
-                s.edge_type: cooccurrence_pairs(
-                    s.entity_features, min_shared=s.min_shared, max_feature_df=s.max_feature_df
-                )
-                for s in coupling_specs
-                if s.use_for_fusion
+                s.edge_type: s.shared_pairs() for s in coupling_specs if s.use_for_fusion
             }
             fused = fuse_layout(
                 embeddings,
