@@ -59,7 +59,9 @@ interface GraphControlsProps {
   onAuthorColorByChange?: (mode: AuthorColorBy) => void
   authorSizeBy?: AuthorSizeBy
   onAuthorSizeByChange?: (mode: AuthorSizeBy) => void
-  // PROTOTYPE (task 19): fused-layout weights. Semantic = remainder.
+  // PROTOTYPE (task 19): fused-layout weights — INDEPENDENT 0..1 per source.
+  layoutSemanticWeight?: number
+  onLayoutSemanticWeightChange?: (value: number) => void
   layoutCoauthWeight?: number
   onLayoutCoauthWeightChange?: (value: number) => void
   layoutBibWeight?: number
@@ -178,6 +180,8 @@ export function GraphControls({
   onAuthorColorByChange,
   authorSizeBy = 'publications',
   onAuthorSizeByChange,
+  layoutSemanticWeight = 1,
+  onLayoutSemanticWeightChange,
   layoutCoauthWeight = 0,
   onLayoutCoauthWeightChange,
   layoutBibWeight = 0,
@@ -371,56 +375,49 @@ export function GraphControls({
           {/* PROTOTYPE (task 19): fused multi-view layout. Library + paper-map
               only (dense O(N²)). Semantic carries the remaining weight, so 0/0 is
               the normal pure-semantic map. */}
-          {isPaperMap && !includeCorpus && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
+          {isPaperMap && !includeCorpus && onLayoutSemanticWeightChange && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
             <div className="mt-3 rounded-sm border border-dashed border-edge-2 bg-surface-2 p-3">
               <div className="mb-1 flex items-center gap-2">
                 <span className="text-xs font-semibold text-alma-800">Layout basis</span>
                 <Badge variant="outline" className="text-[10px]">beta</Badge>
               </div>
               <p className="mb-2 text-[11px] text-slate-500">
-                Blend what drives the <em>positions</em>. At 0/0 the map is pure semantic
-                similarity (the trustworthy default); raise a weight to pull co-authors or
-                reference-sharing papers together. Clusters stay semantic.
+                Blend what drives the <em>positions</em>. Each weight is independent (they
+                don&apos;t need to add up) — all three are used together. The default
+                (semantic 1, others 0) is the trustworthy similarity map; raise a weight to
+                also pull co-authors or reference-sharing papers together. Clusters stay
+                semantic.
               </p>
               <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 text-xs text-slate-600">
-                  <span className="font-medium whitespace-nowrap">Co-authorship</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.25}
-                    value={layoutCoauthWeight}
-                    onChange={(e) => onLayoutCoauthWeightChange(Number(e.target.value))}
-                    className="w-24 accent-alma-600"
-                  />
-                  <span className="font-mono text-[10px] tabular-nums text-slate-500">
-                    {layoutCoauthWeight.toFixed(2)}
-                  </span>
-                </label>
-                <label className="flex items-center gap-2 text-xs text-slate-600">
-                  <span className="font-medium whitespace-nowrap">Bib. coupling</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.25}
-                    value={layoutBibWeight}
-                    onChange={(e) => onLayoutBibWeightChange(Number(e.target.value))}
-                    className="w-24 accent-alma-600"
-                  />
-                  <span className="font-mono text-[10px] tabular-nums text-slate-500">
-                    {layoutBibWeight.toFixed(2)}
-                  </span>
-                </label>
-                <span className="text-[11px] text-slate-400">
-                  semantic {Math.max(0, 1 - layoutCoauthWeight - layoutBibWeight).toFixed(2)}
-                </span>
-                {(layoutCoauthWeight > 0 || layoutBibWeight > 0) && (
+                {(
+                  [
+                    ['Semantic', layoutSemanticWeight, onLayoutSemanticWeightChange] as const,
+                    ['Co-authorship', layoutCoauthWeight, onLayoutCoauthWeightChange] as const,
+                    ['Bib. coupling', layoutBibWeight, onLayoutBibWeightChange] as const,
+                  ]
+                ).map(([label, value, onChange]) => (
+                  <label key={label} className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="font-medium whitespace-nowrap">{label}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.25}
+                      value={value}
+                      onChange={(e) => onChange(Number(e.target.value))}
+                      className="w-24 accent-alma-600"
+                    />
+                    <span className="font-mono text-[10px] tabular-nums text-slate-500">
+                      {value.toFixed(2)}
+                    </span>
+                  </label>
+                ))}
+                {(layoutCoauthWeight > 0 || layoutBibWeight > 0 || layoutSemanticWeight !== 1) && (
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => {
+                      onLayoutSemanticWeightChange(1)
                       onLayoutCoauthWeightChange(0)
                       onLayoutBibWeightChange(0)
                     }}
@@ -584,8 +581,8 @@ export function GraphControls({
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-slate-500" />
                 <div>
-                  <p className="text-sm font-semibold text-alma-800">Physics</p>
-                  <p className="text-xs text-slate-500">Tune pull, spacing, and motion.</p>
+                  <p className="text-sm font-semibold text-alma-800">Node size</p>
+                  <p className="text-xs text-slate-500">Scale the dots (purely visual — the layout is fixed).</p>
                 </div>
               </div>
               {onResetPhysics && (
@@ -594,12 +591,11 @@ export function GraphControls({
                 </Button>
               )}
             </div>
+            {/* The d3-force simulation sliders (repulsion / link distance /
+                attraction / velocity / cooldown) were removed: the layout is now
+                always the fixed UMAP projection, so they did nothing. Only the
+                visual node-size controls remain. */}
             <div className="grid gap-3 sm:grid-cols-2">
-              <RangeControl label="Repulsion" value={physics.repulsion} min={-200} max={0} step={5} onChange={(value) => onPhysicsChange({ repulsion: value })} hint="How strongly nodes push each other apart. More negative = more spread out. (Small graphs only — large graphs use the fixed embedding layout.)" />
-              <RangeControl label="Link Distance" value={physics.linkDistance} min={20} max={220} step={5} onChange={(value) => onPhysicsChange({ linkDistance: value })} hint="The resting length of an edge — higher pulls connected nodes farther apart." />
-              <RangeControl label="Link Attraction" value={physics.linkStrength} min={0} max={2} step={0.05} onChange={(value) => onPhysicsChange({ linkStrength: value })} hint="How hard edges pull their endpoints together. Higher = tighter clusters." />
-              <RangeControl label="Velocity Decay" value={physics.velocityDecay} min={0.05} max={0.9} step={0.01} onChange={(value) => onPhysicsChange({ velocityDecay: value })} hint="Friction — how quickly motion settles. Higher = the layout stops sooner." />
-              <RangeControl label="Cooldown" value={physics.cooldownTicks} min={20} max={300} step={10} onChange={(value) => onPhysicsChange({ cooldownTicks: value })} hint="How many simulation steps to run before freezing the layout." />
               <RangeControl label="Node Scale" value={physics.nodeScale} min={0.6} max={2.5} step={0.05} onChange={(value) => onPhysicsChange({ nodeScale: value })} hint="Multiplier on every node's size — purely visual." />
               <RangeControl label="Base Size" value={physics.baseSize} min={2} max={20} step={0.5} onChange={(value) => onPhysicsChange({ baseSize: value })} hint="The base radius all node sizes scale from — purely visual." />
             </div>

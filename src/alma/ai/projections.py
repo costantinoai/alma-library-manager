@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import sqlite3
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -100,31 +100,38 @@ def fuse_layout(
     bib_pairs: dict[tuple[str, str], int],
     *,
     weights: dict[str, float],
+    init_coords: Optional[dict[str, tuple[float, float]]] = None,
 ) -> dict[str, tuple[float, float]]:
     """PROTOTYPE multi-view layout (task 19) — fuse several relationship signals
     into ONE 2-D layout so the *geometry* reflects the chosen blend.
 
     Builds a per-signal pairwise DISTANCE matrix — semantic (cosine on the
     embeddings), co-authorship (shared authors), bibliographic coupling (shared
-    references) — blends them by ``weights`` (renormalized to sum 1), and runs
-    UMAP(metric="precomputed"). Toggling a signal = its weight → 0.
+    references) — blends them by ``weights`` and runs UMAP(metric="precomputed").
 
-    Dense O(N²): intended for the LIBRARY scale only. The corpus needs the sparse
-    fuzzy-simplicial-set union path (still task 19). Returns {} on any failure so
-    the caller falls back to the pure-semantic layout.
+    * **Weights are INDEPENDENT** (not renormalized): each is the raw 0..1
+      contribution of that source, used together. semantic 1 / coauth 1 / bib 0
+      means "semantic and co-authorship equally". All-zero falls back to semantic.
+    * **``init_coords`` anchors the layout.** Passing the semantic 2-D coords as
+      the UMAP init makes every blend START from the same arrangement and only
+      move points by what the blend changes — so dragging a weight slider nudges
+      the map instead of reshuffling it, and the pure-semantic blend ≈ the
+      default map (no discontinuity).
+
+    Dense O(N²): LIBRARY scale only (the corpus needs the sparse fuzzy-graph
+    union, still task 19). Returns {} on failure → caller keeps the semantic map.
     """
     ids = list(embeddings)
     n = len(ids)
     if n < 3:
         return {pid: (0.5, 0.5) for pid in ids}
 
+    # Independent (un-normalized) weights — each source's raw contribution.
     w_sem = max(0.0, float(weights.get("semantic", 1.0) or 0.0))
     w_co = max(0.0, float(weights.get("coauthorship", 0.0) or 0.0))
     w_bib = max(0.0, float(weights.get("bibliographic_coupling", 0.0) or 0.0))
-    total = w_sem + w_co + w_bib
-    if total <= 0:
-        w_sem, total = 1.0, 1.0
-    w_sem, w_co, w_bib = w_sem / total, w_co / total, w_bib / total
+    if w_sem + w_co + w_bib <= 0:
+        w_sem = 1.0  # all-zero is degenerate → pure semantic
 
     idx = {pid: i for i, pid in enumerate(ids)}
     X = np.asarray([embeddings[pid] for pid in ids], dtype=np.float64)
@@ -156,6 +163,15 @@ def fuse_layout(
     np.fill_diagonal(d, 0.0)
     d = (d + d.T) / 2.0  # enforce exact symmetry for the precomputed metric
 
+    # Anchor the optimization at the semantic layout (when provided) so every
+    # blend starts from the same arrangement and only moves points by what the
+    # blend changes — stable across slider steps, continuous from the default.
+    init: Any = "spectral"
+    if init_coords:
+        init = np.asarray(
+            [init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64
+        )
+
     try:
         if not _UMAP_AVAILABLE:
             return {}
@@ -164,11 +180,38 @@ def fuse_layout(
             n_neighbors=min(15, n - 1),
             min_dist=0.1,
             metric="precomputed",
+            init=init,
             random_state=42,
         )
-        coords_2d = reducer.fit_transform(d)
+        coords_2d = np.asarray(reducer.fit_transform(d), dtype=np.float64)
     except Exception:
         return {}
+
+    if init_coords:
+        # A UMAP layout is only defined up to rotation / reflection / scale /
+        # translation, so even with the same init two blends land in different
+        # frames and a raw comparison looks like a total reshuffle. Procrustes-
+        # align each blend onto the SEMANTIC frame: now every blend shares the
+        # default's orientation, so adjacent slider steps differ by a small,
+        # meaningful nudge instead of a rigid flip.
+        try:
+            from scipy.linalg import orthogonal_procrustes
+
+            target = np.asarray(
+                [init_coords.get(pid, (0.5, 0.5)) for pid in ids], dtype=np.float64
+            )
+            a_c = coords_2d - coords_2d.mean(axis=0)
+            b_c = target - target.mean(axis=0)
+            rot, _ = orthogonal_procrustes(a_c, b_c)
+            aligned = a_c @ rot
+            sa = float(np.linalg.norm(a_c))
+            sb = float(np.linalg.norm(b_c))
+            if sa > 0:
+                aligned = aligned * (sb / sa)
+            coords_2d = np.clip(aligned + target.mean(axis=0), 0.0, 1.0)
+            return {ids[i]: (float(coords_2d[i, 0]), float(coords_2d[i, 1])) for i in range(n)}
+        except Exception:
+            pass  # fall through to plain min-max normalization
 
     mins = coords_2d.min(axis=0)
     maxs = coords_2d.max(axis=0)

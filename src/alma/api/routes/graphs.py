@@ -4,9 +4,10 @@ import json
 import logging
 import math
 import sqlite3
+import time
 import uuid
 import hashlib
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from datetime import datetime
 from typing import Any, Optional
 
@@ -72,6 +73,40 @@ class GraphData(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+# In-memory cache for CUSTOM-options paper-map builds (a non-default
+# cluster_resolution, colour/size encoding, or fused layout). The DEFAULT options
+# ride the materialized-view layer; custom variants used to fully recompute on
+# EVERY request — so nudging the cluster-detail slider on the corpus re-clustered
+# 8k papers each step, pure waste. This memoizes recent variant payloads by their
+# option signature so a repeat request returns instantly. Pure in-process READ
+# cache (no DB write — GET stays pure, I-2); bounded by size + TTL so it can't go
+# stale for long or grow unbounded. The DURABLE, data-fingerprinted variant cache
+# (survives restarts, invalidates on real corpus change) is task 20 — this is the
+# cheap session-level win the waste complaint asked for.
+_PAPER_MAP_VARIANT_CACHE: "OrderedDict[tuple, tuple[float, GraphData]]" = OrderedDict()
+_VARIANT_CACHE_MAX = 24
+_VARIANT_CACHE_TTL_S = 600.0
+
+
+def _variant_cache_get(key: tuple) -> Optional[GraphData]:
+    entry = _PAPER_MAP_VARIANT_CACHE.get(key)
+    if entry is None:
+        return None
+    ts, payload = entry
+    if time.monotonic() - ts > _VARIANT_CACHE_TTL_S:
+        _PAPER_MAP_VARIANT_CACHE.pop(key, None)
+        return None
+    _PAPER_MAP_VARIANT_CACHE.move_to_end(key)  # mark most-recently-used
+    return payload
+
+
+def _variant_cache_put(key: tuple, payload: GraphData) -> None:
+    _PAPER_MAP_VARIANT_CACHE[key] = (time.monotonic(), payload)
+    _PAPER_MAP_VARIANT_CACHE.move_to_end(key)
+    while len(_PAPER_MAP_VARIANT_CACHE) > _VARIANT_CACHE_MAX:
+        _PAPER_MAP_VARIANT_CACHE.popitem(last=False)  # evict least-recently-used
+
+
 @router.get("/paper-map", response_model=GraphData)
 def get_paper_map(
     label_mode: str = Query("cluster", description="Label mode: cluster or topic"),
@@ -81,6 +116,7 @@ def get_paper_map(
     show_topics: bool = Query(False, description="Show topic nodes overlaid on paper map"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
     cluster_resolution: float = Query(1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"),
+    w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
     conn: sqlite3.Connection = Depends(get_db),
@@ -113,7 +149,26 @@ def get_paper_map(
         envelope = mv.get(conn, view_key)
         return _graph_data_from_envelope(envelope)
 
-    # Custom-options path: live build, no caching.
+    # Custom-options path: build live, but memoize the result by its option
+    # signature so a repeat request (e.g. re-opening the same cluster_resolution,
+    # or a fused layout you already viewed) returns instantly instead of
+    # recomputing. Avoids the "re-cluster the whole corpus on every slider tick"
+    # waste.
+    variant_key = (
+        scope.view_key("paper_map"),
+        label_mode,
+        color_by,
+        size_by,
+        show_topics,
+        round(cluster_resolution, 3),
+        round(w_semantic, 3),
+        round(w_coauthorship, 3),
+        round(w_bibliographic, 3),
+    )
+    cached_variant = _variant_cache_get(variant_key)
+    if cached_variant is not None:
+        return cached_variant
+
     ai_state = _get_graph_ai_state(conn)
     graph_options = {
         "label_mode": label_mode,
@@ -122,10 +177,10 @@ def get_paper_map(
         "show_edges": show_edges,
         "scope": scope,
         "cluster_resolution": cluster_resolution,
-        # PROTOTYPE (task 19): fused multi-view layout weights. Semantic carries
-        # the remainder, so {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
+        # PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT (not
+        # renormalized). {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
         "layout_weights": {
-            "semantic": max(0.0, 1.0 - w_coauthorship - w_bibliographic),
+            "semantic": w_semantic,
             "coauthorship": w_coauthorship,
             "bibliographic_coupling": w_bibliographic,
         },
@@ -142,6 +197,7 @@ def get_paper_map(
         result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
     if show_topics:
         result = _add_topic_overlay(conn, result)
+    _variant_cache_put(variant_key, result)
     return result
 
 
@@ -1946,6 +2002,9 @@ def _build_embedding_paper_map(
                 _paper_coauthorship(conn, paper_ids),
                 _paper_bibliographic_coupling(conn, paper_ids),
                 weights=layout_weights,
+                # Anchor at the semantic layout we just computed so adjacent
+                # weight steps nudge the map instead of reshuffling it.
+                init_coords=coords,
             )
             if fused_coords:
                 coords = fused_coords

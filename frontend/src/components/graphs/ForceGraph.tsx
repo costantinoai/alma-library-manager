@@ -208,64 +208,30 @@ export function ForceGraph({
         } satisfies RenderedLink,
       ]
     })
-    // Static-layout fast path (I-10): on large graphs, pin every node to its
-    // backend UMAP coordinate so d3-force has nothing to solve — the canvas
-    // only repaints on pan/zoom instead of on every simulation tick. Triggered
-    // by node OR edge count (the link force is the real cost).
-    if (
-      nodes.length > LARGE_GRAPH_THRESHOLD ||
-      links.length > LARGE_GRAPH_EDGE_THRESHOLD
-    ) {
-      for (const node of nodes) {
-        ;(node as RenderedNode).fx = node._initX
-        ;(node as RenderedNode).fy = node._initY
-      }
+    // Static layout on EVERY graph (I-10). Pin every node to its backend UMAP
+    // coordinate so d3-force never runs: positions ARE the embedding projection,
+    // the same with or without edges. This is the key correctness fix — the old
+    // library-only force simulation made the map jump whenever the edge SET
+    // changed (toggling edges, or an edge-layer chip, fed the link force), so the
+    // geometry wasn't stable and wasn't honestly "similarity". Now edges are a
+    // pure overlay that never moves a node, and there's ONE layout regime for
+    // every scope (DRY) instead of "pinned corpus vs simulated library".
+    for (const node of nodes) {
+      ;(node as RenderedNode).fx = node._initX
+      ;(node as RenderedNode).fy = node._initY
     }
     return { nodes, links }
   }, [data, dimensions.width, dimensions.height, highlightSearch, visibleLayers])
 
+  // Kept only for the edge level-of-detail gate (linkVisibility) — the layout
+  // itself is always static now, so this no longer switches layout regimes.
   const isLargeGraph =
     graphData.nodes.length > LARGE_GRAPH_THRESHOLD ||
     graphData.links.length > LARGE_GRAPH_EDGE_THRESHOLD
 
-  useEffect(() => {
-    const graph = fgRef.current
-    if (!graph || !physics) {
-      return
-    }
-    // Large graphs render statically from the pinned UMAP layout — no force
-    // tuning, no reheat (the simulation is what made the corpus graph lag).
-    if (isLargeGraph) {
-      return
-    }
-    // Disable the built-in center force so precomputed cluster coordinates
-    // aren't collapsed into a circular blob at the origin. Cast through
-    // the setter form: react-force-graph's `d3Force` is overloaded
-    // (getter / setter) but TS narrows to the getter when the second
-    // arg is `null`.
-    ;(graph.d3Force as (name: string, force: unknown) => unknown)('center', null)
-    const charge = graph.d3Force('charge') as { strength?: (value: number) => unknown } | undefined
-    charge?.strength?.(physics.repulsion)
-    const linkForce = graph.d3Force('link') as {
-      distance?: (value: number) => unknown
-      strength?: (value: number) => unknown
-    } | undefined
-    linkForce?.distance?.(physics.linkDistance)
-    linkForce?.strength?.(physics.linkStrength)
-    // Snap each node back to its precomputed starting position and clear
-    // inherited velocities so the new force params drive a fresh layout,
-    // otherwise the already-settled nodes barely move and only the auto-fit
-    // zoom appears to respond.
-    for (const node of graphData.nodes) {
-      node.x = node._initX
-      node.y = node._initY
-      // `vx` / `vy` are added by d3-force at simulation runtime; they
-      // aren't on our static node shape, hence the inline cast.
-      ;(node as { vx?: number; vy?: number }).vx = 0
-      ;(node as { vx?: number; vy?: number }).vy = 0
-    }
-    graph.d3ReheatSimulation()
-  }, [physics, graphData, isLargeGraph])
+  // (No force-simulation reheat effect: every graph renders statically from the
+  // pinned UMAP coordinates. The old d3-force tuning lived here and was what made
+  // the library map shift when the edge set changed — removed with the pin.)
 
   const handleNodeClick = useCallback((node: Record<string, unknown>) => {
     if (onNodeClick) {
@@ -674,13 +640,12 @@ export function ForceGraph({
         onZoom={(transform: { k: number }) => {
           zoomRef.current = transform.k
         }}
-        d3VelocityDecay={physics?.velocityDecay ?? 0.4}
-        // Static UMAP layout on large graphs (I-10): 0 ticks → no simulation,
-        // the canvas only repaints on interaction. Small graphs keep the
-        // interactive physics.
-        cooldownTicks={isLargeGraph ? 0 : (physics?.cooldownTicks || 100)}
+        // Static UMAP layout on EVERY graph: 0 ticks → no simulation, the canvas
+        // only repaints on interaction. Node positions are the pinned embedding
+        // projection; nothing to drag or settle.
+        cooldownTicks={0}
         warmupTicks={0}
-        enableNodeDrag={!isLargeGraph}
+        enableNodeDrag={false}
         enableZoomInteraction={true}
         enablePanInteraction={true}
         onEngineStop={handleZoomToFit}

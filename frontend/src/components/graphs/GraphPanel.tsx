@@ -127,8 +127,10 @@ export function GraphPanel() {
   // Word-cloud density (how many words) + size (how big) sliders.
   const [wordCloudDensity, setWordCloudDensity] = useState(1)
   const [wordCloudSize, setWordCloudSize] = useState(1)
-  // PROTOTYPE (task 19): fused multi-view layout weights. Semantic carries the
-  // remainder (1 − these), so 0/0 = the pure-semantic default. Library scope only.
+  // PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT 0..1 per
+  // source (they don't sum to 1). Default semantic 1 / others 0 = the normal
+  // pure-semantic map. Library scope only.
+  const [layoutSemanticWeight, setLayoutSemanticWeight] = useState(1)
   const [layoutCoauthWeight, setLayoutCoauthWeight] = useState(0)
   const [layoutBibWeight, setLayoutBibWeight] = useState(0)
   const [includeCorpus, setIncludeCorpus] = useState(false)
@@ -152,7 +154,7 @@ export function GraphPanel() {
   // — the Edges toggle is a client-side RENDER flag, so flipping it never
   // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_coauthorship=${layoutCoauthWeight}&w_bibliographic=${layoutBibWeight}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${layoutSemanticWeight}&w_coauthorship=${layoutCoauthWeight}&w_bibliographic=${layoutBibWeight}`
     : `?scope=${scope}&cluster_resolution=${clusterResolution}`
 
   // Only the params that actually change the FETCH belong in the key. The author
@@ -160,7 +162,7 @@ export function GraphPanel() {
   // be in its key (else toggling them would refetch + flash a spinner).
   const queryKey =
     activeView === 'paper-map'
-      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, layoutCoauthWeight, layoutBibWeight]
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, layoutSemanticWeight, layoutCoauthWeight, layoutBibWeight]
       : ['graph', 'author-network', scope, clusterResolution]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
@@ -438,6 +440,8 @@ export function GraphPanel() {
             onAuthorColorByChange={setAuthorColorBy}
             authorSizeBy={authorSizeBy}
             onAuthorSizeByChange={setAuthorSizeBy}
+            layoutSemanticWeight={layoutSemanticWeight}
+            onLayoutSemanticWeightChange={setLayoutSemanticWeight}
             layoutCoauthWeight={layoutCoauthWeight}
             onLayoutCoauthWeightChange={setLayoutCoauthWeight}
             layoutBibWeight={layoutBibWeight}
