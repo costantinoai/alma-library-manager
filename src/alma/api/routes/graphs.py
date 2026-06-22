@@ -18,6 +18,7 @@ from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
 from alma.application import materialized_views as mv
 from alma.config import get_db_path
+from alma.core.scope import Scope
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def get_paper_map(
     option combinations bypass the cache and build inline — those are
     rare, ad-hoc views where caching every variant would be wasteful.
     """
-    scope = scope if scope in {"library", "corpus"} else "library"
+    scope = Scope.parse(scope)
     is_default_options = (
         label_mode == "cluster"
         and color_by == "cluster"
@@ -90,7 +91,7 @@ def get_paper_map(
     )
 
     if is_default_options:
-        view_key = f"graph:paper_map:{scope}"
+        view_key = scope.view_key("paper_map")
         envelope = mv.get(conn, view_key)
         return _graph_data_from_envelope(envelope)
 
@@ -119,8 +120,8 @@ def get_author_network(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get author network visualization data, served via materialised view."""
-    scope = scope if scope in {"library", "corpus"} else "library"
-    view_key = f"graph:author_network:{scope}"
+    scope = Scope.parse(scope)
+    view_key = scope.view_key("author_network")
     envelope = mv.get(conn, view_key)
     return _graph_data_from_envelope(envelope)
 
@@ -444,10 +445,10 @@ def _cluster_label_refresh_impl(
 
     if graph_type == "paper_map":
         graph = get_paper_map(conn=conn, scope=scope)
-        view_key = f"graph:paper_map:{scope if scope == 'corpus' else 'library'}"
+        view_key = Scope.parse(scope).view_key("paper_map")
     elif graph_type == "author_network":
         graph = get_author_network(conn=conn, scope=scope)
-        view_key = f"graph:author_network:{scope if scope == 'corpus' else 'library'}"
+        view_key = Scope.parse(scope).view_key("author_network")
     else:
         raise ValueError(f"Unsupported graph_type: {graph_type}")
 
@@ -622,19 +623,28 @@ def _collect_author_cluster_context(
 ) -> tuple[list[str], list[str]]:
     """Fetch top papers across the cluster's member authors for labelling.
 
-    The cluster's ``member_ids`` are local ``authors.id`` UUIDs.
-    Authorship lives in ``publication_authors`` keyed by
-    ``openalex_id`` (the table has no ``author_id`` column). We bridge
-    via ``authors.openalex_id`` and dedupe ``papers.id`` so a multi-
-    author paper is counted once even when several of its authors
-    belong to the same cluster. The ``lower(...)`` join uses
-    ``ux_authors_openalex_norm`` and a matching index on
-    ``publication_authors.openalex_id``; do NOT add ``trim()`` — see
-    the 2026-04-26 lesson on expression-index defeats.
+    The cluster's ``member_ids`` are OpenAlex AUTHOR ids — the node
+    identity used by :func:`build_coauthor_network`, which keys every node
+    by ``publication_authors.openalex_id`` (see projections.py). They are
+    NOT local ``authors.id`` UUIDs. (Bug I-12, 2026-06-22: this function
+    used to filter ``WHERE a.id IN (<openalex ids>)`` via an
+    ``authors`` bridge join — a type mismatch that matched zero rows, so
+    every author cluster fell back to an empty-context "Cluster N" label.)
+
+    We therefore filter ``publication_authors.openalex_id`` DIRECTLY (no
+    bridge join needed) and dedupe ``papers.id`` so a multi-author paper is
+    counted once even when several of its authors belong to the same
+    cluster. The ``lower(...)`` filter rides the index on
+    ``publication_authors.openalex_id``; do NOT add ``trim()`` — see the
+    2026-04-26 lesson on expression-index defeats.
     """
     if not author_ids:
         return [], []
-    placeholders = ",".join("?" * len(author_ids))
+    # member_ids are OpenAlex author ids; lowercase to match lower(openalex_id).
+    lowered = [str(a).lower() for a in author_ids if a]
+    if not lowered:
+        return [], []
+    placeholders = ",".join("?" * len(lowered))
 
     def _fetch(scope_filter: str) -> list:
         return conn.execute(
@@ -644,13 +654,12 @@ def _collect_author_cluster_context(
                    MAX(COALESCE(p.publication_date, '')) AS pdate
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
-            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-            WHERE a.id IN ({placeholders}){scope_filter}
+            WHERE lower(pa.openalex_id) IN ({placeholders}){scope_filter}
             GROUP BY p.id
             ORDER BY cby DESC, pdate DESC
             LIMIT ?
             """,
-            [*author_ids, limit],
+            [*lowered, limit],
         ).fetchall()
 
     rows = _fetch(" AND p.status = 'library'") if scope == "library" else _fetch("")
@@ -698,7 +707,7 @@ def refresh_cluster_labels(
     )
 
     graph_type = payload.graph_type if payload.graph_type in {"paper_map", "author_network"} else "paper_map"
-    scope = payload.scope if payload.scope in {"library", "corpus"} else "library"
+    scope = Scope.parse(payload.scope)
     operation_key = f"graphs.cluster_labels:{graph_type}:{scope}"
     existing = find_active_job(operation_key)
     if existing:

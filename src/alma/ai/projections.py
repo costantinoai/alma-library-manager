@@ -8,6 +8,8 @@ import sqlite3
 
 import numpy as np
 
+from alma.core.scope import Scope
+
 logger = logging.getLogger(__name__)
 
 # Optional dependency
@@ -257,7 +259,7 @@ def build_coauthor_network(
         method: clustering method tag
     """
     has_topics_table = _table_exists(conn, "topics")
-    status_filter = " AND p.status = 'library'" if scope == "library" else ""
+    status_filter = Scope.parse(scope).paper_filter("p")
 
     # Authors keyed by OpenAlex ID, with publication stats + (optional)
     # profile enrichment from the `authors` table.
@@ -368,7 +370,7 @@ def build_coauthor_network(
     }
     if _table_exists(conn, "publication_topics"):
         placeholders = ",".join(["?"] * len(author_ids))
-        topic_status_filter = " AND p.status = 'library'" if scope == "library" else ""
+        topic_status_filter = Scope.parse(scope).paper_filter("p")
         try:
             if has_topics_table:
                 topic_rows = conn.execute(
@@ -452,7 +454,7 @@ def build_coauthor_network(
     max_shared = 0
     try:
         placeholders = ",".join(["?"] * len(author_ids))
-        shared_status_filter = " AND p.status = 'library'" if scope == "library" else ""
+        shared_status_filter = Scope.parse(scope).paper_filter("p")
         shared_rows = conn.execute(
             f"""
             SELECT pa1.openalex_id AS a1,
@@ -796,7 +798,7 @@ def _author_bibliographic_coupling(
         return {}, 0
 
     placeholders = ",".join(["?"] * len(author_ids))
-    status_filter = " AND p.status = 'library'" if scope == "library" else ""
+    status_filter = Scope.parse(scope).paper_filter("p")
     try:
         rows = conn.execute(
             f"""
