@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import type { LabelMode, ColorBy, SizeBy } from './GraphPanel'
+import type { LabelMode, ColorBy, SizeBy, AuthorColorBy, AuthorSizeBy } from './GraphPanel'
 import type { GraphPhysicsConfig } from './ForceGraph'
 
 interface ClusterSummary {
@@ -49,6 +49,10 @@ interface GraphControlsProps {
   onIncludeCorpusChange?: (include: boolean) => void
   clusterResolution?: number
   onClusterResolutionChange?: (value: number) => void
+  authorColorBy?: AuthorColorBy
+  onAuthorColorByChange?: (mode: AuthorColorBy) => void
+  authorSizeBy?: AuthorSizeBy
+  onAuthorSizeByChange?: (mode: AuthorSizeBy) => void
   physics?: GraphPhysicsConfig
   onPhysicsChange?: (patch: Partial<GraphPhysicsConfig>) => void
   onResetPhysics?: () => void
@@ -153,6 +157,10 @@ export function GraphControls({
   onIncludeCorpusChange,
   clusterResolution = 1.0,
   onClusterResolutionChange,
+  authorColorBy = 'cluster',
+  onAuthorColorByChange,
+  authorSizeBy = 'publications',
+  onAuthorSizeByChange,
   physics,
   onPhysicsChange,
   onResetPhysics,
@@ -340,6 +348,46 @@ export function GraphControls({
           )}
           {!isPaperMap && (
             <div className="mt-3 flex flex-wrap items-center gap-3">
+              {/* Author-appropriate encodings (parity with the paper map, but over
+                  author attributes — productivity / h-index / citations). */}
+              {onAuthorColorByChange && (
+                <SelectControl
+                  label="Color"
+                  value={authorColorBy}
+                  onChange={onAuthorColorByChange}
+                  options={[
+                    { value: 'cluster', label: 'Cluster' },
+                    { value: 'citations', label: 'Citations' },
+                    { value: 'h_index', label: 'h-index' },
+                    { value: 'publications', label: 'Publications' },
+                  ]}
+                />
+              )}
+              {onAuthorSizeByChange && (
+                <SelectControl
+                  label="Size"
+                  value={authorSizeBy}
+                  onChange={onAuthorSizeByChange}
+                  options={[
+                    { value: 'publications', label: 'Publications' },
+                    { value: 'citations', label: 'Citations' },
+                    { value: 'h_index', label: 'h-index' },
+                    { value: 'uniform', label: 'Uniform' },
+                  ]}
+                />
+              )}
+              {onShowEdgesChange && (
+                <label
+                  className="flex items-center gap-1.5 text-xs text-slate-600"
+                  title="Draw the typed relationship edges (semantic / shared-references / co-authorship). Use the layer chips above the map to filter which kinds show."
+                >
+                  <Checkbox
+                    checked={showEdges}
+                    onCheckedChange={(checked) => onShowEdgesChange(checked === true)}
+                  />
+                  <span className="font-medium">Edges</span>
+                </label>
+              )}
               {onShowWordCloudChange && (
                 <label
                   className="flex items-center gap-1.5 text-xs text-slate-600"
@@ -362,7 +410,26 @@ export function GraphControls({
                   <span className="font-medium">Include full corpus</span>
                 </label>
               )}
-              <span className="text-[11px] text-slate-400">Use the edge-layer chips above the map to show/hide semantic · shared-author · shared-reference links.</span>
+              {onClusterResolutionChange && (
+                <label
+                  className="flex items-center gap-2 text-xs text-slate-600"
+                  title="Cluster detail. Higher splits the network into more, finer author communities; lower merges into fewer, broader ones. Non-default values re-cluster live (uncached)."
+                >
+                  <span className="font-medium whitespace-nowrap">Cluster detail</span>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={3}
+                    step={0.25}
+                    value={clusterResolution}
+                    onChange={(e) => onClusterResolutionChange(Number(e.target.value))}
+                    className="w-28 accent-alma-600"
+                  />
+                  <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 tabular-nums">
+                    {clusterResolution.toFixed(2)}×
+                  </span>
+                </label>
+              )}
             </div>
           )}
 

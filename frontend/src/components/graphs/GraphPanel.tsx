@@ -65,6 +65,11 @@ interface ClusterSummary {
 export type LabelMode = 'cluster' | 'topic'
 export type ColorBy = 'cluster' | 'year' | 'rating' | 'citations'
 export type SizeBy = 'citations' | 'uniform' | 'rating'
+// Author-network encodings (parity with the paper map, but over AUTHOR
+// attributes — h-index / productivity / citations — which papers don't have).
+// Applied client-side from node metadata, so changing them is instant.
+export type AuthorColorBy = 'cluster' | 'citations' | 'h_index' | 'publications'
+export type AuthorSizeBy = 'publications' | 'citations' | 'h_index' | 'uniform'
 
 const DEFAULT_GRAPH_PHYSICS: GraphPhysicsConfig = {
   repulsion: -30,
@@ -119,6 +124,10 @@ export function GraphPanel() {
   // Cluster detail knob (Phase 3): 1.0 = default; >1 finer (more clusters),
   // <1 coarser. A non-default value bypasses the MV cache (live re-cluster).
   const [clusterResolution, setClusterResolution] = useState(1.0)
+  // Author-network encodings — applied client-side from node metadata (below),
+  // so changing them never refetches.
+  const [authorColorBy, setAuthorColorBy] = useState<AuthorColorBy>('cluster')
+  const [authorSizeBy, setAuthorSizeBy] = useState<AuthorSizeBy>('publications')
   // I-19: the paper-list drilldown opened from a cluster (null = closed).
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
   const queryClient = useQueryClient()
@@ -127,10 +136,17 @@ export function GraphPanel() {
   const scope = includeCorpus ? 'corpus' : 'library'
   const queryParams = activeView === 'paper-map'
     ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=${showEdges}&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}`
-    : `?scope=${scope}`
+    : `?scope=${scope}&cluster_resolution=${clusterResolution}`
 
+  // Only the params that actually change the FETCH belong in the key. The author
+  // view's color/size/edges encodings are applied client-side, so they must NOT
+  // be in its key (else toggling them would refetch + flash a spinner).
+  const queryKey =
+    activeView === 'paper-map'
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showEdges, showTopics, scope, clusterResolution]
+      : ['graph', 'author-network', scope, clusterResolution]
   const { data, isLoading, error } = useQuery<GraphData>({
-    queryKey: ['graph', activeView, labelMode, colorBy, sizeBy, showEdges, showTopics, scope, clusterResolution],
+    queryKey,
     queryFn: () => api.get<GraphData>(`/graphs/${activeView}${queryParams}`),
     staleTime: 60_000,
   })
@@ -196,6 +212,50 @@ export function GraphPanel() {
     () => clusters.find((cluster) => cluster.id === selectedClusterId) || null,
     [clusters, selectedClusterId],
   )
+  // Author-view color/size encodings, computed client-side from node metadata
+  // (pub_count / h_index / citation_count — already on each node), so toggling
+  // them is instant with no refetch. Default (cluster colour + publications
+  // size) passes the backend payload through untouched.
+  const displayData = useMemo<GraphData | undefined>(() => {
+    if (
+      !data ||
+      activeView !== 'author-network' ||
+      (authorColorBy === 'cluster' && authorSizeBy === 'publications')
+    ) {
+      return data
+    }
+    const num = (m: Record<string, unknown> | undefined, k: string) =>
+      Number((m?.[k] as number) ?? 0) || 0
+    const maxOf = (k: string) => Math.max(1, ...data.nodes.map((n) => num(n.metadata, k)))
+    const maxCit = maxOf('citation_count')
+    const maxH = maxOf('h_index')
+    const maxPub = maxOf('pub_count')
+    // Slate → folio gradient (matches the paper map's citation ramp).
+    const grad = (t: number) => {
+      const c = Math.max(0, Math.min(1, t))
+      const r = Math.round(148 * (1 - c) + 37 * c)
+      const g = Math.round(163 * (1 - c) + 99 * c)
+      const b = Math.round(184 * (1 - c) + 235 * c)
+      const hex = (v: number) => v.toString(16).padStart(2, '0')
+      return `#${hex(r)}${hex(g)}${hex(b)}`
+    }
+    return {
+      ...data,
+      nodes: data.nodes.map((n) => {
+        const m = n.metadata as Record<string, unknown> | undefined
+        let color = n.color
+        if (authorColorBy === 'citations') color = grad(num(m, 'citation_count') / maxCit)
+        else if (authorColorBy === 'h_index') color = grad(num(m, 'h_index') / maxH)
+        else if (authorColorBy === 'publications') color = grad(num(m, 'pub_count') / maxPub)
+        let size = n.size
+        if (authorSizeBy === 'uniform') size = 1
+        else if (authorSizeBy === 'citations') size = 0.6 + 2.4 * (num(m, 'citation_count') / maxCit)
+        else if (authorSizeBy === 'h_index') size = 0.6 + 2.4 * (num(m, 'h_index') / maxH)
+        else size = 0.6 + 2.4 * (num(m, 'pub_count') / maxPub)
+        return { ...n, color, size }
+      }),
+    }
+  }, [data, activeView, authorColorBy, authorSizeBy])
   const selectedNodePublicationDate = selectedNode ? metadataText(selectedNode.metadata, 'publication_date') : ''
   const selectedNodeYear = selectedNode ? metadataNumber(selectedNode.metadata, 'year') : null
   const selectedNodeCitations = selectedNode ? metadataNumber(selectedNode.metadata, 'cited_by_count') : null
@@ -351,6 +411,10 @@ export function GraphPanel() {
             onIncludeCorpusChange={setIncludeCorpus}
             clusterResolution={clusterResolution}
             onClusterResolutionChange={setClusterResolution}
+            authorColorBy={authorColorBy}
+            onAuthorColorByChange={setAuthorColorBy}
+            authorSizeBy={authorSizeBy}
+            onAuthorSizeByChange={setAuthorSizeBy}
             physics={physics}
             onPhysicsChange={updatePhysics}
             onResetPhysics={() => setPhysics(DEFAULT_GRAPH_PHYSICS)}
@@ -417,7 +481,7 @@ export function GraphPanel() {
                   </div>
                 )}
                 <ForceGraph
-                  data={data}
+                  data={displayData ?? data}
                   height={Math.max(640, Math.round(window.innerHeight * 0.72))}
                   onNodeClick={handleNodeClick}
                   showLabels={showLabels}
@@ -430,7 +494,15 @@ export function GraphPanel() {
                   showWordCloud={showWordCloud}
                   clusters={clusters}
                   physics={physics}
-                  visibleLayers={layerKeys.length ? visibleLayers : undefined}
+                  // Author edges on/off is a client-side gate (the author payload
+                  // always carries edges): an empty layer set hides them all.
+                  visibleLayers={
+                    activeView === 'author-network' && !showEdges
+                      ? []
+                      : layerKeys.length
+                        ? visibleLayers
+                        : undefined
+                  }
                 />
               </div>
             ) : (

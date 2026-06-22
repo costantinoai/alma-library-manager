@@ -136,16 +136,32 @@ def get_paper_map(
 @router.get("/author-network", response_model=GraphData)
 def get_author_network(
     scope: str = Query("library", description="library (default) or corpus"),
+    cluster_resolution: float = Query(
+        1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    """Get author network visualization data, served via materialised view."""
+    """Get author network visualization data.
+
+    The default (resolution 1.0) is served from the materialised view (cache
+    hit returns instantly). A non-default cluster_resolution bypasses the cache
+    and re-clusters inline — a pure read (no persistence), mirroring the paper
+    map's custom-options path (I-2).
+    """
     scope = Scope.parse(scope)
-    view_key = scope.view_key("author_network")
-    envelope = mv.get(conn, view_key)
-    return _graph_data_from_envelope(envelope)
+    if abs(cluster_resolution - 1.0) < 1e-6:
+        view_key = scope.view_key("author_network")
+        envelope = mv.get(conn, view_key)
+        return _graph_data_from_envelope(envelope)
+    payload = _build_author_network_payload(
+        conn, scope=scope, cluster_resolution=cluster_resolution
+    )
+    return GraphData(**payload)
 
 
-def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
+def _build_author_network_payload(
+    conn: sqlite3.Connection, *, scope: str, cluster_resolution: float = 1.0
+) -> dict:
     """Compute the author-network GraphData (as a dict) for the given scope.
 
     This is the original `get_author_network` body, lifted out so the
@@ -154,7 +170,7 @@ def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> di
     from alma.ai.cluster_labels import compute_cluster_signature, fetch_cached_labels
     from alma.ai.projections import build_coauthor_network
 
-    raw = build_coauthor_network(conn, scope=scope)
+    raw = build_coauthor_network(conn, scope=scope, cluster_resolution=cluster_resolution)
 
     author_cluster_signatures: dict[int, str] = {}
     for cluster in raw.get("clusters", []):

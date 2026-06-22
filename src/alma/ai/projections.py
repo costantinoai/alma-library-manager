@@ -267,6 +267,7 @@ def build_coauthor_network(
     conn: sqlite3.Connection,
     *,
     scope: str = "library",
+    cluster_resolution: float = 1.0,
 ) -> dict:
     """Build a multi-signal "research neighbourhood" author network (I-11).
 
@@ -579,7 +580,9 @@ def build_coauthor_network(
 
     if len(embedded_ids) >= 3:
         emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
-        result = cluster_publications(emb_map)
+        # Cluster-detail control (parity with the paper map): resolution >1 splits
+        # into more, finer author communities; <1 merges into broader ones.
+        result = cluster_publications(emb_map, resolution=cluster_resolution)
         clustering_method = result.method
         for c_idx, cluster in enumerate(result.clusters):
             for aid in cluster.member_keys:
