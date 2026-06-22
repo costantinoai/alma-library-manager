@@ -151,7 +151,7 @@ function rootsForOperation(operationKey?: string): string[] {
     return ['insights']
   }
   if (key.startsWith('materialize.graph.')) {
-    return ['graph', 'paper-map', 'author-network', 'topic-map']
+    return ['graph', 'paper-map', 'author-network']
   }
 
   return []

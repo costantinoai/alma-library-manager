@@ -62,7 +62,7 @@ interface ClusterSummary {
   }>
 }
 
-export type LabelMode = 'cluster' | 'topic'
+export type LabelMode = 'cluster'
 export type ColorBy = 'cluster' | 'year' | 'rating' | 'citations'
 export type SizeBy = 'citations' | 'uniform' | 'rating'
 // Author-network encodings (parity with the paper map, but over AUTHOR
@@ -119,7 +119,6 @@ export function GraphPanel() {
   // own edges). This is a pure RENDER flag now; edges are always in the payload
   // so toggling is instant.
   const [showEdges, setShowEdges] = useState(false)
-  const [showTopics, setShowTopics] = useState(false)
   const [showWordCloud, setShowWordCloud] = useState(false)
   // Cluster name labels at each centroid — a real toggle now (default off),
   // instead of being force-on for the author view (which read as "words always on").
@@ -162,7 +161,7 @@ export function GraphPanel() {
   // — the Edges toggle is a client-side RENDER flag, so flipping it never
   // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
     : `?scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
 
   // Only the params that actually change the FETCH belong in the key. The author
@@ -170,7 +169,7 @@ export function GraphPanel() {
   // be in its key (else toggling them would refetch + flash a spinner).
   const queryKey =
     activeView === 'paper-map'
-      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, wSem, wCo, wBib]
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, scope, clusterResolution, wSem, wCo, wBib]
       : ['graph', 'author-network', scope, clusterResolution, wSem, wCo, wBib]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
@@ -430,8 +429,6 @@ export function GraphPanel() {
             onSizeByChange={setSizeBy}
             showEdges={showEdges}
             onShowEdgesChange={setShowEdges}
-            showTopics={showTopics}
-            onShowTopicsChange={setShowTopics}
             showWordCloud={showWordCloud}
             onShowWordCloudChange={setShowWordCloud}
             showClusterLabels={showClusterLabels}
@@ -643,7 +640,7 @@ export function GraphPanel() {
               {selectedCluster ? (
                 <div className="space-y-3">
                   <div className="rounded-lg bg-surface-2 p-3">
-                    <p className="text-lg font-semibold text-alma-800">{showTopics && selectedCluster.topic_text ? selectedCluster.topic_text : selectedCluster.label}</p>
+                    <p className="text-lg font-semibold text-alma-800">{selectedCluster.label}</p>
                     {selectedCluster.description && (
                       <p className="mt-1 text-xs italic text-slate-600">{selectedCluster.description}</p>
                     )}

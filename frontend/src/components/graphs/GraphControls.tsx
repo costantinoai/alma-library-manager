@@ -41,8 +41,6 @@ interface GraphControlsProps {
   onSizeByChange?: (mode: SizeBy) => void
   showEdges?: boolean
   onShowEdgesChange?: (show: boolean) => void
-  showTopics?: boolean
-  onShowTopicsChange?: (show: boolean) => void
   showWordCloud?: boolean
   onShowWordCloudChange?: (show: boolean) => void
   showClusterLabels?: boolean
@@ -162,8 +160,6 @@ export function GraphControls({
   onSizeByChange,
   showEdges = true,
   onShowEdgesChange,
-  showTopics = false,
-  onShowTopicsChange,
   showWordCloud = false,
   onShowWordCloudChange,
   showClusterLabels = false,
@@ -274,7 +270,6 @@ export function GraphControls({
                   onChange={onLabelModeChange}
                   options={[
                     { value: 'cluster', label: 'Cluster' },
-                    { value: 'topic', label: 'Topics' },
                   ]}
                 />
               )}
@@ -313,18 +308,6 @@ export function GraphControls({
                     onCheckedChange={(checked) => onShowEdgesChange(checked === true)}
                   />
                   <span className="font-medium">Edges</span>
-                </label>
-              )}
-              {onShowTopicsChange && (
-                <label
-                  className="flex items-center gap-1.5 text-xs text-slate-600"
-                  title="Overlay topic nodes on the map and draw a link from each paper to its topics."
-                >
-                  <Checkbox
-                    checked={showTopics}
-                    onCheckedChange={(checked) => onShowTopicsChange(checked === true)}
-                  />
-                  <span className="font-medium">Topic overlays</span>
                 </label>
               )}
               {onShowWordCloudChange && (
@@ -631,7 +614,7 @@ export function GraphControls({
             className="flex flex-wrap justify-start gap-1.5"
           >
             {clusters.slice(0, 18).map((cluster) => {
-              const badgeLabel = showTopics && cluster.topic_text ? cluster.topic_text : cluster.label
+              const badgeLabel = cluster.label
               return (
                 <ToggleGroupItem
                   key={cluster.id}

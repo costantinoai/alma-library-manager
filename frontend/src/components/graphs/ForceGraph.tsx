@@ -282,7 +282,6 @@ export function ForceGraph({
     const size = (((node.size as number) || 1) * (physics?.nodeScale || 1)) * (physics?.baseSize ?? 6)
     const nodeX = Number(node.x || 0)
     const nodeY = Number(node.y || 0)
-    const nodeType = String(node.node_type || 'paper')
 
     ctx.save()
     // Slightly translucent fills so overlapping dots read as density and edges
@@ -297,15 +296,7 @@ export function ForceGraph({
     }
 
     ctx.beginPath()
-    if (nodeType === 'topic') {
-      ctx.moveTo(nodeX, nodeY - size)
-      ctx.lineTo(nodeX + size, nodeY)
-      ctx.lineTo(nodeX, nodeY + size)
-      ctx.lineTo(nodeX - size, nodeY)
-      ctx.closePath()
-    } else {
-      ctx.arc(nodeX, nodeY, size, 0, 2 * Math.PI)
-    }
+    ctx.arc(nodeX, nodeY, size, 0, 2 * Math.PI)
 
     if (highlighted) {
       ctx.fillStyle = '#FBBF24'
@@ -352,15 +343,7 @@ export function ForceGraph({
       const nodeY = Number(node.y || 0)
       ctx.fillStyle = color
       ctx.beginPath()
-      if (String(node.node_type || 'paper') === 'topic') {
-        ctx.moveTo(nodeX, nodeY - size)
-        ctx.lineTo(nodeX + size, nodeY)
-        ctx.lineTo(nodeX, nodeY + size)
-        ctx.lineTo(nodeX - size, nodeY)
-        ctx.closePath()
-      } else {
-        ctx.arc(nodeX, nodeY, size, 0, 2 * Math.PI)
-      }
+      ctx.arc(nodeX, nodeY, size, 0, 2 * Math.PI)
       ctx.fill()
     },
     [physics?.nodeScale, physics?.baseSize],
@@ -613,7 +596,6 @@ export function ForceGraph({
       if (meta.citation_count != null) stats.push(`${esc(meta.citation_count)} cites`)
       if (meta.h_index != null) stats.push(`h-index ${esc(meta.h_index)}`)
       if (stats.length) rows.push(`<div style="opacity:.7">${stats.join(' · ')}</div>`)
-      if (meta.top_topic) rows.push(`<div style="opacity:.6;font-style:italic">${esc(meta.top_topic)}</div>`)
     } else {
       const stats: string[] = []
       if (meta.year != null) stats.push(esc(meta.year))
