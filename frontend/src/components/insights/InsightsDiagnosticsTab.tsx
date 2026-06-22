@@ -359,11 +359,52 @@ export function InsightsDiagnosticsTab({
                             <p className="font-medium text-alma-800">{card.label}</p>
                             <p className="text-xs text-slate-500">{card.summary}</p>
                           </div>
+                          {/* I-23/I-26: a score badge only when there is a graded
+                              score; otherwise an honest "N/A" (empty population)
+                              or "Observed" (measures-only) chip. */}
                           <StatusBadge tone={scoreStatusTone(card.status)}>
-                            {card.score}/100
+                            {card.status === 'insufficient_data'
+                              ? 'N/A'
+                              : card.score === null || card.score === undefined
+                                ? 'Observed'
+                                : `${card.score}/100`}
                           </StatusBadge>
                         </div>
                         <p className="mt-3 text-sm text-slate-600">{card.detail}</p>
+                        {/* I-23: AI card surfaces separate observed diagnostics,
+                            each with its own sample — no single composite grade. */}
+                        {card.measures && card.measures.length > 0 ? (
+                          <dl className="mt-3 space-y-1.5 border-t border-[var(--color-border)] pt-3">
+                            {card.measures.map((m) => (
+                              <div
+                                key={m.key}
+                                className="flex items-baseline justify-between gap-3 text-sm"
+                              >
+                                <dt className="text-slate-600">{m.label}</dt>
+                                <dd className="font-medium text-alma-800">
+                                  {m.sufficient ? (
+                                    <>
+                                      {m.value}
+                                      {m.unit}
+                                      <span className="ml-1 text-xs font-normal text-slate-400">
+                                        (n={m.sample_size})
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <span className="text-xs font-normal text-slate-400">
+                                      insufficient data (n={m.sample_size})
+                                    </span>
+                                  )}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : null}
+                        {typeof card.sample_size === 'number' && !card.measures ? (
+                          <p className="mt-2 text-xs text-slate-400">
+                            Based on {card.sample_size.toLocaleString()} observations.
+                          </p>
+                        ) : null}
                       </div>
                     ))}
                   </div>

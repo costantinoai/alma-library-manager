@@ -31,6 +31,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { DataTable } from '@/components/ui/data-table'
 import { ActionCardHeader, MetricTile } from '@/components/shared'
 import { truncate } from '@/lib/utils'
+import { formatPercent } from '@/lib/format'
 
 interface Palette {
   slate: string
@@ -136,9 +137,27 @@ export function InsightsReportsTab({
       },
     },
     {
+      // I-29: a real diversity figure (normalized topic evenness 0..1) plus the
+      // raw distinct-topic count — replaces the old len(top5) that maxed at 5.
+      id: 'topic_diversity',
+      accessorKey: 'topic_diversity',
+      header: 'Diversity',
+      size: 110,
+      meta: { cellOverflow: 'none' },
+      cell: ({ row }) => (
+        <span
+          className="block text-right tabular-nums text-slate-700"
+          title={`Topic evenness ${formatPercent(row.original.topic_diversity, 0)} across ${row.original.distinct_topics} distinct topics`}
+        >
+          {row.original.distinct_topics > 1 ? formatPercent(row.original.topic_diversity, 0) : '—'}
+          <span className="ml-1 text-xs text-slate-400">/ {row.original.distinct_topics}</span>
+        </span>
+      ),
+    },
+    {
       id: 'top_topics',
       header: 'Top Topics',
-      size: 260,
+      size: 240,
       enableSorting: false,
       meta: { cellOverflow: 'wrap' },
       cell: ({ row }) => (
@@ -201,9 +220,37 @@ export function InsightsReportsTab({
       ),
     },
     {
+      // I-31: sample sizes behind the comparison, so a delta is read with its N.
+      id: 'evidence',
+      header: 'n (liked/dism.)',
+      size: 120,
+      enableSorting: false,
+      meta: { cellOverflow: 'none' },
+      cell: ({ row }) => (
+        <span className="block text-right tabular-nums text-slate-500">
+          {row.original.liked_n} / {row.original.dismissed_n}
+        </span>
+      ),
+    },
+    {
+      // I-31: 95% CI on the difference of means — the honest uncertainty band.
+      id: 'ci',
+      header: '95% CI (Δ)',
+      size: 140,
+      enableSorting: false,
+      meta: { cellOverflow: 'none' },
+      cell: ({ row }) => (
+        <span className="block text-right tabular-nums text-xs text-slate-500">
+          [{row.original.ci_low.toFixed(3)}, {row.original.ci_high.toFixed(3)}]
+        </span>
+      ),
+    },
+    {
+      // I-31: only positive/negative when the cohort is powered AND the CI
+      // excludes zero (direction !== inconclusive); otherwise "inconclusive".
       id: 'impact',
       accessorKey: 'impact',
-      header: 'Impact',
+      header: 'Association',
       size: 130,
       meta: { cellOverflow: 'none' },
       cell: ({ row }) => (
@@ -216,7 +263,7 @@ export function InsightsReportsTab({
                 : 'neutral'
           }
         >
-          {row.original.impact}
+          {row.original.impact === 'neutral' ? 'inconclusive' : row.original.impact}
         </StatusBadge>
       ),
     },
@@ -348,16 +395,25 @@ export function InsightsReportsTab({
         />
         {topicDriftData && (
           <CardContent className="space-y-4">
+            {/* I-30: explicit windows with paper counts; prevalence not raw count
+                so a busy window can't dominate by volume; insufficient state. */}
             <div className="grid gap-4 lg:grid-cols-3">
               {topicDriftData.windows.map((w) => (
                 <div key={w.label} className="rounded-sm border border-[var(--color-border)] p-3">
-                  <h4 className="mb-1 text-sm font-semibold text-slate-700">{w.label}</h4>
-                  <p className="mb-2 text-xs text-slate-400">{w.from_year}&ndash;{w.to_year}</p>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold text-slate-700 capitalize">{w.label}</h4>
+                    {!w.sufficient && <StatusBadge tone="neutral" size="sm">thin</StatusBadge>}
+                  </div>
+                  <p className="mb-2 text-xs text-slate-400">
+                    {w.from_year}&ndash;{w.to_year} · {w.paper_count} papers
+                  </p>
                   <div className="space-y-1">
                     {w.top_topics.map((t) => (
                       <div key={t.topic} className="flex items-center justify-between text-sm">
-                        <span className="mr-2 truncate text-slate-600">{truncate(t.topic, 25)}</span>
-                        <span className="shrink-0 text-xs text-slate-400">{t.papers}</span>
+                        <span className="mr-2 truncate text-slate-600" title={t.topic}>{truncate(t.topic, 25)}</span>
+                        <span className="shrink-0 text-xs text-slate-400 tabular-nums">
+                          {formatPercent(t.prevalence, 0)}
+                        </span>
                       </div>
                     ))}
                     {w.top_topics.length === 0 && (
@@ -367,32 +423,52 @@ export function InsightsReportsTab({
                 </div>
               ))}
             </div>
-            <div className="flex flex-wrap gap-4">
-              {topicDriftData.emerging_topics.length > 0 && (
-                <div>
-                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    {topicDriftData.emerging_topics.map((t) => (
-                      <StatusBadge key={t} tone="positive">
-                        {t}
-                      </StatusBadge>
-                    ))}
+            {topicDriftData.insufficient ? (
+              <p className="text-sm text-slate-400">
+                {topicDriftData.note || 'Not enough data to identify a reliable trend.'}
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-4">
+                {topicDriftData.emerging_topics.length > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-success-700">Emerging</h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {topicDriftData.emerging_topics.map((t) => (
+                        <StatusBadge
+                          key={t.topic}
+                          tone="positive"
+                          title={`${formatPercent(t.early_prevalence, 0)} → ${formatPercent(t.recent_prevalence, 0)}`}
+                        >
+                          {truncate(t.topic, 28)} +{formatPercent(t.delta, 0)}
+                        </StatusBadge>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-              {topicDriftData.fading_topics.length > 0 && (
-                <div>
-                  <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    {topicDriftData.fading_topics.map((t) => (
-                      <StatusBadge key={t} tone="negative">
-                        {t}
-                      </StatusBadge>
-                    ))}
+                )}
+                {topicDriftData.fading_topics.length > 0 && (
+                  <div>
+                    <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-critical-700">Fading</h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {topicDriftData.fading_topics.map((t) => (
+                        <StatusBadge
+                          key={t.topic}
+                          tone="negative"
+                          title={`${formatPercent(t.early_prevalence, 0)} → ${formatPercent(t.recent_prevalence, 0)}`}
+                        >
+                          {truncate(t.topic, 28)} {formatPercent(t.delta, 0)}
+                        </StatusBadge>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+                {topicDriftData.emerging_topics.length === 0 &&
+                  topicDriftData.fading_topics.length === 0 && (
+                    <p className="text-sm text-slate-400">
+                      No topic moved enough between windows to call a trend.
+                    </p>
+                  )}
+              </div>
+            )}
           </CardContent>
         )}
       </Card>
@@ -417,14 +493,19 @@ export function InsightsReportsTab({
         />
         {signalImpactData && (
           <CardContent className="space-y-4">
-            <div className="mb-3 flex gap-4 text-sm">
+            <div className="mb-3 flex flex-wrap items-center gap-4 text-sm">
               <span className="text-slate-500">
-                Liked: <span className="font-medium text-success-700 tabular-nums">{signalImpactData.liked_count}</span>
+                Positive cohort: <span className="font-medium text-success-700 tabular-nums">{signalImpactData.liked_count}</span>
               </span>
               <span className="text-slate-500">
-                Dismissed: <span className="font-medium text-critical-700 tabular-nums">{signalImpactData.dismissed_count}</span>
+                Negative cohort: <span className="font-medium text-critical-700 tabular-nums">{signalImpactData.dismissed_count}</span>
               </span>
+              {!signalImpactData.sufficient && (
+                <StatusBadge tone="neutral">underpowered cohort</StatusBadge>
+              )}
             </div>
+            {/* I-31: name it honestly — association, not causation. */}
+            <p className="text-xs text-slate-400">{signalImpactData.note}</p>
             {signalImpactData.signals.length === 0 ? (
               <p className="text-sm text-slate-400">Not enough data to compare signals.</p>
             ) : (

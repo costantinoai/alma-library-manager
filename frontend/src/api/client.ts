@@ -2254,10 +2254,24 @@ export interface InsightsDiagnostics {
     scorecards: Array<{
       id: string
       label: string
-      score: number
+      // I-23/I-26: score is null for an "insufficient_data" card (empty
+      // population) or an "observed" measures-only card (e.g. AI Retrieval
+      // Quality, which reports `measures` instead of a single composite grade).
+      score: number | null
+      // 'good' | 'attention' | 'critical' | 'insufficient_data' | 'observed'
       status: string
       summary: string
       detail: string
+      sample_size?: number
+      measures?: Array<{
+        key: string
+        label: string
+        value: number
+        unit: string
+        sample_size: number
+        sufficient: boolean
+        detail: string
+      }>
     }>
     recommended_actions: Array<{
       id: string
@@ -3951,6 +3965,8 @@ export interface WeeklyBriefData {
 export interface CollectionIntelligenceData {
   report_type: 'collection_intelligence'
   total_collections: number
+  // I-29: every figure is scoped to Library papers (D5).
+  scope: string
   collections: Array<{
     id: string
     name: string
@@ -3961,8 +3977,20 @@ export interface CollectionIntelligenceData {
     last_added: string | null
     top_topics: Array<{ topic: string; papers: number }>
     year_range: { min: number | null; max: number | null }
+    // I-29: normalized Shannon evenness (0..1) over the full topic
+    // distribution, not len(top5). `distinct_topics` is the raw count.
     topic_diversity: number
+    distinct_topics: number
   }>
+}
+
+// I-30: emerging/fading are now objects carrying the normalized prevalence
+// change (effect size), not bare topic strings from a top-15 set difference.
+export interface TopicDriftEntry {
+  topic: string
+  recent_prevalence: number
+  early_prevalence: number
+  delta: number
 }
 
 export interface TopicDriftData {
@@ -3971,21 +3999,39 @@ export interface TopicDriftData {
     label: string
     from_year: number
     to_year: number
-    top_topics: Array<{ topic: string; papers: number }>
+    // I-30: paper count (denominator) + per-topic normalized prevalence +
+    // whether the window is large enough to compare.
+    paper_count: number
+    sufficient: boolean
+    top_topics: Array<{ topic: string; papers: number; prevalence: number }>
   }>
-  emerging_topics: string[]
-  fading_topics: string[]
+  emerging_topics: TopicDriftEntry[]
+  fading_topics: TopicDriftEntry[]
+  insufficient: boolean
+  note: string | null
 }
 
 export interface SignalImpactData {
   report_type: 'signal_impact'
+  // I-31: descriptive association, explicitly not causal.
+  method: string
+  note: string
   liked_count: number
   dismissed_count: number
+  cohort: { positive: number; negative: number; neutral: number; total: number }
+  sufficient: boolean
   signals: Array<{
     signal: string
     liked_avg: number
     dismissed_avg: number
+    liked_n: number
+    dismissed_n: number
     delta: number
+    ci_low: number
+    ci_high: number
+    effect_size: number
+    sufficient: boolean
+    direction: 'higher' | 'lower' | 'inconclusive'
     impact: 'positive' | 'negative' | 'neutral'
   }>
 }

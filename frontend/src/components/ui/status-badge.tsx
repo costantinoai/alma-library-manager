@@ -65,6 +65,10 @@ export function severityTone(severity?: string | null): StatusBadgeTone {
 export function scoreStatusTone(status?: string | null): StatusBadgeTone {
   if (status === 'good') return 'positive'
   if (status === 'critical') return 'negative'
+  // I-23/I-26: "insufficient_data" (empty population) and "observed" (a
+  // measures-only card with no composite grade) are NOT problems — render them
+  // as calm neutral chips, not alarm-amber.
+  if (status === 'insufficient_data' || status === 'observed') return 'neutral'
   return 'warning'
 }
 
