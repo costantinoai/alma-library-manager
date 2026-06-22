@@ -40,6 +40,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Optional
 
+from alma.core.db_write import write_section
 from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
@@ -480,12 +481,15 @@ def run_preprint_dedup(
 
         for idx, pair in enumerate(candidates, start=1):
             try:
-                result = merge_preprint_into_canonical(
-                    conn,
-                    pair["preprint_id"],
-                    pair["canonical_id"],
-                )
-                conn.commit()
+                # Local merge (no network) — one gated write window per pair so
+                # the sweep serializes against foreground writes and releases the
+                # gate between merges (commit-per-unit-of-work).
+                with write_section(conn, label="preprint dedup merge"):
+                    result = merge_preprint_into_canonical(
+                        conn,
+                        pair["preprint_id"],
+                        pair["canonical_id"],
+                    )
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:

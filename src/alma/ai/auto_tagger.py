@@ -15,6 +15,8 @@ import sqlite3
 from datetime import datetime
 from typing import Optional
 
+from alma.core.db_write import write_section
+
 logger = logging.getLogger(__name__)
 
 # Defensive imports for optional dependencies
@@ -470,19 +472,22 @@ def bulk_suggest_tags(conn: sqlite3.Connection, progress_callback=None) -> dict:
             pid = pub_row["paper_id"]
 
             try:
+                # Inference (embedding cosine / TF-IDF) runs OUTSIDE the writer
+                # gate — it is the slow, CPU-heavy part. Only the short INSERT
+                # window per paper is gated (BEGIN IMMEDIATE + writer gate).
                 suggestions = suggest_tags(pid, conn, max_tags=5)
 
-                for s in suggestions:
-                    conn.execute(
-                        """
-                        INSERT OR IGNORE INTO tag_suggestions
-                            (paper_id, tag, tag_id, confidence, source, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (pid, s["tag"], s["tag_id"], s["confidence"], s["source"], now),
-                    )
-
                 if suggestions:
+                    with write_section(conn, label="auto_tagger suggestions"):
+                        for s in suggestions:
+                            conn.execute(
+                                """
+                                INSERT OR IGNORE INTO tag_suggestions
+                                    (paper_id, tag, tag_id, confidence, source, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                                (pid, s["tag"], s["tag_id"], s["confidence"], s["source"], now),
+                            )
                     generated += 1
 
             except Exception as exc:
@@ -494,8 +499,6 @@ def bulk_suggest_tags(conn: sqlite3.Connection, progress_callback=None) -> dict:
 
             if progress_callback and (idx == 1 or idx % 25 == 0 or idx == total):
                 progress_callback(idx, total, generated, errors, pid)
-
-        conn.commit()
 
     except Exception as exc:
         logger.exception("Bulk tag suggestion failed: %s", exc)

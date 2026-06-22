@@ -44,7 +44,7 @@ import sqlite3
 from datetime import datetime
 from typing import Iterable, Optional
 
-from alma.core.db_write import run_after_gate_release
+from alma.core.db_write import run_after_gate_release, write_section
 
 logger = logging.getLogger(__name__)
 
@@ -432,17 +432,20 @@ def garbage_collect_orphan_authors(
             if len(sample) < 25:
                 sample.append({"author_id": aid, "name": row["name"]})
             continue
-        if soft_remove_author(
-            db,
-            aid,
-            reason="manual sweep",
-            job_id=job_id,
-        ):
+        # One gated write window per removal (commit-per-unit-of-work). The
+        # local soft-remove writes go inside the section; soft_remove_author's
+        # audit log defers past the gate via run_after_gate_release.
+        with write_section(db, label="author gc remove"):
+            removed = soft_remove_author(
+                db,
+                aid,
+                reason="manual sweep",
+                job_id=job_id,
+            )
+        if removed:
             collected += 1
             if len(sample) < 25:
                 sample.append({"author_id": aid, "name": row["name"]})
-    if not dry_run and db.in_transaction:
-        db.commit()
     summary = {
         "success": True,
         "scanned": scanned,
