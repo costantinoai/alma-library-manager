@@ -44,6 +44,10 @@ from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal, safe_div, table_exists
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.application import materialized_views as mv
+from alma.application.diagnostics_stats import (
+    MIN_RATE_SAMPLE,
+    RateEstimate,
+)
 from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
     count_outcomes,
@@ -236,6 +240,14 @@ def _build_diag_feed(db: sqlite3.Connection) -> dict[str, Any]:
     degraded = [m for m in monitors if m.get("health") == "degraded"]
     disabled = [m for m in monitors if m.get("health") == "disabled"]
 
+    # I-26: the average yield must cover ALL monitors with a measurable yield,
+    # not just the first 20 we keep for the UI table below. Computing it here
+    # (over the full monitor_rows) and stashing it on the summary means the
+    # evaluation scorecard reads a true population average instead of
+    # re-deriving it from the sliced `monitors` list (which was the bug).
+    all_yields = [r["yield_rate"] for r in monitor_rows if r["yield_rate"] is not None]
+    avg_yield_rate = round(sum(all_yields) / len(all_yields), 3) if all_yields else 0.0
+
     refresh_ops = _load_recent_operations(
         db, operation_key="feed.refresh_inbox", limit=45
     )
@@ -275,6 +287,10 @@ def _build_diag_feed(db: sqlite3.Connection) -> dict[str, Any]:
             "query_monitors": sum(
                 1 for m in monitors if m.get("monitor_type") == "query"
             ),
+            # Population-wide yield (over every monitor that reported one), used
+            # by the evaluation scorecard — not the sliced table below (I-26).
+            "avg_yield_rate": avg_yield_rate,
+            "monitors_with_yield": len(all_yields),
         },
         "monitors": monitor_rows[:20],
         "recent_refreshes": recent_refreshes,
@@ -410,30 +426,45 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
             mix_key = branch_id or branch_label
             source_mix = (source_mix_by_branch.get(mix_key) or [])[:4]
 
-            if count >= 4 and dismiss_rate >= 0.40:
-                tuning_hint = "Mute or cool this branch. Dismissals are too high."
+            # I-25: prescriptive "boost"/"cool" verdicts must clear an uncertainty
+            # bar, not fire at 3-4 outcomes. We require a sufficient sample AND the
+            # conservative Wilson bound (not the point estimate) to clear the
+            # threshold, and we state the numerator/denominator as the evidence.
+            dismiss_est = RateEstimate(dismissed, count)
+            positive_est = RateEstimate(liked + saved, count)
+            if dismiss_est.confidently_above(0.40):
                 quality_state = "cool"
-            elif count >= 4 and positive_rate >= 0.28 and recent_share >= 0.35:
-                tuning_hint = "Boost this branch. It is producing useful, recent recommendations."
-                quality_state = "strong"
-            elif count <= 3 and positive_rate >= 0.34:
                 tuning_hint = (
-                    "Give this branch more budget. Early outcomes are promising "
-                    "but volume is thin."
+                    f"Mute or cool this branch — {dismissed}/{count} dismissed "
+                    "(confidently too high)."
                 )
+            elif positive_est.confidently_above(0.28) and recent_share >= 0.35:
+                quality_state = "strong"
+                tuning_hint = (
+                    f"Boost this branch — {liked + saved}/{count} positive and recent."
+                )
+            elif not positive_est.sufficient and positive_est.rate >= 0.34:
+                # Promising point estimate but too thin for a prescriptive call;
+                # surface the thinness instead of advising a budget change.
                 quality_state = "underexplored"
-            elif unique_sources <= 1 and positive_rate >= 0.20:
+                tuning_hint = (
+                    f"Promising but thin — {liked + saved}/{count} positive. Needs "
+                    f"{MIN_RATE_SAMPLE} outcomes for a confident verdict."
+                )
+            elif positive_est.sufficient and unique_sources <= 1 and positive_est.rate >= 0.20:
+                quality_state = "narrow"
                 tuning_hint = (
                     "Diversify source mix. Branch quality is decent but too "
                     "concentrated."
                 )
-                quality_state = "narrow"
-            else:
-                tuning_hint = (
-                    "Monitor this branch. It needs more volume or clearer "
-                    "user feedback."
-                )
+            elif not positive_est.sufficient:
                 quality_state = "monitor"
+                tuning_hint = (
+                    f"Too few outcomes to tune — {count} of {MIN_RATE_SAMPLE} needed."
+                )
+            else:
+                quality_state = "monitor"
+                tuning_hint = "Monitor this branch. It needs clearer user feedback."
             branch_quality.append(
                 {
                     "branch_id": branch_id,
@@ -555,6 +586,68 @@ def _build_diag_operational(db: sqlite3.Connection) -> dict[str, Any]:
 # ── Section: evaluation ---------------------------------------------------
 
 
+def _score_band(score: int) -> str:
+    """Map a 0..100 diagnostic score to a status band (only when we HAVE data)."""
+    return "good" if score >= 75 else "attention" if score >= 50 else "critical"
+
+
+def _make_scorecard(
+    *,
+    id: str,
+    label: str,
+    sample_size: int,
+    min_sample: int,
+    score: int | None,
+    summary: str,
+    detail: str,
+    insufficient_summary: str | None = None,
+    measures: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build one diagnostics scorecard with an HONEST empty/low-data state.
+
+    Findings I-23 / I-26: a scorecard must never present a misleading number
+    when there is nothing (or almost nothing) to measure. A 0 reads as
+    "critical" and an optimistic default reads as "good" — both lie when the
+    underlying population is empty (no monitors, no alert runs, no recs). So:
+
+    * ``sample_size`` is the size of the population this card scores; when it is
+      below ``min_sample`` the card returns ``status='insufficient_data'`` with
+      ``score=None`` and an explanatory summary, instead of a graded number.
+    * ``score=None`` WITH a sufficient sample marks an "observed" card — one that
+      reports separate ``measures`` rather than a single composite grade. This is
+      the I-23 shape for AI Retrieval Quality, whose old composite both conflated
+      unrelated quantities and capped at 87 (its weights summed to 0.87).
+    * Otherwise the score is banded good / attention / critical as before.
+
+    ``sample_size`` is always emitted so the UI can show "based on N …".
+    """
+    card: dict[str, Any] = {
+        "id": id,
+        "label": label,
+        "sample_size": sample_size,
+        "summary": summary,
+        "detail": detail,
+    }
+    if measures is not None:
+        card["measures"] = measures
+
+    if sample_size < min_sample:
+        card["status"] = "insufficient_data"
+        card["score"] = None
+        card["summary"] = insufficient_summary or (
+            f"Not enough data yet — {sample_size} observed, {min_sample} needed."
+        )
+    elif score is None:
+        # Measures-only card: observed, deliberately not reduced to one grade.
+        card["status"] = "observed"
+        card["score"] = None
+    else:
+        clamped = max(0, min(100, int(score)))
+        card["status"] = _score_band(clamped)
+        card["score"] = clamped
+    return card
+
+
 def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
     """Composes all section scorecards, recommended actions, automation tips.
 
@@ -576,17 +669,13 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
     ) or {}
 
     feed_summary = feed_payload.get("summary") or {}
-    monitor_rows = feed_payload.get("monitors") or []
     total_monitors = _safe_int(feed_summary.get("total_monitors"))
     ready_count = _safe_int(feed_summary.get("ready_monitors"))
     degraded_count = _safe_int(feed_summary.get("degraded_monitors"))
     ready_ratio = safe_div(ready_count, total_monitors or 1)
-    yields = [
-        _safe_float(item.get("yield_rate"))
-        for item in monitor_rows
-        if item.get("yield_rate") is not None
-    ]
-    avg_monitor_yield = safe_div(sum(yields), max(1, len(yields)))
+    # I-26: population-wide yield, computed in `_build_diag_feed` over EVERY
+    # monitor (not the 20-row UI slice this section used to re-average).
+    avg_monitor_yield = _safe_float(feed_summary.get("avg_yield_rate"))
     feed_score = max(
         0,
         min(
@@ -772,40 +861,46 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
         ),
     )
 
+    # I-23: NO composite AI score. The old 0..100 grade summed weights to 0.87
+    # (so a perfect system reported 87) AND conflated four unrelated quantities
+    # behind one number. Instead we surface the observed diagnostics separately,
+    # each with its own population so the UI can mark "insufficient data" per
+    # measure. These describe the AI retrieval substrate; they are NOT graded.
     ai_summary = ai_payload.get("summary") or {}
-    ai_score = max(
-        0,
-        min(
-            100,
-            round(
-                (
-                    (min(_safe_float(ai_summary.get("embedding_coverage_pct")) / 100.0, 1.0) * 0.45)
-                    + (
-                        (
-                            1.0
-                            - min(
-                                _safe_int(ai_summary.get("stale_embeddings"))
-                                / max(
-                                    1,
-                                    _safe_int(ai_summary.get("stale_embeddings"))
-                                    + _safe_int(ai_summary.get("up_to_date_embeddings")),
-                                ),
-                                1.0,
-                            )
-                        )
-                        * 0.15
-                    )
-                    + (min(_safe_float(ai_summary.get("hybrid_text_rate")) / 0.6, 1.0) * 0.10)
-                    + (min(_safe_float(ai_summary.get("avg_text_similarity")) / 0.35, 1.0) * 0.10)
-                    + (
-                        (1.0 - min(_safe_float(ai_summary.get("compressed_similarity_rate")) / 0.6, 1.0))
-                        * 0.07
-                    )
-                )
-                * 100
-            ),
-        ),
-    )
+    ai_total_papers = _safe_int(ai_summary.get("total_papers"))
+    ai_up_to_date = _safe_int(ai_summary.get("up_to_date_embeddings"))
+    ai_stale = _safe_int(ai_summary.get("stale_embeddings"))
+    ai_embedded = ai_up_to_date + ai_stale
+    ai_recent_analyzed = _safe_int(ai_summary.get("recent_recommendations_analyzed"))
+    ai_measures: list[dict[str, Any]] = [
+        {
+            "key": "embedding_coverage",
+            "label": "Embedding coverage",
+            "value": round(_safe_float(ai_summary.get("embedding_coverage_pct")), 1),
+            "unit": "%",
+            "sample_size": ai_total_papers,
+            "sufficient": ai_total_papers > 0,
+            "detail": f"{ai_up_to_date} of {ai_total_papers} papers embedded with the active model.",
+        },
+        {
+            "key": "stale_embeddings",
+            "label": "Stale embeddings",
+            "value": round(safe_div(ai_stale, ai_embedded or 1) * 100.0, 1),
+            "unit": "%",
+            "sample_size": ai_embedded,
+            "sufficient": ai_embedded > 0,
+            "detail": f"{ai_stale} of {ai_embedded} embedded papers are on an older model.",
+        },
+        {
+            "key": "avg_text_similarity",
+            "label": "Avg retrieval similarity",
+            "value": round(_safe_float(ai_summary.get("avg_text_similarity")), 3),
+            "unit": "",
+            "sample_size": ai_recent_analyzed,
+            "sufficient": ai_recent_analyzed >= MIN_RATE_SAMPLE,
+            "detail": f"Mean text similarity over {ai_recent_analyzed} recently scored recommendations.",
+        },
+    ]
 
     operational_summary = operational_payload.get("summary") or {}
     operational_score = max(
@@ -829,133 +924,181 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
         ),
     )
 
-    def _status_band(score: int) -> str:
-        return "good" if score >= 75 else "attention" if score >= 50 else "critical"
+    # Sample sizes — the population each card actually scores. When a population
+    # is empty the card reports "insufficient data" instead of a misleading
+    # number (I-26). Rate cards (discovery / branch) need a real sample before a
+    # rate is trustworthy; configuration/progress cards (monitors / library /
+    # authors) just need one entity; alerts need a few runs (they run rarely).
+    branch_total = sum(_safe_int(item.get("count")) for item in active_branch_rows)
+    raw_tracked_authors = _safe_int(authors_summary.get("tracked_authors"))
+    alert_runs_30d = (
+        sent_runs_30d
+        + failed_runs_30d
+        + empty_runs_30d
+        + _safe_int(alerts_summary.get("skipped_runs_30d"))
+    )
+    week_interactions = _safe_int(feedback_summary.get("week_interactions"))
+    operational_checks = (
+        _safe_int(operational_summary.get("healthy_checks"))
+        + _safe_int(operational_summary.get("warning_count"))
+        + _safe_int(operational_summary.get("critical_count"))
+    )
 
     scorecards: list[dict[str, Any]] = [
-        {
-            "id": "feed_monitor_health",
-            "label": "Feed Monitor Health",
-            "score": feed_score,
-            "status": _status_band(feed_score),
-            "summary": f"{ready_count} of {total_monitors} monitors are ready.",
-            "detail": (
+        _make_scorecard(
+            id="feed_monitor_health",
+            label="Feed Monitor Health",
+            sample_size=total_monitors,
+            min_sample=1,
+            score=feed_score,
+            summary=f"{ready_count} of {total_monitors} monitors are ready.",
+            detail=(
                 f"Average recent yield is {avg_monitor_yield:.2f} and "
                 f"{degraded_count} monitors are degraded."
             ),
-        },
-        {
-            "id": "discovery_quality",
-            "label": "Discovery Quality",
-            "score": discovery_score,
-            "status": _status_band(discovery_score),
-            "summary": (
+            insufficient_summary="No feed monitors configured yet.",
+        ),
+        _make_scorecard(
+            id="discovery_quality",
+            label="Discovery Quality",
+            sample_size=total_source_count,
+            min_sample=MIN_RATE_SAMPLE,
+            score=discovery_score,
+            summary=(
                 f"{total_source_liked} likes and {total_source_dismissed} "
                 f"dismisses across {total_source_count} recommendations."
             ),
-            "detail": (
+            detail=(
                 f"Engagement is {safe_div(total_source_engaged, total_source_count or 1) * 100:.0f}% "
                 "across tracked source groups."
             ),
-        },
-        {
-            "id": "branch_signal_quality",
-            "label": "Branch Signal Quality",
-            "score": branch_score,
-            "status": _status_band(branch_score),
-            "summary": (
-                f"{len(active_branch_rows)} branches have tracked recommendation outcomes."
+            insufficient_summary=(
+                f"Only {total_source_count} recommendations so far — need "
+                f"{MIN_RATE_SAMPLE} before scoring discovery quality."
             ),
-            "detail": (
+        ),
+        _make_scorecard(
+            id="branch_signal_quality",
+            label="Branch Signal Quality",
+            sample_size=branch_total,
+            min_sample=MIN_RATE_SAMPLE,
+            score=branch_score,
+            summary=(
+                f"{len(active_branch_rows)} branches with {branch_total} tracked "
+                "recommendation outcomes."
+            ),
+            detail=(
                 "Branch score reflects positive outcomes, recency share, "
                 "source diversity, and dismiss pressure."
             ),
-        },
-        {
-            "id": "library_workflow",
-            "label": "Library Workflow",
-            "score": workflow_score,
-            "status": _status_band(workflow_score),
-            "summary": (
+            insufficient_summary=(
+                f"Only {branch_total} branch-attributed outcomes — need "
+                f"{MIN_RATE_SAMPLE} before scoring branch quality."
+            ),
+        ),
+        _make_scorecard(
+            id="library_workflow",
+            label="Library Workflow",
+            sample_size=_safe_int(workflow_snapshot.get("total_library")),
+            min_sample=1,
+            score=workflow_score,
+            summary=(
                 f"{_safe_int(workflow_snapshot.get('reading_count'))} reading, "
                 f"{_safe_int(workflow_snapshot.get('done_count'))} done of "
                 f"{_safe_int(workflow_snapshot.get('total_library'))} saved papers."
             ),
-            "detail": (
+            detail=(
                 "Workflow score reflects how much of your saved library you have "
                 "read or are actively reading (D2: a save is not a reading chore)."
             ),
-        },
-        {
-            "id": "ai_quality",
-            "label": "AI Retrieval Quality",
-            "score": ai_score,
-            "status": _status_band(ai_score),
-            "summary": (
-                f"{_safe_float(ai_summary.get('embedding_coverage_pct'))}% embedding coverage and "
-                f"{_safe_int(ai_summary.get('recent_recommendations_analyzed'))} recent recommendations analyzed."
+            insufficient_summary="No saved library papers yet.",
+        ),
+        # I-23: AI Retrieval Quality is an OBSERVED card (no composite grade) —
+        # see `ai_measures` above. `score=None` + a sufficient sample renders the
+        # measures; zero papers renders "insufficient data".
+        _make_scorecard(
+            id="ai_quality",
+            label="AI Retrieval Quality",
+            sample_size=ai_total_papers,
+            min_sample=1,
+            score=None,
+            measures=ai_measures,
+            summary=(
+                f"{round(_safe_float(ai_summary.get('embedding_coverage_pct')), 1)}% embedding "
+                f"coverage; {ai_recent_analyzed} recent recommendations analyzed."
             ),
-            "detail": (
-                "AI score reflects embedding coverage, embedding freshness, "
-                "hybrid-text usage, and similarity quality."
+            detail=(
+                "Observed retrieval-substrate diagnostics, reported separately "
+                "rather than as one grade — each carries its own sample size."
             ),
-        },
-        {
-            "id": "authors_monitoring",
-            "label": "Authors Monitoring",
-            "score": authors_score,
-            "status": _status_band(authors_score),
-            "summary": (
-                f"{ready_tracked} of {_safe_int(authors_summary.get('tracked_authors'))} "
-                "tracked authors are refresh-ready."
+            insufficient_summary="No papers to embed yet.",
+        ),
+        _make_scorecard(
+            id="authors_monitoring",
+            label="Authors Monitoring",
+            sample_size=raw_tracked_authors,
+            min_sample=1,
+            score=authors_score,
+            summary=(
+                f"{ready_tracked} of {raw_tracked_authors} tracked authors are refresh-ready."
             ),
-            "detail": (
+            detail=(
                 f"{bridge_gap_count} tracked authors still need a stronger identity bridge."
             ),
-        },
-        {
-            "id": "alert_automation_quality",
-            "label": "Alert Automation Quality",
-            "score": alerts_score,
-            "status": _status_band(alerts_score),
-            "summary": (
+            insufficient_summary="No tracked authors yet.",
+        ),
+        _make_scorecard(
+            id="alert_automation_quality",
+            label="Alert Automation Quality",
+            sample_size=alert_runs_30d,
+            min_sample=3,
+            score=alerts_score,
+            summary=(
                 f"{sent_runs_30d} sent runs, {failed_runs_30d} failed, "
                 f"{empty_runs_30d} empty in the last 30 days."
             ),
-            "detail": (
+            detail=(
                 "Alert score balances delivery reliability, non-empty output, "
                 "and papers delivered per successful run."
             ),
-        },
-        {
-            "id": "feedback_learning",
-            "label": "Feedback Learning",
-            "score": signal_score,
-            "status": _status_band(signal_score),
-            "summary": (
-                f"{_safe_int(feedback_summary.get('week_interactions'))} interactions "
-                "this week with "
+            # I-26: with no runs the old formula scored ~75 ("good"). Now no
+            # runs (or too few) is honestly "insufficient data".
+            insufficient_summary=(
+                f"Only {alert_runs_30d} alert runs in 30 days — too few to judge automation quality."
+            ),
+        ),
+        _make_scorecard(
+            id="feedback_learning",
+            label="Feedback Learning",
+            sample_size=week_interactions,
+            min_sample=1,
+            score=signal_score,
+            summary=(
+                f"{week_interactions} interactions this week with "
                 f"{_safe_int(feedback_summary.get('source_diversity_7d'))} source groups touched."
             ),
-            "detail": (
+            detail=(
                 "Learning health reflects recent interaction depth, source diversity, "
                 "topic coverage, and recommendation engagement."
             ),
-        },
-        {
-            "id": "operational_health",
-            "label": "Operational Health",
-            "score": operational_score,
-            "status": _status_band(operational_score),
-            "summary": (
+            insufficient_summary="No feedback interactions this week.",
+        ),
+        _make_scorecard(
+            id="operational_health",
+            label="Operational Health",
+            sample_size=operational_checks,
+            min_sample=1,
+            score=operational_score,
+            summary=(
                 f"{_safe_int(operational_summary.get('issues_total'))} active issues "
                 "across embeddings, monitors, sources, alerts, and plugins."
             ),
-            "detail": (
+            detail=(
                 "Operational health focuses on degraded capabilities that directly "
                 "affect retrieval quality, delivery, and observability."
             ),
-        },
+            insufficient_summary="No operational checks have run yet.",
+        ),
     ]
 
     # Recommended actions: lifted from the legacy endpoint body.
@@ -989,9 +1132,12 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 ),
                 reverse=True,
             )
-            if _safe_int(item.get("count")) >= 4
-            and safe_div(_safe_float(item.get("dismissed")), max(1.0, _safe_float(item.get("count"))))
-            >= 0.35
+            # I-25: only flag a source as noisy when its dismiss rate is
+            # CONFIDENTLY high (sufficient sample + Wilson lower bound ≥ 0.35),
+            # not after 4 dismissals that could be noise.
+            if RateEstimate(
+                _safe_int(item.get("dismissed")), _safe_int(item.get("count"))
+            ).confidently_above(0.35)
             and not (
                 str(item.get("source_type") or "") == "lens_retrieval"
                 and str(item.get("source_api") or "") == "unknown"
@@ -1021,7 +1167,9 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 key=lambda row: (_safe_float(row.get("engagement_rate")), _safe_float(row.get("count"))),
                 reverse=True,
             )
-            if _safe_int(item.get("count")) >= 3
+            # I-25: only "operationalize" a branch once it has a defensible
+            # sample, not after 3 outcomes.
+            if _safe_int(item.get("count")) >= MIN_RATE_SAMPLE
             and _safe_float(item.get("engagement_rate")) >= 0.25
         ),
         None,
@@ -1048,8 +1196,11 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 key=lambda row: (_safe_float(row.get("dismiss_rate")), -_safe_float(row.get("count"))),
                 reverse=True,
             )
-            if _safe_int(item.get("count")) >= 4
-            and _safe_float(item.get("dismiss_rate")) >= 0.35
+            # I-25: only advise cooling when dismissals are CONFIDENTLY high
+            # (sufficient sample + Wilson lower bound ≥ 0.35).
+            if RateEstimate(
+                _safe_int(item.get("dismissed")), _safe_int(item.get("count"))
+            ).confidently_above(0.35)
         ),
         None,
     )
@@ -1067,33 +1218,12 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
                 "priority": "medium",
             }
         )
-    underexplored_branch = next(
-        (
-            item
-            for item in sorted(
-                branch_quality,
-                key=lambda row: (_safe_float(row.get("positive_rate")), -_safe_float(row.get("count"))),
-                reverse=True,
-            )
-            if _safe_int(item.get("count")) <= 3
-            and _safe_float(item.get("positive_rate")) >= 0.34
-        ),
-        None,
-    )
-    if underexplored_branch:
-        recommended_actions.append(
-            {
-                "id": "expand_underexplored_branch",
-                "title": "Expand an underexplored branch",
-                "detail": (
-                    f"{underexplored_branch['branch_label']} is promising but "
-                    "underfed. Give it more branch budget or exploratory temperature."
-                ),
-                "page": "discovery",
-                "params": {},
-                "priority": "low",
-            }
-        )
+    # I-25: the old "expand an underexplored branch" action fired on branches
+    # with count <= 3 — exactly the underpowered regime where a positive_rate is
+    # statistical noise. Acting on 1-3 outcomes is what I-25 forbids, so this
+    # prescriptive recommendation is removed. The branch card still surfaces the
+    # observational "underexplored" state (with its thin sample stated) for the
+    # user to notice without the system advising a budget change on noise.
     # D2/I-22: no "triage the library backlog" action — saving a paper is not a
     # reading chore, so an unread save is not a problem to nag about.
     background_corpus_papers = _safe_int(authors_summary.get("background_corpus_papers"))

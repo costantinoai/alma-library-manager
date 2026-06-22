@@ -62,7 +62,12 @@ LABELLING_VERSION = "2026.07-2"
 # 2026.07-2: float16 embedding dim, papers-per-author, institution grouping.
 # 2026.07-3: I-21 canonical outcome projection (engagement no longer reads the
 #            always-empty user_action='like') + I-22 removed queued/untriaged.
-INSIGHTS_LOGIC_VERSION = "2026.07-3"
+# 2026.07-4: Phase 4 — I-23 AI card → separate measures (no composite); I-26
+#            scorecards carry sample_size + an insufficient_data state (no
+#            monitors / no alert runs no longer misgraded) + full-population feed
+#            yield; I-25 prescriptive branch/source advice gated behind a sample
+#            + Wilson bound.
+INSIGHTS_LOGIC_VERSION = "2026.07-4"
 
 
 def with_version(fingerprint_sql: str, *versions: str) -> str:

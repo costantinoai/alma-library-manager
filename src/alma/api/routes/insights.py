@@ -421,11 +421,21 @@ def _build_branch_trends(
             }
         )
 
+    # I-26: bound the "recent 7d" / "prior 7d" comparison by CALENDAR days, not
+    # by the last N rows that happened to have activity. `daily[-7:]` took the
+    # last seven *active* days, so a branch with sparse activity compared windows
+    # spanning months and the "7d" label was a lie. These explicit ISO bounds
+    # make the windows exactly the last 7 calendar days vs the 7 before them.
+    today = datetime.utcnow().date()
+    recent_start = (today - timedelta(days=6)).isoformat()  # 7 calendar days incl. today
+    prior_start = (today - timedelta(days=13)).isoformat()
+    prior_end = (today - timedelta(days=7)).isoformat()
+
     ranked: list[dict[str, Any]] = []
     for item in by_branch.values():
         daily = sorted(item["daily"], key=lambda point: str(point.get("date") or ""))
-        recent = daily[-7:]
-        prior = daily[-14:-7]
+        recent = [p for p in daily if str(p.get("date") or "") >= recent_start]
+        prior = [p for p in daily if prior_start <= str(p.get("date") or "") <= prior_end]
         recent_total = sum(int(point.get("total") or 0) for point in recent)
         prior_total = sum(int(point.get("total") or 0) for point in prior)
         recent_positive = sum(int(point.get("positive") or 0) for point in recent)
@@ -435,7 +445,8 @@ def _build_branch_trends(
         ranked.append(
             {
                 **item,
-                "daily": daily[-14:],
+                # Last 14 calendar days of points (matches the two 7-day windows).
+                "daily": [p for p in daily if str(p.get("date") or "") >= prior_start],
                 "recent_7d_total": recent_total,
                 "prior_7d_total": prior_total,
                 "recent_7d_positive_rate": recent_rate,
