@@ -55,6 +55,10 @@ class GraphEdge(BaseModel):
     source: str
     target: str
     weight: float = 1.0
+    # Typed edge layer (Phase 3 / I-11): "semantic" (mutual-kNN in embedding
+    # space), "bibliographic_coupling" (shared references), "co_authorship"
+    # (shared authors), or "topic" (paper↔topic overlay). The UI filters by this.
+    edge_type: str = "semantic"
 
 
 class GraphData(BaseModel):
@@ -1595,6 +1599,7 @@ def _build_embedding_paper_map(
     so a read request never writes + commits mid-response.
     """
     from alma.ai.clustering import cluster_publications, label_clusters_tfidf
+    from alma.ai.neighbor_graph import mutual_knn_edges
     from alma.ai.projections import project_embeddings
 
     opts = graph_options or {}
@@ -1995,41 +2000,61 @@ def _build_embedding_paper_map(
             )
         )
 
-    # Build intra-cluster edges (capped for readability).
+    # Typed, filterable edge LAYERS (Phase 3 / I-11). The old intra-cluster
+    # cliques asserted a relationship that was really just "same HDBSCAN
+    # cluster"; we replace them with edges that each MEAN something specific and
+    # carry their own `edge_type` so the UI can show/hide each layer:
+    #   • semantic               — mutual k-NN in the 768-d SPECTER2 space
+    #   • bibliographic_coupling — papers that share ≥3 references
+    #   • co_authorship          — papers that share ≥1 author
+    # Citation/h-index stats NEVER enter edge geometry — they are node metadata.
     edges: list[GraphEdge] = []
-    edge_keys: set[tuple[str, str]] = set()
+    edge_layers: dict[str, int] = {}
     if show_edges:
-        for _cid, members in cluster_members.items():
-            if _cid < 0:
-                continue  # outliers are not a coherent group — draw no clique edges
-            if len(members) <= 20:
-                for i in range(len(members)):
-                    for j in range(i + 1, len(members)):
-                        key = (members[i], members[j]) if members[i] < members[j] else (members[j], members[i])
-                        if key in edge_keys:
-                            continue
-                        edge_keys.add(key)
-                        edges.append(
-                            GraphEdge(
-                                source=key[0],
-                                target=key[1],
-                                weight=0.5,
-                            )
-                        )
+        # Retracted papers must not anchor neighbourhoods — they stay as nodes
+        # but get no edges, so a retracted work is never drawn as central.
+        retracted = _retracted_paper_ids(conn, paper_ids)
+        semantic_embeddings = {
+            pid: vec for pid, vec in embeddings.items() if pid not in retracted
+        }
+        seen_pairs: set[tuple[str, str, str]] = set()
 
-        # Co-citation / bibliographic-coupling edges: paper pairs that share
-        # at least `min_shared_refs` references get an extra link, weighted
-        # by the overlap size. Captures "these papers rely on the same
-        # literature" connections that pure embedding geometry can miss.
-        cocitation_pairs = _paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3)
-        max_shared = max((count for count in cocitation_pairs.values()), default=0)
-        for (a, b), shared in cocitation_pairs.items():
-            key = (a, b) if a < b else (b, a)
-            if key in edge_keys:
+        def _add_edge(a: str, b: str, weight: float, edge_type: str) -> None:
+            # One edge per unordered pair PER TYPE: a pair may be connected in
+            # more than one layer (e.g. both semantic and shared-author), and the
+            # UI filters per type, so we keep them distinct rather than merging.
+            key = (a, b, edge_type) if a < b else (b, a, edge_type)
+            if a == b or key in seen_pairs:
+                return
+            seen_pairs.add(key)
+            edges.append(
+                GraphEdge(
+                    source=key[0], target=key[1],
+                    weight=round(float(weight), 3), edge_type=edge_type,
+                )
+            )
+            edge_layers[edge_type] = edge_layers.get(edge_type, 0) + 1
+
+        # 1) Semantic neighbourhood — mutual k-NN in embedding space.
+        for a, b, sim in mutual_knn_edges(semantic_embeddings, k=8, min_similarity=0.45):
+            _add_edge(a, b, sim, "semantic")
+
+        # 2) Bibliographic coupling — shared references (same literature base).
+        coupling = _paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3)
+        max_shared = max(coupling.values(), default=0)
+        for (a, b), shared in coupling.items():
+            if a in retracted or b in retracted:
                 continue
-            edge_keys.add(key)
             weight = 0.4 + 0.5 * (shared / max_shared if max_shared else 0.0)
-            edges.append(GraphEdge(source=key[0], target=key[1], weight=round(weight, 3)))
+            _add_edge(a, b, weight, "bibliographic_coupling")
+
+        # 3) Co-authorship — papers that share at least one author.
+        coauthor = _paper_coauthorship(conn, paper_ids, min_shared_authors=1)
+        for (a, b), shared in coauthor.items():
+            if a in retracted or b in retracted:
+                continue
+            weight = min(1.0, 0.4 + 0.2 * shared)
+            _add_edge(a, b, weight, "co_authorship")
 
     # Topic clusters only — the Unclustered group is reported as a count in the
     # clustering metadata, never as a pseudo-topic with a TF-IDF label (I-6).
@@ -2080,6 +2105,8 @@ def _build_embedding_paper_map(
             "stable_papers": len(stable_ids),
             "clusters": cluster_info,
             "clustering": clustering_panel,
+            # Per-layer edge counts so the UI can build filter toggles (I-11).
+            "edge_layers": edge_layers,
             **(ai_state or {}),
         },
     )
@@ -2136,6 +2163,69 @@ def _cache_graph(
         )
     except sqlite3.OperationalError:
         pass  # Table might not exist yet
+
+
+def _retracted_paper_ids(conn: sqlite3.Connection, paper_ids: list[str]) -> set[str]:
+    """The subset of ``paper_ids`` flagged ``is_retracted`` (Phase 3 / I-11).
+
+    Retracted works must not anchor research-neighbourhood edges, so the caller
+    keeps them as nodes but draws no edges to/from them. Returns {} when the
+    column/table is unavailable."""
+    if not paper_ids:
+        return set()
+    placeholders = ",".join(["?"] * len(paper_ids))
+    try:
+        rows = conn.execute(
+            f"SELECT id FROM papers WHERE is_retracted = 1 AND id IN ({placeholders})",
+            list(paper_ids),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {
+        (row["id"] if isinstance(row, sqlite3.Row) else row[0]) for row in rows
+    }
+
+
+def _paper_coauthorship(
+    conn: sqlite3.Connection,
+    paper_ids: list[str],
+    *,
+    min_shared_authors: int = 1,
+) -> dict[tuple[str, str], int]:
+    """Pairs of papers that share at least ``min_shared_authors`` authors.
+
+    Co-authorship edge layer for the paper map (Phase 3 / I-11): a self-join of
+    ``publication_authors`` on the (case-folded) OpenAlex author id, counting
+    distinct shared authors per paper pair. Uses the ``idx_pubauthors_oid_lower``
+    expression index. Silently returns {} when the table is missing.
+    """
+    if not paper_ids or not table_exists(conn, "publication_authors"):
+        return {}
+    placeholders = ",".join(["?"] * len(paper_ids))
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT pa1.paper_id AS a, pa2.paper_id AS b, COUNT(*) AS shared
+            FROM publication_authors pa1
+            JOIN publication_authors pa2
+              ON lower(pa1.openalex_id) = lower(pa2.openalex_id)
+             AND pa1.paper_id < pa2.paper_id
+            WHERE pa1.paper_id IN ({placeholders})
+              AND pa2.paper_id IN ({placeholders})
+              AND TRIM(COALESCE(pa1.openalex_id, '')) <> ''
+            GROUP BY pa1.paper_id, pa2.paper_id
+            HAVING shared >= ?
+            """,
+            list(paper_ids) + list(paper_ids) + [min_shared_authors],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    pairs: dict[tuple[str, str], int] = {}
+    for r in rows:
+        a = r["a"] if isinstance(r, sqlite3.Row) else r[0]
+        b = r["b"] if isinstance(r, sqlite3.Row) else r[1]
+        pairs[(a, b)] = int(r["shared"] if isinstance(r, sqlite3.Row) else r[2])
+    return pairs
 
 
 def _paper_bibliographic_coupling(
@@ -2295,6 +2385,7 @@ def _add_topic_overlay(
                         source=paper_id,
                         target=topic_id,
                         weight=0.3,
+                        edge_type="topic",
                     )
                 )
 

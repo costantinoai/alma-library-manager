@@ -30,8 +30,12 @@ from __future__ import annotations
 
 # ── Version constants — bump the relevant one when its family's logic changes ──
 
-# 2-D projection / node-layout logic (ai/projections.py, the UMAP/static map).
-PROJECTION_ALGO_VERSION = "2026.07-1"
+# 2-D projection / node-layout logic (ai/projections.py, the UMAP/static map)
+# AND the graph EDGE topology (the rendered paper-map structure).
+# 2026.07-2: Phase 3 / I-11 — typed edge layers (semantic mutual-kNN in 768-d,
+#            bibliographic coupling, co-authorship) replace intra-cluster cliques;
+#            retracted papers excluded from edges.
+PROJECTION_ALGO_VERSION = "2026.07-2"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
