@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_db, get_current_user
+from alma.core.db_write import run_write_unit
 from alma.api.helpers import table_exists
 from alma.ai.embedding_sources import (
     EMBEDDING_SOURCE_LOCAL,
@@ -962,72 +963,79 @@ def ai_configure(
                 ),
             )
 
-    if body.provider is not None:
-        provider = (body.provider or "").strip().lower()
-        if provider not in _VALID_EMBEDDING_PROVIDERS:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Invalid embedding provider. "
-                    f"Expected one of: {', '.join(sorted(_VALID_EMBEDDING_PROVIDERS))}"
-                ),
+    # All settings writes run inside ONE gated unit (writer gate + BEGIN
+    # IMMEDIATE + retry). They must stay in one transaction because later
+    # branches read settings an earlier branch just wrote (e.g. embedding_model
+    # is derived from the ai.provider written above), and the read must see the
+    # uncommitted write. Validation HTTPExceptions raise inside the unit →
+    # rollback + propagate (not a lock error, so no retry).
+    def _persist_ai_settings() -> None:
+        if body.provider is not None:
+            provider = (body.provider or "").strip().lower()
+            if provider not in _VALID_EMBEDDING_PROVIDERS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Invalid embedding provider. "
+                        f"Expected one of: {', '.join(sorted(_VALID_EMBEDDING_PROVIDERS))}"
+                    ),
+                )
+            _write_setting(db, "ai.provider", provider)
+
+        if body.local_model is not None:
+            from alma.ai.providers import LOCAL_MODELS
+            if body.local_model not in LOCAL_MODELS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown local model: {body.local_model}. Valid: {', '.join(LOCAL_MODELS.keys())}",
+                )
+            _write_setting(db, "ai.local_model", body.local_model)
+
+        # After handling any provider/model-related fields above, re-derive
+        # the canonical embedding model identifier and persist it to
+        # `embedding_model`. This is the single string used by every read
+        # path to filter publication_embeddings by the active model, so it
+        # must always match what the active provider writes into the `model`
+        # column.
+        if body.provider is not None or body.local_model is not None:
+            from alma.ai.providers import DEFAULT_LOCAL_MODEL, LOCAL_MODELS, OpenAIProvider
+            active_provider = _read_setting(db, "ai.provider", "none").strip().lower()
+            if active_provider == "local":
+                model_key = _read_setting(db, "ai.local_model", DEFAULT_LOCAL_MODEL)
+                config = LOCAL_MODELS.get(model_key) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]
+                _write_setting(db, "embedding_model", config.hf_id)
+            elif active_provider == "openai":
+                _write_setting(db, "embedding_model", OpenAIProvider.MODEL_NAME)
+
+        if body.openai_api_key is not None:
+            clean_key = (body.openai_api_key or "").strip()
+            if clean_key:
+                set_secret(SECRET_OPENAI_API_KEY, clean_key)
+            else:
+                delete_secret(SECRET_OPENAI_API_KEY)
+            # Keep legacy setting scrubbed.
+            _write_setting(db, "ai.openai_api_key", "")
+
+        if env_type_updated or env_path_updated:
+            next_path = (
+                (body.python_env_path or "").strip()
+                if env_path_updated
+                else _read_setting(db, "ai.python_env_path", "")
             )
-        _write_setting(db, "ai.provider", provider)
-
-    if body.local_model is not None:
-        from alma.ai.providers import LOCAL_MODELS
-        if body.local_model not in LOCAL_MODELS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown local model: {body.local_model}. Valid: {', '.join(LOCAL_MODELS.keys())}",
+            next_type = (
+                (body.python_env_type or "").strip().lower()
+                if env_type_updated
+                else _infer_env_type_from_path(next_path)
             )
-        _write_setting(db, "ai.local_model", body.local_model)
+            if not next_type:
+                next_type = "system"
+            if next_type == "system":
+                next_path = ""
 
-    # After handling any provider/model-related fields above, re-derive
-    # the canonical embedding model identifier and persist it to
-    # `embedding_model`. This is the single string used by every read
-    # path to filter publication_embeddings by the active model, so it
-    # must always match what the active provider writes into the `model`
-    # column.
-    if body.provider is not None or body.local_model is not None:
-        from alma.ai.providers import DEFAULT_LOCAL_MODEL, LOCAL_MODELS, OpenAIProvider
-        active_provider = _read_setting(db, "ai.provider", "none").strip().lower()
-        if active_provider == "local":
-            model_key = _read_setting(db, "ai.local_model", DEFAULT_LOCAL_MODEL)
-            config = LOCAL_MODELS.get(model_key) or LOCAL_MODELS[DEFAULT_LOCAL_MODEL]
-            _write_setting(db, "embedding_model", config.hf_id)
-        elif active_provider == "openai":
-            _write_setting(db, "embedding_model", OpenAIProvider.MODEL_NAME)
+            _write_setting(db, "ai.python_env_type", next_type)
+            _write_setting(db, "ai.python_env_path", next_path)
 
-    if body.openai_api_key is not None:
-        clean_key = (body.openai_api_key or "").strip()
-        if clean_key:
-            set_secret(SECRET_OPENAI_API_KEY, clean_key)
-        else:
-            delete_secret(SECRET_OPENAI_API_KEY)
-        # Keep legacy setting scrubbed.
-        _write_setting(db, "ai.openai_api_key", "")
-
-    if env_type_updated or env_path_updated:
-        next_path = (
-            (body.python_env_path or "").strip()
-            if env_path_updated
-            else _read_setting(db, "ai.python_env_path", "")
-        )
-        next_type = (
-            (body.python_env_type or "").strip().lower()
-            if env_type_updated
-            else _infer_env_type_from_path(next_path)
-        )
-        if not next_type:
-            next_type = "system"
-        if next_type == "system":
-            next_path = ""
-
-        _write_setting(db, "ai.python_env_type", next_type)
-        _write_setting(db, "ai.python_env_path", next_path)
-
-    db.commit()
+    run_write_unit(db, _persist_ai_settings, label="ai_configure")
 
     return ai_status(db=db, _user=_user)
 
@@ -1280,9 +1288,14 @@ def delete_inactive_embeddings(
         active_model = active_provider.model_name
 
     try:
-        cursor = db.execute("DELETE FROM publication_embeddings WHERE model <> ?", (active_model,))
-        db.commit()
-        deleted = int(cursor.rowcount or 0)
+        def _delete_inactive() -> int:
+            cursor = db.execute(
+                "DELETE FROM publication_embeddings WHERE model <> ?", (active_model,)
+            )
+            return int(cursor.rowcount or 0)
+
+        # Foreground write → gate it (BEGIN IMMEDIATE + writer gate + retry).
+        deleted = run_write_unit(db, _delete_inactive, label="delete_inactive_embeddings")
     except sqlite3.OperationalError:
         deleted = 0
 

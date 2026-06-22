@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import json_loads, raise_internal, safe_div, table_exists
+from alma.core.db_write import run_write_unit
 from alma.application import materialized_views as mv
 from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 from alma.application.followed_authors import get_followed_author_backfill_status
@@ -2131,12 +2132,16 @@ def apply_branch_action(
     try:
         from alma.application import discovery as discovery_app
 
-        result = discovery_app.apply_branch_control_action(
+        # Foreground write → gate the caller-owns engine call in one unit.
+        result = run_write_unit(
             db,
-            branch_id=body.branch_id,
-            action=body.action,
+            lambda: discovery_app.apply_branch_control_action(
+                db,
+                branch_id=body.branch_id,
+                action=body.action,
+            ),
+            label="apply_branch_action",
         )
-        db.commit()
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
