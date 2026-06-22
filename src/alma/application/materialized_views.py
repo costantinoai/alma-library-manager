@@ -38,7 +38,7 @@ from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable, Optional
 
-from alma.core.db_write import commit_unless_gated
+from alma.core.db_write import commit_unless_gated, run_write_unit
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +394,10 @@ def get_or_build_variant(
         if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
             return cached
 
+    # The build is a PURE READ (the graph builders persist nothing — they pass
+    # persist=False) and is SLOW, so it runs OUTSIDE any write transaction: never
+    # hold the writer gate across a multi-second build (SQLite write-discipline
+    # rule 2). The fingerprint (a few cheap reads) is computed here too.
     started = perf_counter()
     payload = build_fn(conn)
     if not isinstance(payload, dict):
@@ -401,15 +405,28 @@ def get_or_build_variant(
             f"variant build_fn for {view_key!r} returned {type(payload).__name__}, expected dict"
         )
     compute_ms = int(round((perf_counter() - started) * 1000))
-    try:
+    fingerprint = make_fingerprint()
+
+    # Persist through the DRY central gated write route: BEGIN IMMEDIATE takes the
+    # write lock up front (so the INSERT can't lose the read→write upgrade race and
+    # "database is locked"), the in-process gate serialises against every other
+    # writer, and transient cross-process locks retry. _write_row /
+    # _prune_variant_rows commit_unless_gated → no-op inside this unit, which owns
+    # the single commit. A persistent-lock failure is swallowed: the cache is an
+    # optimisation, so the user still gets their graph (the response never blocks
+    # on or 500s from a cache write).
+    def _persist() -> None:
         _write_row(
             conn,
             view_key=view_key,
-            fingerprint=make_fingerprint(),
+            fingerprint=fingerprint,
             payload=payload,
             compute_ms=compute_ms,
         )
         _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
+
+    try:
+        run_write_unit(conn, _persist, label=f"mv.variant:{view_key}")
     except Exception:  # noqa: BLE001 — cache write must never break the response
         logger.exception("materialized_views: failed to persist variant %s", view_key)
     return payload
