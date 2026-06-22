@@ -400,6 +400,38 @@ export function ForceGraph({
     return sourceCluster === selectedClusterId && targetCluster === selectedClusterId ? 0.55 : 0.08
   }, [selectedClusterId])
 
+  // Rich hover tooltip (react-force-graph renders the returned HTML in its
+  // default tooltip box). Surfaces the cluster label + the stats behind the
+  // node — what an author/paper IS — instead of just its name, so hovering
+  // explains the geometry. No raw colors: the library box provides the chrome;
+  // we only structure + de-emphasize secondary lines with opacity.
+  const nodeLabel = useCallback((node: Record<string, unknown>) => {
+    const meta = (node.metadata ?? {}) as Record<string, unknown>
+    const esc = (v: unknown) =>
+      String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const rows: string[] = []
+    if (meta.cluster_label) {
+      rows.push(`<div style="opacity:.85">Cluster: ${esc(meta.cluster_label)}</div>`)
+    }
+    const isAuthor = node.node_type === 'author' || meta.pub_count != null
+    if (isAuthor) {
+      if (meta.affiliation) rows.push(`<div style="opacity:.8">${esc(meta.affiliation)}</div>`)
+      const stats: string[] = []
+      if (meta.pub_count != null) stats.push(`${esc(meta.pub_count)} papers`)
+      if (meta.citation_count != null) stats.push(`${esc(meta.citation_count)} cites`)
+      if (meta.h_index != null) stats.push(`h-index ${esc(meta.h_index)}`)
+      if (stats.length) rows.push(`<div style="opacity:.7">${stats.join(' · ')}</div>`)
+      if (meta.top_topic) rows.push(`<div style="opacity:.6;font-style:italic">${esc(meta.top_topic)}</div>`)
+    } else {
+      const stats: string[] = []
+      if (meta.year != null) stats.push(esc(meta.year))
+      const cites = meta.citations ?? meta.cited_by_count
+      if (cites != null) stats.push(`${esc(cites)} cites`)
+      if (stats.length) rows.push(`<div style="opacity:.7">${stats.join(' · ')}</div>`)
+    }
+    return `<div style="max-width:280px;line-height:1.35"><div style="font-weight:600;margin-bottom:2px">${esc(node.name)}</div>${rows.join('')}</div>`
+  }, [])
+
   return (
     <div ref={containerRef} className="w-full" style={{ height }}>
       <ForceGraph2D
@@ -408,6 +440,7 @@ export function ForceGraph({
         width={dimensions.width}
         height={height}
         nodeCanvasObject={nodeCanvasObject}
+        nodeLabel={nodeLabel}
         onNodeClick={handleNodeClick}
         onRenderFramePost={(ctx: unknown, globalScale: number) => {
           const c = ctx as CanvasRenderingContext2D
