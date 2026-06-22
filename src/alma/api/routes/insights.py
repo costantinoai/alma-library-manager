@@ -5,11 +5,17 @@ import sqlite3
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from alma.api.deps import get_db, get_current_user
-from alma.api.helpers import json_loads, raise_internal, safe_div, table_exists
+from alma.api.helpers import (
+    json_loads,
+    raise_internal,
+    row_to_paper_response,
+    safe_div,
+    table_exists,
+)
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.core.db_write import run_write_unit
 from alma.application import materialized_views as mv
@@ -1595,6 +1601,127 @@ def get_insights(
         "stale": envelope.get("stale", False),
         "rebuilding": envelope.get("rebuilding", False),
         "computed_at": envelope.get("computed_at"),
+    }
+
+
+# ── Drilldown: one parameterized paper list behind every Insights figure ──
+#
+# I-19: every visible card / chart / cluster must drill down to the papers it
+# counts. Rather than a per-chart endpoint, ONE parameterized route serves them
+# all — a graph cluster, or a topic / journal / institution / year / source bar.
+# Each ``filter_type`` maps to a JOIN + WHERE fragment; the rows are projected
+# through the SAME ``row_to_paper_response`` the Library / Publications surfaces
+# use, so a drilldown row is the identical Publication shape the UI already
+# renders. Pure read (no writes). ``total`` is returned so the UI can show an
+# honest "N papers" denominator next to the figure that opened it.
+
+# filter_type → (extra JOIN, WHERE fragment, value coercion). Library scope is
+# enforced for the organization/aggregate filters (D5); the cluster filter is
+# scope-aware because a paper's cluster assignment is per-scope (I-1).
+_DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
+    "topic": {
+        "join": (
+            "JOIN publication_topics pt ON pt.paper_id = p.id "
+            "LEFT JOIN topics t ON t.topic_id = pt.topic_id"
+        ),
+        "where": "COALESCE(t.canonical_name, pt.term) = ? AND p.status = 'library'",
+        "coerce": str,
+    },
+    "journal": {
+        "join": "",
+        "where": "p.journal = ? AND p.status = 'library'",
+        "coerce": str,
+    },
+    "institution": {
+        "join": "JOIN publication_institutions pi ON pi.paper_id = p.id",
+        "where": "LOWER(TRIM(pi.institution_name)) = LOWER(TRIM(?)) AND p.status = 'library'",
+        "coerce": str,
+    },
+    "year": {
+        "join": "",
+        "where": "p.year = ? AND p.status = 'library'",
+        "coerce": int,
+    },
+    "source": {
+        "join": "JOIN recommendations r ON r.paper_id = p.id",
+        "where": "COALESCE(NULLIF(TRIM(r.source_api), ''), NULLIF(TRIM(r.source_type), ''), 'unknown') = ?",
+        "coerce": str,
+    },
+}
+
+
+@router.get(
+    "/papers",
+    summary="Papers behind an Insights figure (drilldown)",
+    description=(
+        "Paginated paper list for ONE Insights figure — a graph cluster, or a "
+        "topic / journal / institution / year / source bar. Pure read; rows are "
+        "the standard Publication shape."
+    ),
+)
+def get_insights_papers(
+    filter_type: str = Query(..., description="cluster | topic | journal | institution | year | source"),
+    filter_value: str = Query(..., description="the figure's value (cluster id, topic name, …)"),
+    scope: str = Query("library", description="library | corpus — only affects cluster"),
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    ft = (filter_type or "").strip().lower()
+
+    # The cluster filter is special: it reads the scope-keyed publication_clusters
+    # side table (I-1), so its WHERE binds two params (scope + cluster id).
+    if ft == "cluster":
+        try:
+            cluster_id = int(filter_value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="cluster filter_value must be an integer")
+        sc = scope if scope in ("library", "corpus") else "library"
+        join = "JOIN publication_clusters pc ON pc.paper_id = p.id"
+        where = "pc.scope = ? AND pc.cluster_id = ?"
+        params: list[Any] = [sc, cluster_id]
+    else:
+        spec = _DRILLDOWN_FILTERS.get(ft)
+        if spec is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown filter_type '{filter_type}'. "
+                f"Expected one of: cluster, {', '.join(_DRILLDOWN_FILTERS)}.",
+            )
+        try:
+            value = spec["coerce"](filter_value)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail=f"Invalid filter_value for {ft}")
+        join = spec["join"]
+        where = spec["where"]
+        params = [value]
+
+    try:
+        # DISTINCT p.* collapses the row fan-out a topic/institution/source JOIN
+        # can produce (a paper with several matching child rows).
+        rows = db.execute(
+            f"SELECT DISTINCT p.* FROM papers p {join} WHERE {where} "
+            "ORDER BY p.cited_by_count DESC, p.added_at DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+        total = int(
+            db.execute(
+                f"SELECT COUNT(DISTINCT p.id) AS c FROM papers p {join} WHERE {where}",
+                tuple(params),
+            ).fetchone()["c"]
+        )
+    except sqlite3.OperationalError as exc:
+        raise_internal("Failed to load drilldown papers", exc)
+
+    return {
+        "filter_type": ft,
+        "filter_value": filter_value,
+        "scope": scope,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "items": [row_to_paper_response(r) for r in rows],
     }
 
 
