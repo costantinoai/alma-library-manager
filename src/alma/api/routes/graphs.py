@@ -6,7 +6,7 @@ import math
 import sqlite3
 import uuid
 import hashlib
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -220,11 +220,10 @@ def _serve_graph_variant(
 
 @router.get("/paper-map", response_model=GraphData)
 def get_paper_map(
-    label_mode: str = Query("cluster", description="Label mode: cluster or topic"),
+    label_mode: str = Query("cluster", description="Label mode: cluster (c-TF-IDF over title text)"),
     color_by: str = Query("cluster", description="Color by: cluster, year, rating, citations"),
     size_by: str = Query("citations", description="Size by: citations, uniform, rating"),
     show_edges: bool = Query(True, description="Show edges between nodes"),
-    show_topics: bool = Query(False, description="Show topic nodes overlaid on paper map"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
     cluster_resolution: float = Query(1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"),
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
@@ -235,7 +234,7 @@ def get_paper_map(
     """Get paper map visualization data.
 
     Default options (cluster labels, cluster colour, citation size, edges
-    on, no topic overlay, resolution 1.0) are served via the materialised-view
+    on, resolution 1.0) are served via the materialised-view
     layer: cache hit returns instantly, fingerprint mismatch enqueues a
     background rebuild and serves the prior payload meanwhile. Custom
     option combinations (incl. a non-default cluster_resolution) bypass the
@@ -250,7 +249,6 @@ def get_paper_map(
         and color_by == "cluster"
         and size_by == "citations"
         and show_edges
-        and not show_topics
         and abs(cluster_resolution - 1.0) < 1e-6
         and not fused_layout
     )
@@ -292,15 +290,13 @@ def get_paper_map(
             )
         else:
             result = _build_text_paper_map(c, scope=scope, ai_state=ai_state)
-        if show_topics:
-            result = _add_topic_overlay(c, result)
         return result.model_dump()
 
     return _serve_graph_variant(
         conn,
         base_view_key=scope.view_key("paper_map"),
         options=(
-            label_mode, color_by, size_by, show_topics,
+            label_mode, color_by, size_by,
             round(cluster_resolution, 3), round(w_semantic, 3),
             round(w_coauthorship, 3), round(w_bibliographic, 3),
         ),
@@ -421,7 +417,6 @@ def _build_author_network_payload(
                 "affiliation": n.get("affiliation", ""),
                 "orcid": n.get("orcid", ""),
                 "openalex_id": n.get("openalex_id", ""),
-                "top_topic": n.get("top_topic"),
                 "interests": n.get("interests", []),
                 "is_outlier": bool(n.get("is_outlier")),
                 "cluster_label": cluster_label_override.get(
@@ -475,65 +470,20 @@ def _build_author_network_payload(
     return result.model_dump()
 
 
-@router.get("/topic-map", response_model=GraphData)
-def get_topic_map(conn: sqlite3.Connection = Depends(get_db)):
-    """Get topic co-occurrence map visualization data, served via materialised view."""
-    envelope = mv.get(conn, "graph:topic_map")
-    return _graph_data_from_envelope(envelope)
-
-
-def _build_topic_map_payload(conn: sqlite3.Connection) -> dict:
-    """Compute the topic-cooccurrence GraphData (as a dict).
-
-    Lifted out of `get_topic_map` so the materialised-view layer can
-    invoke it on cache miss / rebuild.
-    """
-    from alma.ai.projections import build_topic_cooccurrence
-
-    raw = build_topic_cooccurrence(conn)
-
-    max_count = max((n["count"] for n in raw["nodes"]), default=1)
-    nodes = [
-        GraphNode(
-            id=n["id"],
-            name=n["name"],
-            x=n["x"],
-            y=n["y"],
-            size=max(0.5, n["count"] / max_count * 3),
-            metadata={"count": n["count"]},
-        )
-        for n in raw["nodes"]
-    ]
-
-    edges = [
-        GraphEdge(
-            source=e["source"],
-            target=e["target"],
-            weight=e["weight"],
-        )
-        for e in raw["edges"]
-    ]
-
-    return GraphData(
-        nodes=nodes, edges=edges, metadata={"type": "topic_map"}
-    ).model_dump()
-
-
 def _rebuild_graphs_impl(
     conn: sqlite3.Connection, *, scope: Scope = Scope.library, job_id: str | None = None
 ) -> dict:
     """Rebuild the graph caches for ``scope`` phase-by-phase.
 
-    Each phase (clear / reference backfill / paper_map / author_network /
-    topic_map) commits before the next one begins, so the SQLite writer
-    lock is released between phases. Before this change the whole rebuild
-    ran under one implicit transaction and concurrent reads showed p95 of
-    ~3.5s during the job (see ``tasks/10_ACTIVITY_CONCURRENCY.md``).
+    Each phase (clear / reference backfill / paper_map / author_network)
+    commits before the next one begins, so the SQLite writer lock is released
+    between phases. Before this change the whole rebuild ran under one implicit
+    transaction and concurrent reads showed p95 of ~3.5s during the job (see
+    ``tasks/10_ACTIVITY_CONCURRENCY.md``).
 
     I-3: paper_map + author_network rebuild the view for the requested
     ``scope`` (not a hardcoded ``:library``), so clicking "Rebuild" while
-    viewing Corpus actually refreshes the Corpus graph the user is looking
-    at. ``topic_map`` is scope-agnostic and always rebuilt.
+    viewing Corpus actually refreshes the Corpus graph the user is looking at.
     """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.openalex.client import backfill_missing_publication_references
@@ -546,7 +496,7 @@ def _rebuild_graphs_impl(
         return bool(job_id and is_cancellation_requested(job_id))
 
     rebuilt: list[str] = []
-    phases = ["clear_cache", "reference_backfill", "paper_map", "author_network", "topic_map"]
+    phases = ["clear_cache", "reference_backfill", "paper_map", "author_network"]
     total_phases = len(phases)
 
     def _mark_progress(phase_idx: int, phase_name: str) -> None:
@@ -651,25 +601,6 @@ def _rebuild_graphs_impl(
         logger.warning("Failed to rebuild author_network: %s", e)
         if job_id:
             add_job_log(job_id, f"Failed rebuilding author_network: {e}", level="ERROR", step="author_network")
-
-    if _cancelled():
-        if job_id:
-            add_job_log(job_id, "Cancellation requested before topic map", step="cancelled")
-        return {"rebuilt": rebuilt, "count": len(rebuilt), "cancelled": True, "reference_backfill": graph_backfill}
-
-    # Phase 5: topic_map
-    _mark_progress(4, "topic_map")
-    try:
-        if job_id:
-            add_job_log(job_id, "Rebuilding topic map", step="topic_map")
-        mv.rebuild(conn, "graph:topic_map")
-        _flush()
-        rebuilt.append("topic_map")
-    except Exception as e:
-        _flush()
-        logger.warning("Failed to rebuild topic_map: %s", e)
-        if job_id:
-            add_job_log(job_id, f"Failed rebuilding topic_map: {e}", level="ERROR", step="topic_map")
 
     summary = {"rebuilt": rebuilt, "count": len(rebuilt), "reference_backfill": graph_backfill}
     if job_id:
@@ -1486,55 +1417,6 @@ def _build_text_paper_map(
     return GraphData(nodes=nodes, edges=edges, metadata=metadata)
 
 
-def _load_publication_topic_signals(
-    conn: sqlite3.Connection,
-) -> dict[str, list[tuple[str, float]]]:
-    if not table_exists(conn, "publication_topics"):
-        return {}
-
-    has_topics = table_exists(conn, "topics")
-    try:
-        if has_topics:
-            rows = conn.execute(
-                """
-                SELECT pt.paper_id,
-                       COALESCE(t.canonical_name, pt.term) AS term,
-                       MAX(COALESCE(pt.score, 1.0)) AS score
-                FROM publication_topics pt
-                LEFT JOIN topics t ON pt.topic_id = t.topic_id
-                GROUP BY pt.paper_id, COALESCE(t.canonical_name, pt.term)
-                """
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT paper_id, term, MAX(COALESCE(score, 1.0)) AS score
-                FROM publication_topics
-                GROUP BY paper_id, term
-                """
-            ).fetchall()
-    except Exception:
-        return {}
-
-    by_key: dict[str, list[tuple[str, float]]] = defaultdict(list)
-    for row in rows:
-        paper_id = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
-        term = row["term"] if isinstance(row, sqlite3.Row) else row[1]
-        score = float(row["score"] if isinstance(row, sqlite3.Row) else row[2])
-        if not term:
-            continue
-        by_key[paper_id].append((term, score))
-
-    for key, vals in by_key.items():
-        vals.sort(key=lambda x: x[1], reverse=True)
-        dedup: dict[str, float] = {}
-        for term, score in vals:
-            if term not in dedup or score > dedup[term]:
-                dedup[term] = score
-        by_key[key] = sorted(dedup.items(), key=lambda x: x[1], reverse=True)
-    return dict(by_key)
-
-
 def _build_cluster_detail(
     cluster_id: int,
     members: list[str],
@@ -1546,7 +1428,6 @@ def _build_cluster_detail(
 ) -> dict[str, Any]:
     xs = [coords[paper_id][0] for paper_id in members if paper_id in coords]
     ys = [coords[paper_id][1] for paper_id in members if paper_id in coords]
-    topic_counts: Counter[str] = Counter()
     citations: list[int] = []
     ratings: list[int] = []
     years: list[int] = []
@@ -1555,12 +1436,6 @@ def _build_cluster_detail(
 
     for paper_id in members:
         meta = paper_meta.get(paper_id, {})
-        for key in ("topics", "openalex_topics", "keywords"):
-            for term in meta.get(key, []) or []:
-                normalized = str(term or "").strip()
-                if normalized:
-                    topic_counts[normalized] += 1
-
         citations.append(int(meta.get("cited_by_count") or 0))
         rating_value = int(meta.get("rating") or 0)
         if rating_value > 0:
@@ -1597,7 +1472,6 @@ def _build_cluster_detail(
         ),
         reverse=True,
     )
-    top_topics = [term for term, _ in topic_counts.most_common(6)]
     from alma.ai.cluster_labels import compute_cluster_signature
 
     cluster_signature = compute_cluster_signature(members)
@@ -1606,10 +1480,15 @@ def _build_cluster_detail(
     cached_description = str(cached_entry.get("description") or "").strip() if cached_entry else ""
     cached_model = str(cached_entry.get("model") or "").strip() if cached_entry else ""
 
-    if cached_label:
-        resolved_label = cached_label
-    else:
-        resolved_label = label or (top_topics[0] if top_topics else f"Cluster {cluster_id + 1}")
+    resolved_label = cached_label or label or f"Cluster {cluster_id + 1}"
+    # Top terms come from the text-based c-TF-IDF cluster label (the noisy
+    # OpenAlex/S2 topic vocabulary is gone), split into the individual phrases the
+    # cluster-detail chips render. A bare "Cluster N" placeholder yields no chips.
+    top_topics = (
+        [t.strip() for t in resolved_label.replace(" · ", ",").split(",") if t.strip()]
+        if resolved_label and not resolved_label.startswith("Cluster ")
+        else []
+    )
     topic_text = " · ".join(top_topics[:2]) if top_topics else resolved_label
     return {
         "id": int(cluster_id),
@@ -1828,10 +1707,9 @@ def _build_embedding_paper_map(
         for paper_id, vec in embeddings.items()
     }
 
-    # Load topic signals for all papers
-    topic_signals = _load_publication_topic_signals(conn)
-
-    # Fetch per-paper text payloads (for labels and node metadata).
+    # Fetch per-paper text payloads (for labels and node metadata). The cluster
+    # labels are c-TF-IDF over this title+abstract text — the noisy OpenAlex/S2
+    # topic vocabulary is no longer loaded or attached to nodes.
     texts: dict[str, str] = {}
     paper_meta: dict[str, dict] = {}
     for paper_id in embeddings:
@@ -1852,7 +1730,6 @@ def _build_embedding_paper_map(
             journal = row["journal"] if isinstance(row, sqlite3.Row) else row[5]
             authors = row["authors"] if isinstance(row, sqlite3.Row) else row[6]
             publication_date = row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]
-            top_topics = [term for term, _ in topic_signals.get(paper_id, [])[:3]]
             texts[paper_id] = f"{title or ''}. {abstract or ''}"
             paper_meta[paper_id] = {
                 "title": title or "",
@@ -1862,7 +1739,6 @@ def _build_embedding_paper_map(
                 "journal": journal or "",
                 "authors": authors or "",
                 "publication_date": publication_date,
-                "topics": top_topics,
             }
         else:
             texts[paper_id] = ""
@@ -1874,7 +1750,6 @@ def _build_embedding_paper_map(
                 "journal": "",
                 "authors": "",
                 "publication_date": None,
-                "topics": [],
             }
 
     # Read embedding freshness and previously materialized layout rows.
@@ -2182,7 +2057,7 @@ def _build_embedding_paper_map(
     # Build nodes.
     nodes: list[GraphNode] = []
     for paper_id in embeddings:
-        meta = paper_meta.get(paper_id, {"title": "", "cited_by_count": 0, "year": None, "rating": 0, "topics": []})
+        meta = paper_meta.get(paper_id, {"title": "", "cited_by_count": 0, "year": None, "rating": 0})
         cid = assignments.get(paper_id)
         x, y = coords.get(paper_id, (0.5, 0.5))
 
@@ -2218,14 +2093,12 @@ def _build_embedding_paper_map(
         else:  # citations
             node_size = max(0.5, min(3.0, int(meta.get("cited_by_count") or 0) / 50 + 0.5))
 
-        # Determine display label
+        # Determine display label — the cluster's c-TF-IDF text label (or the
+        # Unclustered label for density-noise nodes). The old topic-vocabulary
+        # label mode is gone; `label_mode` is retained for API stability but the
+        # only label source now is the text-based cluster label.
         is_outlier = cid is None or int(cid) < 0
-        if label_mode == "topic" and meta.get("topics"):
-            display_label = ", ".join(meta["topics"][:2])
-        elif is_outlier:
-            display_label = OUTLIER_LABEL
-        else:
-            display_label = labels_by_cluster.get(int(cid))
+        display_label = OUTLIER_LABEL if is_outlier else labels_by_cluster.get(int(cid))
 
         # HDBSCAN membership strength [0,1] — the per-node clustering confidence
         # that the old force-merge discarded (I-6). None when unavailable (cached
@@ -2254,7 +2127,6 @@ def _build_embedding_paper_map(
                     "cluster_confidence": (
                         round(float(confidence), 3) if confidence is not None else None
                     ),
-                    "topics": meta.get("topics", []),
                 },
             )
         )
@@ -2510,129 +2382,6 @@ def _paper_bibliographic_coupling(
     return cooccurrence_pairs(paper_refs, min_shared=min_shared_refs, max_feature_df=max_ref_df)
 
 
-def _add_topic_overlay(
-    conn: sqlite3.Connection,
-    graph_data: GraphData,
-    min_papers_per_topic: int = 3,
-) -> GraphData:
-    """Add topic nodes to an existing paper map graph.
-
-    For each topic that appears in at least min_papers_per_topic papers:
-    1. Create a topic node positioned at the centroid of connected papers
-    2. Create edges from papers to their topics
-    """
-    if not table_exists(conn, "publication_topics"):
-        return graph_data
-
-    # Get paper IDs from the graph
-    paper_ids = [n.id for n in graph_data.nodes if n.node_type == "paper"]
-    if not paper_ids:
-        return graph_data
-
-    # Load topics for these papers (using canonical names if available)
-    has_topics = table_exists(conn, "topics")
-    placeholders = ",".join("?" for _ in paper_ids)
-
-    if has_topics:
-        rows = conn.execute(
-            f"""
-            SELECT pt.paper_id,
-                   COALESCE(t.canonical_name, pt.term) AS topic_name,
-                   MAX(COALESCE(pt.score, 1.0)) AS score
-            FROM publication_topics pt
-            LEFT JOIN topics t ON pt.topic_id = t.topic_id
-            WHERE pt.paper_id IN ({placeholders})
-            GROUP BY pt.paper_id, COALESCE(t.canonical_name, pt.term)
-            """,
-            paper_ids,
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"""
-            SELECT paper_id, term AS topic_name, MAX(COALESCE(score, 1.0)) AS score
-            FROM publication_topics
-            WHERE paper_id IN ({placeholders})
-            GROUP BY paper_id, term
-            """,
-            paper_ids,
-        ).fetchall()
-
-    # Build topic -> [paper_ids] mapping
-    topic_papers: dict[str, list[str]] = defaultdict(list)
-    for row in rows:
-        paper_id = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
-        topic_name = row["topic_name"] if isinstance(row, sqlite3.Row) else row[1]
-        if topic_name:
-            topic_papers[topic_name].append(paper_id)
-
-    # Filter topics by minimum paper count
-    eligible_topics = {
-        topic: papers
-        for topic, papers in topic_papers.items()
-        if len(papers) >= min_papers_per_topic
-    }
-
-    if not eligible_topics:
-        return graph_data
-
-    # Build position lookup for existing paper nodes
-    paper_positions = {n.id: (n.x, n.y) for n in graph_data.nodes if n.node_type == "paper"}
-
-    # Create topic nodes and edges
-    topic_nodes: list[GraphNode] = []
-    topic_edges: list[GraphEdge] = []
-
-    for topic_name, connected_papers in eligible_topics.items():
-        # Calculate centroid position
-        positions = [paper_positions[pid] for pid in connected_papers if pid in paper_positions]
-        if not positions:
-            continue
-
-        centroid_x = sum(x for x, y in positions) / len(positions)
-        centroid_y = sum(y for x, y in positions) / len(positions)
-
-        # Create topic node
-        topic_id = f"topic:{topic_name}"
-        topic_nodes.append(
-            GraphNode(
-                id=topic_id,
-                name=topic_name,
-                x=centroid_x,
-                y=centroid_y,
-                node_type="topic",
-                color="#F59E0B",  # Orange color for topics
-                size=max(1.0, min(3.0, len(connected_papers) / 5)),
-                metadata={
-                    "count": len(connected_papers),
-                    "type": "topic",
-                },
-            )
-        )
-
-        # Create edges from papers to this topic
-        for paper_id in connected_papers:
-            if paper_id in paper_positions:
-                topic_edges.append(
-                    GraphEdge(
-                        source=paper_id,
-                        target=topic_id,
-                        weight=0.3,
-                        edge_type="topic",
-                    )
-                )
-
-    # Append to existing graph
-    return GraphData(
-        nodes=graph_data.nodes + topic_nodes,
-        edges=graph_data.edges + topic_edges,
-        metadata={
-            **graph_data.metadata,
-            "topic_nodes_count": len(topic_nodes),
-            "topics_shown": True,
-        },
-    )
-
-
 # ---------------------------------------------------------------------------
 # Materialised-view registrations
 # ---------------------------------------------------------------------------
@@ -2640,9 +2389,9 @@ def _add_topic_overlay(
 # Each public graph endpoint registers a view here so a cache hit returns
 # in <10 ms on the GET path. The fingerprint captures every input that
 # should change the rendered graph: corpus / library paper count, last
-# Library mutation, embedding count + active model (paper_map),
-# followed-author count + last follow time (author_network), and topic
-# coverage (topic_map). On fingerprint mismatch the prior payload is
+# Library mutation, embedding count + active model (paper_map), and
+# followed-author count + last follow time (author_network). On
+# fingerprint mismatch the prior payload is
 # served immediately and a background rebuild job runs under
 # `materialize.graph.<view>` — `useOperationToasts` invalidates the
 # matching React Query roots when it completes.
@@ -2741,15 +2490,6 @@ _AUTHOR_NETWORK_CORPUS_FP_SQL = """
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors)
 """
 
-# Topic map. Fingerprint covers paper count + last update; topic
-# extraction is derived from paper records.
-_TOPIC_MAP_FP_SQL = """
-    SELECT
-      (SELECT COUNT(*) FROM papers),
-      (SELECT COALESCE(MAX(updated_at), '') FROM papers)
-"""
-
-
 # I-4: stamp the clustering/projection/labelling versions into the paper-map +
 # author-network fingerprints so a CHANGE to the ML (e.g. the I-5 eom/no-forced-K
 # clustering fix) invalidates the cached layout — input data alone can't, so a
@@ -2778,10 +2518,4 @@ mv.register(mv.View(
     fingerprint_sql=with_version(_AUTHOR_NETWORK_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
     operation_key="materialize.graph.author_network.corpus",
-))
-mv.register(mv.View(
-    key="graph:topic_map",
-    fingerprint_sql=_TOPIC_MAP_FP_SQL,
-    build_fn=_build_topic_map_payload,
-    operation_key="materialize.graph.topic_map",
 ))
