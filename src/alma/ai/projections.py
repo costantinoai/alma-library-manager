@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from alma.ai.cooccurrence import cooccurrence_pairs
+from alma.ai.embedding_graph import CouplingSpec, build_embedding_graph, build_typed_edges
 from alma.core.scope import Scope
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 # authors aren't meaningful pairwise collaborators. Dropped from the co-authorship
 # layer, the same IDF intuition the bibliographic coupling applies to references.
 _COAUTHOR_PAPER_DF_CAP = 100
+# Bibliographic-coupling df cap: a work cited by more than this many authors
+# couples them all pairwise and is non-discriminative (everyone cites the classic).
+_AUTHOR_BIB_DF_CAP = 50
 
 # Optional dependency
 try:
@@ -378,34 +381,6 @@ def build_topic_cooccurrence(
     return {"nodes": nodes, "edges": edges}
 
 
-def _top_k_pairs_per_node(
-    pairs: dict[tuple[str, str], int], k: int
-) -> dict[tuple[str, str], int]:
-    """Keep only each node's ``k`` strongest pairs (by weight) from an
-    undirected pair→weight map.
-
-    Sparsifies a dense relational layer (e.g. bibliographic coupling, where
-    every author in a field couples with nearly every other) the same way
-    mutual-kNN sparsifies the semantic layer: each node retains a bounded set
-    of its strongest connections, so the rendered graph stays legible
-    regardless of corpus density. An edge survives if EITHER endpoint ranks it
-    in its top-k (union), so strong asymmetric links aren't dropped.
-    """
-    if not pairs:
-        return {}
-    by_node: dict[str, list[tuple[int, tuple[str, str]]]] = defaultdict(list)
-    for pair, weight in pairs.items():
-        a, b = pair
-        by_node[a].append((weight, pair))
-        by_node[b].append((weight, pair))
-    keep: set[tuple[str, str]] = set()
-    for ranked in by_node.values():
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        for _weight, pair in ranked[:k]:
-            keep.add(pair)
-    return {pair: pairs[pair] for pair in keep}
-
-
 def build_coauthor_network(
     conn: sqlite3.Connection,
     *,
@@ -549,56 +524,37 @@ def build_coauthor_network(
     n_authors = len(author_ids)
     author_index = {aid: i for i, aid in enumerate(author_ids)}
 
-    # Build topic-weight vectors per author (alias-aware).
-    topic_weights_by_author: dict[str, dict[str, float]] = {
-        aid: {} for aid in author_ids
-    }
-    if _table_exists(conn, "publication_topics"):
-        placeholders = ",".join(["?"] * len(author_ids))
-        topic_status_filter = Scope.parse(scope).paper_filter("p")
-        try:
-            if has_topics_table:
-                topic_rows = conn.execute(
-                    f"""
-                    SELECT pa.openalex_id AS author_id,
-                           COALESCE(t.canonical_name, pt.term) AS term,
-                           SUM(COALESCE(pt.score, 1.0)) AS weight
-                    FROM publication_topics pt
-                    JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-                    JOIN papers p ON p.id = pa.paper_id
-                    LEFT JOIN topics t ON pt.topic_id = t.topic_id
-                    WHERE pa.openalex_id IN ({placeholders}){topic_status_filter}
-                    GROUP BY pa.openalex_id, COALESCE(t.canonical_name, pt.term)
-                    """,
-                    author_ids,
-                ).fetchall()
-            else:
-                topic_rows = conn.execute(
-                    f"""
-                    SELECT pa.openalex_id AS author_id,
-                           pt.term,
-                           SUM(COALESCE(pt.score, 1.0)) AS weight
-                    FROM publication_topics pt
-                    JOIN publication_authors pa ON pa.paper_id = pt.paper_id
-                    JOIN papers p ON p.id = pa.paper_id
-                    WHERE pa.openalex_id IN ({placeholders}){topic_status_filter}
-                    GROUP BY pa.openalex_id, pt.term
-                    """,
-                    author_ids,
-                ).fetchall()
-            for row in topic_rows:
-                aid = row["author_id"] if isinstance(row, sqlite3.Row) else row[0]
-                term = row["term"] if isinstance(row, sqlite3.Row) else row[1]
-                weight = float(row["weight"] if isinstance(row, sqlite3.Row) else row[2])
-                if aid in topic_weights_by_author and term:
-                    topic_weights_by_author[aid][term] = weight
-        except Exception as exc:
-            logger.warning("Could not compute author topic vectors: %s", exc)
-
-    top_topic_by_author: dict[str, str] = {}
-    for aid, topic_map in topic_weights_by_author.items():
-        if topic_map:
-            top_topic_by_author[aid] = max(topic_map.items(), key=lambda kv: kv[1])[0]
+    # Per-author TEXT for cluster labelling — the concatenated titles of each
+    # author's papers. This replaces the old per-author `publication_topics` vector
+    # (the OpenAlex/S2 topic vocabulary is noisy + ineffective, AND that 4-table
+    # query was a corpus bottleneck). Labels now come from the SAME source as the
+    # paper map — real title text through the shared c-TF-IDF scorer — so the two
+    # graphs label identically. Titles (not abstracts) keep an author's "document"
+    # concise: a prolific author would otherwise concatenate dozens of abstracts.
+    author_text_by_id: dict[str, str] = {aid: "" for aid in author_ids}
+    placeholders = ",".join(["?"] * len(author_ids))
+    text_status_filter = Scope.parse(scope).paper_filter("p")
+    try:
+        title_rows = conn.execute(
+            f"""
+            SELECT pa.openalex_id AS aid, p.title AS title
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE pa.openalex_id IN ({placeholders}){text_status_filter}
+              AND TRIM(COALESCE(p.title, '')) <> ''
+            """,
+            author_ids,
+        ).fetchall()
+        title_parts: dict[str, list[str]] = defaultdict(list)
+        for row in title_rows:
+            aid = row["aid"] if isinstance(row, sqlite3.Row) else row[0]
+            title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
+            if aid in author_text_by_id and title:
+                title_parts[str(aid)].append(str(title))
+        for aid, titles in title_parts.items():
+            author_text_by_id[aid] = " ".join(titles)
+    except Exception as exc:
+        logger.warning("Could not load author title text for labelling: %s", exc)
 
     author_interests: dict[str, list[str]] = {}
     for aid, raw in interests_raw.items():
@@ -619,186 +575,93 @@ def build_coauthor_network(
     # mutual k-NN over the 768-d author embeddings, and productivity stats never
     # enter edge geometry (they stay node metadata).
 
-    # Direct co-authorship signal: how many papers two authors share. Authors are
-    # keyed by the papers they wrote and paired via the shared cooccurrence
-    # primitive — ONE indexed scan, NOT the old double-``IN`` self-join that paired
-    # ~16k authors against ~16k authors and made the corpus author network unusable
-    # (the same self-join blow-up that cost the paper map 372s). The df cap drops
-    # mega-consortium papers: a 1000-author paper emits df²/2 = 500k pairs and
-    # doesn't make all its authors meaningful collaborators anyway.
-    shared_pairs: dict[tuple[str, str], int] = {}
-    max_shared = 0
+    # ── Structural coupling inputs for the SHARED pipeline (entity → features) ──
+    # Co-authorship: each author keyed by the papers they wrote. Bibliographic
+    # coupling: each author keyed by the works their papers cite. Both are ONE
+    # indexed scan; the shared cooccurrence primitive (inside the pipeline) does the
+    # pairing + df cap — no SQL self-join, no per-graph edge code.
+    placeholders = ",".join(["?"] * len(author_ids))
+    scope_filter = Scope.parse(scope).paper_filter("p")
+    author_papers: dict[str, set[str]] = defaultdict(set)
     try:
-        placeholders = ",".join(["?"] * len(author_ids))
-        shared_status_filter = Scope.parse(scope).paper_filter("p")
-        coauth_rows = conn.execute(
-            f"""
-            SELECT pa.openalex_id AS aid, pa.paper_id AS pid
-            FROM publication_authors pa
-            JOIN papers p ON p.id = pa.paper_id
-            WHERE pa.openalex_id IN ({placeholders}){shared_status_filter}
-              AND TRIM(COALESCE(pa.openalex_id, '')) <> ''
-            """,
+        for row in conn.execute(
+            f"""SELECT pa.openalex_id AS aid, pa.paper_id AS pid
+                FROM publication_authors pa JOIN papers p ON p.id = pa.paper_id
+                WHERE pa.openalex_id IN ({placeholders}){scope_filter}
+                  AND TRIM(COALESCE(pa.openalex_id, '')) <> ''""",
             author_ids,
-        ).fetchall()
-        author_papers: dict[str, set[str]] = defaultdict(set)
-        for row in coauth_rows:
+        ).fetchall():
             aid = row["aid"] if isinstance(row, sqlite3.Row) else row[0]
             pid = row["pid"] if isinstance(row, sqlite3.Row) else row[1]
             author_papers[str(aid)].add(str(pid))
-        shared_pairs = cooccurrence_pairs(author_papers, max_feature_df=_COAUTHOR_PAPER_DF_CAP)
-        max_shared = max(shared_pairs.values(), default=0)
     except Exception as exc:
-        logger.warning("Could not compute shared-paper overlap: %s", exc)
+        logger.warning("Could not load author→paper links: %s", exc)
+    author_refs = _author_referenced_works(conn, author_ids, scope=scope)
 
-    # Bibliographic coupling: authors whose papers cite the same works.
-    bib_pairs, max_bib = _author_bibliographic_coupling(conn, author_ids, scope=scope)
-
-    # Author embeddings (768-d SPECTER2 mean) — the basis for the semantic
-    # neighbourhood AND the clustering/layout below (Phase 3 / I-11).
     author_embeddings = _author_mean_embeddings(conn, author_ids)
     embedded_ids = [aid for aid in author_ids if aid in author_embeddings]
+    emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
 
-    # ── Typed, filterable edge LAYERS (I-11) ──────────────────────────────
-    # Replaces the single combined_similarity — which folded productivity STATS
-    # into edge geometry (a locked-rule violation) and collapsed everything into
-    # one top-k weight. Each layer now means one thing and carries its edge_type
-    # so the UI can filter; citation/h-index stay node metadata only.
-    edges: list[dict[str, Any]] = []
-    edge_layers: dict[str, int] = {}
-    seen_edges: set[tuple[str, str, str]] = set()
+    # The author network's edge layers — same shapes the paper map uses, just over
+    # author/paper features. (co_authorship: shared papers; bibliographic_coupling:
+    # shared cited works, sparsified to each author's top-4 partners.)
+    coupling_specs = [
+        CouplingSpec(
+            edge_type="co_authorship", entity_features=author_papers,
+            min_shared=1, max_feature_df=_COAUTHOR_PAPER_DF_CAP,
+            weight_floor=0.5, weight_span=0.5, use_for_fusion=True,
+        ),
+        CouplingSpec(
+            edge_type="bibliographic_coupling", entity_features=author_refs,
+            min_shared=1, max_feature_df=_AUTHOR_BIB_DF_CAP,
+            weight_floor=0.4, weight_span=0.5, top_k_per_node=4, use_for_fusion=True,
+        ),
+    ]
 
-    def _emit_edge(a1: str, a2: str, weight: float, edge_type: str, **extra: Any) -> None:
-        if a1 == a2:
-            return
-        key = (a1, a2, edge_type) if a1 < a2 else (a2, a1, edge_type)
-        if key in seen_edges:
-            return
-        seen_edges.add(key)
-        edges.append({
-            "source": key[0],
-            "target": key[1],
-            "weight": round(float(weight), 3),
-            "edge_type": edge_type,
-            **extra,
-        })
-        edge_layers[edge_type] = edge_layers.get(edge_type, 0) + 1
-
-    # 1) Semantic neighbourhood — mutual k-NN over author embeddings.
-    from alma.ai.neighbor_graph import mutual_knn_edges
-
-    for a1, a2, sim in mutual_knn_edges(
-        {aid: author_embeddings[aid].tolist() for aid in embedded_ids},
-        k=6,
-        min_similarity=0.5,
-    ):
-        _emit_edge(a1, a2, sim, "semantic")
-
-    # 2) Co-authorship — shared papers.
-    for (a1, a2), shared in shared_pairs.items():
-        weight = 0.5 + 0.5 * (shared / max_shared if max_shared else 0.0)
-        _emit_edge(a1, a2, weight, "co_authorship", shared_papers=shared)
-
-    # 3) Bibliographic coupling — shared references. Authors in one field
-    # couple with almost everyone (all-pairs ≥1 shared ref is O(n²) and would
-    # flood the graph — 15k+ edges on this library). Keep only each author's
-    # top-k strongest coupling partners so the layer stays sparse + readable,
-    # the same sparsification idea as the mutual-kNN semantic layer.
-    for (a1, a2), shared in _top_k_pairs_per_node(bib_pairs, k=4).items():
-        weight = 0.4 + 0.5 * (shared / max_bib if max_bib else 0.0)
-        _emit_edge(a1, a2, weight, "bibliographic_coupling", shared_refs=shared)
-
-    # ── Honest clustering over author embeddings (Phase 2 recipe, I-11) ──────
-    # Unifies with the paper map: HDBSCAN-eom + retained outliers via
-    # cluster_publications (no silhouette-kmeans, no forced-K). Authors HDBSCAN
-    # can't confidently place stay Unclustered (cluster_id=None) — same as
-    # authors with no embedding. Citation/h-index never enter the feature
-    # vector (display only); position + clusters come from SPECTER2-mean alone.
-    from alma.ai.clustering import cluster_publications, score_cluster_terms
-
+    # ── The ONE shared machine (alma.ai.embedding_graph) ──────────────────────
+    # Clusters, 2-D layout, typed edges, and c-TF-IDF text labels all come from the
+    # identical pipeline the paper map uses. The author graph differs ONLY in its
+    # inputs (mean-embeddings, title text, author/paper coupling) and its node
+    # payloads (assembled below) — never in the machine itself.
     cluster_ids = np.full(n_authors, -1, dtype=np.int32)
     coords_by_author: dict[str, tuple[float, float]] = {}
     clustering_method = "no_embeddings"
     clustering_panel: dict[str, Any] = {}
+    cluster_topic_labels: dict[int, str] = {}
+    cluster_word_clouds: dict[int, list[dict[str, Any]]] = {}
+    cluster_member_ids: dict[int, list[str]] = {}
 
     if len(embedded_ids) >= 3:
-        emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
-        # Same accel fixtures as the paper map (task #21): compute ONE shared cosine
-        # kNN over the author embeddings and feed it to both the clustering substrate
-        # and the 2-D projection, so a corpus-scale author network does one neighbour
-        # search instead of two (bounded epochs apply automatically inside accel).
-        from alma.ai import accel
-
-        shared_knn = accel.shared_cosine_knn(emb_map)
-        # Cluster-detail control (parity with the paper map): resolution >1 splits
-        # into more, finer author communities; <1 merges into broader ones.
-        result = cluster_publications(emb_map, resolution=cluster_resolution, precomputed_knn=shared_knn)
-        clustering_method = result.method
-        for c_idx, cluster in enumerate(result.clusters):
-            for aid in cluster.member_keys:
-                cluster_ids[author_index[aid]] = c_idx
-        clustering_panel = {
-            "method": result.method,
-            "n_clusters": result.n_clusters,
-            "outlier_count": len(result.outliers),
-            "coverage": round(result.coverage, 4),
-            "params": result.params,
-        }
-        try:
-            # 2-D layout from the same SPECTER2 input via the cosine UMAP path,
-            # so visual neighbourhood and clusters share one geometry (reusing the
-            # shared kNN computed above — the paper map's fixture, applied here).
-            semantic_coords = project_embeddings(emb_map, precomputed_knn=shared_knn)
-            coords_by_author.update(semantic_coords)
-            # Fused multi-view layout (task 19, parity with the paper map): blend
-            # semantic + co-authorship + bibliographic-coupling into the POSITIONS
-            # when weights are set. Clusters stay semantic; anchored at the
-            # semantic layout (init) for stability. Dense O(N²) ⇒ capped.
-            lw = layout_weights or {}
-            fused_on = (
-                float(lw.get("coauthorship", 0) or 0) > 0
-                or float(lw.get("bibliographic_coupling", 0) or 0) > 0
-            )
-            if fused_on and len(embedded_ids) <= 1500:
-                fused = fuse_layout(
-                    emb_map, shared_pairs, bib_pairs, weights=lw, init_coords=semantic_coords
-                )
-                if fused:
-                    coords_by_author.update(fused)
-        except Exception as exc:
-            logger.warning("Author embedding projection failed; using fallback layout: %s", exc)
-
-    cluster_members: dict[int, list[int]] = defaultdict(list)
-    for idx, cid in enumerate(cluster_ids):
-        if int(cid) >= 0:
-            cluster_members[int(cid)].append(idx)
+        graph = build_embedding_graph(
+            emb_map,
+            node_text=author_text_by_id,
+            resolution=cluster_resolution,
+            layout_weights=layout_weights,
+            coupling_specs=coupling_specs,
+            semantic_k=6,
+            semantic_min_similarity=0.5,
+        )
+        clustering_method = graph.clustering_meta["method"]
+        clustering_panel = graph.clustering_meta
+        coords_by_author.update(graph.coords)
+        edges, edge_layers = graph.edges, graph.edge_layers
+        cluster_topic_labels = graph.labels_by_cluster
+        cluster_word_clouds = graph.word_clouds
+        cluster_member_ids = graph.cluster_members
+        for aid, cid in graph.cluster_ids.items():
+            if cid >= 0 and aid in author_index:
+                cluster_ids[author_index[aid]] = cid
+    else:
+        # Too few embeddings to cluster/lay out — still surface the structural edge
+        # layers (semantic is empty, co-authorship/bib still emit) through the same
+        # edge builder, so even a tiny author set isn't edgeless.
+        edges, edge_layers = build_typed_edges(
+            emb_map, coupling_specs=coupling_specs, semantic_k=6, semantic_min_similarity=0.5
+        )
 
     unplaced_indices = [
         i for i, aid in enumerate(author_ids) if aid not in author_embeddings
     ]
-
-    # Cluster labels — prevalence-weighted c-TF-IDF over each cluster's authors'
-    # topic terms (shared scorer; same fix as the paper map). A label term must
-    # recur across the cluster's AUTHORS, not sit in one prolific author.
-    member_topic_docs = {
-        cid: [
-            " ".join(topic_weights_by_author.get(author_ids[idx], {}).keys())
-            for idx in members
-        ]
-        for cid, members in cluster_members.items()
-    }
-    scored_terms = score_cluster_terms(member_topic_docs, ngram_range=(1, 2), top_k=10)
-    cluster_topic_labels: dict[int, str] = {}
-    cluster_word_clouds: dict[int, list[dict[str, Any]]] = {}
-    for cid in cluster_members:
-        ranked = scored_terms.get(cid, [])
-        terms = [term for term, _w in ranked][:2]
-        cluster_topic_labels[cid] = ", ".join(terms) if terms else f"Cluster {cid + 1}"
-        # Per-cluster word cloud (same scorer) so the author view has parity with
-        # the paper map's word-cloud toggle.
-        cluster_word_clouds[cid] = [
-            {"term": term, "weight": round(weight, 4)} for term, weight in ranked[:10]
-        ]
 
     # Ensure coords exist for every author. Authors without embeddings are
     # scattered around the edge so they don't pile on top of each other.
@@ -831,7 +694,6 @@ def build_coauthor_network(
                 "works_count": works_counts.get(aid, 0),
                 "orcid": orcids.get(aid, ""),
                 "openalex_id": openalex_ids.get(aid, ""),
-                "top_topic": top_topic_by_author.get(aid),
                 "interests": author_interests.get(aid, []),
                 "cluster_id": cid,
                 "cluster_label": (
@@ -849,9 +711,9 @@ def build_coauthor_network(
             "label": cluster_topic_labels.get(cid, f"Cluster {cid + 1}"),
             "size": len(members),
             "word_cloud": cluster_word_clouds.get(cid, []),
-            "member_ids": [author_ids[idx] for idx in members],
+            "member_ids": list(members),
         }
-        for cid, members in sorted(cluster_members.items(), key=lambda kv: kv[0])
+        for cid, members in sorted(cluster_member_ids.items(), key=lambda kv: kv[0])
     ]
 
     return {
@@ -864,36 +726,27 @@ def build_coauthor_network(
     }
 
 
-def _author_bibliographic_coupling(
+def _author_referenced_works(
     conn: sqlite3.Connection,
     author_ids: list[str],
     *,
     scope: str = "library",
-    max_ref_df: int = 50,
-) -> tuple[dict[tuple[str, str], int], int]:
-    """Count shared references between every pair of authors.
+) -> dict[str, set[str]]:
+    """Map each author → the set of works their papers cite.
 
-    Bibliographic coupling (BC) = number of distinct works cited by
-    *both* authors. Returns ({(a1, a2): count}, max_count) with
-    a1 < a2 for deterministic keys. Silently returns ({}, 0) when the
-    ``publication_references`` table is missing.
-
-    Authors are keyed by their cited works and paired via the shared
-    ``cooccurrence_pairs`` primitive (one indexed scan, NOT a self-join). Its
-    ``max_ref_df`` cap drops references cited by more than that many authors —
-    non-discriminative AND the O(df²) blow-up — the same IDF intuition as the
-    paper-level coupling.
+    The entity→features input the shared pipeline pairs into bibliographic-coupling
+    edges (one indexed scan; the pairing + df cap live in ``cooccurrence_pairs``).
+    Returns {} when ``publication_references`` is missing.
     """
+    out: dict[str, set[str]] = defaultdict(set)
     if not author_ids or not _table_exists(conn, "publication_references"):
-        return {}, 0
-
+        return out
     placeholders = ",".join(["?"] * len(author_ids))
     status_filter = Scope.parse(scope).paper_filter("p")
     try:
         rows = conn.execute(
             f"""
-            SELECT DISTINCT pa.openalex_id AS author_id,
-                            r.referenced_work_id AS ref
+            SELECT DISTINCT pa.openalex_id AS author_id, r.referenced_work_id AS ref
             FROM publication_references r
             JOIN papers p ON p.id = r.paper_id
             JOIN publication_authors pa ON pa.paper_id = r.paper_id
@@ -903,17 +756,13 @@ def _author_bibliographic_coupling(
             author_ids,
         ).fetchall()
     except sqlite3.OperationalError as exc:
-        logger.warning("Bibliographic coupling query failed: %s", exc)
-        return {}, 0
-
-    author_refs: dict[str, set[str]] = defaultdict(set)
+        logger.warning("Author referenced-works query failed: %s", exc)
+        return out
     for row in rows:
         aid = row["author_id"] if isinstance(row, sqlite3.Row) else row[0]
         ref = row["ref"] if isinstance(row, sqlite3.Row) else row[1]
-        author_refs[str(aid)].add(str(ref))
-
-    pairs = cooccurrence_pairs(author_refs, max_feature_df=max_ref_df)
-    return pairs, max(pairs.values(), default=0)
+        out[str(aid)].add(str(ref))
+    return out
 
 
 def _author_mean_embeddings(

@@ -79,7 +79,10 @@ CLUSTERING_ALGO_VERSION = "2026.07-5"
 # 2026.07-2: prevalence-weighted c-TF-IDF — terms must recur across the
 #            cluster's papers, not just be frequent in one (fixes non-co-
 #            occurring words in labels + word clouds).
-LABELLING_VERSION = "2026.07-2"
+# 2026.07-6: noisy OpenAlex/S2 topics removed from the machines — BOTH graphs now
+#            label clusters from real title text via the shared embedding_graph
+#            pipeline (the author network previously labelled from publication_topics).
+LABELLING_VERSION = "2026.07-6"
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding
