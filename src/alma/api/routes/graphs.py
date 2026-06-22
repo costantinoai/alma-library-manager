@@ -905,6 +905,20 @@ CLUSTER_COLORS = [
     "#A855F7",
 ]
 
+# Outlier group (I-6): papers HDBSCAN judged to be density noise are retained as
+# a distinct "Unclustered" group rather than force-merged into a real cluster.
+# A negative id keeps them out of the dense 0..N-1 cluster colour ramp, and the
+# neutral slate fill signals "no confident topic" instead of a misleading colour.
+OUTLIER_CLUSTER_ID = -1
+OUTLIER_LABEL = "Unclustered"
+OUTLIER_COLOR = "#94A3B8"  # slate-400: the same neutral used for "no cluster"
+
+# Incremental layout: a brand-new paper is only attached to an existing cluster
+# centroid when it is genuinely close (cosine ≥ this). A novel paper that sits
+# far from every centroid stays Unclustered until the next full rebuild, instead
+# of being jittered into whichever centroid happens to be least-far (I-6/I-7).
+_INCREMENTAL_MIN_COSINE = 0.10
+
 
 def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     provider = "none"
@@ -1713,6 +1727,10 @@ def _build_embedding_paper_map(
     labels_by_cluster: dict[int, str] = {}
     cluster_members: dict[int, list[str]] = defaultdict(list)
     layout_mode = "embeddings_full"
+    # Clustering diagnostics (I-4/I-6) — populated by the full-rebuild path; the
+    # cached/incremental paths derive their counts from the loaded layout below.
+    clustering_meta: dict[str, Any] = {}
+    node_probabilities: dict[str, float] = {}
 
     # 1) Fully fresh cache: render directly from persisted layout.
     if not stale_ids and len(stable_ids) == len(paper_ids):
@@ -1765,8 +1783,17 @@ def _build_embedding_paper_map(
                     centroid_vectors.keys(),
                     key=lambda cid: _cosine(vec, centroid_vectors[cid]),
                 )
-                assignments[paper_id] = int(best_cid)
-                cluster_members[int(best_cid)].append(paper_id)
+                best_sim = _cosine(vec, centroid_vectors[best_cid])
+                # I-6/I-7: only attach a new paper to a cluster it is genuinely
+                # close to. A novel paper far from every centroid stays
+                # Unclustered (honest) instead of being jittered into the
+                # least-far centroid as if it belonged.
+                if best_sim < _INCREMENTAL_MIN_COSINE:
+                    assignments[paper_id] = OUTLIER_CLUSTER_ID
+                    cluster_members[OUTLIER_CLUSTER_ID].append(paper_id)
+                else:
+                    assignments[paper_id] = int(best_cid)
+                    cluster_members[int(best_cid)].append(paper_id)
 
             # Place incremental nodes around cluster centroids with deterministic jitter.
             stale_idx_by_cluster: dict[int, int] = defaultdict(int)
@@ -1783,7 +1810,11 @@ def _build_embedding_paper_map(
 
     # 3) Full rebuild: clustering + 2D projection.
     if layout_mode == "embeddings_full":
-        clusters = cluster_publications(embeddings)
+        # Stability re-fits UMAP several times, so only pay for it on the
+        # persisting REBUILD path — never on a synchronous custom-options GET.
+        clustering = cluster_publications(embeddings, compute_stability=persist)
+        clusters = clustering.clusters
+        node_probabilities = clustering.probabilities
         labels = label_clusters_tfidf(clusters, texts)
         for cluster, label in zip(clusters, labels):
             cluster.label = label
@@ -1794,6 +1825,21 @@ def _build_embedding_paper_map(
             cluster_members[cid] = list(cluster.member_keys)
             for paper_id in cluster.member_keys:
                 assignments[paper_id] = cid
+        # I-6: density-noise papers are NOT forced into a cluster — collect them
+        # as the explicit Unclustered group so each renders honestly.
+        if clustering.outliers:
+            cluster_members[OUTLIER_CLUSTER_ID] = list(clustering.outliers)
+            labels_by_cluster[OUTLIER_CLUSTER_ID] = OUTLIER_LABEL
+            for paper_id in clustering.outliers:
+                assignments[paper_id] = OUTLIER_CLUSTER_ID
+        clustering_meta = {
+            "method": clustering.method,
+            "n_clusters": clustering.n_clusters,
+            "outlier_count": len(clustering.outliers),
+            "coverage": round(clustering.coverage, 4),
+            "stability": clustering.stability,
+            "params": clustering.params,
+        }
 
     # Ensure every cluster has a label after incremental assignment as well.
     if cluster_members and (layout_mode != "embeddings_full" or not labels_by_cluster):
@@ -1805,10 +1851,14 @@ def _build_embedding_paper_map(
         synthetic_clusters = [
             _Cluster(cluster_id=cid, member_keys=members)
             for cid, members in sorted(cluster_members.items(), key=lambda kv: kv[0])
+            if cid >= 0  # never TF-IDF-label the Unclustered group — it has no topic
         ]
         generated_labels = label_clusters_tfidf(synthetic_clusters, texts)
         for cluster, label in zip(synthetic_clusters, generated_labels):
             labels_by_cluster[int(cluster.cluster_id)] = str(label or labels_by_cluster.get(int(cluster.cluster_id), ""))
+        # The outlier group always carries the fixed Unclustered label.
+        if OUTLIER_CLUSTER_ID in cluster_members:
+            labels_by_cluster[OUTLIER_CLUSTER_ID] = OUTLIER_LABEL
 
     # Persist computed layout rows so subsequent refreshes can be incremental.
     # I-2: ONLY on the rebuild path (persist=True). A GET request never reaches
@@ -1825,9 +1875,13 @@ def _build_embedding_paper_map(
             for batch_start in range(0, len(paper_ids), _CLUSTER_BATCH_SIZE):
                 batch = paper_ids[batch_start:batch_start + _CLUSTER_BATCH_SIZE]
                 for paper_id in batch:
-                    cid = int(assignments.get(paper_id, 0))
+                    # Default to the Unclustered group (not cluster 0) for any
+                    # paper without an assignment — honest "we don't know" (I-6).
+                    cid = int(assignments.get(paper_id, OUTLIER_CLUSTER_ID))
                     x, y = coords.get(paper_id, (0.5, 0.5))
-                    label = labels_by_cluster.get(cid, f"Cluster {cid + 1}")
+                    label = labels_by_cluster.get(cid) or (
+                        OUTLIER_LABEL if cid < 0 else f"Cluster {cid + 1}"
+                    )
                     conn.execute(
                         """
                         INSERT INTO publication_clusters (paper_id, cluster_id, label, x, y, updated_at)
@@ -1881,8 +1935,11 @@ def _build_embedding_paper_map(
             g = int(163 * (1 - cite_ratio) + 130 * cite_ratio)
             b = int(184 * (1 - cite_ratio) + 246 * cite_ratio)
             node_color = f"#{r:02x}{g:02x}{b:02x}"
+        elif cid is None or int(cid) < 0:
+            # Unclustered / no-cluster papers: neutral slate, never a topic colour.
+            node_color = OUTLIER_COLOR
         else:
-            node_color = CLUSTER_COLORS[cid % len(CLUSTER_COLORS)] if cid is not None else "#64748B"
+            node_color = CLUSTER_COLORS[cid % len(CLUSTER_COLORS)]
 
         # Determine node size
         if size_by == "uniform":
@@ -1893,10 +1950,18 @@ def _build_embedding_paper_map(
             node_size = max(0.5, min(3.0, int(meta.get("cited_by_count") or 0) / 50 + 0.5))
 
         # Determine display label
+        is_outlier = cid is None or int(cid) < 0
         if label_mode == "topic" and meta.get("topics"):
             display_label = ", ".join(meta["topics"][:2])
+        elif is_outlier:
+            display_label = OUTLIER_LABEL
         else:
-            display_label = labels_by_cluster.get(int(cid)) if cid is not None else None
+            display_label = labels_by_cluster.get(int(cid))
+
+        # HDBSCAN membership strength [0,1] — the per-node clustering confidence
+        # that the old force-merge discarded (I-6). None when unavailable (cached
+        # layout / k-means fallback).
+        confidence = node_probabilities.get(paper_id) if node_probabilities else None
 
         nodes.append(
             GraphNode(
@@ -1916,6 +1981,10 @@ def _build_embedding_paper_map(
                     "journal": meta.get("journal"),
                     "authors": meta.get("authors"),
                     "cluster_label": display_label,
+                    "is_outlier": is_outlier,
+                    "cluster_confidence": (
+                        round(float(confidence), 3) if confidence is not None else None
+                    ),
                     "topics": meta.get("topics", []),
                 },
             )
@@ -1926,6 +1995,8 @@ def _build_embedding_paper_map(
     edge_keys: set[tuple[str, str]] = set()
     if show_edges:
         for _cid, members in cluster_members.items():
+            if _cid < 0:
+                continue  # outliers are not a coherent group — draw no clique edges
             if len(members) <= 20:
                 for i in range(len(members)):
                     for j in range(i + 1, len(members)):
@@ -1955,19 +2026,45 @@ def _build_embedding_paper_map(
             weight = 0.4 + 0.5 * (shared / max_shared if max_shared else 0.0)
             edges.append(GraphEdge(source=key[0], target=key[1], weight=round(weight, 3)))
 
+    # Topic clusters only — the Unclustered group is reported as a count in the
+    # clustering metadata, never as a pseudo-topic with a TF-IDF label (I-6).
+    topic_cluster_members = {
+        cid: members for cid, members in cluster_members.items() if cid >= 0
+    }
     cached_labels = _load_paper_map_cached_labels(
         conn,
-        cluster_members,
+        topic_cluster_members,
         scope=opts.get("scope", "library"),
     )
     cluster_info = _build_cluster_info(
-        cluster_members,
+        topic_cluster_members,
         paper_meta=paper_meta,
         coords=coords,
         labels_by_cluster=labels_by_cluster,
         cached_labels=cached_labels,
         cluster_texts=texts,
     )
+
+    # Unified clustering diagnostics (I-4/I-6) for the method/uncertainty panel.
+    # The full-rebuild path supplies fresh figures (method, stability, params);
+    # the cached/incremental paths derive counts from the loaded layout so the
+    # panel is honest in every mode.
+    outlier_count = clustering_meta.get(
+        "outlier_count", len(cluster_members.get(OUTLIER_CLUSTER_ID, []))
+    )
+    total_points = len(paper_ids)
+    coverage = clustering_meta.get("coverage")
+    if coverage is None and total_points:
+        coverage = round((total_points - outlier_count) / total_points, 4)
+    clustering_panel = {
+        "method": clustering_meta.get("method", layout_mode),
+        "n_clusters": clustering_meta.get("n_clusters", len(topic_cluster_members)),
+        "outlier_count": outlier_count,
+        "coverage": coverage,
+        "stability": clustering_meta.get("stability"),
+        "params": clustering_meta.get("params", {}),
+    }
+
     result = GraphData(
         nodes=nodes,
         edges=edges,
@@ -1977,6 +2074,7 @@ def _build_embedding_paper_map(
             "stale_papers": len(stale_ids),
             "stable_papers": len(stable_ids),
             "clusters": cluster_info,
+            "clustering": clustering_panel,
             **(ai_state or {}),
         },
     )

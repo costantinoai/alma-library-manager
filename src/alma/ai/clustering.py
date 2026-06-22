@@ -35,8 +35,8 @@ forces a fresh refresh.
 
 import logging
 import math
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import numpy as np
 
@@ -243,11 +243,110 @@ class Cluster:
     centroid: Optional[list[float]] = None
 
 
+@dataclass
+class ClusteringResult:
+    """Outcome of one clustering run, carrying the honesty + diagnostic
+    signals the Insights "method" panel surfaces (findings I-4, I-6).
+
+    `clusters` holds only the REAL clusters (dense ids ``0..N-1``). Points
+    HDBSCAN judged to be density noise are NOT force-merged into the nearest
+    cluster — the old behaviour that silently erased the outlier/uncertainty
+    signal (I-6). They are listed in `outliers` and rendered by the caller as
+    a distinct "Unclustered" group, never coloured as if they belonged.
+
+    `probabilities` is HDBSCAN's per-point membership strength in ``[0, 1]``
+    (``0.0`` for outliers; ``1.0`` everywhere under the k-means fallback,
+    which has no soft-membership estimate). `stability` is the mean pairwise
+    Adjusted Rand Index across several UMAP seeds (``None`` when not computed
+    or undefined) — a value near ``1.0`` means the partition is reproducible,
+    a low value means the clusters are an artefact of one random projection.
+    """
+
+    clusters: list[Cluster]
+    outliers: list[str] = field(default_factory=list)
+    probabilities: dict[str, float] = field(default_factory=dict)
+    method: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    stability: Optional[float] = None
+
+    @property
+    def n_clusters(self) -> int:
+        return len(self.clusters)
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of points assigned to a real cluster (1 − outlier rate)."""
+        clustered = sum(len(c.member_keys) for c in self.clusters)
+        total = clustered + len(self.outliers)
+        return (clustered / total) if total else 0.0
+
+
+def measure_clustering_stability(
+    vectors: np.ndarray,
+    *,
+    min_cluster_size: int,
+    min_samples: int,
+    n_seeds: int = 5,
+) -> Optional[float]:
+    """Mean pairwise Adjusted Rand Index of the partition across UMAP seeds.
+
+    The clustering pipeline's only stochastic stage is the UMAP reduction
+    (HDBSCAN is deterministic given a substrate). Re-reducing with different
+    ``random_state`` seeds and re-clustering tells us whether the cluster
+    structure is *reproducible* (ARI≈1: the data genuinely has these groups)
+    or an *artefact* of one lucky projection (ARI low: treat the map as
+    suggestive, not authoritative). This is a clustering-validity diagnostic,
+    surfaced in the method panel — it never changes the served partition,
+    which always uses the fixed ``random_state=42`` run.
+
+    Returns ``None`` when stability is undefined/uncomputable: UMAP missing,
+    too few points for a reduction, fewer than two seeds usable, or every run
+    collapsed to a single label (ARI needs ≥2 partitions with structure).
+    """
+    if not _HDBSCAN_AVAILABLE or not _UMAP_AVAILABLE:
+        return None
+    n = int(vectors.shape[0])
+    if n < _UMAP_MIN_POINTS or n_seeds < 2:
+        return None
+
+    from sklearn.metrics import adjusted_rand_score
+
+    seeds = [42, 1, 7, 13, 99][:n_seeds]
+    label_sets: list[np.ndarray] = []
+    for seed in seeds:
+        try:
+            substrate = reduce_for_clustering(vectors, random_state=seed)
+            clusterer = _hdbscan.HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                min_samples=min_samples,
+                metric="euclidean",
+                cluster_selection_method="eom",
+            )
+            labels = np.asarray(clusterer.fit_predict(substrate), dtype=np.int32)
+        except Exception:
+            continue
+        # A run that found no structure (all noise, or one cluster) carries no
+        # partition information — skip it rather than letting ARI degenerate.
+        if len({int(x) for x in labels if int(x) >= 0}) >= 2:
+            label_sets.append(labels)
+
+    if len(label_sets) < 2:
+        return None
+
+    scores: list[float] = []
+    for i in range(len(label_sets)):
+        for j in range(i + 1, len(label_sets)):
+            scores.append(float(adjusted_rand_score(label_sets[i], label_sets[j])))
+    return round(sum(scores) / len(scores), 4) if scores else None
+
+
 def cluster_publications(
     embeddings: dict[str, list[float]],
     min_cluster_size: Optional[int] = None,
     min_samples: Optional[int] = None,
-) -> list[Cluster]:
+    *,
+    compute_stability: bool = False,
+) -> ClusteringResult:
     """Cluster publication embeddings via the BERTopic recipe.
 
     Pipeline:
@@ -284,15 +383,21 @@ def cluster_publications(
             SPECTER2 — normalisation happens internally).
         min_cluster_size: Minimum cluster size for HDBSCAN.
         min_samples: Minimum samples for HDBSCAN.
+        compute_stability: When True, also run the seed-resampling stability
+            diagnostic (mean pairwise ARI across UMAP seeds). Off by default
+            because it re-fits UMAP several times — enable it on the
+            background REBUILD path, not on a synchronous read.
 
     Returns:
-        List of Cluster objects with member_keys populated. Centroids
-        are computed on the *raw* SPECTER2 vectors so callers (e.g.
-        the incremental-layout fast path) can do nearest-centroid
-        lookups in the original embedding space.
+        A :class:`ClusteringResult`. ``clusters`` are the real clusters only
+        (dense ids, centroids on the *raw* SPECTER2 vectors so the
+        incremental-layout fast path can do nearest-centroid lookups in the
+        original embedding space); density-noise points are retained in
+        ``outliers`` (I-6), never force-merged. ``probabilities``, ``method``,
+        ``params`` and ``stability`` feed the method/uncertainty panel.
     """
     if not embeddings:
-        return []
+        return ClusteringResult(clusters=[])
 
     keys = list(embeddings.keys())
     vectors = np.array([embeddings[k] for k in keys], dtype=np.float32)
@@ -304,9 +409,14 @@ def cluster_publications(
         # explodes into 15-30 clusters depending on density.
         min_cluster_size = max(3, min(12, int(round(math.sqrt(n_items) * 0.5))))
     if min_samples is None:
-        # Lower min_samples → less density required → more granular clusters.
-        # Floor at 1 so HDBSCAN doesn't refuse very small libraries.
-        min_samples = max(1, min(min_cluster_size - 1, max(1, min_cluster_size // 3)))
+        # min_samples is HDBSCAN's conservativeness knob: higher → more points
+        # declared noise. It MUST be ≥ 2 — at min_samples=1 every point is a core
+        # point and HDBSCAN can never emit noise, which silently disables the
+        # outlier path entirely (I-6) and makes "coverage" meaninglessly 1.0.
+        # We sit it at half the cluster size (floored at 2, capped below
+        # min_cluster_size) so the density estimate is honest without over-
+        # noising a small personal library.
+        min_samples = max(2, min(min_cluster_size - 1, min_cluster_size // 2))
 
     cluster_substrate = reduce_for_clustering(vectors)
 
@@ -346,63 +456,86 @@ def cluster_publications(
             prediction_data=True,
         )
         labels = clusterer.fit_predict(cluster_substrate)
+        # Per-point membership strength in [0, 1] (0 for noise). Surfaced as the
+        # node's clustering confidence — the uncertainty signal the old
+        # force-merge destroyed (I-6). `prediction_data=True` guarantees
+        # `probabilities_` is populated (length n, zeros for noise).
+        point_probabilities = np.asarray(clusterer.probabilities_, dtype=np.float32)
+        method = "hdbscan_eom"
     else:
         # HDBSCAN unavailable: silhouette-driven k-means is the only option (k≥2
         # only because silhouette is undefined for k<2 — a capability floor, NOT a
-        # "more clusters is better" target).
+        # "more clusters is better" target). k-means has no soft-membership or
+        # outlier notion, so every point gets probability 1.0 and none are noise.
         labels = _run_kmeans(cluster_substrate, n_items, lower_bound=2)
+        point_probabilities = np.ones(n_items, dtype=np.float32)
+        method = "kmeans_silhouette"
 
     labels = np.array(labels, dtype=np.int32)
 
-    # Re-attach HDBSCAN noise points to the nearest cluster centroid in the SAME
-    # reduced space. NOTE (I-6, pending): this erases the outlier/uncertainty
-    # signal — a follow-up SOTA pass will instead RETAIN low-confidence points as
-    # an explicit "unclustered" group (requires the caller to render them
-    # distinctly, not default-to-cluster-0). Kept for now so every node gets a
-    # colored group and the caller's assignment map stays total.
-    if np.any(labels == -1):
-        valid_mask = labels >= 0
-        if np.any(valid_mask):
-            unique_valid = sorted(int(x) for x in np.unique(labels[valid_mask]))
-            centroids = {
-                lbl: cluster_substrate[labels == lbl].mean(axis=0)
-                for lbl in unique_valid
-            }
-            noise_idx = np.where(labels == -1)[0]
-            for idx in noise_idx:
-                nearest = min(
-                    unique_valid,
-                    key=lambda lbl: float(
-                        np.linalg.norm(cluster_substrate[idx] - centroids[lbl])
-                    ),
-                )
-                labels[idx] = nearest
+    # I-6: RETAIN density noise as a real "unclustered" group. The old code
+    # re-attached every HDBSCAN -1 point to its nearest centroid, manufacturing
+    # membership the density model explicitly rejected and erasing uncertainty.
+    # We now keep -1 and let the caller render those points distinctly (grey, no
+    # cluster edges): an honest "we don't know where this belongs" beats a
+    # confident wrong colour.
 
-    # Normalize labels to dense 0..N-1 for stable colors/ordering.
+    # Normalize the REAL labels to dense 0..N-1 for stable colors/ordering;
+    # -1 (noise) is preserved as -1.
     unique_labels = sorted(int(x) for x in np.unique(labels) if int(x) >= 0)
     label_map = {old: new for new, old in enumerate(unique_labels)}
     labels = np.array([label_map.get(int(lbl), -1) for lbl in labels], dtype=np.int32)
 
-    # Group by cluster label
+    # Group members; collect noise points and the per-paper membership strength.
     cluster_map: dict[int, list[str]] = {}
+    outliers: list[str] = []
+    probabilities: dict[str, float] = {}
     for i, label in enumerate(labels):
-        if label == -1:
-            continue  # noise in HDBSCAN
-        cluster_map.setdefault(int(label), []).append(keys[i])
+        key = keys[i]
+        probabilities[key] = (
+            float(point_probabilities[i]) if i < len(point_probabilities) else 0.0
+        )
+        if int(label) == -1:
+            outliers.append(key)  # density noise — honestly unclustered
+            continue
+        cluster_map.setdefault(int(label), []).append(key)
 
-    clusters = []
+    clusters: list[Cluster] = []
     for cid, members in sorted(cluster_map.items()):
         member_vecs = np.array([embeddings[k] for k in members])
         centroid = member_vecs.mean(axis=0).tolist()
         clusters.append(
-            Cluster(
-                cluster_id=cid,
-                member_keys=members,
-                centroid=centroid,
-            )
+            Cluster(cluster_id=cid, member_keys=members, centroid=centroid)
         )
 
-    return clusters
+    # Reproducibility diagnostic (opt-in; re-fits UMAP, so background-only).
+    stability: Optional[float] = None
+    if compute_stability:
+        stability = measure_clustering_stability(
+            vectors, min_cluster_size=min_cluster_size, min_samples=min_samples
+        )
+
+    return ClusteringResult(
+        clusters=clusters,
+        outliers=outliers,
+        probabilities=probabilities,
+        method=method,
+        params={
+            "min_cluster_size": int(min_cluster_size),
+            "min_samples": int(min_samples),
+            "selection": "eom" if _HDBSCAN_AVAILABLE else "silhouette",
+            "reduced_dim": (
+                int(cluster_substrate.shape[1]) if cluster_substrate.ndim == 2 else None
+            ),
+            "substrate": (
+                "umap_cosine"
+                if (_UMAP_AVAILABLE and n_items >= _UMAP_MIN_POINTS)
+                else "l2_raw"
+            ),
+            "metric": "euclidean_on_l2norm",
+        },
+        stability=stability,
+    )
 
 
 def _select_label_terms(

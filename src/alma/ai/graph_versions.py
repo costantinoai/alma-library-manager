@@ -36,7 +36,10 @@ PROJECTION_ALGO_VERSION = "2026.07-1"
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
 # 2026.07-2: HDBSCAN leaf→eom + removed the forced-K≥4 rescue (I-5).
-CLUSTERING_ALGO_VERSION = "2026.07-2"
+# 2026.07-3: retain density noise as an explicit Unclustered group instead of
+#            force-merging it to the nearest centroid; ClusteringResult carries
+#            per-point membership probability + coverage + stability (I-6).
+CLUSTERING_ALGO_VERSION = "2026.07-3"
 
 # Cluster-label generation (ai/cluster_labels.py): representative selection,
 # c-TF-IDF terms, the label-signature content hash.
