@@ -737,6 +737,48 @@ def _m_0020_topic_aliases_legacy_shape(conn: sqlite3.Connection) -> None:
         logger.info("topic_aliases legacy-shape rebuild: migrated %d aliases", migrated)
 
 
+def _m_0021_publication_clusters_scope(conn: sqlite3.Connection) -> None:
+    """Key the cluster-layout cache by graph SCOPE (I-1).
+
+    PRIMARY KEY (paper_id) → (paper_id, scope) so a Library layout and a
+    Corpus layout coexist per paper. Before this, a Corpus rebuild
+    (corpus ⊇ library) overwrote Library cluster assignments, and a Library
+    GET then served corpus-space positions/clusters. Existing rows ARE the
+    Library layout, so they migrate under scope='library'.
+    """
+    if not _table_exists(conn, "publication_clusters"):
+        return
+    if "scope" in _table_columns(conn, "publication_clusters"):
+        return  # already current shape (fresh DB or re-run)
+    logger.info(
+        "Migrating publication_clusters PK from (paper_id) to (paper_id, scope)"
+    )
+    conn.execute(
+        "ALTER TABLE publication_clusters RENAME TO publication_clusters_legacy"
+    )
+    conn.execute(
+        """CREATE TABLE publication_clusters (
+            paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+            scope TEXT NOT NULL DEFAULT 'library',
+            cluster_id INTEGER NOT NULL,
+            label TEXT DEFAULT '',
+            x REAL DEFAULT 0.5,
+            y REAL DEFAULT 0.5,
+            updated_at TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (paper_id, scope)
+        )"""
+    )
+    conn.execute(
+        """
+        INSERT INTO publication_clusters
+            (paper_id, scope, cluster_id, label, x, y, updated_at)
+        SELECT paper_id, 'library', cluster_id, label, x, y, updated_at
+        FROM publication_clusters_legacy
+        """
+    )
+    conn.execute("DROP TABLE publication_clusters_legacy")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -758,6 +800,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (18, "gap_feedback_suggestion_bucket", _m_0018_gap_feedback_suggestion_bucket),
     (19, "follow_state_heal", _m_0019_follow_state_heal),
     (20, "topic_aliases_legacy_shape", _m_0020_topic_aliases_legacy_shape),
+    (21, "publication_clusters_scope", _m_0021_publication_clusters_scope),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

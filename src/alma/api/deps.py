@@ -810,14 +810,19 @@ def init_db_schema() -> None:
             )
 
             conn.execute(
+                # Keyed by (paper_id, scope) so a Library layout and a Corpus
+                # layout coexist per paper (I-1). Before this, a Corpus rebuild
+                # (corpus ⊇ library) overwrote Library cluster assignments and a
+                # Library GET served corpus-space positions/clusters.
                 """CREATE TABLE IF NOT EXISTS publication_clusters (
                     paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+                    scope TEXT NOT NULL DEFAULT 'library',
                     cluster_id INTEGER NOT NULL,
                     label TEXT DEFAULT '',
                     x REAL DEFAULT 0.5,
                     y REAL DEFAULT 0.5,
                     updated_at TEXT DEFAULT (datetime('now')),
-                    PRIMARY KEY (paper_id)
+                    PRIMARY KEY (paper_id, scope)
                 )"""
             )
 

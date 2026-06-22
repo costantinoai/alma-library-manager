@@ -329,12 +329,11 @@ def _rebuild_graphs_impl(
         # cluster_publications with the CURRENT algorithm. Without this the
         # incremental path reused the stale cached layout (I-7), so a clustering
         # change (I-5: eom / no-forced-K) never reached the rebuilt map — i.e.
-        # "Rebuild" didn't actually re-cluster.
-        scope_filter = scope.paper_filter("p", leading_and=False) or "1=1"
+        # "Rebuild" didn't actually re-cluster. I-1: the cache is now scope-keyed,
+        # so we clear exactly this scope's rows (no papers join needed).
         try:
             conn.execute(
-                "DELETE FROM publication_clusters WHERE paper_id IN "
-                f"(SELECT p.id FROM papers p WHERE {scope_filter})"
+                "DELETE FROM publication_clusters WHERE scope = ?", (str(scope),)
             )
         except sqlite3.OperationalError:
             pass
@@ -1603,6 +1602,10 @@ def _build_embedding_paper_map(
     color_by = opts.get("color_by", "cluster")
     size_by = opts.get("size_by", "citations")
     show_edges = opts.get("show_edges", True)
+    # I-1: the cluster-layout cache is keyed by scope, so a Corpus build never
+    # overwrites the Library layout (and vice-versa). Read + persist only this
+    # scope's rows.
+    layout_scope = str(opts.get("scope", "library") or "library")
 
     def _cosine(a: np.ndarray, b: np.ndarray) -> float:
         na = float(np.linalg.norm(a))
@@ -1692,7 +1695,9 @@ def _build_embedding_paper_map(
         embedding_created_at = {}
     try:
         rows = conn.execute(
-            "SELECT paper_id, cluster_id, label, x, y, updated_at FROM publication_clusters"
+            "SELECT paper_id, cluster_id, label, x, y, updated_at "
+            "FROM publication_clusters WHERE scope = ?",
+            (layout_scope,),
         ).fetchall()
         for row in rows:
             pid = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
@@ -1884,16 +1889,16 @@ def _build_embedding_paper_map(
                     )
                     conn.execute(
                         """
-                        INSERT INTO publication_clusters (paper_id, cluster_id, label, x, y, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(paper_id) DO UPDATE SET
+                        INSERT INTO publication_clusters (paper_id, scope, cluster_id, label, x, y, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(paper_id, scope) DO UPDATE SET
                             cluster_id = excluded.cluster_id,
                             label = excluded.label,
                             x = excluded.x,
                             y = excluded.y,
                             updated_at = excluded.updated_at
                         """,
-                        (paper_id, cid, label, float(x), float(y), now_iso),
+                        (paper_id, layout_scope, cid, label, float(x), float(y), now_iso),
                     )
                 if conn.in_transaction:
                     conn.commit()
