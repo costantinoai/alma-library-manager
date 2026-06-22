@@ -35,7 +35,10 @@ from __future__ import annotations
 # 2026.07-2: Phase 3 / I-11 — typed edge layers (semantic mutual-kNN in 768-d,
 #            bibliographic coupling, co-authorship) replace intra-cluster cliques;
 #            retracted papers excluded from edges.
-PROJECTION_ALGO_VERSION = "2026.07-2"
+# 2026.07-3: author network gets the same treatment — typed mutual-kNN/co-author/
+#            coupling layers (stats out of edge geometry) + honest eom clustering
+#            with retained outliers, replacing topic-TFIDF+stats + silhouette-kmeans.
+PROJECTION_ALGO_VERSION = "2026.07-3"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.

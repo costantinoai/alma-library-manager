@@ -179,7 +179,7 @@ def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> di
             cluster_id=n.get("cluster_id"),
             color=CLUSTER_COLORS[n["cluster_id"] % len(CLUSTER_COLORS)]
             if n.get("cluster_id") is not None
-            else None,
+            else OUTLIER_COLOR,  # Unclustered authors render neutral, not blue (I-6)
             size=max(1.0, n.get("pub_count", 1) / 6),
             metadata={
                 "pub_count": n.get("pub_count", 0),
@@ -192,6 +192,7 @@ def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> di
                 "openalex_id": n.get("openalex_id", ""),
                 "top_topic": n.get("top_topic"),
                 "interests": n.get("interests", []),
+                "is_outlier": bool(n.get("is_outlier")),
                 "cluster_label": cluster_label_override.get(
                     int(n["cluster_id"]) if n.get("cluster_id") is not None else -1,
                     n.get("cluster_label"),
@@ -206,6 +207,7 @@ def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> di
             source=e["source"],
             target=e["target"],
             weight=e["weight"],
+            edge_type=e.get("edge_type", "semantic"),
         )
         for e in raw["edges"]
     ]
@@ -231,8 +233,12 @@ def _build_author_network_payload(conn: sqlite3.Connection, *, scope: str) -> di
         edges=edges,
         metadata={
             "type": "author_network",
-            "method": raw.get("method", "topic_similarity"),
+            "method": raw.get("method", "author_embedding_mean"),
             "clusters": enriched_clusters,
+            # Typed edge-layer counts + clustering diagnostics, same shape as the
+            # paper map so the UI's filter chips + method panel work here too.
+            "edge_layers": raw.get("edge_layers", {}),
+            "clustering": raw.get("clustering", {}),
         },
     )
     return result.model_dump()

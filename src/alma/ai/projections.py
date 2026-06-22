@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import sqlite3
+from typing import Any
 
 import numpy as np
 
@@ -234,12 +235,51 @@ def build_topic_cooccurrence(
     return {"nodes": nodes, "edges": edges}
 
 
+def _top_k_pairs_per_node(
+    pairs: dict[tuple[str, str], int], k: int
+) -> dict[tuple[str, str], int]:
+    """Keep only each node's ``k`` strongest pairs (by weight) from an
+    undirected pair→weight map.
+
+    Sparsifies a dense relational layer (e.g. bibliographic coupling, where
+    every author in a field couples with nearly every other) the same way
+    mutual-kNN sparsifies the semantic layer: each node retains a bounded set
+    of its strongest connections, so the rendered graph stays legible
+    regardless of corpus density. An edge survives if EITHER endpoint ranks it
+    in its top-k (union), so strong asymmetric links aren't dropped.
+    """
+    if not pairs:
+        return {}
+    by_node: dict[str, list[tuple[int, tuple[str, str]]]] = defaultdict(list)
+    for pair, weight in pairs.items():
+        a, b = pair
+        by_node[a].append((weight, pair))
+        by_node[b].append((weight, pair))
+    keep: set[tuple[str, str]] = set()
+    for ranked in by_node.values():
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        for _weight, pair in ranked[:k]:
+            keep.add(pair)
+    return {pair: pairs[pair] for pair in keep}
+
+
 def build_coauthor_network(
     conn: sqlite3.Connection,
     *,
     scope: str = "library",
 ) -> dict:
-    """Build a co-authorship + topic-similarity author network.
+    """Build a multi-signal "research neighbourhood" author network (I-11).
+
+    Mirrors the paper map and reuses the SAME primitives (DRY): nodes are
+    positioned + clustered from each author's mean SPECTER2 embedding
+    (``cluster_publications``, eom + retained outliers), and edges come in three
+    TYPED, filterable layers — none of them productivity stats:
+      • semantic               — mutual k-NN over the 768-d author embeddings
+      • co_authorship          — shared papers
+      • bibliographic_coupling — shared references (co-citation signal),
+                                 sparsified to each author's top-k partners
+    Citation / h-index / works_count stay node metadata for display only — they
+    never enter edge geometry or the clustering features.
 
     Author identity is rooted in ``publication_authors.openalex_id`` —
     the v3 schema's source of truth for paper ↔ author links. The
@@ -428,24 +468,11 @@ def build_coauthor_network(
                 parsed = [x.strip() for x in val.split(",") if x.strip()]
         author_interests[aid] = parsed[:8]
 
-    # Build TF-IDF-like matrix across authors.
-    all_terms: list[str] = sorted(
-        {term for terms in topic_weights_by_author.values() for term in terms.keys()}
-    )
-    if all_terms:
-        term_index = {t: i for i, t in enumerate(all_terms)}
-        matrix = np.zeros((n_authors, len(all_terms)), dtype=np.float32)
-        for aid, term_weights in topic_weights_by_author.items():
-            i = author_index[aid]
-            for term, weight in term_weights.items():
-                matrix[i, term_index[term]] = float(weight)
-
-        df = np.count_nonzero(matrix > 0, axis=0)
-        idf = np.log((1.0 + n_authors) / (1.0 + df)) + 1.0
-        topic_matrix = _safe_norm_rows(matrix * idf)
-        topic_similarity = np.clip(topic_matrix @ topic_matrix.T, 0.0, 1.0)
-    else:
-        topic_similarity = np.zeros((n_authors, n_authors), dtype=np.float32)
+    # NOTE (Phase 3 / I-11): author topic vectors are kept ONLY for cluster
+    # labelling (via score_cluster_terms below) + the per-author top_topic.
+    # Topic similarity no longer drives edges — the semantic edge layer is now
+    # mutual k-NN over the 768-d author embeddings, and productivity stats never
+    # enter edge geometry (they stay node metadata).
 
     # Direct co-authorship signal: how many papers two authors share.
     # Under the v3 schema this is a clean junction-table lookup —
@@ -480,246 +507,121 @@ def build_coauthor_network(
     except Exception as exc:
         logger.warning("Could not compute shared-paper overlap: %s", exc)
 
-    stat_features = np.array(
-        [
-            [
-                math.log1p(pub_counts.get(aid, 0)),
-                math.log1p(citation_counts.get(aid, 0)),
-            ]
-            for aid in author_ids
-        ],
-        dtype=np.float32,
-    )
-    stats_similarity = np.eye(n_authors, dtype=np.float32)
-    for i in range(n_authors):
-        for j in range(i + 1, n_authors):
-            delta_pub = abs(float(stat_features[i, 0] - stat_features[j, 0]))
-            delta_cit = abs(float(stat_features[i, 1] - stat_features[j, 1]))
-            sim = 1.0 / (1.0 + delta_pub + 0.75 * delta_cit)
-            stats_similarity[i, j] = sim
-            stats_similarity[j, i] = sim
-
-    # Bibliographic coupling: two authors are more similar when their
-    # papers cite the same works. Uses publication_references if present.
+    # Bibliographic coupling: authors whose papers cite the same works.
     bib_pairs, max_bib = _author_bibliographic_coupling(conn, author_ids, scope=scope)
 
-    combined_similarity = 0.80 * topic_similarity + 0.15 * stats_similarity
-    for i in range(n_authors):
-        for j in range(i + 1, n_authors):
-            topic_sim = float(topic_similarity[i, j])
-            stats_sim = float(stats_similarity[i, j])
-            a1 = author_ids[i]
-            a2 = author_ids[j]
-            key = (a1, a2) if (a1, a2) in shared_pairs else (a2, a1)
-            shared_norm = (
-                shared_pairs.get(key, 0) / max_shared if max_shared > 0 else 0.0
-            )
-            bib_key = (a1, a2) if (a1, a2) in bib_pairs else (a2, a1)
-            bib_norm = (
-                bib_pairs.get(bib_key, 0) / max_bib if max_bib > 0 else 0.0
-            )
-            combined = (
-                0.55 * topic_sim
-                + 0.10 * stats_sim
-                + 0.15 * shared_norm
-                + 0.20 * bib_norm
-            )
-            combined_similarity[i, j] = combined
-            combined_similarity[j, i] = combined
-
-    # Build sparse but informative edges.
-    min_edge_weight = 0.45
-    top_k = 3 if n_authors >= 6 else 2
-    edge_pairs: set[tuple[int, int]] = set()
-
-    for i in range(n_authors):
-        sims = [(j, float(combined_similarity[i, j])) for j in range(n_authors) if j != i]
-        sims = [pair for pair in sims if pair[1] > 0]
-        sims.sort(key=lambda x: x[1], reverse=True)
-        for j, sim in sims[:top_k]:
-            if sim > 0:
-                edge_pairs.add((min(i, j), max(i, j)))
-
-    for i in range(n_authors):
-        for j in range(i + 1, n_authors):
-            a1 = author_ids[i]
-            a2 = author_ids[j]
-            has_shared_pair = (a1, a2) in shared_pairs or (a2, a1) in shared_pairs
-            has_topic_overlap = float(topic_similarity[i, j]) > 0.05
-            if (
-                float(combined_similarity[i, j]) >= min_edge_weight
-                and (has_shared_pair or has_topic_overlap)
-            ):
-                edge_pairs.add((i, j))
-
-    edges = []
-    for i, j in sorted(edge_pairs):
-        a1 = author_ids[i]
-        a2 = author_ids[j]
-        key = (a1, a2) if (a1, a2) in shared_pairs else (a2, a1)
-        shared = shared_pairs.get(key, 0)
-        shared_topics = len(
-            set(topic_weights_by_author[a1].keys()) & set(topic_weights_by_author[a2].keys())
-        )
-        weight = max(0.05, float(combined_similarity[i, j]))
-        edges.append(
-            {
-                "source": a1,
-                "target": a2,
-                "weight": round(weight, 3),
-                "shared_topics": shared_topics,
-                "shared_papers": shared,
-            }
-        )
-
-    # Cluster + position authors from the mean embedding of their papers
-    # (the active publication-embedding model — e.g. SPECTER2). Mixing
-    # citation counts into the feature vector produced clusters dominated
-    # by "how well-cited" rather than "what the author works on", so
-    # metadata like citations / h-index is kept for display only.
+    # Author embeddings (768-d SPECTER2 mean) — the basis for the semantic
+    # neighbourhood AND the clustering/layout below (Phase 3 / I-11).
     author_embeddings = _author_mean_embeddings(conn, author_ids)
     embedded_ids = [aid for aid in author_ids if aid in author_embeddings]
 
-    # Per the locked product rule (2026-05-07): clustering is
-    # SPECTER2-mean only. With < 3 embedded authors we do NOT cluster
-    # — we surface every author as an unclustered node and let the
-    # frontend show the "compute embeddings" empty state. ``-1``
-    # is the in-array sentinel; nodes get ``cluster_id=None`` at
-    # serialisation time below.
+    # ── Typed, filterable edge LAYERS (I-11) ──────────────────────────────
+    # Replaces the single combined_similarity — which folded productivity STATS
+    # into edge geometry (a locked-rule violation) and collapsed everything into
+    # one top-k weight. Each layer now means one thing and carries its edge_type
+    # so the UI can filter; citation/h-index stay node metadata only.
+    edges: list[dict[str, Any]] = []
+    edge_layers: dict[str, int] = {}
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def _emit_edge(a1: str, a2: str, weight: float, edge_type: str, **extra: Any) -> None:
+        if a1 == a2:
+            return
+        key = (a1, a2, edge_type) if a1 < a2 else (a2, a1, edge_type)
+        if key in seen_edges:
+            return
+        seen_edges.add(key)
+        edges.append({
+            "source": key[0],
+            "target": key[1],
+            "weight": round(float(weight), 3),
+            "edge_type": edge_type,
+            **extra,
+        })
+        edge_layers[edge_type] = edge_layers.get(edge_type, 0) + 1
+
+    # 1) Semantic neighbourhood — mutual k-NN over author embeddings.
+    from alma.ai.neighbor_graph import mutual_knn_edges
+
+    for a1, a2, sim in mutual_knn_edges(
+        {aid: author_embeddings[aid].tolist() for aid in embedded_ids},
+        k=6,
+        min_similarity=0.5,
+    ):
+        _emit_edge(a1, a2, sim, "semantic")
+
+    # 2) Co-authorship — shared papers.
+    for (a1, a2), shared in shared_pairs.items():
+        weight = 0.5 + 0.5 * (shared / max_shared if max_shared else 0.0)
+        _emit_edge(a1, a2, weight, "co_authorship", shared_papers=shared)
+
+    # 3) Bibliographic coupling — shared references. Authors in one field
+    # couple with almost everyone (all-pairs ≥1 shared ref is O(n²) and would
+    # flood the graph — 15k+ edges on this library). Keep only each author's
+    # top-k strongest coupling partners so the layer stays sparse + readable,
+    # the same sparsification idea as the mutual-kNN semantic layer.
+    for (a1, a2), shared in _top_k_pairs_per_node(bib_pairs, k=4).items():
+        weight = 0.4 + 0.5 * (shared / max_bib if max_bib else 0.0)
+        _emit_edge(a1, a2, weight, "bibliographic_coupling", shared_refs=shared)
+
+    # ── Honest clustering over author embeddings (Phase 2 recipe, I-11) ──────
+    # Unifies with the paper map: HDBSCAN-eom + retained outliers via
+    # cluster_publications (no silhouette-kmeans, no forced-K). Authors HDBSCAN
+    # can't confidently place stay Unclustered (cluster_id=None) — same as
+    # authors with no embedding. Citation/h-index never enter the feature
+    # vector (display only); position + clusters come from SPECTER2-mean alone.
+    from alma.ai.clustering import cluster_publications, score_cluster_terms
+
     cluster_ids = np.full(n_authors, -1, dtype=np.int32)
     coords_by_author: dict[str, tuple[float, float]] = {}
-    clustering_method = "author_embedding_mean"
+    clustering_method = "no_embeddings"
+    clustering_panel: dict[str, Any] = {}
 
     if len(embedded_ids) >= 3:
-        matrix = np.stack([author_embeddings[aid] for aid in embedded_ids]).astype(np.float32)
+        emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
+        result = cluster_publications(emb_map)
+        clustering_method = result.method
+        for c_idx, cluster in enumerate(result.clusters):
+            for aid in cluster.member_keys:
+                cluster_ids[author_index[aid]] = c_idx
+        clustering_panel = {
+            "method": result.method,
+            "n_clusters": result.n_clusters,
+            "outlier_count": len(result.outliers),
+            "coverage": round(result.coverage, 4),
+            "params": result.params,
+        }
         try:
-            from sklearn.cluster import MiniBatchKMeans
-
-            from alma.ai.clustering import _silhouette_optimal_k, reduce_for_clustering
-
-            # BERTopic recipe: L2-normalise (cosine geometry — what
-            # SPECTER2 was trained for) → UMAP-5d (curse-of-dim fix) →
-            # cluster on the reduced space. ``reduce_for_clustering``
-            # falls back to normalised raw vectors when UMAP isn't
-            # available or N is below the UMAP threshold.
-            cluster_substrate = reduce_for_clustering(matrix)
-
-            # Silhouette-driven k. Ceiling widened to ⌈√n × 2⌉ capped
-            # at 25 (was ⌈√n × 1.5⌉ capped at 12) so the silhouette
-            # sweep can split a research corpus into the topical
-            # neighbourhoods the user actually has, not collapse them
-            # into eight legibility buckets. Floor stays at 2 so tiny
-            # corpora still cluster.
-            upper = max(3, min(25, int(round(math.sqrt(len(embedded_ids)) * 2.0))))
-            n_clusters = _silhouette_optimal_k(cluster_substrate, min_k=2, max_k=upper)
-            n_clusters = min(n_clusters, max(2, len(embedded_ids) - 1))
-            model = MiniBatchKMeans(
-                n_clusters=n_clusters,
-                random_state=42,
-                n_init=5,
-                batch_size=min(64, len(embedded_ids)),
-            )
-            embedded_cluster_ids = model.fit_predict(cluster_substrate)
-        except Exception as exc:
-            logger.warning("Author embedding clustering failed; assigning a single cluster: %s", exc)
-            embedded_cluster_ids = np.zeros(len(embedded_ids), dtype=np.int32)
-
-        for aid, cid in zip(embedded_ids, embedded_cluster_ids):
-            cluster_ids[author_index[aid]] = int(cid)
-
-        try:
-            # 2-d display layout reads the same SPECTER2 input through
-            # the cosine UMAP path (``project_embeddings``), so visual
-            # neighbourhood and cluster membership are produced from
-            # the same geometry — they agree by construction.
-            projected = project_embeddings(
-                {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
-            )
-            coords_by_author.update(projected)
+            # 2-D layout from the same SPECTER2 input via the cosine UMAP path,
+            # so visual neighbourhood and clusters share one geometry.
+            coords_by_author.update(project_embeddings(emb_map))
         except Exception as exc:
             logger.warning("Author embedding projection failed; using fallback layout: %s", exc)
-    else:
-        clustering_method = "no_embeddings"
-
-    # Normalise the clustered author cluster_ids to a dense 0..N-1 range,
-    # leaving the ``-1`` sentinel intact for unclustered authors. Authors
-    # without an embedding stay at -1 — they are surfaced as nodes but
-    # don't get a synthetic "Unplaced" cluster (would have been a fake
-    # cluster, which the no-fallback rule rejects).
-    embedded_cluster_id_set = sorted(
-        int(cid) for cid in np.unique(cluster_ids) if int(cid) >= 0
-    )
-    cluster_remap = {old: new for new, old in enumerate(embedded_cluster_id_set)}
-    cluster_ids = np.array(
-        [cluster_remap.get(int(cid), -1) for cid in cluster_ids],
-        dtype=np.int32,
-    )
 
     cluster_members: dict[int, list[int]] = defaultdict(list)
     for idx, cid in enumerate(cluster_ids):
-        if int(cid) < 0:
-            continue
-        cluster_members[int(cid)].append(idx)
+        if int(cid) >= 0:
+            cluster_members[int(cid)].append(idx)
 
     unplaced_indices = [
         i for i, aid in enumerate(author_ids) if aid not in author_embeddings
     ]
 
-    # Class-based TF-IDF over per-cluster topic-term aggregates. The
-    # earlier "top-2 terms by sum" path picked terms that were *common*
-    # in the cluster, which on a research corpus means every cluster's
-    # label was something like "neuroscience, machine learning"
-    # because every cluster shares those high-frequency parents.
-    # Weighting per-cluster TF by inverse class frequency promotes the
-    # term that actually distinguishes a cluster from its siblings.
-    per_cluster_terms: list[dict[str, float]] = []
-    sorted_cluster_ids = sorted(cluster_members.keys())
-    for cid in sorted_cluster_ids:
-        term_scores: dict[str, float] = defaultdict(float)
-        for idx in cluster_members[cid]:
-            aid = author_ids[idx]
-            for term, score in topic_weights_by_author.get(aid, {}).items():
-                if not term:
-                    continue
-                term_scores[term] += float(score or 0.0)
-        per_cluster_terms.append(dict(term_scores))
-
-    vocabulary = sorted({term for bag in per_cluster_terms for term in bag})
+    # Cluster labels — prevalence-weighted c-TF-IDF over each cluster's authors'
+    # topic terms (shared scorer; same fix as the paper map). A label term must
+    # recur across the cluster's AUTHORS, not sit in one prolific author.
+    member_topic_docs = {
+        cid: [
+            " ".join(topic_weights_by_author.get(author_ids[idx], {}).keys())
+            for idx in members
+        ]
+        for cid, members in cluster_members.items()
+    }
+    scored_terms = score_cluster_terms(member_topic_docs, ngram_range=(1, 2), top_k=4)
     cluster_topic_labels: dict[int, str] = {}
-
-    if vocabulary and per_cluster_terms:
-        n_classes = len(per_cluster_terms)
-        term_index = {term: idx for idx, term in enumerate(vocabulary)}
-        weights = np.zeros((n_classes, len(vocabulary)), dtype=np.float64)
-        for class_idx, bag in enumerate(per_cluster_terms):
-            for term, score in bag.items():
-                weights[class_idx, term_index[term]] = score
-
-        class_sums = weights.sum(axis=1)
-        class_sums_safe = np.maximum(class_sums, 1e-9)
-        tf = weights / class_sums_safe[:, None]
-        avg_size = float(class_sums.mean()) if class_sums.sum() > 0 else 1.0
-        f_x = weights.sum(axis=0)
-        f_x_safe = np.maximum(f_x, 1e-9)
-        idf = np.log1p(avg_size / f_x_safe)
-        cf_idf = tf * idf[None, :]
-
-        for class_idx, cid in enumerate(sorted_cluster_ids):
-            row = cf_idf[class_idx]
-            order = np.argsort(-row, kind="stable")
-            top_terms = []
-            for ti in order[:6]:
-                if row[ti] <= 0:
-                    break
-                top_terms.append(str(vocabulary[ti]))
-                if len(top_terms) == 2:
-                    break
-            cluster_topic_labels[cid] = (
-                ", ".join(top_terms) if top_terms else f"Cluster {cid + 1}"
-            )
-
-    for cid in cluster_members.keys():
-        cluster_topic_labels.setdefault(cid, f"Cluster {cid + 1}")
+    for cid in cluster_members:
+        terms = [term for term, _w in scored_terms.get(cid, [])][:2]
+        cluster_topic_labels[cid] = ", ".join(terms) if terms else f"Cluster {cid + 1}"
 
     # Ensure coords exist for every author. Authors without embeddings are
     # scattered around the edge so they don't pile on top of each other.
@@ -758,6 +660,7 @@ def build_coauthor_network(
                 "cluster_label": (
                     cluster_topic_labels.get(cid) if cid is not None else None
                 ),
+                "is_outlier": cid is None,
                 "x": x,
                 "y": y,
             }
@@ -778,6 +681,8 @@ def build_coauthor_network(
         "edges": edges,
         "clusters": clusters,
         "method": clustering_method,
+        "edge_layers": edge_layers,
+        "clustering": clustering_panel,
     }
 
 
