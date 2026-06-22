@@ -990,29 +990,34 @@ def record_orcid_aliases(
         }
 
     # Network discovery runs FIRST, before any writes, so the writer lock is
-    # never held across the OpenAlex calls (the caller's hydration loop commits
-    # per source around this).
+    # never held across the OpenAlex calls.
     discovery = discover_aliases_via_orcid(primary_oid, mailto=mailto, known_orcid=known_orcid)
     aliases = discovery.get("aliases") or []
     recorded = 0
-    for alias in aliases:
-        alt_oid = str(alias.get("openalex_id") or "").strip()
-        if not alt_oid:
-            continue
-        # Try to find a local `authors` row with this openalex_id —
-        # gives us a useful back-pointer for later merge UX. None is
-        # fine; the row is keyed by primary + alt_openalex_id.
-        local_row = db.execute(
-            "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
-            (alt_oid,),
-        ).fetchone()
-        local_alt_id = str(local_row["id"]) if local_row else None
-        if record_author_alias(
-            db, primary_id, alt_oid, alt_author_id=local_alt_id, source="orcid_discovery"
-        ):
-            recorded += 1
-    # Caller owns the transaction — no commit here (the hydration runner
-    # commits per source; see author_hydrate._hydrate_openalex).
+    # Gate the alias write loop in ONE BEGIN IMMEDIATE section, opened only AFTER
+    # the network discovery above. Self-gating (the old contract left the commit
+    # to the caller's per-source loop) makes this correct no matter who calls it:
+    # a raw DEFERRED commit can lose the read→write lock-upgrade race under
+    # concurrency → "database is locked"; the writer gate + IMMEDIATE removes
+    # that. The single caller (_hydrate_openalex) holds no gate at this point.
+    if aliases:
+        with write_section(db, label="record_orcid_aliases"):
+            for alias in aliases:
+                alt_oid = str(alias.get("openalex_id") or "").strip()
+                if not alt_oid:
+                    continue
+                # Try to find a local `authors` row with this openalex_id —
+                # gives us a useful back-pointer for later merge UX. None is
+                # fine; the row is keyed by primary + alt_openalex_id.
+                local_row = db.execute(
+                    "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
+                    (alt_oid,),
+                ).fetchone()
+                local_alt_id = str(local_row["id"]) if local_row else None
+                if record_author_alias(
+                    db, primary_id, alt_oid, alt_author_id=local_alt_id, source="orcid_discovery"
+                ):
+                    recorded += 1
     discovery["primary_author_id"] = primary_id
     discovery["recorded"] = recorded
     return discovery

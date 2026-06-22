@@ -22,6 +22,7 @@ from alma.application.author_affiliation import (
     score_affiliation_candidates,
 )
 from alma.application.author_profile import apply_author_profile_update
+from alma.core.db_write import write_section
 from alma.core.utils import (
     normalize_id_list,
     normalize_orcid,
@@ -284,106 +285,113 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
     fields_key = _fields_key(OPENALEX_SOURCE)
     oid = _normalize_openalex_author_id(str(row["openalex_id"] or ""))
     if not oid:
-        for purpose in purposes:
-            _upsert_enrichment_status(
-                conn,
-                author_id=author_id,
-                source=OPENALEX_SOURCE,
-                purpose=purpose,
-                lookup_key="",
-                fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="missing_openalex_id",
-            )
+        # Terminal-status write, no network on this branch — still gated so the
+        # commit is BEGIN IMMEDIATE + writer-serialized, never a raw DEFERRED
+        # commit that can lose the lock-upgrade race under concurrency.
+        with write_section(conn, label="author hydrate: openalex no-id"):
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=OPENALEX_SOURCE,
+                    purpose=purpose,
+                    lookup_key="",
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="missing_openalex_id",
+                )
         return {"source": OPENALEX_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
     detail = batch_get_author_details([oid], batch_size=1, max_workers=1).get(oid)
-    if not detail:
-        for purpose in purposes:
+    # ONE gated write window for the profile + affiliation writes, opened AFTER
+    # the OpenAlex fetch above so the writer lock is never held across network.
+    # The no-detail terminal write returns from inside the section (committed on
+    # exit). ALIASES is handled separately below: it fires its OWN network call
+    # (record_orcid_aliases), so it must run with NO gate held.
+    filled_by_purpose: dict[str, list[str]] = {}
+    with write_section(conn, label="author hydrate: openalex profile/affiliation"):
+        if not detail:
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=OPENALEX_SOURCE,
+                    purpose=purpose,
+                    lookup_key=lookup_key,
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="openalex_author_not_found",
+                )
+            return {"source": OPENALEX_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
+
+        if PROFILE_PURPOSE in purposes:
+            result = apply_author_profile_update(conn, author_id, _profile_from_openalex_detail(detail))
+            filled_by_purpose[PROFILE_PURPOSE] = list(result.get("updated") or [])
             _upsert_enrichment_status(
                 conn,
                 author_id=author_id,
                 source=OPENALEX_SOURCE,
-                purpose=purpose,
+                purpose=PROFILE_PURPOSE,
                 lookup_key=lookup_key,
                 fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="openalex_author_not_found",
+                status="enriched" if filled_by_purpose[PROFILE_PURPOSE] else "unchanged",
+                fields_requested=["display_name", "orcid", "works_count", "cited_by_count", "summary_stats", "topics"],
+                fields_filled=filled_by_purpose[PROFILE_PURPOSE],
             )
-        return {"source": OPENALEX_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
-    filled_by_purpose: dict[str, list[str]] = {}
-    if PROFILE_PURPOSE in purposes:
-        result = apply_author_profile_update(conn, author_id, _profile_from_openalex_detail(detail))
-        filled_by_purpose[PROFILE_PURPOSE] = list(result.get("updated") or [])
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=OPENALEX_SOURCE,
-            purpose=PROFILE_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if filled_by_purpose[PROFILE_PURPOSE] else "unchanged",
-            fields_requested=["display_name", "orcid", "works_count", "cited_by_count", "summary_stats", "topics"],
-            fields_filled=filled_by_purpose[PROFILE_PURPOSE],
-        )
-
-    if AFFILIATION_PURPOSE in purposes:
-        evidence_count = 0
-        _clear_affiliation_evidence(conn, author_id=author_id, source=OPENALEX_SOURCE)
-        institution = str(detail.get("institution") or "").strip()
-        if institution:
-            if _insert_affiliation_evidence(
+        if AFFILIATION_PURPOSE in purposes:
+            evidence_count = 0
+            _clear_affiliation_evidence(conn, author_id=author_id, source=OPENALEX_SOURCE)
+            institution = str(detail.get("institution") or "").strip()
+            if institution:
+                if _insert_affiliation_evidence(
+                    conn,
+                    author_id=author_id,
+                    source=OPENALEX_SOURCE,
+                    institution_name=institution,
+                    role="last_known_institution",
+                    is_current=True,
+                    confidence=0.86,
+                    evidence_url=f"https://openalex.org/{oid}",
+                ):
+                    evidence_count += 1
+            for aff in detail.get("affiliations") or []:
+                if not isinstance(aff, dict):
+                    continue
+                years = aff.get("years") if isinstance(aff.get("years"), list) else []
+                latest = max([int(y) for y in years if str(y).isdigit()], default=None)
+                if _insert_affiliation_evidence(
+                    conn,
+                    author_id=author_id,
+                    source=OPENALEX_SOURCE,
+                    institution_name=str(aff.get("name") or ""),
+                    role="affiliation",
+                    start_date=str(latest) if latest else None,
+                    is_current=bool(latest and latest >= datetime.utcnow().year - 2),
+                    confidence=0.78,
+                    evidence_url=f"https://openalex.org/{oid}",
+                ):
+                    evidence_count += 1
+            filled = ["affiliation_evidence"] if evidence_count else []
+            filled_by_purpose[AFFILIATION_PURPOSE] = filled
+            _upsert_enrichment_status(
                 conn,
                 author_id=author_id,
                 source=OPENALEX_SOURCE,
-                institution_name=institution,
-                role="last_known_institution",
-                is_current=True,
-                confidence=0.86,
-                evidence_url=f"https://openalex.org/{oid}",
-            ):
-                evidence_count += 1
-        for aff in detail.get("affiliations") or []:
-            if not isinstance(aff, dict):
-                continue
-            years = aff.get("years") if isinstance(aff.get("years"), list) else []
-            latest = max([int(y) for y in years if str(y).isdigit()], default=None)
-            if _insert_affiliation_evidence(
-                conn,
-                author_id=author_id,
-                source=OPENALEX_SOURCE,
-                institution_name=str(aff.get("name") or ""),
-                role="affiliation",
-                start_date=str(latest) if latest else None,
-                is_current=bool(latest and latest >= datetime.utcnow().year - 2),
-                confidence=0.78,
-                evidence_url=f"https://openalex.org/{oid}",
-            ):
-                evidence_count += 1
-        filled = ["affiliation_evidence"] if evidence_count else []
-        filled_by_purpose[AFFILIATION_PURPOSE] = filled
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=OPENALEX_SOURCE,
-            purpose=AFFILIATION_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if evidence_count else "unchanged",
-            fields_requested=["last_known_institutions", "affiliations"],
-            fields_filled=filled,
-        )
+                purpose=AFFILIATION_PURPOSE,
+                lookup_key=lookup_key,
+                fields_key=fields_key,
+                status="enriched" if evidence_count else "unchanged",
+                fields_requested=["last_known_institutions", "affiliations"],
+                fields_filled=filled,
+            )
 
     if ALIASES_PURPOSE in purposes:
         alias_count = 0
-        # Release the writer lock before record_orcid_aliases' OpenAlex
-        # discovery call: the affiliation purpose above may have opened a write
-        # transaction, and record_orcid_aliases does network FIRST then writes
-        # — holding the lock across that call is the "no txn across network I/O"
-        # violation. The per-source commit below persists its writes.
-        if conn.in_transaction:
-            conn.commit()
+        # record_orcid_aliases does OpenAlex discovery FIRST then self-gates its
+        # own write loop. Call it with NO gate held — the profile/affiliation
+        # section above has already closed, so we are gate-free here (the gate is
+        # non-reentrant; calling it under a held gate would deadlock).
         try:
             from alma.application.author_merge import record_orcid_aliases
 
@@ -397,17 +405,19 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
             logger.debug("OpenAlex ORCID alias hydration skipped for %s: %s", author_id, exc)
         filled = ["orcid_aliases"] if alias_count else []
         filled_by_purpose[ALIASES_PURPOSE] = filled
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=OPENALEX_SOURCE,
-            purpose=ALIASES_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if alias_count else "unchanged",
-            fields_requested=["orcid_aliases"],
-            fields_filled=filled,
-        )
+        # Gated write of the aliases enrichment-status row.
+        with write_section(conn, label="author hydrate: openalex aliases status"):
+            _upsert_enrichment_status(
+                conn,
+                author_id=author_id,
+                source=OPENALEX_SOURCE,
+                purpose=ALIASES_PURPOSE,
+                lookup_key=lookup_key,
+                fields_key=fields_key,
+                status="enriched" if alias_count else "unchanged",
+                fields_requested=["orcid_aliases"],
+                fields_filled=filled,
+            )
 
     return {"source": OPENALEX_SOURCE, "status": "ok", "filled": filled_by_purpose}
 
@@ -420,70 +430,74 @@ def _hydrate_s2(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tuple[str,
     fields_key = _fields_key(S2_SOURCE)
     sid = str(row["semantic_scholar_id"] or "").strip()
     if not sid:
-        for purpose in purposes:
-            _upsert_enrichment_status(
-                conn,
-                author_id=author_id,
-                source=S2_SOURCE,
-                purpose=purpose,
-                lookup_key="",
-                fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="missing_semantic_scholar_id",
-            )
+        with write_section(conn, label="author hydrate: s2 no-id"):
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=S2_SOURCE,
+                    purpose=purpose,
+                    lookup_key="",
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="missing_semantic_scholar_id",
+                )
         return {"source": S2_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
     data = fetch_authors_batch([sid], batch_size=1).get(sid)
-    if not data:
-        for purpose in purposes:
+    # One gated write window opened AFTER the S2 fetch — everything below is
+    # local-only (no further network), including the no-data terminal branch.
+    filled_by_purpose: dict[str, list[str]] = {}
+    with write_section(conn, label="author hydrate: s2"):
+        if not data:
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=S2_SOURCE,
+                    purpose=purpose,
+                    lookup_key=lookup_key,
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="semantic_scholar_author_not_found",
+                )
+            return {"source": S2_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
+
+        if PROFILE_PURPOSE in purposes:
+            profile = {
+                "display_name": data.get("name"),
+                "citedby": data.get("citationCount"),
+                "h_index": data.get("hIndex"),
+                "works_count": data.get("paperCount"),
+            }
+            result = apply_author_profile_update(conn, author_id, profile)
+            filled = list(result.get("updated") or [])
+            filled_by_purpose[PROFILE_PURPOSE] = filled
             _upsert_enrichment_status(
                 conn,
                 author_id=author_id,
                 source=S2_SOURCE,
-                purpose=purpose,
+                purpose=PROFILE_PURPOSE,
                 lookup_key=lookup_key,
                 fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="semantic_scholar_author_not_found",
+                status="enriched" if filled else "unchanged",
+                fields_requested=["name", "citationCount", "hIndex", "paperCount"],
+                fields_filled=filled,
             )
-        return {"source": S2_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
-
-    filled_by_purpose: dict[str, list[str]] = {}
-    if PROFILE_PURPOSE in purposes:
-        profile = {
-            "display_name": data.get("name"),
-            "citedby": data.get("citationCount"),
-            "h_index": data.get("hIndex"),
-            "works_count": data.get("paperCount"),
-        }
-        result = apply_author_profile_update(conn, author_id, profile)
-        filled = list(result.get("updated") or [])
-        filled_by_purpose[PROFILE_PURPOSE] = filled
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=S2_SOURCE,
-            purpose=PROFILE_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if filled else "unchanged",
-            fields_requested=["name", "citationCount", "hIndex", "paperCount"],
-            fields_filled=filled,
-        )
-    if ALIASES_PURPOSE in purposes:
-        aliases = [str(a).strip() for a in (data.get("aliases") or []) if str(a).strip()]
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=S2_SOURCE,
-            purpose=ALIASES_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if aliases else "unchanged",
-            fields_requested=["aliases"],
-            fields_filled=["aliases"] if aliases else [],
-        )
-        filled_by_purpose[ALIASES_PURPOSE] = ["aliases"] if aliases else []
+        if ALIASES_PURPOSE in purposes:
+            aliases = [str(a).strip() for a in (data.get("aliases") or []) if str(a).strip()]
+            _upsert_enrichment_status(
+                conn,
+                author_id=author_id,
+                source=S2_SOURCE,
+                purpose=ALIASES_PURPOSE,
+                lookup_key=lookup_key,
+                fields_key=fields_key,
+                status="enriched" if aliases else "unchanged",
+                fields_requested=["aliases"],
+                fields_filled=["aliases"] if aliases else [],
+            )
+            filled_by_purpose[ALIASES_PURPOSE] = ["aliases"] if aliases else []
     return {"source": S2_SOURCE, "status": "ok", "filled": filled_by_purpose}
 
 
@@ -493,81 +507,85 @@ def _hydrate_orcid(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tuple[s
     fields_key = _fields_key(ORCID_SOURCE)
     orcid = normalize_orcid(str(row["orcid"] or ""))
     if not orcid:
-        for purpose in purposes:
-            _upsert_enrichment_status(
-                conn,
-                author_id=author_id,
-                source=ORCID_SOURCE,
-                purpose=purpose,
-                lookup_key="",
-                fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="missing_orcid",
-            )
+        with write_section(conn, label="author hydrate: orcid no-id"):
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=ORCID_SOURCE,
+                    purpose=purpose,
+                    lookup_key="",
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="missing_orcid",
+                )
         return {"source": ORCID_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
     record = fetch_record_by_orcid(orcid)
-    if not record:
-        for purpose in purposes:
+    # One gated write window opened AFTER the ORCID fetch — everything below is
+    # local-only (no further network), including the no-record terminal branch.
+    filled_by_purpose: dict[str, list[str]] = {}
+    with write_section(conn, label="author hydrate: orcid"):
+        if not record:
+            for purpose in purposes:
+                _upsert_enrichment_status(
+                    conn,
+                    author_id=author_id,
+                    source=ORCID_SOURCE,
+                    purpose=purpose,
+                    lookup_key=lookup_key,
+                    fields_key=fields_key,
+                    status=TERMINAL_NO_MATCH_STATUS,
+                    reason="orcid_record_not_found",
+                )
+            return {"source": ORCID_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
+
+        if PROFILE_PURPOSE in purposes:
+            filled = ["other_names"] if record.other_names else []
             _upsert_enrichment_status(
                 conn,
                 author_id=author_id,
                 source=ORCID_SOURCE,
-                purpose=purpose,
+                purpose=PROFILE_PURPOSE,
                 lookup_key=lookup_key,
                 fields_key=fields_key,
-                status=TERMINAL_NO_MATCH_STATUS,
-                reason="orcid_record_not_found",
+                status="enriched" if filled else "unchanged",
+                fields_requested=["person.name", "person.other_names", "person.addresses"],
+                fields_filled=filled,
             )
-        return {"source": ORCID_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
+            filled_by_purpose[PROFILE_PURPOSE] = filled
 
-    filled_by_purpose: dict[str, list[str]] = {}
-    if PROFILE_PURPOSE in purposes:
-        filled = ["other_names"] if record.other_names else []
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=ORCID_SOURCE,
-            purpose=PROFILE_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if filled else "unchanged",
-            fields_requested=["person.name", "person.other_names", "person.addresses"],
-            fields_filled=filled,
-        )
-        filled_by_purpose[PROFILE_PURPOSE] = filled
-
-    if AFFILIATION_PURPOSE in purposes:
-        evidence_count = 0
-        _clear_affiliation_evidence(conn, author_id=author_id, source=ORCID_SOURCE)
-        for affiliation in record.affiliations:
-            if _insert_affiliation_evidence(
+        if AFFILIATION_PURPOSE in purposes:
+            evidence_count = 0
+            _clear_affiliation_evidence(conn, author_id=author_id, source=ORCID_SOURCE)
+            for affiliation in record.affiliations:
+                if _insert_affiliation_evidence(
+                    conn,
+                    author_id=author_id,
+                    source=ORCID_SOURCE,
+                    institution_name=affiliation.institution_name,
+                    institution_ror=affiliation.institution_ror,
+                    role=affiliation.role,
+                    start_date=affiliation.start_date,
+                    end_date=affiliation.end_date,
+                    is_current=affiliation.is_current,
+                    evidence_url=affiliation.evidence_url or f"https://orcid.org/{orcid}",
+                    confidence=1.0 if affiliation.role == "employment" else 0.72,
+                ):
+                    evidence_count += 1
+            filled = ["affiliation_evidence"] if evidence_count else []
+            _upsert_enrichment_status(
                 conn,
                 author_id=author_id,
                 source=ORCID_SOURCE,
-                institution_name=affiliation.institution_name,
-                institution_ror=affiliation.institution_ror,
-                role=affiliation.role,
-                start_date=affiliation.start_date,
-                end_date=affiliation.end_date,
-                is_current=affiliation.is_current,
-                evidence_url=affiliation.evidence_url or f"https://orcid.org/{orcid}",
-                confidence=1.0 if affiliation.role == "employment" else 0.72,
-            ):
-                evidence_count += 1
-        filled = ["affiliation_evidence"] if evidence_count else []
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=ORCID_SOURCE,
-            purpose=AFFILIATION_PURPOSE,
-            lookup_key=lookup_key,
-            fields_key=fields_key,
-            status="enriched" if evidence_count else "unchanged",
-            fields_requested=["activities-summary.employments", "activities-summary.educations"],
-            fields_filled=filled,
-        )
-        filled_by_purpose[AFFILIATION_PURPOSE] = filled
+                purpose=AFFILIATION_PURPOSE,
+                lookup_key=lookup_key,
+                fields_key=fields_key,
+                status="enriched" if evidence_count else "unchanged",
+                fields_requested=["activities-summary.employments", "activities-summary.educations"],
+                fields_filled=filled,
+            )
+            filled_by_purpose[AFFILIATION_PURPOSE] = filled
     return {"source": ORCID_SOURCE, "status": "ok", "filled": filled_by_purpose}
 
 
@@ -622,20 +640,53 @@ def _hydrate_crossref(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
     fields_key = _fields_key(CROSSREF_SOURCE)
     orcid = normalize_orcid(str(row["orcid"] or ""))
     if not orcid:
-        _upsert_enrichment_status(
-            conn,
-            author_id=author_id,
-            source=CROSSREF_SOURCE,
-            purpose=AFFILIATION_PURPOSE,
-            lookup_key="",
-            fields_key=fields_key,
-            status=TERMINAL_NO_MATCH_STATUS,
-            reason="missing_orcid",
-        )
+        with write_section(conn, label="author hydrate: crossref no-id"):
+            _upsert_enrichment_status(
+                conn,
+                author_id=author_id,
+                source=CROSSREF_SOURCE,
+                purpose=AFFILIATION_PURPOSE,
+                lookup_key="",
+                fields_key=fields_key,
+                status=TERMINAL_NO_MATCH_STATUS,
+                reason="missing_orcid",
+            )
         return {"source": CROSSREF_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
     names = _fetch_crossref_affiliations(orcid)
-    if names is None:
+    # One gated write window opened AFTER the Crossref fetch — everything below
+    # is local-only (no further network), including the fetch-failed branch.
+    with write_section(conn, label="author hydrate: crossref"):
+        if names is None:
+            _upsert_enrichment_status(
+                conn,
+                author_id=author_id,
+                source=CROSSREF_SOURCE,
+                purpose=AFFILIATION_PURPOSE,
+                lookup_key=lookup_key,
+                fields_key=fields_key,
+                status=RETRYABLE_STATUS,
+                reason="crossref_fetch_failed",
+                fields_requested=["works.author.affiliation"],
+                fields_filled=[],
+            )
+            return {"source": CROSSREF_SOURCE, "status": RETRYABLE_STATUS, "filled": {}}
+
+        evidence_count = 0
+        _clear_affiliation_evidence(conn, author_id=author_id, source=CROSSREF_SOURCE)
+        for name in names:
+            if _insert_affiliation_evidence(
+                conn,
+                author_id=author_id,
+                source=CROSSREF_SOURCE,
+                institution_name=name,
+                role="recent_authorship",
+                is_current=False,
+                evidence_url=f"https://orcid.org/{orcid}",
+                confidence=0.54,
+            ):
+                evidence_count += 1
+        filled = ["affiliation_evidence"] if evidence_count else []
         _upsert_enrichment_status(
             conn,
             author_id=author_id,
@@ -643,39 +694,10 @@ def _hydrate_crossref(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
             purpose=AFFILIATION_PURPOSE,
             lookup_key=lookup_key,
             fields_key=fields_key,
-            status=RETRYABLE_STATUS,
-            reason="crossref_fetch_failed",
+            status="enriched" if evidence_count else "unchanged",
             fields_requested=["works.author.affiliation"],
-            fields_filled=[],
+            fields_filled=filled,
         )
-        return {"source": CROSSREF_SOURCE, "status": RETRYABLE_STATUS, "filled": {}}
-
-    evidence_count = 0
-    _clear_affiliation_evidence(conn, author_id=author_id, source=CROSSREF_SOURCE)
-    for name in names:
-        if _insert_affiliation_evidence(
-            conn,
-            author_id=author_id,
-            source=CROSSREF_SOURCE,
-            institution_name=name,
-            role="recent_authorship",
-            is_current=False,
-            evidence_url=f"https://orcid.org/{orcid}",
-            confidence=0.54,
-        ):
-            evidence_count += 1
-    filled = ["affiliation_evidence"] if evidence_count else []
-    _upsert_enrichment_status(
-        conn,
-        author_id=author_id,
-        source=CROSSREF_SOURCE,
-        purpose=AFFILIATION_PURPOSE,
-        lookup_key=lookup_key,
-        fields_key=fields_key,
-        status="enriched" if evidence_count else "unchanged",
-        fields_requested=["works.author.affiliation"],
-        fields_filled=filled,
-    )
     return {"source": CROSSREF_SOURCE, "status": "ok", "filled": {AFFILIATION_PURPOSE: filled}}
 
 
@@ -714,32 +736,36 @@ def hydrate_author_metadata(
             filled = result.get("filled") if isinstance(result, dict) else {}
             if isinstance(filled, dict) and AFFILIATION_PURPOSE in filled and filled[AFFILIATION_PURPOSE]:
                 evidence_touched = True
-            # Commit per source: each _hydrate_* fetches from the network
-            # BEFORE writing, so closing the transaction here releases the
-            # writer lock before the NEXT source's remote call — a single
-            # commit at the end held it across up to three network fetches.
-            if conn.in_transaction:
-                conn.commit()
+            # No commit here. Each _hydrate_* now self-gates its own write window
+            # (write_section = writer gate + BEGIN IMMEDIATE, opened AFTER its
+            # network fetch), so its writes are already committed when it returns
+            # and the writer lock is never held across the NEXT source's fetch.
         except Exception as exc:
             logger.warning("Author hydration failed for %s via %s: %s", author_key, source, exc)
             lookup_key = _lookup_key(source, row)
-            for purpose in allowed_purposes:
-                _upsert_enrichment_status(
-                    conn,
-                    author_id=author_key,
-                    source=source,
-                    purpose=purpose,
-                    lookup_key=lookup_key,
-                    fields_key=_fields_key(source),
-                    status=RETRYABLE_STATUS,
-                    reason=str(exc),
-                )
+            # Gated write of the retryable error statuses — the failed _hydrate_*
+            # has already returned, so no network is in flight under the gate.
+            with write_section(conn, label="author hydrate: source error"):
+                for purpose in allowed_purposes:
+                    _upsert_enrichment_status(
+                        conn,
+                        author_id=author_key,
+                        source=source,
+                        purpose=purpose,
+                        lookup_key=lookup_key,
+                        fields_key=_fields_key(source),
+                        status=RETRYABLE_STATUS,
+                        reason=str(exc),
+                    )
             results[source] = {"source": source, "status": RETRYABLE_STATUS, "error": str(exc)}
-            if conn.in_transaction:
-                conn.commit()
 
-    decision = recompute_display_affiliation(conn, author_key) if evidence_touched else None
-    conn.commit()
+    # Final display-affiliation recompute (local aggregation over the evidence
+    # just written), gated. Skipped entirely when no evidence changed — there is
+    # nothing to write, so no transaction is opened.
+    decision = None
+    if evidence_touched:
+        with write_section(conn, label="author hydrate: display affiliation"):
+            decision = recompute_display_affiliation(conn, author_key)
     return {
         "author_id": author_key,
         "success": True,
@@ -865,16 +891,19 @@ def _enqueue_candidates_for_run(
         """,
         params,
     ).fetchall()
+    # Gated enqueue loop (no network here — pure local ledger writes). One
+    # BEGIN IMMEDIATE section instead of a raw DEFERRED commit that could lose
+    # the lock-upgrade race against a concurrent foreground write.
     count = 0
-    for row in rows:
-        if enqueue_pending_author_hydration(
-            conn,
-            str(row["id"]),
-            priority="high" if force else "low",
-            reason="manual_rehydrate_prepare",
-        ):
-            count += 1
-    conn.commit()
+    with write_section(conn, label="author hydrate: enqueue candidates"):
+        for row in rows:
+            if enqueue_pending_author_hydration(
+                conn,
+                str(row["id"]),
+                priority="high" if force else "low",
+                reason="manual_rehydrate_prepare",
+            ):
+                count += 1
     return count
 
 

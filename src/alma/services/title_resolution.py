@@ -49,6 +49,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
+from alma.core.db_write import write_section
 from alma.core.utils import canonical_lookup_doi
 from alma.discovery import semantic_scholar
 from alma.openalex.client import _normalize_openalex_work_id
@@ -247,7 +248,11 @@ def _try_openalex_match(
     if new_doi:
         fill_fields["doi"] = new_doi
     if fill_fields:
-        fill_only_update_paper(conn, paper_id, fill_fields=fill_fields)
+        # Gated write: the OpenAlex search above already ran (network OUTSIDE the
+        # gate). BEGIN IMMEDIATE + writer gate instead of a raw DEFERRED commit
+        # that could lose the lock-upgrade race against a concurrent writer.
+        with write_section(conn, label="title resolution: openalex fill"):
+            fill_only_update_paper(conn, paper_id, fill_fields=fill_fields)
 
     return _outcome(
         resolved=True,
@@ -326,31 +331,35 @@ def _try_s2_search_match(
     new_doi = canonical_lookup_doi(str(best.get("doi") or "")) or ""
     new_abstract = str(best.get("abstract") or "").strip()
 
-    fill_only_update_paper(
-        conn,
-        paper_id,
-        fill_fields={
-            "semantic_scholar_id": new_s2_id,
-            "doi": new_doi,
-            "abstract": new_abstract,
-        },
-    )
-
+    # One gated write window for the fill + the SPECTER2 vector. The S2 search
+    # above already ran, and the vector rode in on that response (no further
+    # network), so the writer lock is held only for these local upserts.
     vector_stored = False
-    vector = best.get("specter2_embedding")
-    if isinstance(vector, list) and vector:
-        try:
-            vector_stored = semantic_scholar.upsert_specter2_vector(
-                conn,
-                paper_id,
-                vector,
-                source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                created_at=datetime.utcnow().isoformat(),
-            )
-        except Exception as exc:
-            logger.warning(
-                "S2 fallback vector store failed for %s: %s", paper_id, exc
-            )
+    with write_section(conn, label="title resolution: s2 fill"):
+        fill_only_update_paper(
+            conn,
+            paper_id,
+            fill_fields={
+                "semantic_scholar_id": new_s2_id,
+                "doi": new_doi,
+                "abstract": new_abstract,
+            },
+        )
+
+        vector = best.get("specter2_embedding")
+        if isinstance(vector, list) and vector:
+            try:
+                vector_stored = semantic_scholar.upsert_specter2_vector(
+                    conn,
+                    paper_id,
+                    vector,
+                    source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
+                    created_at=datetime.utcnow().isoformat(),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "S2 fallback vector store failed for %s: %s", paper_id, exc
+                )
 
     return _outcome(
         resolved=True,
@@ -541,9 +550,15 @@ def run_title_resolution_sweep(
                     resolved_via_s2 += 1
                 if outcome["vector_stored"]:
                     vectors_captured += 1
-                _clear_terminal_status_row(conn, paper_id=paper_id, model=model)
-                conn.commit()
+                # Gated cleanup DELETE (no network). The fill/vector writes for
+                # this paper were already committed inside the _try_* helper's
+                # own write_section; this drops any stale terminal status row.
+                with write_section(conn, label="title resolution: clear terminal status"):
+                    _clear_terminal_status_row(conn, paper_id=paper_id, model=model)
 
+            # set_job_status writes on the SCHEDULER's own connection — it runs
+            # here with NO write_section held (the gate above has closed), so it
+            # never blocks on the writer lock this thread is holding.
             set_job_status(
                 job_id,
                 status="running",
@@ -556,7 +571,9 @@ def run_title_resolution_sweep(
                 ),
             )
 
-        conn.commit()
+        # No final commit: every resolved paper's writes were committed inside
+        # their own write_section as the loop ran (gather-from-network → gated
+        # write), so nothing is left pending here.
 
         # Self-rescheduling decision. Queue a continuation when:
         # - we made progress (avoid infinite loops on a stuck corpus)

@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from alma.application import paper_signal
+from alma.core.db_write import write_section
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_doi
 from alma.discovery import semantic_scholar
@@ -479,8 +480,8 @@ def refresh_openalex_related_network(
         now_dt = datetime.now(timezone.utc)
 
         if not seeds:
-            _write_cache(conn, SOURCE_OPENALEX_RELATED, [], 0, ttl)
-            conn.commit()
+            with write_section(conn, label="author network: openalex empty cache"):
+                _write_cache(conn, SOURCE_OPENALEX_RELATED, [], 0, ttl)
             _log_step(ctx, "done", "No seed authors — cache written empty", 0, 0)
             return {"seeds": 0, "candidates": 0}
 
@@ -495,11 +496,9 @@ def refresh_openalex_related_network(
         per_candidate: dict[str, dict] = {}
         errors = 0
         for idx, seed_oid in enumerate(seeds, 1):
-            # Release writer lock before the remote call (lesson:
-            # "Background jobs must release writer lock before every
-            # remote call"). Works even though we have no open tx.
-            if conn.in_transaction:
-                conn.commit()
+            # Remote call runs with NO writer lock held: the previous seed's
+            # cache write closed its write_section (committed + released), so we
+            # enter the fetch in autocommit. No manual release-commit needed.
             try:
                 page = openalex_client.fetch_works_page_for_author(
                     seed_oid, cursor="*", per_page=_MAX_WORKS_PER_SEED
@@ -528,8 +527,11 @@ def refresh_openalex_related_network(
                 corpus_oids=corpus_oids,
                 weights=weights,
             )
-            _write_cache(conn, SOURCE_OPENALEX_RELATED, partial, len(seeds), ttl)
-            conn.commit()
+            # Gated partial-cache write (in-memory accumulation + scoring above
+            # ran outside the gate). One BEGIN IMMEDIATE section per seed keeps
+            # the streaming-UX cadence while serializing the write correctly.
+            with write_section(conn, label="author network: openalex partial cache"):
+                _write_cache(conn, SOURCE_OPENALEX_RELATED, partial, len(seeds), ttl)
             _log_step(
                 ctx, "openalex_fetch",
                 f"Seed {idx}/{len(seeds)} · {len(partial)} candidates",
@@ -617,8 +619,8 @@ def refresh_s2_related_network(
         now_dt = datetime.now(timezone.utc)
 
         if not seeds:
-            _write_cache(conn, SOURCE_S2_RELATED, [], 0, ttl)
-            conn.commit()
+            with write_section(conn, label="author network: s2 empty cache"):
+                _write_cache(conn, SOURCE_S2_RELATED, [], 0, ttl)
             _log_step(ctx, "done", "No seed DOIs — cache written empty", 0, 0)
             return {"seeds": 0, "candidates": 0}
 
@@ -631,9 +633,8 @@ def refresh_s2_related_network(
         per_candidate: dict[str, dict] = {}
         errors = 0
         for idx, doi in enumerate(seeds, 1):
-            # Release writer lock before every remote call.
-            if conn.in_transaction:
-                conn.commit()
+            # Remote calls run with NO writer lock held — the previous seed's
+            # cache write closed its write_section, so we are in autocommit here.
             try:
                 recs = _s2_recommendations(doi, limit=_MAX_RECS_PER_DOI)
             except Exception as exc:
@@ -649,8 +650,8 @@ def refresh_s2_related_network(
                     rd = normalize_doi(str(ext.get("DOI") or "").strip())
                     if rd:
                         rec_dois.append(rd)
-                if conn.in_transaction:
-                    conn.commit()
+                # No open write txn here (writes are gated below), so the
+                # OpenAlex hydrate call never holds the writer lock.
                 oa_works: list[dict] = []
                 if rec_dois:
                     try:
@@ -679,8 +680,10 @@ def refresh_s2_related_network(
                 corpus_oids=corpus_oids,
                 weights=weights,
             )
-            _write_cache(conn, SOURCE_S2_RELATED, partial, len(seeds), ttl)
-            conn.commit()
+            # Gated partial-cache write (network + in-memory scoring above ran
+            # outside the gate). One BEGIN IMMEDIATE section per seed DOI.
+            with write_section(conn, label="author network: s2 partial cache"):
+                _write_cache(conn, SOURCE_S2_RELATED, partial, len(seeds), ttl)
             _log_step(
                 ctx, "s2_fetch",
                 f"DOI {idx}/{len(seeds)} · {len(partial)} candidates",
