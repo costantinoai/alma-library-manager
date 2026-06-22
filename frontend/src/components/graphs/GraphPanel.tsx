@@ -128,11 +128,12 @@ export function GraphPanel() {
   const [wordCloudDensity, setWordCloudDensity] = useState(1)
   const [wordCloudSize, setWordCloudSize] = useState(1)
   // PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT 0..1 per
-  // source (they don't sum to 1). Default semantic 1 / others 0 = the normal
-  // pure-semantic map. Library scope only.
+  // source (they don't sum to 1). Default semantic 1 / co-authorship 0 /
+  // bibliographic-coupling 0.5. Library scope only (corpus stays pure-semantic
+  // on the cached path — see the effective weights below).
   const [layoutSemanticWeight, setLayoutSemanticWeight] = useState(1)
   const [layoutCoauthWeight, setLayoutCoauthWeight] = useState(0)
-  const [layoutBibWeight, setLayoutBibWeight] = useState(0)
+  const [layoutBibWeight, setLayoutBibWeight] = useState(0.5)
   const [includeCorpus, setIncludeCorpus] = useState(false)
   // Typed edge layers toggled OFF (Phase 3 / I-11). Empty ⇒ all layers shown.
   const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
@@ -150,11 +151,18 @@ export function GraphPanel() {
   const { toast } = useToast()
 
   const scope = includeCorpus ? 'corpus' : 'library'
+  // The fused layout (dense O(N²)) is Library-only; the corpus stays pure
+  // semantic so it keeps hitting the cached MV (sending non-default weights would
+  // force the slow, uncached custom build for 8k papers).
+  const fusedActive = !includeCorpus
+  const wSem = fusedActive ? layoutSemanticWeight : 1
+  const wCo = fusedActive ? layoutCoauthWeight : 0
+  const wBib = fusedActive ? layoutBibWeight : 0
   // show_edges is hardcoded true so the edges are always in the (cached) payload
   // — the Edges toggle is a client-side RENDER flag, so flipping it never
   // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${layoutSemanticWeight}&w_coauthorship=${layoutCoauthWeight}&w_bibliographic=${layoutBibWeight}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
     : `?scope=${scope}&cluster_resolution=${clusterResolution}`
 
   // Only the params that actually change the FETCH belong in the key. The author
@@ -162,7 +170,7 @@ export function GraphPanel() {
   // be in its key (else toggling them would refetch + flash a spinner).
   const queryKey =
     activeView === 'paper-map'
-      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, layoutSemanticWeight, layoutCoauthWeight, layoutBibWeight]
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, showTopics, scope, clusterResolution, wSem, wCo, wBib]
       : ['graph', 'author-network', scope, clusterResolution]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
@@ -527,6 +535,10 @@ export function GraphPanel() {
                   clusters={clusters}
                   physics={physics}
                   visibleLayers={layerKeys.length ? visibleLayers : undefined}
+                  // Auto-fit only when the GRAPH identity changes (view/scope),
+                  // not on slider-driven refetches — so tweaking weights keeps
+                  // your current pan/zoom.
+                  autoFitKey={`${activeView}:${scope}`}
                 />
               </div>
             ) : (

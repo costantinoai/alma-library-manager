@@ -581,8 +581,8 @@ export function GraphControls({
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-slate-500" />
                 <div>
-                  <p className="text-sm font-semibold text-alma-800">Node size</p>
-                  <p className="text-xs text-slate-500">Scale the dots (purely visual — the layout is fixed).</p>
+                  <p className="text-sm font-semibold text-alma-800">Physics</p>
+                  <p className="text-xs text-slate-500">Spacing + motion (small graphs) and node size.</p>
                 </div>
               </div>
               {onResetPhysics && (
@@ -591,11 +591,16 @@ export function GraphControls({
                 </Button>
               )}
             </div>
-            {/* The d3-force simulation sliders (repulsion / link distance /
-                attraction / velocity / cooldown) were removed: the layout is now
-                always the fixed UMAP projection, so they did nothing. Only the
-                visual node-size controls remain. */}
+            {/* Spacing/motion sliders relax the layout on SMALL graphs (the library)
+                — large graphs stay pinned to the embedding layout for performance.
+                Edge layers never feed these forces, so the geometry stays stable
+                when you toggle edges. */}
             <div className="grid gap-3 sm:grid-cols-2">
+              <RangeControl label="Repulsion" value={physics.repulsion} min={-200} max={0} step={5} onChange={(value) => onPhysicsChange({ repulsion: value })} hint="How strongly nodes push each other apart — more negative spreads the map out. (Small graphs only.)" />
+              <RangeControl label="Link Distance" value={physics.linkDistance} min={20} max={220} step={5} onChange={(value) => onPhysicsChange({ linkDistance: value })} hint="Resting length of an edge — higher pushes connected nodes farther apart. (Small graphs only.)" />
+              <RangeControl label="Link Attraction" value={physics.linkStrength} min={0} max={2} step={0.05} onChange={(value) => onPhysicsChange({ linkStrength: value })} hint="How hard edges pull their endpoints together — higher = tighter clusters. (Small graphs only.)" />
+              <RangeControl label="Velocity Decay" value={physics.velocityDecay} min={0.05} max={0.9} step={0.01} onChange={(value) => onPhysicsChange({ velocityDecay: value })} hint="Friction — how quickly motion settles. Higher stops the layout sooner." />
+              <RangeControl label="Cooldown" value={physics.cooldownTicks} min={20} max={300} step={10} onChange={(value) => onPhysicsChange({ cooldownTicks: value })} hint="How many simulation steps run before the layout freezes." />
               <RangeControl label="Node Scale" value={physics.nodeScale} min={0.6} max={2.5} step={0.05} onChange={(value) => onPhysicsChange({ nodeScale: value })} hint="Multiplier on every node's size — purely visual." />
               <RangeControl label="Base Size" value={physics.baseSize} min={2} max={20} step={0.5} onChange={(value) => onPhysicsChange({ baseSize: value })} hint="The base radius all node sizes scale from — purely visual." />
             </div>

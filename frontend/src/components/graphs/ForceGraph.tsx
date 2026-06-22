@@ -102,6 +102,9 @@ interface ForceGraphProps {
   physics?: GraphPhysicsConfig
   /** Edge layers to render (Phase 3 / I-11). undefined ⇒ show every layer. */
   visibleLayers?: string[]
+  /** Auto fit-to-view fires ONLY when this key changes (e.g. view/scope switch),
+      not on every data update — so tweaking a slider keeps your pan/zoom. */
+  autoFitKey?: string
 }
 
 export function ForceGraph({
@@ -121,6 +124,7 @@ export function ForceGraph({
   clusters = [],
   physics,
   visibleLayers,
+  autoFitKey,
 }: ForceGraphProps) {
   const fgRef = useRef<InstanceType<typeof ForceGraph2D>>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -187,16 +191,15 @@ export function ForceGraph({
         } satisfies RenderedNode,
       ]
     })
-    const layerFilter = visibleLayers ? new Set(visibleLayers) : null
+    // Links carry EVERY edge — the layer chips filter what's DRAWN (linkVisibility),
+    // NOT the simulation. So toggling an edge layer changes the overlay only; the
+    // link force always sees the full, fixed edge set and the geometry never
+    // shifts when you touch edges. (This is what lets us keep a real physics
+    // layout AND have stable geometry under edge/layer toggles.)
     const links = data.edges.flatMap((edge) => {
       const source = String(edge.source || '')
       const target = String(edge.target || '')
       if (!source || !target || source === target || !seenNodeIds.has(source) || !seenNodeIds.has(target)) {
-        return []
-      }
-      const edgeType = String(edge.edge_type || 'semantic')
-      // Layer filter (I-11): hide edges whose layer is toggled off.
-      if (layerFilter && !layerFilter.has(edgeType)) {
         return []
       }
       return [
@@ -204,34 +207,62 @@ export function ForceGraph({
           source,
           target,
           value: Number.isFinite(edge.weight) ? edge.weight : 1,
-          edge_type: edgeType,
+          edge_type: String(edge.edge_type || 'semantic'),
         } satisfies RenderedLink,
       ]
     })
-    // Static layout on EVERY graph (I-10). Pin every node to its backend UMAP
-    // coordinate so d3-force never runs: positions ARE the embedding projection,
-    // the same with or without edges. This is the key correctness fix — the old
-    // library-only force simulation made the map jump whenever the edge SET
-    // changed (toggling edges, or an edge-layer chip, fed the link force), so the
-    // geometry wasn't stable and wasn't honestly "similarity". Now edges are a
-    // pure overlay that never moves a node, and there's ONE layout regime for
-    // every scope (DRY) instead of "pinned corpus vs simulated library".
-    for (const node of nodes) {
-      ;(node as RenderedNode).fx = node._initX
-      ;(node as RenderedNode).fy = node._initY
+    // Pin only LARGE graphs (corpus / dense author net) — running d3-force over
+    // thousands of nodes+edges every frame is the lag. Small graphs (the library)
+    // keep a light physics relaxation seeded at the UMAP coords, so they have the
+    // elasticity + spacing the sliders control. Either way edges are decoupled
+    // from geometry (above), so this regime split is a pure perf choice now, not
+    // the old "edges move the small graph but not the big one" inconsistency.
+    if (
+      nodes.length > LARGE_GRAPH_THRESHOLD ||
+      links.length > LARGE_GRAPH_EDGE_THRESHOLD
+    ) {
+      for (const node of nodes) {
+        ;(node as RenderedNode).fx = node._initX
+        ;(node as RenderedNode).fy = node._initY
+      }
     }
     return { nodes, links }
-  }, [data, dimensions.width, dimensions.height, highlightSearch, visibleLayers])
+  }, [data, dimensions.width, dimensions.height, highlightSearch])
 
-  // Kept only for the edge level-of-detail gate (linkVisibility) — the layout
-  // itself is always static now, so this no longer switches layout regimes.
   const isLargeGraph =
     graphData.nodes.length > LARGE_GRAPH_THRESHOLD ||
     graphData.links.length > LARGE_GRAPH_EDGE_THRESHOLD
 
-  // (No force-simulation reheat effect: every graph renders statically from the
-  // pinned UMAP coordinates. The old d3-force tuning lived here and was what made
-  // the library map shift when the edge set changed — removed with the pin.)
+  // Small graphs run a light physics relaxation seeded at the UMAP coordinates,
+  // so they have elasticity + the spacing the sliders control. The link force
+  // sees the FULL edge set (see graphData) — never the layer-filtered set — so
+  // toggling edge layers can't reshape the map. Large graphs stay pinned (perf).
+  useEffect(() => {
+    const graph = fgRef.current
+    if (!graph || !physics || isLargeGraph) {
+      return
+    }
+    // Disable the built-in center force so the precomputed cluster coordinates
+    // aren't collapsed into a blob at the origin. (Setter overload of d3Force.)
+    ;(graph.d3Force as (name: string, force: unknown) => unknown)('center', null)
+    const charge = graph.d3Force('charge') as { strength?: (value: number) => unknown } | undefined
+    charge?.strength?.(physics.repulsion)
+    const linkForce = graph.d3Force('link') as {
+      distance?: (value: number) => unknown
+      strength?: (value: number) => unknown
+    } | undefined
+    linkForce?.distance?.(physics.linkDistance)
+    linkForce?.strength?.(physics.linkStrength)
+    // Re-seed at the precomputed positions + clear inherited velocities so new
+    // force params drive a fresh relaxation from the embedding layout.
+    for (const node of graphData.nodes) {
+      node.x = node._initX
+      node.y = node._initY
+      ;(node as { vx?: number; vy?: number }).vx = 0
+      ;(node as { vx?: number; vy?: number }).vy = 0
+    }
+    graph.d3ReheatSimulation()
+  }, [physics, graphData, isLargeGraph])
 
   const handleNodeClick = useCallback((node: Record<string, unknown>) => {
     if (onNodeClick) {
@@ -496,13 +527,17 @@ export function ForceGraph({
   // so it tracks zoom without a React re-render (the canvas repaints on zoom).
   const EDGE_ZOOM_THRESHOLD = 2.2
   const linkVisibility = useCallback(
-    () => {
+    (link: Record<string, unknown>) => {
+      // Layer chips filter DRAWING only — the simulation always uses every edge.
+      if (visibleLayers && !visibleLayers.includes(String(link.edge_type || 'semantic'))) {
+        return false
+      }
       if (selectedClusterId !== null) return true
       if (!showEdges) return false
       if (!isLargeGraph) return true
       return zoomRef.current >= EDGE_ZOOM_THRESHOLD
     },
-    [isLargeGraph, selectedClusterId, showEdges],
+    [isLargeGraph, selectedClusterId, showEdges, visibleLayers],
   )
 
   const linkColor = useCallback((link: Record<string, unknown>) => {
@@ -590,12 +625,19 @@ export function ForceGraph({
   }, [])
 
   // Navigation helpers (I-14): the canvas was hard to navigate — no fit, no
-  // zoom affordance. zoomToFit also runs on every engine-stop so the graph
-  // always opens framed (and re-frames after a static layout settles instantly).
+  // zoom affordance. The Fit button always re-frames; the AUTO fit on engine-stop
+  // only fires when the graph identity (autoFitKey: view/scope) changes, so a
+  // slider tweak that refetches data does NOT yank your pan/zoom back to fit.
   const handleZoomToFit = useCallback(() => {
     const g = fgRef.current as { zoomToFit?: (ms?: number, px?: number) => void } | null
     g?.zoomToFit?.(400, 48)
   }, [])
+  const lastFitKeyRef = useRef<string | undefined>(undefined)
+  const handleEngineStop = useCallback(() => {
+    if (autoFitKey === lastFitKeyRef.current) return // same view → keep the user's framing
+    lastFitKeyRef.current = autoFitKey
+    handleZoomToFit()
+  }, [autoFitKey, handleZoomToFit])
   const adjustZoom = useCallback((factor: number) => {
     const g = fgRef.current as { zoom?: (k?: number, ms?: number) => number } | null
     if (!g?.zoom) return
@@ -640,15 +682,16 @@ export function ForceGraph({
         onZoom={(transform: { k: number }) => {
           zoomRef.current = transform.k
         }}
-        // Static UMAP layout on EVERY graph: 0 ticks → no simulation, the canvas
-        // only repaints on interaction. Node positions are the pinned embedding
-        // projection; nothing to drag or settle.
-        cooldownTicks={0}
+        d3VelocityDecay={physics?.velocityDecay ?? 0.4}
+        // Large graphs render statically from the pinned UMAP layout (0 ticks).
+        // Small graphs run the light physics relaxation (the sliders) seeded at
+        // those coords.
+        cooldownTicks={isLargeGraph ? 0 : (physics?.cooldownTicks || 80)}
         warmupTicks={0}
-        enableNodeDrag={false}
+        enableNodeDrag={!isLargeGraph}
         enableZoomInteraction={true}
         enablePanInteraction={true}
-        onEngineStop={handleZoomToFit}
+        onEngineStop={handleEngineStop}
       />
     </div>
   )
