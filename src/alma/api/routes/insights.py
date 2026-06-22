@@ -1067,12 +1067,18 @@ def _build_ai_snapshot(
         except sqlite3.OperationalError:
             pass
         try:
+            # I-24: vectors are stored float16 = 2 bytes/value (see
+            # core.vector_blob.STORAGE_DTYPE / _STORAGE_BYTES). The old LENGTH/4
+            # assumed float32 and reported a 768-d vector as 384. Divide by 2.
+            # Legacy float32 rows (4 bytes/value) surface here as a larger variant
+            # until vector_blob.migrate_blob_column_to_float16 rewrites them — that
+            # extra variant row is a useful "migration still pending" signal.
             dim_rows = db.execute(
                 """
-                SELECT CAST(LENGTH(embedding) / 4 AS INTEGER) AS embedding_dim, COUNT(*) AS count
+                SELECT CAST(LENGTH(embedding) / 2 AS INTEGER) AS embedding_dim, COUNT(*) AS count
                 FROM publication_embeddings
                 WHERE embedding IS NOT NULL AND model = ?
-                GROUP BY CAST(LENGTH(embedding) / 4 AS INTEGER)
+                GROUP BY CAST(LENGTH(embedding) / 2 AS INTEGER)
                 ORDER BY count DESC, embedding_dim DESC
                 """,
                 (summary["embedding_model"],),
@@ -1666,10 +1672,12 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         # drift silently when the junction table references openalex_ids
         # that haven't been backfilled into `authors` yet.
         total_authors = 0
+        author_paper_links = 0
         if table_exists(db, "publication_authors") and table_exists(db, "authors"):
             r = db.execute(
                 """
-                SELECT COUNT(DISTINCT a.id) AS c
+                SELECT COUNT(DISTINCT a.id) AS authors,
+                       COUNT(DISTINCT a.id || ':' || p.id) AS links
                 FROM authors a
                 JOIN publication_authors pa
                   ON pa.openalex_id = a.openalex_id
@@ -1679,7 +1687,11 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                 WHERE p.status = 'library'
                 """
             ).fetchone()
-            total_authors = r["c"] or 0
+            total_authors = r["authors"] or 0
+            # I-16: distinct (author, library-paper) links — the numerator for a
+            # correct mean papers-per-author. NOT total_pubs (which counts each
+            # multi-author paper once, so total_pubs/total_authors overstates it).
+            author_paper_links = r["links"] or 0
 
         total_countries = 0
         total_institutions = 0
@@ -1738,7 +1750,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "total_topics": total_topics,
             "total_institutions": total_institutions,
             "avg_citations_per_paper": round(total_citations / total_pubs, 1) if total_pubs else 0.0,
-            "avg_papers_per_author": round(total_pubs / total_authors, 1) if total_authors else 0.0,
+            "avg_papers_per_author": round(author_paper_links / total_authors, 1) if total_authors else 0.0,
         }
 
         # ── Publications by year (Library-scoped) ──
@@ -1774,7 +1786,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         if table_exists(db, "publication_institutions"):
             rows = db.execute(
                 """
-                SELECT pi.institution_name,
+                SELECT MAX(pi.institution_name) AS institution_name,
                        pi.country_code,
                        COUNT(DISTINCT pi.paper_id) AS count
                 FROM publication_institutions pi
@@ -1782,7 +1794,10 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                 WHERE p.status = 'library'
                   AND pi.institution_name IS NOT NULL
                   AND TRIM(pi.institution_name) <> ''
-                GROUP BY pi.institution_name
+                -- I-17: group by NORMALIZED name + country so `country_code` is a
+                -- grouping key (not an arbitrary row SQLite happens to pick), and
+                -- a same-named institution in two countries stays two rows.
+                GROUP BY LOWER(TRIM(pi.institution_name)), pi.country_code
                 ORDER BY count DESC LIMIT 15
                 """
             ).fetchall()
