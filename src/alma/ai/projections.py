@@ -40,12 +40,18 @@ def _safe_norm_rows(matrix: np.ndarray) -> np.ndarray:
 def project_embeddings(
     embeddings: dict[str, list[float]],
     method: str = "auto",
+    *,
+    precomputed_knn=None,
 ) -> dict[str, tuple[float, float]]:
     """Project embeddings to 2D for visualization.
 
     Args:
         embeddings: Map of paper_id -> embedding vector.
         method: "umap", "tsne", or "auto" (UMAP if available, else t-SNE).
+        precomputed_knn: Optional ``(knn_indices, knn_dists)`` cosine graph shared
+            with the clustering fit (task #21) so the corpus build runs one
+            neighbour search instead of two. ``None`` lets UMAP build its own.
+            UMAP/GPU dispatch + bounded epochs live in :mod:`alma.ai.accel`.
 
     Returns:
         Map of paper_id -> (x, y) coordinates.
@@ -61,14 +67,17 @@ def project_embeddings(
         method = "umap" if _UMAP_AVAILABLE else "tsne"
 
     if method == "umap" and _UMAP_AVAILABLE:
-        reducer = _umap.UMAP(
+        from alma.ai import accel
+
+        coords_2d = accel.umap_fit(
+            vectors,
             n_components=2,
             n_neighbors=min(15, len(keys) - 1),
             min_dist=0.1,
             metric="cosine",
             random_state=42,
+            precomputed_knn=precomputed_knn,
         )
-        coords_2d = reducer.fit_transform(vectors)
     else:
         from sklearn.manifold import TSNE
 

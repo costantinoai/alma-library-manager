@@ -92,26 +92,40 @@ def reduce_for_clustering(
     *,
     n_components: int = _CLUSTER_REDUCED_DIM,
     random_state: int = 42,
+    precomputed_knn=None,
 ) -> np.ndarray:
     """L2-normalise and UMAP-reduce SPECTER2 vectors for clustering.
 
     Returns the reduced matrix (or the L2-normalised raw matrix when
     UMAP is unavailable or the input is too small). Always returns
     float32 so downstream HDBSCAN/sklearn doesn't pay an upcast.
+
+    ``precomputed_knn`` (task #21): an optional ``(knn_indices, knn_dists)``
+    cosine graph shared with the 2-D projection fit so the neighbour search runs
+    once per build rather than twice. Cosine is scale-invariant, so a graph built
+    on the raw vectors is valid here on the L2-normalised ones. Pass ``None`` to
+    let UMAP build its own (correct, slightly slower). Dispatch (GPU vs optimised
+    CPU + bounded epochs) lives in :mod:`alma.ai.accel`.
     """
     normalized = _l2_normalise(vectors)
     n = int(normalized.shape[0])
     if not _UMAP_AVAILABLE or n < _UMAP_MIN_POINTS:
         return normalized
     try:
-        reducer = _umap.UMAP(
+        from alma.ai import accel
+
+        return accel.umap_fit(
+            normalized,
             n_components=min(n_components, max(2, n - 1)),
             n_neighbors=min(15, max(5, n - 1)),
             min_dist=0.0,  # tight clusters help HDBSCAN's density signal
             metric="cosine",
             random_state=random_state,
-        )
-        return reducer.fit_transform(normalized).astype(np.float32)
+            # The substrate feeds HDBSCAN's density estimate, so it needs the
+            # larger epoch budget to settle under a shared kNN (see accel docs).
+            n_epochs=accel.large_n_epochs(n, accel.CLUSTER_EPOCHS_LARGE_N),
+            precomputed_knn=precomputed_knn,
+        ).astype(np.float32)
     except Exception as exc:
         logger.warning(
             "UMAP reduction for clustering failed (n=%d); falling back to "
@@ -347,6 +361,7 @@ def cluster_publications(
     *,
     compute_stability: bool = False,
     resolution: float = 1.0,
+    precomputed_knn=None,
 ) -> ClusteringResult:
     """Cluster publication embeddings via the BERTopic recipe.
 
@@ -431,7 +446,9 @@ def cluster_publications(
         # noising a small personal library.
         min_samples = max(2, min(min_cluster_size - 1, min_cluster_size // 2))
 
-    cluster_substrate = reduce_for_clustering(vectors)
+    # task #21: reuse the shared cosine kNN graph (computed once by the builder
+    # for the corpus-scale build) so the 5-D substrate fit skips its own search.
+    cluster_substrate = reduce_for_clustering(vectors, precomputed_knn=precomputed_knn)
 
     def _run_kmeans(
         vecs: np.ndarray,

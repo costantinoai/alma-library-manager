@@ -43,7 +43,14 @@ from __future__ import annotations
 #            >50 papers (372s→<1s on the corpus). Hub-ref couplings (everyone
 #            cites the famous review) were non-discriminative noise anyway, so the
 #            corpus edge set changes slightly — the cached corpus map must rebuild.
-PROJECTION_ALGO_VERSION = "2026.07-4"
+# 2026.07-5: corpus PERF (task #21) — the 2-D projection now runs through the
+#            alma.ai.accel dispatch (GPU when present; optimised CPU otherwise) with
+#            a bounded n_epochs (200 for the display layout, down from umap's <10k
+#            default of 500) and a kNN graph shared with the clustering fit. The
+#            shared graph is the same neighbour graph, but the bounded epochs +
+#            shared-SGD orientation shift the layout marginally, so the cached
+#            corpus map rebuilds once.
+PROJECTION_ALGO_VERSION = "2026.07-5"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
@@ -51,7 +58,13 @@ PROJECTION_ALGO_VERSION = "2026.07-4"
 # 2026.07-3: retain density noise as an explicit Unclustered group instead of
 #            force-merging it to the nearest centroid; ClusteringResult carries
 #            per-point membership probability + coverage + stability (I-6).
-CLUSTERING_ALGO_VERSION = "2026.07-3"
+# 2026.07-5: corpus PERF (task #21) — the 5-D clustering substrate now runs
+#            through alma.ai.accel with a shared kNN and a bounded n_epochs (300
+#            for the substrate; chosen because a shared-kNN SGD needs ~300 epochs
+#            to recover the own-kNN/500 coverage — 0.741 on the corpus — whereas
+#            200 under-settles it to 0.723). Coverage is preserved; the layout
+#            shifts marginally, so the cached clustering rebuilds once.
+CLUSTERING_ALGO_VERSION = "2026.07-5"
 
 # Cluster-label generation (ai/clustering.py score_cluster_terms): c-TF-IDF
 # term selection + word clouds, and the label-signature content hash.
