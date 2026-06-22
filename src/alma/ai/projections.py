@@ -94,6 +94,90 @@ def project_embeddings(
     }
 
 
+def fuse_layout(
+    embeddings: dict[str, list[float]],
+    coauth_pairs: dict[tuple[str, str], int],
+    bib_pairs: dict[tuple[str, str], int],
+    *,
+    weights: dict[str, float],
+) -> dict[str, tuple[float, float]]:
+    """PROTOTYPE multi-view layout (task 19) — fuse several relationship signals
+    into ONE 2-D layout so the *geometry* reflects the chosen blend.
+
+    Builds a per-signal pairwise DISTANCE matrix — semantic (cosine on the
+    embeddings), co-authorship (shared authors), bibliographic coupling (shared
+    references) — blends them by ``weights`` (renormalized to sum 1), and runs
+    UMAP(metric="precomputed"). Toggling a signal = its weight → 0.
+
+    Dense O(N²): intended for the LIBRARY scale only. The corpus needs the sparse
+    fuzzy-simplicial-set union path (still task 19). Returns {} on any failure so
+    the caller falls back to the pure-semantic layout.
+    """
+    ids = list(embeddings)
+    n = len(ids)
+    if n < 3:
+        return {pid: (0.5, 0.5) for pid in ids}
+
+    w_sem = max(0.0, float(weights.get("semantic", 1.0) or 0.0))
+    w_co = max(0.0, float(weights.get("coauthorship", 0.0) or 0.0))
+    w_bib = max(0.0, float(weights.get("bibliographic_coupling", 0.0) or 0.0))
+    total = w_sem + w_co + w_bib
+    if total <= 0:
+        w_sem, total = 1.0, 1.0
+    w_sem, w_co, w_bib = w_sem / total, w_co / total, w_bib / total
+
+    idx = {pid: i for i, pid in enumerate(ids)}
+    X = np.asarray([embeddings[pid] for pid in ids], dtype=np.float64)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    Xn = X / norms
+    # Semantic distance in [0, 1] (cosine sim → distance).
+    d_sem = np.clip((1.0 - np.clip(Xn @ Xn.T, -1.0, 1.0)) / 2.0, 0.0, 1.0)
+
+    def _pair_distance(pairs: dict[tuple[str, str], int]) -> np.ndarray:
+        # Affinity (shared count, normalized to the strongest pair) → distance.
+        # No shared signal ⇒ distance 1 (maximally far on this axis).
+        d = np.ones((n, n), dtype=np.float64)
+        np.fill_diagonal(d, 0.0)
+        if not pairs:
+            return d
+        mx = max(pairs.values()) or 1
+        for (a, b), c in pairs.items():
+            if a in idx and b in idx:
+                aff = min(1.0, c / mx)
+                d[idx[a], idx[b]] = d[idx[b], idx[a]] = 1.0 - aff
+        return d
+
+    d = w_sem * d_sem
+    if w_co > 0:
+        d = d + w_co * _pair_distance(coauth_pairs)
+    if w_bib > 0:
+        d = d + w_bib * _pair_distance(bib_pairs)
+    np.fill_diagonal(d, 0.0)
+    d = (d + d.T) / 2.0  # enforce exact symmetry for the precomputed metric
+
+    try:
+        if not _UMAP_AVAILABLE:
+            return {}
+        reducer = _umap.UMAP(
+            n_components=2,
+            n_neighbors=min(15, n - 1),
+            min_dist=0.1,
+            metric="precomputed",
+            random_state=42,
+        )
+        coords_2d = reducer.fit_transform(d)
+    except Exception:
+        return {}
+
+    mins = coords_2d.min(axis=0)
+    maxs = coords_2d.max(axis=0)
+    ranges = maxs - mins
+    ranges[ranges == 0] = 1
+    coords_2d = (coords_2d - mins) / ranges
+    return {ids[i]: (float(coords_2d[i, 0]), float(coords_2d[i, 1])) for i in range(n)}
+
+
 def build_topic_cooccurrence(
     conn: sqlite3.Connection, min_cooccurrence: int = 2
 ) -> dict:

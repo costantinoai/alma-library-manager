@@ -59,6 +59,11 @@ interface GraphControlsProps {
   onAuthorColorByChange?: (mode: AuthorColorBy) => void
   authorSizeBy?: AuthorSizeBy
   onAuthorSizeByChange?: (mode: AuthorSizeBy) => void
+  // PROTOTYPE (task 19): fused-layout weights. Semantic = remainder.
+  layoutCoauthWeight?: number
+  onLayoutCoauthWeightChange?: (value: number) => void
+  layoutBibWeight?: number
+  onLayoutBibWeightChange?: (value: number) => void
   physics?: GraphPhysicsConfig
   onPhysicsChange?: (patch: Partial<GraphPhysicsConfig>) => void
   onResetPhysics?: () => void
@@ -173,6 +178,10 @@ export function GraphControls({
   onAuthorColorByChange,
   authorSizeBy = 'publications',
   onAuthorSizeByChange,
+  layoutCoauthWeight = 0,
+  onLayoutCoauthWeightChange,
+  layoutBibWeight = 0,
+  onLayoutBibWeightChange,
   physics,
   onPhysicsChange,
   onResetPhysics,
@@ -358,6 +367,71 @@ export function GraphControls({
               )}
             </div>
           )}
+
+          {/* PROTOTYPE (task 19): fused multi-view layout. Library + paper-map
+              only (dense O(N²)). Semantic carries the remaining weight, so 0/0 is
+              the normal pure-semantic map. */}
+          {isPaperMap && !includeCorpus && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
+            <div className="mt-3 rounded-sm border border-dashed border-edge-2 bg-surface-2 p-3">
+              <div className="mb-1 flex items-center gap-2">
+                <span className="text-xs font-semibold text-alma-800">Layout basis</span>
+                <Badge variant="outline" className="text-[10px]">beta</Badge>
+              </div>
+              <p className="mb-2 text-[11px] text-slate-500">
+                Blend what drives the <em>positions</em>. At 0/0 the map is pure semantic
+                similarity (the trustworthy default); raise a weight to pull co-authors or
+                reference-sharing papers together. Clusters stay semantic.
+              </p>
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <span className="font-medium whitespace-nowrap">Co-authorship</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.25}
+                    value={layoutCoauthWeight}
+                    onChange={(e) => onLayoutCoauthWeightChange(Number(e.target.value))}
+                    className="w-24 accent-alma-600"
+                  />
+                  <span className="font-mono text-[10px] tabular-nums text-slate-500">
+                    {layoutCoauthWeight.toFixed(2)}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <span className="font-medium whitespace-nowrap">Bib. coupling</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.25}
+                    value={layoutBibWeight}
+                    onChange={(e) => onLayoutBibWeightChange(Number(e.target.value))}
+                    className="w-24 accent-alma-600"
+                  />
+                  <span className="font-mono text-[10px] tabular-nums text-slate-500">
+                    {layoutBibWeight.toFixed(2)}
+                  </span>
+                </label>
+                <span className="text-[11px] text-slate-400">
+                  semantic {Math.max(0, 1 - layoutCoauthWeight - layoutBibWeight).toFixed(2)}
+                </span>
+                {(layoutCoauthWeight > 0 || layoutBibWeight > 0) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      onLayoutCoauthWeightChange(0)
+                      onLayoutBibWeightChange(0)
+                    }}
+                  >
+                    Reset to semantic
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
           {!isPaperMap && (
             <div className="mt-3 flex flex-wrap items-center gap-3">
               {/* Author-appropriate encodings (parity with the paper map, but over

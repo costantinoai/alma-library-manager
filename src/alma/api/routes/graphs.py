@@ -81,6 +81,8 @@ def get_paper_map(
     show_topics: bool = Query(False, description="Show topic nodes overlaid on paper map"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
     cluster_resolution: float = Query(1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"),
+    w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
+    w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get paper map visualization data.
@@ -94,6 +96,8 @@ def get_paper_map(
     variant would be wasteful.
     """
     scope = Scope.parse(scope)
+    # A fused layout (any non-zero non-semantic weight) is a custom, uncached view.
+    fused_layout = w_coauthorship > 0 or w_bibliographic > 0
     is_default_options = (
         label_mode == "cluster"
         and color_by == "cluster"
@@ -101,6 +105,7 @@ def get_paper_map(
         and show_edges
         and not show_topics
         and abs(cluster_resolution - 1.0) < 1e-6
+        and not fused_layout
     )
 
     if is_default_options:
@@ -117,6 +122,13 @@ def get_paper_map(
         "show_edges": show_edges,
         "scope": scope,
         "cluster_resolution": cluster_resolution,
+        # PROTOTYPE (task 19): fused multi-view layout weights. Semantic carries
+        # the remainder, so {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
+        "layout_weights": {
+            "semantic": max(0.0, 1.0 - w_coauthorship - w_bibliographic),
+            "coauthorship": w_coauthorship,
+            "bibliographic_coupling": w_bibliographic,
+        },
     }
     embeddings = _load_embeddings(conn, scope=scope)
     if embeddings and len(embeddings) >= 5:
@@ -1909,6 +1921,37 @@ def _build_embedding_paper_map(
         except sqlite3.OperationalError:
             if conn.in_transaction:
                 conn.rollback()
+
+    # PROTOTYPE (task 19): fused multi-view layout. Clusters stay SEMANTIC
+    # (computed/cached above — stable), but POSITIONS are re-blended from
+    # semantic + co-authorship + bibliographic-coupling per the requested
+    # weights. Applied AFTER persist so the cached layout stays pure-semantic.
+    # Dense O(N²) ⇒ library-scale only; we hard-cap to avoid the corpus blowing
+    # up (the sparse fuzzy-graph path is the corpus answer, still task 19).
+    _FUSED_MAX_PAPERS = 1500
+    layout_weights = opts.get("layout_weights")
+    if (
+        layout_weights
+        and len(paper_ids) <= _FUSED_MAX_PAPERS
+        and (
+            float(layout_weights.get("coauthorship", 0) or 0) > 0
+            or float(layout_weights.get("bibliographic_coupling", 0) or 0) > 0
+        )
+    ):
+        try:
+            from alma.ai.projections import fuse_layout
+
+            fused_coords = fuse_layout(
+                embeddings,
+                _paper_coauthorship(conn, paper_ids),
+                _paper_bibliographic_coupling(conn, paper_ids),
+                weights=layout_weights,
+            )
+            if fused_coords:
+                coords = fused_coords
+                layout_mode = "fused"
+        except Exception as exc:  # never let a prototype break the map
+            logger.warning("fused layout failed; keeping semantic layout: %s", exc)
 
     # Compute year range for color scaling
     all_years = [int(paper_meta[pid].get("year") or 0) for pid in embeddings if paper_meta[pid].get("year")]
