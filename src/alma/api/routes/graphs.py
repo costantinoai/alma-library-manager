@@ -106,7 +106,12 @@ def get_paper_map(
     }
     embeddings = _load_embeddings(conn, scope=scope)
     if embeddings and len(embeddings) >= 5:
-        result = _build_embedding_paper_map(conn, embeddings, ai_state=ai_state, graph_options=graph_options)
+        # I-2: custom-options GET is a pure read — build the layout in-memory and
+        # do NOT persist (no write/commit mid-response). The MV rebuild path is the
+        # only writer of publication_clusters.
+        result = _build_embedding_paper_map(
+            conn, embeddings, ai_state=ai_state, graph_options=graph_options, persist=False
+        )
     else:
         result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
     if show_topics:
@@ -1546,8 +1551,16 @@ def _build_embedding_paper_map(
     *,
     ai_state: Optional[dict] = None,
     graph_options: Optional[dict] = None,
+    persist: bool = True,
 ) -> GraphData:
-    """Build paper map using embeddings, with incremental clustering/layout reuse."""
+    """Build paper map using embeddings, with incremental clustering/layout reuse.
+
+    I-2 (GET purity): ``persist`` controls whether the computed layout is written
+    back to ``publication_clusters``. The materialized-view REBUILD path (a
+    background job) persists (default True) so subsequent rebuilds can reuse the
+    incremental layout; the synchronous custom-options GET passes ``persist=False``
+    so a read request never writes + commits mid-response.
+    """
     from alma.ai.clustering import cluster_publications, label_clusters_tfidf
     from alma.ai.projections import project_embeddings
 
@@ -1778,37 +1791,41 @@ def _build_embedding_paper_map(
             labels_by_cluster[int(cluster.cluster_id)] = str(label or labels_by_cluster.get(int(cluster.cluster_id), ""))
 
     # Persist computed layout rows so subsequent refreshes can be incremental.
-    # Commit in bounded batches to release the SQLite writer lock between
-    # chunks. Before this batching, 1000+ upserts ran under a single
-    # transaction and held the writer lock for multiple seconds, blocking
-    # concurrent user writes (see ``tasks/10_ACTIVITY_CONCURRENCY.md``).
-    now_iso = datetime.now().isoformat()
-    _CLUSTER_BATCH_SIZE = 200
-    try:
-        for batch_start in range(0, len(paper_ids), _CLUSTER_BATCH_SIZE):
-            batch = paper_ids[batch_start:batch_start + _CLUSTER_BATCH_SIZE]
-            for paper_id in batch:
-                cid = int(assignments.get(paper_id, 0))
-                x, y = coords.get(paper_id, (0.5, 0.5))
-                label = labels_by_cluster.get(cid, f"Cluster {cid + 1}")
-                conn.execute(
-                    """
-                    INSERT INTO publication_clusters (paper_id, cluster_id, label, x, y, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(paper_id) DO UPDATE SET
-                        cluster_id = excluded.cluster_id,
-                        label = excluded.label,
-                        x = excluded.x,
-                        y = excluded.y,
-                        updated_at = excluded.updated_at
-                    """,
-                    (paper_id, cid, label, float(x), float(y), now_iso),
-                )
+    # I-2: ONLY on the rebuild path (persist=True). A GET request never reaches
+    # this block (the custom-options GET passes persist=False), so reads stay pure.
+    # Commit in bounded batches to release the SQLite writer lock between chunks
+    # (1000+ upserts under one txn held the lock for seconds — see
+    # ``tasks/10_ACTIVITY_CONCURRENCY.md``). NOTE: the residual raw commit here is
+    # the background-rebuild write that task 09 (_MIGRATION_BACKLOG) gates via
+    # write_section — left to 09 per the I-2↔09 cross-reference; do not double-fix.
+    if persist:
+        now_iso = datetime.now().isoformat()
+        _CLUSTER_BATCH_SIZE = 200
+        try:
+            for batch_start in range(0, len(paper_ids), _CLUSTER_BATCH_SIZE):
+                batch = paper_ids[batch_start:batch_start + _CLUSTER_BATCH_SIZE]
+                for paper_id in batch:
+                    cid = int(assignments.get(paper_id, 0))
+                    x, y = coords.get(paper_id, (0.5, 0.5))
+                    label = labels_by_cluster.get(cid, f"Cluster {cid + 1}")
+                    conn.execute(
+                        """
+                        INSERT INTO publication_clusters (paper_id, cluster_id, label, x, y, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(paper_id) DO UPDATE SET
+                            cluster_id = excluded.cluster_id,
+                            label = excluded.label,
+                            x = excluded.x,
+                            y = excluded.y,
+                            updated_at = excluded.updated_at
+                        """,
+                        (paper_id, cid, label, float(x), float(y), now_iso),
+                    )
+                if conn.in_transaction:
+                    conn.commit()
+        except sqlite3.OperationalError:
             if conn.in_transaction:
-                conn.commit()
-    except sqlite3.OperationalError:
-        if conn.in_transaction:
-            conn.rollback()
+                conn.rollback()
 
     # Compute year range for color scaling
     all_years = [int(paper_meta[pid].get("year") or 0) for pid in embeddings if paper_meta[pid].get("year")]
