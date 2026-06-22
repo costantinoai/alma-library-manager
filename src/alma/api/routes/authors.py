@@ -61,6 +61,7 @@ from alma.core.resolution import (
 )
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
+from alma.core.db_retry import commit_with_retry
 from alma.core.db_write import run_write_unit, write_section
 from alma.api.helpers import background_mode_requested, raise_internal
 
@@ -447,13 +448,16 @@ def _resolve_and_persist_author_identity(
         use_orcid=_id_settings["orcid_enabled"],
         use_preprints=semantic_scholar_enabled,
     )
-    persist_identity_result(db, author_id, hierarchical)
-    db.execute(
-        "UPDATE authors SET id_resolution_reason = ? WHERE id = ?",
-        (_summarize_hierarchical_identity(hierarchical), author_id),
-    )
-    if db.in_transaction:
-        db.commit()
+    # Identity resolution (network) is done above — gate the two writes
+    # (evidence row + reason) as one IMMEDIATE unit. persist_identity_result
+    # uses commit_unless_gated, so it no-ops inside this section (we own the
+    # commit) instead of committing mid-unit.
+    with write_section(db, label="resolve_and_persist_author_identity"):
+        persist_identity_result(db, author_id, hierarchical)
+        db.execute(
+            "UPDATE authors SET id_resolution_reason = ? WHERE id = ?",
+            (_summarize_hierarchical_identity(hierarchical), author_id),
+        )
 
     after_openalex = _norm_oaid(str(hierarchical.openalex_id or before_openalex or "").strip()) or None
     after_scholar = str(hierarchical.scholar_id or before_scholar or "").strip() or None
@@ -1298,8 +1302,8 @@ def _refresh_author_identity_profile_impl(
             data={"openalex_id": openalex_id, "reason": "identity_unchanged"},
         )
 
-    if db.in_transaction:
-        db.commit()
+    # No commit needed: the identity persist (_resolve_and_persist_author_identity)
+    # and the centroid refresh above each run in their own write_section.
 
     total_count = authors_app.get_author_publication_count(
         db,
@@ -1410,9 +1414,9 @@ def _deep_refresh_all_impl(
     # Release any pending writes on the caller's connection before we
     # spawn workers — each worker opens its own connection, but if the
     # caller is mid-transaction here we'd hold a writer lock that
-    # serialises every worker behind us.
-    if db.in_transaction:
-        db.commit()
+    # serialises every worker behind us. commit_with_retry flushes with
+    # transient-lock retry instead of a raw, un-retried commit.
+    commit_with_retry(db, label="deep_refresh_all preflight flush")
 
     # Pre-classify rows. Only truly malformed rows (empty id) are
     # skipped up-front; import-only placeholders without upstream IDs
@@ -1645,8 +1649,8 @@ def _deep_refresh_all_impl(
             )
         return cancel_summary
 
-    if db.in_transaction:
-        db.commit()
+    # Final flush of the orchestrator connection (workers committed on their own).
+    commit_with_retry(db, label="deep_refresh_all final flush")
     summary = {
         "success": failed == 0,
         "total": total,
@@ -3686,13 +3690,9 @@ def _resolve_identifiers_bulk_optimized(
     set_job_status(job_id, status="running", processed=0, total=total)
 
     for idx, (author_id, author_name) in enumerate(authors, 1):
-        # Release any pending writes from the previous iteration before we
-        # block on OpenAlex / Semantic Scholar / ORCID so short user writes
-        # don't queue behind an in-flight network call.
-        if db.in_transaction:
-            db.commit()
-
         try:
+            # Network OUTSIDE the writer gate: identity resolution (OpenAlex /
+            # Semantic Scholar / ORCID) + the sample-title read.
             resolution = resolve_author_identity(
                 db,
                 author_id=author_id,
@@ -3702,47 +3702,45 @@ def _resolve_identifiers_bulk_optimized(
                 use_orcid=_id_resolution_settings()["orcid_enabled"],
             )
 
-            duplicate = False
-            resolved_openalex = _norm_oaid(str(resolution.openalex_id or ""))
-            if resolved_openalex:
-                existing = db.execute(
-                    "SELECT id, name FROM authors WHERE lower(openalex_id) = lower(?) AND id != ?",
-                    (resolved_openalex, author_id),
-                ).fetchone()
-                if existing:
-                    duplicate = True
-                    _set_resolution_status(
-                        db,
-                        author_id,
-                        "needs_manual_review",
-                        f"duplicate openalex_id {resolved_openalex} — already assigned to '{existing['name']}' ({existing['id']})",
-                    )
-                    summary["duplicate"] += 1
+            # Gate this author's write window (BEGIN IMMEDIATE + writer gate);
+            # the duplicate-check SELECT inside sees the unit's own snapshot.
+            with write_section(db, label="bulk id resolution"):
+                duplicate = False
+                resolved_openalex = _norm_oaid(str(resolution.openalex_id or ""))
+                if resolved_openalex:
+                    existing = db.execute(
+                        "SELECT id, name FROM authors WHERE lower(openalex_id) = lower(?) AND id != ?",
+                        (resolved_openalex, author_id),
+                    ).fetchone()
+                    if existing:
+                        duplicate = True
+                        _set_resolution_status(
+                            db,
+                            author_id,
+                            "needs_manual_review",
+                            f"duplicate openalex_id {resolved_openalex} — already assigned to '{existing['name']}' ({existing['id']})",
+                        )
+                        summary["duplicate"] += 1
 
-            if not duplicate:
-                _apply_author_resolution_result(db, author_id, resolution)
-                if resolution.openalex_profile:
-                    summary["enriched"] += 1
-                if resolution.status == "resolved_auto":
-                    summary["resolved_auto"] += 1
-                elif resolution.status == "needs_manual_review":
-                    summary["needs_manual_review"] += 1
-                elif resolution.status == "no_match":
-                    summary["no_match"] += 1
-                else:
-                    summary["resolved_auto"] += 1 if resolution.updates else 0
-
-            # Flush this author's writes immediately so the next iteration's
-            # remote call doesn't start under an open write transaction.
-            if db.in_transaction:
-                db.commit()
+                if not duplicate:
+                    _apply_author_resolution_result(db, author_id, resolution)
+                    if resolution.openalex_profile:
+                        summary["enriched"] += 1
+                    if resolution.status == "resolved_auto":
+                        summary["resolved_auto"] += 1
+                    elif resolution.status == "needs_manual_review":
+                        summary["needs_manual_review"] += 1
+                    elif resolution.status == "no_match":
+                        summary["no_match"] += 1
+                    else:
+                        summary["resolved_auto"] += 1 if resolution.updates else 0
         except Exception as exc:
-            if db.in_transaction:
-                db.rollback()
             summary["error"] += 1
             try:
-                _set_resolution_status(db, author_id, "error", f"resolver error: {type(exc).__name__}: {exc}")
-                db.commit()
+                # The failed unit already rolled back; record the error status
+                # in its own gated write window.
+                with write_section(db, label="bulk id resolution error"):
+                    _set_resolution_status(db, author_id, "error", f"resolver error: {type(exc).__name__}: {exc}")
             except Exception:
                 logger.debug("Failed to persist resolver error status", exc_info=True)
             if summary["error"] <= 10:
@@ -3779,8 +3777,7 @@ def _resolve_identifiers_bulk_optimized(
                 step="id_resolution_progress",
             )
 
-    if db.in_transaction:
-        db.commit()
+    # No final flush: each author committed inside its own write_section.
     summary["elapsed_seconds"] = round(time.monotonic() - t0, 1)
     add_job_log(
         job_id,
@@ -4460,13 +4457,13 @@ def repair_author(
             if duplicate:
                 duplicate_id = duplicate["id"] if isinstance(duplicate, sqlite3.Row) else duplicate[0]
                 duplicate_name = duplicate["name"] if isinstance(duplicate, sqlite3.Row) else duplicate[1]
-                _set_resolution_status(
-                    db,
-                    author_id,
-                    "needs_manual_review",
-                    f"duplicate openalex_id {resolved_openalex} — already assigned to '{duplicate_name}' ({duplicate_id})",
-                )
-                db.commit()
+                with write_section(db, label="repair_author duplicate"):
+                    _set_resolution_status(
+                        db,
+                        author_id,
+                        "needs_manual_review",
+                        f"duplicate openalex_id {resolved_openalex} — already assigned to '{duplicate_name}' ({duplicate_id})",
+                    )
                 return {
                     "author_id": author_id,
                     "repaired_fields": [],
@@ -4482,7 +4479,12 @@ def repair_author(
                     },
                 }
 
-        _apply_author_resolution_result(db, author_id, resolution)
+        # Persist the resolution in its own gated unit BEFORE the refresh:
+        # _refresh_author_cache_impl self-gates and rolls back any uncommitted
+        # state on entry, so the resolution must already be committed (network
+        # for the resolution happened above, outside this section).
+        with write_section(db, label="repair_author apply resolution"):
+            _apply_author_resolution_result(db, author_id, resolution)
         after_state = {
             "openalex_id": _norm_oaid(str(resolution.openalex_id or current_openalex or "")) or None,
             "scholar_id": str(resolution.scholar_id or current_scholar or "").strip() or None,
@@ -4507,29 +4509,31 @@ def repair_author(
             except Exception as exc:
                 resolution_notes.append(f"refresh_failed:{type(exc).__name__}")
 
-        if repaired_fields:
-            _set_resolution_status(
-                db,
-                author_id,
-                resolution.status if resolution.status in _RESOLUTION_STATUSES else "resolved_auto",
-                "; ".join(note for note in resolution_notes if note) or "Repaired author identifiers",
-            )
-        elif current_openalex:
-            _set_resolution_status(
-                db,
-                author_id,
-                resolution.status if resolution.status in _RESOLUTION_STATUSES else "resolved_manual",
-                "; ".join(note for note in resolution_notes if note) or "Author already refreshable",
-            )
-        else:
-            _set_resolution_status(
-                db,
-                author_id,
-                "needs_manual_review",
-                "; ".join(note for note in resolution_notes if note) or "Automatic repair could not resolve a refreshable bridge",
-            )
+        # Terminal status write — gated unit (the refresh above ran on a clean
+        # connection and committed its own writes).
+        with write_section(db, label="repair_author final status"):
+            if repaired_fields:
+                _set_resolution_status(
+                    db,
+                    author_id,
+                    resolution.status if resolution.status in _RESOLUTION_STATUSES else "resolved_auto",
+                    "; ".join(note for note in resolution_notes if note) or "Repaired author identifiers",
+                )
+            elif current_openalex:
+                _set_resolution_status(
+                    db,
+                    author_id,
+                    resolution.status if resolution.status in _RESOLUTION_STATUSES else "resolved_manual",
+                    "; ".join(note for note in resolution_notes if note) or "Author already refreshable",
+                )
+            else:
+                _set_resolution_status(
+                    db,
+                    author_id,
+                    "needs_manual_review",
+                    "; ".join(note for note in resolution_notes if note) or "Automatic repair could not resolve a refreshable bridge",
+                )
 
-        db.commit()
         return {
             "author_id": author_id,
             "repaired_fields": repaired_fields,
