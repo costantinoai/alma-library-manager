@@ -41,6 +41,27 @@ interface RenderedLink extends Record<string, unknown> {
   source: string | RenderedNode
   target: string | RenderedNode
   value: number
+  edge_type: string
+}
+
+// Per-layer edge colours (Phase 3 / I-11). Canvas hex strings, not Tailwind
+// classes — the semantic identity is folio-blue (the primary neighbourhood
+// signal), with distinct hues for the corroborating layers. Exported so the
+// GraphPanel legend/filter chips stay in sync (one source of truth).
+export const LAYER_COLORS: Record<string, string> = {
+  semantic: 'rgba(59,130,246,0.45)', // folio blue — the headline neighbourhood
+  bibliographic_coupling: 'rgba(139,92,246,0.38)', // violet — shared literature
+  co_authorship: 'rgba(16,185,129,0.38)', // emerald — shared authors
+  topic: 'rgba(245,158,11,0.35)', // amber — topic overlay
+}
+const LAYER_FALLBACK_COLOR = 'rgba(203,213,225,0.30)'
+
+// Human labels for the typed edge layers, shown in the filter chips + legend.
+export const LAYER_LABELS: Record<string, string> = {
+  semantic: 'Semantic (nearest work)',
+  bibliographic_coupling: 'Shared references',
+  co_authorship: 'Shared authors',
+  topic: 'Topic',
 }
 
 interface ForceGraphProps {
@@ -56,6 +77,8 @@ interface ForceGraphProps {
   showWordCloud?: boolean
   clusters?: ClusterSummary[]
   physics?: GraphPhysicsConfig
+  /** Edge layers to render (Phase 3 / I-11). undefined ⇒ show every layer. */
+  visibleLayers?: string[]
 }
 
 export function ForceGraph({
@@ -71,6 +94,7 @@ export function ForceGraph({
   showWordCloud = false,
   clusters = [],
   physics,
+  visibleLayers,
 }: ForceGraphProps) {
   const fgRef = useRef<InstanceType<typeof ForceGraph2D>>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -134,10 +158,16 @@ export function ForceGraph({
         } satisfies RenderedNode,
       ]
     })
+    const layerFilter = visibleLayers ? new Set(visibleLayers) : null
     const links = data.edges.flatMap((edge) => {
       const source = String(edge.source || '')
       const target = String(edge.target || '')
       if (!source || !target || source === target || !seenNodeIds.has(source) || !seenNodeIds.has(target)) {
+        return []
+      }
+      const edgeType = String(edge.edge_type || 'semantic')
+      // Layer filter (I-11): hide edges whose layer is toggled off.
+      if (layerFilter && !layerFilter.has(edgeType)) {
         return []
       }
       return [
@@ -145,11 +175,12 @@ export function ForceGraph({
           source,
           target,
           value: Number.isFinite(edge.weight) ? edge.weight : 1,
+          edge_type: edgeType,
         } satisfies RenderedLink,
       ]
     })
     return { nodes, links }
-  }, [data, dimensions.width, dimensions.height, highlightSearch])
+  }, [data, dimensions.width, dimensions.height, highlightSearch, visibleLayers])
 
   useEffect(() => {
     const graph = fgRef.current
@@ -360,8 +391,11 @@ export function ForceGraph({
 
   const linkColor = useCallback((link: Record<string, unknown>) => {
     if (selectedClusterId === null) {
-      return '#CBD5E1'
+      // Default: colour by edge LAYER (I-11) so the typed neighbourhood reads
+      // at a glance — semantic vs shared-refs vs shared-authors.
+      return LAYER_COLORS[String(link.edge_type || 'semantic')] ?? LAYER_FALLBACK_COLOR
     }
+    // Cluster focus mode: highlight in-cluster edges, mute the rest.
     const sourceCluster = typeof (link.source as RenderedNode)?.cluster_id === 'number'
       ? (link.source as RenderedNode).cluster_id
       : null

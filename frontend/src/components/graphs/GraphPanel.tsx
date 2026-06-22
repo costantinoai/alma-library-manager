@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { api, refreshClusterLabels, type GraphData, type GraphNode } from '@/api/client'
-import { ForceGraph, type GraphPhysicsConfig } from './ForceGraph'
+import { ForceGraph, type GraphPhysicsConfig, LAYER_COLORS, LAYER_LABELS } from './ForceGraph'
 import { GraphControls } from './GraphControls'
 import { useToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -103,6 +103,8 @@ export function GraphPanel() {
   const [showTopics, setShowTopics] = useState(false)
   const [showWordCloud, setShowWordCloud] = useState(false)
   const [includeCorpus, setIncludeCorpus] = useState(false)
+  // Typed edge layers toggled OFF (Phase 3 / I-11). Empty ⇒ all layers shown.
+  const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
   const [physics, setPhysics] = useState<GraphPhysicsConfig>(DEFAULT_GRAPH_PHYSICS)
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -190,6 +192,24 @@ export function GraphPanel() {
   const graphErrorMessage = error instanceof Error ? error.message : 'Could not load graph data.'
   const method = String(data?.metadata?.method || '')
   const note = String(data?.metadata?.note || '')
+  // Typed edge layers (Phase 3 / I-11): per-layer counts from metadata drive
+  // the filter chips; `visibleLayers` is the set NOT toggled off.
+  const edgeLayers = (data?.metadata?.edge_layers || {}) as Record<string, number>
+  const layerKeys = useMemo(
+    () => Object.keys(edgeLayers).filter((key) => (edgeLayers[key] || 0) > 0),
+    [edgeLayers],
+  )
+  const visibleLayers = useMemo(
+    () => layerKeys.filter((key) => !hiddenLayers.has(key)),
+    [layerKeys, hiddenLayers],
+  )
+  const toggleLayer = (key: string) =>
+    setHiddenLayers((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   const nodeDetailTitle = activeView === 'paper-map' ? 'Selected Paper' : 'Selected Author'
   const nodeDetailSubtitle = activeView === 'paper-map'
     ? 'Paper-level metadata and how it sits inside the active cluster.'
@@ -302,19 +322,51 @@ export function GraphPanel() {
                 <p className="mt-1 text-xs text-slate-400">{graphErrorMessage}</p>
               </div>
             ) : data && data.nodes.length > 0 ? (
-              <ForceGraph
-                data={data}
-                height={560}
-                onNodeClick={handleNodeClick}
-                showLabels={showLabels}
-                highlightSearch={searchQuery}
-                selectedNodeId={selectedNode?.id || null}
-                selectedClusterId={selectedClusterId}
-                showClusterLabels={activeView === 'paper-map' && (showTopics || labelMode !== 'cluster')}
-                showWordCloud={activeView === 'paper-map' && showWordCloud}
-                clusters={clusters}
-                physics={physics}
-              />
+              <div className="flex flex-col gap-2">
+                {layerKeys.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-medium text-slate-500">Edge layers</span>
+                    {layerKeys.map((key) => {
+                      const active = !hiddenLayers.has(key)
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => toggleLayer(key)}
+                          aria-pressed={active}
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                            active
+                              ? 'border-edge-2 bg-surface-2 text-slate-700'
+                              : 'border-edge-1 bg-surface-1 text-slate-400'
+                          }`}
+                          title={`${active ? 'Hide' : 'Show'} ${LAYER_LABELS[key] || key} edges`}
+                        >
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ backgroundColor: active ? LAYER_COLORS[key] : 'transparent', border: active ? 'none' : '1px solid currentColor' }}
+                          />
+                          {LAYER_LABELS[key] || key}
+                          <span className="opacity-60">{edgeLayers[key]}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                <ForceGraph
+                  data={data}
+                  height={560}
+                  onNodeClick={handleNodeClick}
+                  showLabels={showLabels}
+                  highlightSearch={searchQuery}
+                  selectedNodeId={selectedNode?.id || null}
+                  selectedClusterId={selectedClusterId}
+                  showClusterLabels={activeView === 'paper-map' && (showTopics || labelMode !== 'cluster')}
+                  showWordCloud={activeView === 'paper-map' && showWordCloud}
+                  clusters={clusters}
+                  physics={physics}
+                  visibleLayers={layerKeys.length ? visibleLayers : undefined}
+                />
+              </div>
             ) : (
               <div className="flex h-[560px] flex-col items-center justify-center text-slate-500">
                 <Map className="mb-2 h-8 w-8" />

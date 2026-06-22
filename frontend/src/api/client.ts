@@ -2965,6 +2965,10 @@ export interface GraphEdge {
   source: string
   target: string
   weight: number
+  // Typed edge layer (Phase 3 / I-11): "semantic" (mutual-kNN in 768-d),
+  // "bibliographic_coupling" (shared refs), "co_authorship" (shared authors),
+  // or "topic" (paper↔topic overlay). The map filters by this.
+  edge_type?: string
 }
 
 export interface GraphData {
