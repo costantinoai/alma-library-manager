@@ -346,6 +346,7 @@ def cluster_publications(
     min_samples: Optional[int] = None,
     *,
     compute_stability: bool = False,
+    resolution: float = 1.0,
 ) -> ClusteringResult:
     """Cluster publication embeddings via the BERTopic recipe.
 
@@ -387,6 +388,10 @@ def cluster_publications(
             diagnostic (mean pairwise ARI across UMAP seeds). Off by default
             because it re-fits UMAP several times — enable it on the
             background REBUILD path, not on a synchronous read.
+        resolution: User-facing detail knob (default 1.0). >1 → finer (more,
+            smaller clusters); <1 → coarser. Scales the auto-derived
+            min_cluster_size by 1/resolution. Ignored if min_cluster_size is
+            passed explicitly.
 
     Returns:
         A :class:`ClusteringResult`. ``clusters`` are the real clusters only
@@ -407,7 +412,15 @@ def cluster_publications(
         # Finer-grained than the previous ⌈√n × 0.9⌉: for n=330 papers
         # this gives ~9 instead of ~16, which the leaf method then
         # explodes into 15-30 clusters depending on density.
-        min_cluster_size = max(3, min(12, int(round(math.sqrt(n_items) * 0.5))))
+        base = max(3, min(12, int(round(math.sqrt(n_items) * 0.5))))
+        # `resolution` is the user-facing detail knob (default 1.0): >1 makes
+        # finer clusters (smaller min size → more, smaller clusters), <1 makes
+        # coarser ones. min_cluster_size scales by 1/resolution. Floor at 2.
+        scale = 1.0 / resolution if resolution and resolution > 0 else 1.0
+        # Cap at ~a quarter of the corpus so the "coarser" direction can't demand
+        # a cluster bigger than the data supports (which would yield all-noise).
+        ceiling = max(3, n_items // 4)
+        min_cluster_size = max(2, min(int(round(base * scale)), ceiling))
     if min_samples is None:
         # min_samples is HDBSCAN's conservativeness knob: higher → more points
         # declared noise. It MUST be ≥ 2 — at min_samples=1 every point is a core
@@ -523,6 +536,7 @@ def cluster_publications(
         params={
             "min_cluster_size": int(min_cluster_size),
             "min_samples": int(min_samples),
+            "resolution": round(float(resolution), 3),
             "selection": "eom" if _HDBSCAN_AVAILABLE else "silhouette",
             "reduced_dim": (
                 int(cluster_substrate.shape[1]) if cluster_substrate.ndim == 2 else None

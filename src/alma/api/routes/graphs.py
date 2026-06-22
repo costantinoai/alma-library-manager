@@ -80,16 +80,18 @@ def get_paper_map(
     show_edges: bool = Query(True, description="Show edges between nodes"),
     show_topics: bool = Query(False, description="Show topic nodes overlaid on paper map"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
+    cluster_resolution: float = Query(1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get paper map visualization data.
 
     Default options (cluster labels, cluster colour, citation size, edges
-    on, no topic overlay) are served via the materialised-view layer:
-    cache hit returns instantly, fingerprint mismatch enqueues a
+    on, no topic overlay, resolution 1.0) are served via the materialised-view
+    layer: cache hit returns instantly, fingerprint mismatch enqueues a
     background rebuild and serves the prior payload meanwhile. Custom
-    option combinations bypass the cache and build inline — those are
-    rare, ad-hoc views where caching every variant would be wasteful.
+    option combinations (incl. a non-default cluster_resolution) bypass the
+    cache and build inline — those are rare, ad-hoc views where caching every
+    variant would be wasteful.
     """
     scope = Scope.parse(scope)
     is_default_options = (
@@ -98,6 +100,7 @@ def get_paper_map(
         and size_by == "citations"
         and show_edges
         and not show_topics
+        and abs(cluster_resolution - 1.0) < 1e-6
     )
 
     if is_default_options:
@@ -113,6 +116,7 @@ def get_paper_map(
         "size_by": size_by,
         "show_edges": show_edges,
         "scope": scope,
+        "cluster_resolution": cluster_resolution,
     }
     embeddings = _load_embeddings(conn, scope=scope)
     if embeddings and len(embeddings) >= 5:
@@ -1709,6 +1713,13 @@ def _build_embedding_paper_map(
     clustering_meta: dict[str, Any] = {}
     node_probabilities: dict[str, float] = {}
 
+    # A non-default cluster_resolution must actually RE-CLUSTER: the cached
+    # publication_clusters layout was built at resolution 1.0, so reusing it
+    # would silently ignore the requested detail level. Force a full recompute.
+    if abs(float(opts.get("cluster_resolution", 1.0) or 1.0) - 1.0) > 1e-6:
+        stale_ids = list(paper_ids)
+        stable_ids = []
+
     # 1) Fully fresh cache: render directly from persisted layout.
     if not stale_ids and len(stable_ids) == len(paper_ids):
         layout_mode = "embeddings_cached"
@@ -1789,7 +1800,12 @@ def _build_embedding_paper_map(
     if layout_mode == "embeddings_full":
         # Stability re-fits UMAP several times, so only pay for it on the
         # persisting REBUILD path — never on a synchronous custom-options GET.
-        clustering = cluster_publications(embeddings, compute_stability=persist)
+        # `cluster_resolution` (default 1.0) is the user-facing detail knob.
+        clustering = cluster_publications(
+            embeddings,
+            compute_stability=persist,
+            resolution=float(opts.get("cluster_resolution", 1.0) or 1.0),
+        )
         clusters = clustering.clusters
         node_probabilities = clustering.probabilities
         labels = label_clusters_tfidf(clusters, texts)

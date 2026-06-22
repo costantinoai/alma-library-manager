@@ -106,16 +106,19 @@ export function GraphPanel() {
   // Typed edge layers toggled OFF (Phase 3 / I-11). Empty ⇒ all layers shown.
   const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
   const [physics, setPhysics] = useState<GraphPhysicsConfig>(DEFAULT_GRAPH_PHYSICS)
+  // Cluster detail knob (Phase 3): 1.0 = default; >1 finer (more clusters),
+  // <1 coarser. A non-default value bypasses the MV cache (live re-cluster).
+  const [clusterResolution, setClusterResolution] = useState(1.0)
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
   const scope = includeCorpus ? 'corpus' : 'library'
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=${showEdges}&show_topics=${showTopics}&scope=${scope}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=${showEdges}&show_topics=${showTopics}&scope=${scope}&cluster_resolution=${clusterResolution}`
     : `?scope=${scope}`
 
   const { data, isLoading, error } = useQuery<GraphData>({
-    queryKey: ['graph', activeView, labelMode, colorBy, sizeBy, showEdges, showTopics, scope],
+    queryKey: ['graph', activeView, labelMode, colorBy, sizeBy, showEdges, showTopics, scope, clusterResolution],
     queryFn: () => api.get<GraphData>(`/graphs/${activeView}${queryParams}`),
     staleTime: 60_000,
   })
@@ -298,6 +301,8 @@ export function GraphPanel() {
             onShowWordCloudChange={setShowWordCloud}
             includeCorpus={includeCorpus}
             onIncludeCorpusChange={setIncludeCorpus}
+            clusterResolution={clusterResolution}
+            onClusterResolutionChange={setClusterResolution}
             physics={physics}
             onPhysicsChange={updatePhysics}
             onResetPhysics={() => setPhysics(DEFAULT_GRAPH_PHYSICS)}

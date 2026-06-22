@@ -47,6 +47,8 @@ interface GraphControlsProps {
   onShowWordCloudChange?: (show: boolean) => void
   includeCorpus?: boolean
   onIncludeCorpusChange?: (include: boolean) => void
+  clusterResolution?: number
+  onClusterResolutionChange?: (value: number) => void
   physics?: GraphPhysicsConfig
   onPhysicsChange?: (patch: Partial<GraphPhysicsConfig>) => void
   onResetPhysics?: () => void
@@ -149,6 +151,8 @@ export function GraphControls({
   onShowWordCloudChange,
   includeCorpus = false,
   onIncludeCorpusChange,
+  clusterResolution = 1.0,
+  onClusterResolutionChange,
   physics,
   onPhysicsChange,
   onResetPhysics,
@@ -310,6 +314,26 @@ export function GraphControls({
                     onCheckedChange={(checked) => onIncludeCorpusChange(checked === true)}
                   />
                   <span className="font-medium">Include full corpus</span>
+                </label>
+              )}
+              {onClusterResolutionChange && (
+                <label
+                  className="flex items-center gap-2 text-xs text-slate-600"
+                  title="Cluster detail. Higher splits the map into more, finer clusters; lower merges into fewer, broader ones. Non-default values re-cluster live (uncached)."
+                >
+                  <span className="font-medium whitespace-nowrap">Cluster detail</span>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={3}
+                    step={0.25}
+                    value={clusterResolution}
+                    onChange={(e) => onClusterResolutionChange(Number(e.target.value))}
+                    className="w-28 accent-alma-600"
+                  />
+                  <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-slate-700 tabular-nums">
+                    {clusterResolution.toFixed(2)}×
+                  </span>
                 </label>
               )}
             </div>
