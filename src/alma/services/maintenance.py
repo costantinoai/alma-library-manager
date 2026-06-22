@@ -626,7 +626,14 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "Fill author profile fields + affiliation evidence from OpenAlex, "
                 "ORCID, Semantic Scholar, and Crossref for authors that need it."
             ),
-            health_dimensions=("authors.followed_unresolved", "authors.affiliation_conflicts"),
+            # Truthful repair claim. Re-hydration refreshes affiliation EVIDENCE
+            # across sources, so it CAN clear stale `affiliation_conflicts`. It
+            # canNOT mint an OpenAlex id for an author that has none, so it does
+            # NOT heal `followed_unresolved` — those are an identity gap resolved
+            # per-author on the Authors page (retry / paste id / accept as
+            # unidentifiable), not by a bulk re-hydrate. Claiming it made the
+            # "maintenance due" count advertise a fix that never moved the number.
+            health_dimensions=("authors.affiliation_conflicts",),
             candidate_path="",
             operation_key="authors.rehydrate_metadata",
             job_id_prefix="maint_author_metadata",
@@ -660,7 +667,17 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "optional — bulk expansion is opt-in; a single Follow expands that "
                 "one author on the action path."
             ),
-            health_dimensions=("authors.followed_unresolved", "authors.no_match", "authors.resolution_error"),
+            # No health-dimension claim — on purpose. This op only acts on already
+            # RESOLVED authors (non-empty openalex_id) whose centroid is missing or
+            # >14 days stale (see _count_author_works). It structurally cannot touch
+            # `followed_unresolved` (no openalex_id by definition), `no_match`, or
+            # `resolution_error` (identity states healed per-author on the Authors
+            # page). Claiming those three was the root of the reported "maintenance
+            # due asks to backfill some authors but does not resolve" bug: the Health
+            # repair count never dropped because the run worked a disjoint population.
+            # It stays visible via its own count_fn as an honest freshness op that
+            # repairs no health gap; the orphaned identity dims fall to Diagnostics.
+            health_dimensions=(),
             candidate_path="",
             operation_key="authors.backfill_works",
             job_id_prefix="maint_author_works",

@@ -49,11 +49,15 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   )
 
   // Paper dims → drilldown modal; author dims → the Authors page's
-  // needs-attention section; anything else stays read-only.
+  // needs-attention section. We pass ?focus=needs-attention because that
+  // section sits BELOW the corpus table: a bare navigation lands above the
+  // fold and the gap reads as "nothing to fix". The param tells AuthorsPage to
+  // scroll it into view and flash it, so the drilldown lands on the card that
+  // actually resolves the gap (retry / pick affiliation / accept-unidentified).
   const handleOpen = canDrilldown(dim.key)
     ? onOpen
     : isAuthorDim
-      ? () => navigateTo('authors')
+      ? () => navigateTo('authors', { focus: 'needs-attention' })
       : undefined
 
   return <StatusRow severity={dim.severity} label={dim.label} metric={metric} onOpen={handleOpen} />

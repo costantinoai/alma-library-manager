@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { Plus, Users } from 'lucide-react'
@@ -31,6 +31,8 @@ import {
   useAuthorAttentionRouter,
 } from '@/components/authors/AuthorsNeedsAttentionSection'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { useHashRoute } from '@/lib/hashRoute'
+import { cn } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
 /**
@@ -78,6 +80,28 @@ export function AuthorsPage() {
     queryFn: () => listAuthorsNeedsAttention(50),
     staleTime: 60_000,
   })
+
+  // Health-drilldown landing. The Health page routes author-dimension
+  // drilldowns here with ?focus=needs-attention (DimensionStatusRow). That
+  // section renders below the corpus table, so without this it lands above the
+  // fold and the conflict the user clicked looks absent. Once the list has
+  // loaded (so the layout is settled), scroll it into view and flash an accent
+  // ring. Guarded to fire once per arrival so a manual scroll-up never re-snaps.
+  const route = useHashRoute()
+  const focusNeedsAttention = route.params.get('focus') === 'needs-attention'
+  const needsAttentionRef = useRef<HTMLDivElement>(null)
+  const [highlightAttention, setHighlightAttention] = useState(false)
+  const didFocusAttentionRef = useRef(false)
+  useEffect(() => {
+    if (!focusNeedsAttention || needsAttentionQuery.isLoading || didFocusAttentionRef.current) {
+      return
+    }
+    didFocusAttentionRef.current = true
+    needsAttentionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    setHighlightAttention(true)
+    const timer = setTimeout(() => setHighlightAttention(false), 2200)
+    return () => clearTimeout(timer)
+  }, [focusNeedsAttention, needsAttentionQuery.isLoading])
 
   const addAuthorMutation = useMutation({
     mutationFn: (payload: AddAuthorPayload) => api.post<Author>('/authors', payload),
@@ -278,7 +302,17 @@ export function AuthorsPage() {
 
       <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />
 
-      <div data-tour="authors-attention">
+      <div
+        ref={needsAttentionRef}
+        id="authors-needs-attention"
+        data-tour="authors-attention"
+        className={cn(
+          'scroll-mt-6 rounded-lg transition-shadow',
+          // Transient accent ring on arrival from a Health drilldown, so the
+          // just-scrolled section is unmistakable. Brand accent = folio.
+          highlightAttention && 'ring-2 ring-alma-folio ring-offset-2 ring-offset-surface-1',
+        )}
+      >
         <AuthorsNeedsAttentionSection
           rows={attentionRows}
           isLoading={needsAttentionQuery.isLoading}
