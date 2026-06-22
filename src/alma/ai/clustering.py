@@ -265,15 +265,13 @@ def cluster_publications(
     Falls back gracefully:
     * UMAP unavailable / N < 15 → cluster on normalised raw vectors.
     * HDBSCAN unavailable → silhouette-driven MiniBatchKMeans on the
-      reduced space, k ∈ [2, 30].
-    * HDBSCAN collapses to ≤ 3 clusters on a non-trivial corpus →
-      same kmeans fallback so the paper map is never reduced to a few
-      mega-clusters.
+      reduced space, k ∈ [2, 30] (a capability fallback only).
 
-    Defaults aim for a *finer* granularity than the previous EOM
-    pipeline: ``min_cluster_size = max(3, min(12, ⌈√n × 0.5⌉))`` plus
-    leaf method typically produces 2–3× more clusters at the same N,
-    which is what the user asked for. The 2-d display layout is
+    Cluster COUNT is inferred, not targeted (I-5): HDBSCAN excess-of-mass
+    selection with ``min_cluster_size = max(3, min(12, ⌈√n × 0.5⌉))`` returns
+    the structure the data actually supports — possibly a single cluster on a
+    tight corpus. We do NOT force a minimum count; manufacturing extra clusters
+    to look "richer" was the old bug. The 2-d display layout is
     computed independently by the caller via ``project_embeddings``;
     both pipelines read the same L2-normalised SPECTER2 input with
     cosine UMAP, so visual proximity BROADLY agrees with cluster
@@ -333,29 +331,35 @@ def cluster_publications(
         return kmeans.fit_predict(vecs)
 
     if _HDBSCAN_AVAILABLE:
+        # SOTA recipe (I-5): excess-of-mass ('eom') selection infers the NATURAL
+        # number of clusters instead of over-splitting (the old 'leaf' method),
+        # and we no longer force a minimum cluster count. If the corpus has
+        # weak/no structure HDBSCAN may return one cluster (or mostly noise) —
+        # that honest answer stands. The previous "≤3 clusters on n≥18 → force ≥4
+        # k-means clusters" rescue manufactured structure the data didn't support.
+        # prediction_data=True enables approximate_predict for the incremental path.
         clusterer = _hdbscan.HDBSCAN(
             min_cluster_size=min_cluster_size,
             min_samples=min_samples,
             metric="euclidean",
-            cluster_selection_method="leaf",
+            cluster_selection_method="eom",
+            prediction_data=True,
         )
         labels = clusterer.fit_predict(cluster_substrate)
-        cluster_count = len({int(l) for l in labels if int(l) >= 0})
-
-        # Even with leaf method, HDBSCAN sometimes refuses to split a
-        # tightly-packed corpus. Fall back to silhouette-driven kmeans
-        # so the paper map is never reduced to a few mega-clusters.
-        if n_items >= 18 and cluster_count <= 3:
-            labels = _run_kmeans(cluster_substrate, n_items, lower_bound=4)
     else:
+        # HDBSCAN unavailable: silhouette-driven k-means is the only option (k≥2
+        # only because silhouette is undefined for k<2 — a capability floor, NOT a
+        # "more clusters is better" target).
         labels = _run_kmeans(cluster_substrate, n_items, lower_bound=2)
 
     labels = np.array(labels, dtype=np.int32)
 
-    # Re-attach HDBSCAN noise points to the nearest cluster centroid so
-    # the graph has fewer unlabeled gray nodes. Done in the SAME reduced
-    # space the clustering ran in, so the nearest-centroid choice is
-    # consistent with the cluster assignment that produced the centroids.
+    # Re-attach HDBSCAN noise points to the nearest cluster centroid in the SAME
+    # reduced space. NOTE (I-6, pending): this erases the outlier/uncertainty
+    # signal — a follow-up SOTA pass will instead RETAIN low-confidence points as
+    # an explicit "unclustered" group (requires the caller to render them
+    # distinctly, not default-to-cluster-0). Kept for now so every node gets a
+    # colored group and the caller's assignment map stays total.
     if np.any(labels == -1):
         valid_mask = labels >= 0
         if np.any(valid_mask):

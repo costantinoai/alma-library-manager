@@ -17,6 +17,12 @@ from pydantic import BaseModel
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
 from alma.application import materialized_views as mv
+from alma.ai.graph_versions import (
+    CLUSTERING_ALGO_VERSION,
+    LABELLING_VERSION,
+    PROJECTION_ALGO_VERSION,
+    with_version,
+)
 from alma.config import get_db_path
 from alma.core.scope import Scope
 
@@ -318,9 +324,23 @@ def _rebuild_graphs_impl(
     _mark_progress(0, "clear_cache")
     try:
         conn.execute("DELETE FROM graph_cache")
+        # Force a full RE-CLUSTER for this scope: drop its cached
+        # publication_clusters layout so the paper_map phase re-runs
+        # cluster_publications with the CURRENT algorithm. Without this the
+        # incremental path reused the stale cached layout (I-7), so a clustering
+        # change (I-5: eom / no-forced-K) never reached the rebuilt map — i.e.
+        # "Rebuild" didn't actually re-cluster.
+        scope_filter = scope.paper_filter("p", leading_and=False) or "1=1"
+        try:
+            conn.execute(
+                "DELETE FROM publication_clusters WHERE paper_id IN "
+                f"(SELECT p.id FROM papers p WHERE {scope_filter})"
+            )
+        except sqlite3.OperationalError:
+            pass
         _flush()
         if job_id:
-            add_job_log(job_id, "Cleared existing graph cache", step="clear_cache")
+            add_job_log(job_id, "Cleared graph cache + scope layout (forces full recluster)", step="clear_cache")
     except sqlite3.OperationalError:
         if job_id:
             add_job_log(job_id, "Graph cache table missing; skipping clear step", step="clear_cache")
@@ -2304,27 +2324,32 @@ _TOPIC_MAP_FP_SQL = """
 """
 
 
+# I-4: stamp the clustering/projection/labelling versions into the paper-map +
+# author-network fingerprints so a CHANGE to the ML (e.g. the I-5 eom/no-forced-K
+# clustering fix) invalidates the cached layout — input data alone can't, so a
+# corrected algorithm would otherwise keep serving the old manufactured clusters.
+_GRAPH_ML_VERSIONS = (CLUSTERING_ALGO_VERSION, PROJECTION_ALGO_VERSION, LABELLING_VERSION)
 mv.register(mv.View(
     key="graph:paper_map:library",
-    fingerprint_sql=_PAPER_MAP_LIBRARY_FP_SQL,
+    fingerprint_sql=with_version(_PAPER_MAP_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_paper_map_payload(conn, scope="library"),
     operation_key="materialize.graph.paper_map.library",
 ))
 mv.register(mv.View(
     key="graph:paper_map:corpus",
-    fingerprint_sql=_PAPER_MAP_CORPUS_FP_SQL,
+    fingerprint_sql=with_version(_PAPER_MAP_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_paper_map_payload(conn, scope="corpus"),
     operation_key="materialize.graph.paper_map.corpus",
 ))
 mv.register(mv.View(
     key="graph:author_network:library",
-    fingerprint_sql=_AUTHOR_NETWORK_LIBRARY_FP_SQL,
+    fingerprint_sql=with_version(_AUTHOR_NETWORK_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
     operation_key="materialize.graph.author_network.library",
 ))
 mv.register(mv.View(
     key="graph:author_network:corpus",
-    fingerprint_sql=_AUTHOR_NETWORK_CORPUS_FP_SQL,
+    fingerprint_sql=with_version(_AUTHOR_NETWORK_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
     operation_key="materialize.graph.author_network.corpus",
 ))

@@ -35,7 +35,8 @@ PROJECTION_ALGO_VERSION = "2026.07-1"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
-CLUSTERING_ALGO_VERSION = "2026.07-1"
+# 2026.07-2: HDBSCAN leaf→eom + removed the forced-K≥4 rescue (I-5).
+CLUSTERING_ALGO_VERSION = "2026.07-2"
 
 # Cluster-label generation (ai/cluster_labels.py): representative selection,
 # c-TF-IDF terms, the label-signature content hash.
