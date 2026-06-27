@@ -18,10 +18,19 @@ import { StatusRow } from './StatusRow'
 
 export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOpen: () => void }) {
   const isAuthorDim = dim.key.startsWith('authors.')
-  const isCoverage = dim.coverage_pct != null
+  const isError = dim.state === 'error'
+  const isCoverage = !isError && dim.coverage_pct != null
   const pct = Math.round(dim.coverage_pct ?? 0)
 
-  const metric = isCoverage ? (
+  // H-2: a failed assessor must read as "couldn't measure", never a healthy 0.
+  const metric = isError ? (
+    <span
+      className="shrink-0 text-xs italic text-warning-600"
+      title="The health assessor for this dimension failed — see the server log. This is NOT a measured zero."
+    >
+      couldn’t measure
+    </span>
+  ) : isCoverage ? (
     <span className="flex items-center gap-2">
       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200" aria-hidden>
         <span
@@ -34,8 +43,8 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   ) : (
     <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums text-slate-600">
       <span>
-        {dim.count.toLocaleString()}
-        {dim.total > 0 ? <span className="text-slate-400"> / {dim.total.toLocaleString()}</span> : null}
+        {(dim.count ?? 0).toLocaleString()}
+        {(dim.total ?? 0) > 0 ? <span className="text-slate-400"> / {(dim.total ?? 0).toLocaleString()}</span> : null}
       </span>
       {dim.exhausted ? (
         <span

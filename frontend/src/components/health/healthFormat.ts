@@ -92,7 +92,7 @@ export function canDrilldown(key: string): boolean {
 /** Worst-first ordering (critical → warning → info → ok), then larger count first. */
 export function sortBySeverity(dims: HealthDimension[]): HealthDimension[] {
   return [...dims].sort(
-    (a, b) => severityRank(a.severity) - severityRank(b.severity) || b.count - a.count,
+    (a, b) => severityRank(a.severity) - severityRank(b.severity) || (b.count ?? 0) - (a.count ?? 0),
   )
 }
 

@@ -28,15 +28,39 @@ not for every GET).
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable, Tuple
 
 from alma.application import materialized_views as mv
 from alma.core.sql_helpers import canonical_paper_filter
 
+logger = logging.getLogger(__name__)
+
 # embeddings_ready flips true at this coverage % (user decision 2026-05-25).
 EMBEDDINGS_READY_THRESHOLD = 80.0
+
+# Dimension measurement states (H-2). The UI renders these distinctly so a real
+# failure can never masquerade as a healthy "0". ``measured`` is the normal path.
+DIM_MEASURED = "measured"
+DIM_ERROR = "error"  # the assessor raised — count is unknown, NOT zero
+
+
+def _safe_assess(label: str, fn: Callable[[], Any]) -> Tuple[Any, bool]:
+    """Run a health assessor; on failure log LOUDLY and signal it (H-2).
+
+    Returns ``(value, ok)``. ``ok=False`` means the assessor raised — the caller
+    MUST render a typed ``error`` state, never a healthy zero. A missing table /
+    malformed migration / SQL regression must look broken, not green (the
+    project's no-silent-failure rule). The traceback goes to the log with the
+    assessor label so the failure is actionable.
+    """
+    try:
+        return fn(), True
+    except Exception as exc:  # noqa: BLE001 — deliberately broad: ANY failure must be loud, not silent
+        logger.error("health assessor %r failed: %s", label, exc, exc_info=True)
+        return None, False
 
 HEALTH_CORPUS_VIEW_KEY = "health:corpus"
 
@@ -252,12 +276,17 @@ def _dimension(
     scope: str = "corpus",
     extra_actions: list[dict[str, str]] | None = None,
     exhausted: int | None = None,
+    state: str = DIM_MEASURED,
 ) -> dict[str, Any]:
     """Build one uniform dimension record (the shape every surface reads).
 
     ``exhausted`` (when given) is the subset of this gap that no repair op can
     fix — tried and terminal (e.g. Semantic Scholar has no vector for them). The
     UI splits it out so the user isn't surprised that Run-now skips them.
+
+    ``state`` (H-2): ``measured`` normally, ``error`` when the assessor failed —
+    then ``count`` is ``None`` (unknown), NOT ``0``, so the UI shows "couldn't
+    measure" instead of a misleading healthy zero.
     """
     actions = list(_REPAIR_ACTIONS.get(repair_task or "", []))
     if extra_actions:
@@ -266,8 +295,8 @@ def _dimension(
         "key": key,
         "entity": entity,
         "label": label,
-        "count": int(count),
-        "total": int(total),
+        "count": int(count) if count is not None else None,
+        "total": int(total) if total is not None else None,
         "coverage_pct": coverage_pct,
         "severity": severity,
         "explanation": explanation,
@@ -276,6 +305,7 @@ def _dimension(
         "actions": actions,
         "scope": scope,
         "exhausted": int(exhausted) if exhausted is not None else None,
+        "state": state,
     }
 
 
@@ -357,6 +387,10 @@ def embedding_coverage(
     (as it did before) inflated both counts with papers the drilldown could never
     show, and could even push the numerator above the denominator.
     """
+    # H-2: a SQL/schema failure must NOT silently read as 0% healthy coverage.
+    # Log loudly and flag ``error`` so callers render a "couldn't measure" state
+    # (coverage_pct=None, ready=False) — never a misleading zero.
+    error: str | None = None
     try:
         if model is None:
             from alma.discovery.similarity import get_active_embedding_model
@@ -372,41 +406,47 @@ def embedding_coverage(
             (model,),
         ).fetchone()
         emb_count = int((emb["c"] if emb else 0) or 0)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.error("embedding_coverage: embedding count failed: %s", exc, exc_info=True)
         model = ""
         emb_count = 0
+        error = "embedding count failed"
     try:
         pub = conn.execute(
             f"SELECT COUNT(*) AS c FROM papers p WHERE {canonical_paper_filter('p')}"
         ).fetchone()
         pub_count = int((pub["c"] if pub else 0) or 0)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.error("embedding_coverage: paper count failed: %s", exc, exc_info=True)
         pub_count = 0
+        error = "paper count failed"
     pct = round((emb_count / pub_count * 100.0), 1) if pub_count > 0 else 0.0
     return {
         "active_model": model,
         "embeddings_count": emb_count,
         "papers_count": pub_count,
-        "coverage_pct": pct,
-        "ready": pct >= EMBEDDINGS_READY_THRESHOLD,
+        "coverage_pct": None if error else pct,
+        "ready": error is None and pct >= EMBEDDINGS_READY_THRESHOLD,
+        "error": error,
     }
 
 
 def _count_canonical_orphans(conn: sqlite3.Connection) -> int:
-    """Papers whose ``canonical_paper_id`` points at a non-existent row."""
-    try:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS c FROM papers p
-            WHERE COALESCE(NULLIF(TRIM(p.canonical_paper_id), ''), '') != ''
-              AND NOT EXISTS (
-                  SELECT 1 FROM papers c WHERE c.id = p.canonical_paper_id
-              )
-            """
-        ).fetchone()
-        return int((row["c"] if row else 0) or 0)
-    except sqlite3.OperationalError:
-        return 0
+    """Papers whose ``canonical_paper_id`` points at a non-existent row.
+
+    No internal swallow — the caller runs this through ``_safe_assess`` (H-2), so
+    a failure is logged loudly and surfaced as an ``error`` state, not a silent 0.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS c FROM papers p
+        WHERE COALESCE(NULLIF(TRIM(p.canonical_paper_id), ''), '') != ''
+          AND NOT EXISTS (
+              SELECT 1 FROM papers c WHERE c.id = p.canonical_paper_id
+          )
+        """
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
 
 
 # --------------------------------------------------------------------------
@@ -428,14 +468,23 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         _count_s2_fetch_terminal,
     )
 
-    enr = build_enrichment_status(conn)
+    # H-2: every assessor runs through _safe_assess, so a failure becomes a typed
+    # ``error`` dimension (loud in the log, count=None in the UI) — never a
+    # healthy-looking zero. The per-field metadata dims all derive from ``enr``,
+    # so they share its state.
+    enr, enr_ok = _safe_assess("enrichment_status", lambda: build_enrichment_status(conn))
+    enr = enr or {}
+    enr_state = DIM_MEASURED if enr_ok else DIM_ERROR
     papers_total = int(enr.get("papers_total") or 0)
     missing = enr.get("missing") or {}
-    coverage = embedding_coverage(conn)
-    s2_missing = _count_s2_fetch_candidates(conn)
-    s2_terminal = _count_s2_fetch_terminal(conn)  # tried, no vector at S2 — only local fill helps
-    local_computable = _count_local_specter2_candidates(conn)
-    orphans = _count_canonical_orphans(conn)
+    coverage = embedding_coverage(conn)  # carries its own ``error`` flag
+    coverage_state = DIM_ERROR if coverage.get("error") else DIM_MEASURED
+    s2_missing, s2_ok = _safe_assess("s2_fetch_candidates", lambda: _count_s2_fetch_candidates(conn))
+    s2_terminal, _ = _safe_assess("s2_fetch_terminal", lambda: _count_s2_fetch_terminal(conn))
+    local_computable, local_ok = _safe_assess(
+        "local_specter2_candidates", lambda: _count_local_specter2_candidates(conn)
+    )
+    orphans, orphans_ok = _safe_assess("canonical_orphans", lambda: _count_canonical_orphans(conn))
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
 
@@ -447,9 +496,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             key="identity.unresolved",
             entity="identity",
             label="Unresolved identity",
-            count=without_oa,
+            count=without_oa if enr_ok else None,
             total=papers_total,
-            severity=_severity_from_fraction(without_oa, papers_total),
+            state=enr_state,
+            severity=_severity_from_fraction(without_oa, papers_total) if enr_ok else "warning",
             explanation=(
                 f"{without_oa} papers aren't resolved to an OpenAlex id, so they "
                 "lack rich metadata, citations, and topics. Resolve missing identity "
@@ -461,7 +511,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             repair_task="title_resolution",
         )
     )
-    if orphans:
+    if orphans_ok and orphans:  # on assessor failure: skip (already loud in the log), don't claim 0
         dims.append(
             _dimension(
                 key="identity.canonical_orphans",
@@ -488,10 +538,11 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 key=f"papers.missing_{field}",
                 entity="paper",
                 label=label,
-                count=count,
+                count=count if enr_ok else None,
                 total=papers_total,
-                severity=_severity_from_fraction(count, papers_total),
-                explanation=f"{count} papers {why}.",
+                state=enr_state,
+                severity=_severity_from_fraction(count, papers_total) if enr_ok else "warning",
+                explanation=(f"{count} papers {why}." if enr_ok else "Couldn't measure — see logs."),
                 impact=impact,
                 repair_task=repair,
             )
@@ -503,13 +554,20 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             key="embeddings.coverage",
             entity="embedding",
             label="Embedding coverage",
-            count=coverage["embeddings_count"],
-            total=coverage["papers_count"],
+            count=coverage["embeddings_count"] if coverage_state == DIM_MEASURED else None,
+            total=coverage["papers_count"] if coverage_state == DIM_MEASURED else None,
             coverage_pct=coverage["coverage_pct"],
-            severity=_coverage_severity(coverage["coverage_pct"]),
+            state=coverage_state,
+            severity=(
+                _coverage_severity(coverage["coverage_pct"])
+                if coverage_state == DIM_MEASURED
+                else "warning"
+            ),
             explanation=(
                 f"{coverage['coverage_pct']}% of papers have a vector for the active "
                 f"model. Ready at ≥{int(EMBEDDINGS_READY_THRESHOLD)}%."
+                if coverage_state == DIM_MEASURED
+                else "Couldn't measure embedding coverage — see logs."
             ),
             impact="Discovery similarity and the paper map depend on embedding coverage.",
             # Coverage itself isn't a single runner; it improves by fetching S2
@@ -523,13 +581,16 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             key="embeddings.s2_vector_missing",
             entity="embedding",
             label="Fetchable S2 vectors",
-            count=s2_missing,
+            count=s2_missing if s2_ok else None,
             total=papers_total,
-            severity=_severity_from_fraction(s2_missing, papers_total),
+            state=DIM_MEASURED if s2_ok else DIM_ERROR,
+            severity=_severity_from_fraction(s2_missing, papers_total) if s2_ok else "warning",
             explanation=(
                 f"{s2_missing} papers have a DOI/S2 id and could fetch a precomputed "
                 "SPECTER2 vector from Semantic Scholar. Papers that Semantic Scholar "
                 "has no vector for fall through to local compute below."
+                if s2_ok
+                else "Couldn't measure — see logs."
             ),
             impact="Fetched vectors are higher quality than local fallbacks and need no GPU.",
             repair_task="s2_vector",
@@ -543,15 +604,18 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             key="embeddings.local_computable",
             entity="embedding",
             label="Locally computable embeddings",
-            count=local_computable,
+            count=local_computable if local_ok else None,
             total=papers_total,
-            severity=_severity_from_fraction(local_computable, papers_total),
+            state=DIM_MEASURED if local_ok else DIM_ERROR,
+            severity=_severity_from_fraction(local_computable, papers_total) if local_ok else "warning",
             explanation=(
                 f"{local_computable} papers have a title + abstract and can be embedded "
                 "locally with SPECTER2 — this is the only fix for papers Semantic Scholar "
                 "has no vector for. Papers missing a title or abstract can't be embedded "
                 "at all; fix those via metadata rehydration first (see the missing-abstract "
                 "/ missing-title gaps above)."
+                if local_ok
+                else "Couldn't measure — see logs."
             ),
             impact="Covers papers Semantic Scholar can't supply a vector for.",
             repair_task="embedding",
@@ -616,7 +680,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # one rebuild so the corrected coverage lands.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v5',
+      'health-logic-v6',
       (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
@@ -687,24 +751,29 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             n_no_match = int(row["n_no_match"] or 0)
             n_review = int(row["n_review"] or 0)
             n_followed_unresolved = int(row["n_followed_unresolved"] or 0)
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        # Documented degradation: the id_resolution_* columns may not exist yet on
+        # a mid-migration DB → zeros are the right answer there. But log it (H-2)
+        # so a real SQL regression isn't fully silent.
+        logger.warning("author identity counts unavailable (schema not ready?): %s", exc)
 
     # Conflict counts come from the same helpers the endpoint uses, so the
-    # numbers can't diverge from the rows it renders.
-    merge_conflicts = affiliation_conflicts = 0
-    try:
+    # numbers can't diverge from the rows it renders. H-2: a failed assessor must
+    # surface an ``error`` state (loud in the log), never a healthy 0.
+    def _count_merge_conflicts() -> int:
         from alma.application.author_merge import list_unresolved_conflicts
 
-        merge_conflicts = len(list_unresolved_conflicts(conn) or [])
-    except Exception:
-        pass
-    try:
+        return len(list_unresolved_conflicts(conn) or [])
+
+    def _count_affiliation_conflicts() -> int:
         from alma.application.author_affiliation import list_affiliation_conflicts
 
-        affiliation_conflicts = len(list_affiliation_conflicts(conn, limit=500) or [])
-    except Exception:
-        pass
+        return len(list_affiliation_conflicts(conn, limit=500) or [])
+
+    merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
+    affiliation_conflicts, affil_ok = _safe_assess(
+        "author_affiliation_conflicts", _count_affiliation_conflicts
+    )
 
     dims: list[dict[str, Any]] = [
         _dimension(
@@ -758,12 +827,15 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             key="authors.merge_conflicts",
             entity="author",
             label="Unresolved merge conflicts",
-            count=merge_conflicts,
+            count=merge_conflicts if merge_ok else None,
             total=total,
-            severity="warning" if merge_conflicts else "ok",
+            state=DIM_MEASURED if merge_ok else DIM_ERROR,
+            severity=("warning" if merge_conflicts else "ok") if merge_ok else "warning",
             explanation=(
                 f"{merge_conflicts} merges kept a conflicting hard identifier "
                 "(orcid / scholar id) that needs a human decision."
+                if merge_ok
+                else "Couldn't measure merge conflicts — see logs."
             ),
             impact="A wrong identifier can mis-attribute papers across people.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -772,12 +844,15 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             key="authors.affiliation_conflicts",
             entity="author",
             label="Affiliation conflicts",
-            count=affiliation_conflicts,
+            count=affiliation_conflicts if affil_ok else None,
             total=total,
-            severity="info" if affiliation_conflicts else "ok",
+            state=DIM_MEASURED if affil_ok else DIM_ERROR,
+            severity=("info" if affiliation_conflicts else "ok") if affil_ok else "warning",
             explanation=(
                 f"{affiliation_conflicts} authors have affiliation evidence that "
                 "disagrees across sources."
+                if affil_ok
+                else "Couldn't measure affiliation conflicts — see logs."
             ),
             impact="The displayed institution may be wrong until reviewed.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -792,12 +867,14 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": {
             "authors_total": total,
+            # `or 0`: a failed conflict assessor (None) must not crash the total —
+            # its dimension already carries the error state.
             "attention_total": n_error
             + n_no_match
             + n_review
             + n_followed_unresolved
-            + merge_conflicts
-            + affiliation_conflicts,
+            + (merge_conflicts or 0)
+            + (affiliation_conflicts or 0),
             "dimensions_by_severity": by_severity,
         },
         "dimensions": dims,
@@ -810,7 +887,7 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
 # output shape / dimensions / actions change.
 _HEALTH_AUTHORS_FINGERPRINT_SQL = """
     SELECT
-      'health-authors-v1',
+      'health-authors-v2',
       (SELECT COUNT(*) FROM authors),
       (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
       (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),
@@ -975,7 +1052,11 @@ def dimension_items(
 
     try:
         rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as exc:
+        # H-2: an empty drilldown must not silently read as "no affected papers"
+        # when the query actually FAILED. Log loudly; the caller can still render
+        # an empty list, but the failure is now visible/actionable.
+        logger.error("dimension_items drilldown %r failed: %s", key, exc, exc_info=True)
         return []
 
     out: list[dict[str, Any]] = []

@@ -215,8 +215,10 @@ export interface HealthDimension {
   key: string
   entity: string
   label: string
-  count: number
-  total: number
+  /** null when `state === 'error'` — the assessor failed, so the count is
+   *  UNKNOWN (render "couldn't measure", never a misleading 0). */
+  count: number | null
+  total: number | null
   coverage_pct: number | null
   severity: 'ok' | 'info' | 'warning' | 'critical'
   explanation: string
@@ -226,6 +228,8 @@ export interface HealthDimension {
   scope: 'corpus' | 'library' | string
   /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
   exhausted: number | null
+  /** H-2: 'measured' normally; 'error' when the assessor raised (count is null). */
+  state?: 'measured' | 'error'
 }
 
 /** GET /insights/health — flattened MV envelope (payload fields + SWR flags). */
