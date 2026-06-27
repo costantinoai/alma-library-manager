@@ -268,7 +268,19 @@ def recompute_display_affiliation(conn: sqlite3.Connection, author_id: str) -> A
 
 
 def list_affiliation_conflicts(conn: sqlite3.Connection, *, limit: int = 100) -> list[dict[str, Any]]:
-    """Return current evidence conflicts for Authors needs-attention."""
+    """Return current evidence conflicts for Authors needs-attention.
+
+    ``limit`` caps the RETURNED list only — it must NOT cap the author scan.
+    The old query applied ``LIMIT`` to the candidate scan (ordered by name), so
+    which conflicts were *detected* depended on the limit: a conflict on a
+    late-alphabet author was never examined at ``limit=50`` but was at
+    ``limit=500``. That made the Health "Affiliation conflicts" count
+    (``assess_authors`` calls with limit=500) disagree with the
+    ``/authors/needs-attention`` list (limit=50) — the count showed 1 while the
+    drilldown showed "everything resolved". We now scan EVERY author with
+    affiliation evidence and cap only the collected results, so detection is
+    stable regardless of the caller's limit.
+    """
     try:
         rows = conn.execute(
             """
@@ -277,9 +289,7 @@ def list_affiliation_conflicts(conn: sqlite3.Connection, *, limit: int = 100) ->
             JOIN author_affiliation_evidence ev ON ev.author_id = a.id
             WHERE COALESCE(a.status, 'active') != 'removed'
             ORDER BY a.name ASC
-            LIMIT ?
-            """,
-            (max(1, int(limit or 100)),),
+            """
         ).fetchall()
     except sqlite3.OperationalError:
         return []
