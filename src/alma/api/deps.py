@@ -237,6 +237,14 @@ def init_db_schema() -> None:
                     canonical_paper_id TEXT,
                     preprint_source TEXT, -- arxiv / biorxiv / psyrxiv / osf / chemrxiv
 
+                    -- Paper components (part-of, NOT dedup): a figure / SI file
+                    -- / author-response / dataset points at its parent paper
+                    -- and is hidden from the Feed list (shown in the paper
+                    -- popup instead). NULL/NULL = a normal standalone paper.
+                    -- See alma.core.components.
+                    parent_paper_id TEXT,
+                    component_type TEXT, -- figure | supplementary | peer_review | dataset
+
                     -- Library metadata (populated when status = 'library')
                     rating INTEGER DEFAULT 0,
                     notes TEXT,
@@ -270,6 +278,7 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_papers_signal ON papers(global_signal_score DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_papers_resolution ON papers(openalex_resolution_status)",
                 "CREATE INDEX IF NOT EXISTS idx_papers_canonical ON papers(canonical_paper_id) WHERE canonical_paper_id IS NOT NULL",
+                "CREATE INDEX IF NOT EXISTS idx_papers_parent ON papers(parent_paper_id) WHERE parent_paper_id IS NOT NULL",
             ]:
                 _safe_execute(conn, idx_sql)
 

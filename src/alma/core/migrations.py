@@ -779,6 +779,38 @@ def _m_0021_publication_clusters_scope(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE publication_clusters_legacy")
 
 
+def _m_0022_papers_component_columns(conn: sqlite3.Connection) -> None:
+    """Paper components (parent/child, 2026-06-27): a figure / supporting-info
+    file / author-response / dataset is a *part of* a paper, not a paper to
+    read. ``component_type`` (figure | supplementary | peer_review | dataset)
+    marks it; ``parent_paper_id`` links it to its parent row. Distinct from
+    ``canonical_paper_id`` (dedup — "same work twice"); this is part-of. Both
+    NULL for a normal paper. See alma.core.components."""
+    _add_columns(
+        conn,
+        "papers",
+        {
+            "parent_paper_id": "TEXT",
+            "component_type": "TEXT",
+        },
+    )
+
+
+def _m_0023_influential_citation_count_heal(conn: sqlite3.Connection) -> None:
+    """Heal legacy NULL ``influential_citation_count`` to its DDL default (0).
+
+    The column is declared ``INTEGER DEFAULT 0`` and ``PaperResponse`` requires a
+    non-null int, but a handful of legacy rows (papers never touched by the S2
+    enrichment path) hold NULL — which 500s ``GET /papers/{id}/details`` (the
+    popup). Forward-only: bring old data to the current contract once."""
+    if not _table_exists(conn, "papers"):
+        return
+    conn.execute(
+        "UPDATE papers SET influential_citation_count = 0 "
+        "WHERE influential_citation_count IS NULL"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -801,6 +833,8 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (19, "follow_state_heal", _m_0019_follow_state_heal),
     (20, "topic_aliases_legacy_shape", _m_0020_topic_aliases_legacy_shape),
     (21, "publication_clusters_scope", _m_0021_publication_clusters_scope),
+    (22, "papers_component_columns", _m_0022_papers_component_columns),
+    (23, "influential_citation_count_heal", _m_0023_influential_citation_count_heal),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
