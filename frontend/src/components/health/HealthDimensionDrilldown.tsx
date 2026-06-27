@@ -25,6 +25,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { Input } from '@/components/ui/input'
 import { AsyncButton } from '@/components/settings/primitives'
+import { ConfirmDialog } from '@/components/library'
 import {
   bulkRemoveFromLibrary,
   estimateMaintenanceOperation,
@@ -127,12 +128,16 @@ export function HealthDimensionDrilldown({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // H-9: bulk removal is gated behind an explicit confirm (it changes Library
+  // membership and writes a negative signal — see the dialog copy below).
+  const [confirmBulkRemove, setConfirmBulkRemove] = useState(false)
 
   // Reset transient UI state whenever we open a different dimension.
   useEffect(() => {
     setSelected(new Set())
     setEditingId(null)
     setDraft('')
+    setConfirmBulkRemove(false)
   }, [dim?.key])
 
   const itemsQuery = useInfiniteQuery({
@@ -228,6 +233,7 @@ export function HealthDimensionDrilldown({
     .map((i) => i.paper_id)
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 overflow-hidden bg-surface-1 p-0">
         {dim ? (
@@ -287,7 +293,8 @@ export function HealthDimensionDrilldown({
                         icon={<Trash2 className="h-4 w-4" />}
                         pending={removeSelectedMutation.isPending}
                         className="text-slate-500 hover:text-critical-700"
-                        onClick={() => removeSelectedMutation.mutate(selectedLibraryIds)}
+                        // H-9: confirm before a bulk membership change.
+                        onClick={() => setConfirmBulkRemove(true)}
                       >
                         Remove {selectedLibraryIds.length}
                       </AsyncButton>
@@ -456,5 +463,26 @@ export function HealthDimensionDrilldown({
         ) : null}
       </DialogContent>
     </Dialog>
+
+    {/* H-9: explicit consequence disclosure before a bulk Library removal. The
+        shared soft-remove service (status='removed') keeps the row + provenance
+        and records a negative preference signal — so the copy is truthful and we
+        add NO page-specific removal behavior, just the gate. */}
+    <ConfirmDialog
+      open={confirmBulkRemove}
+      onOpenChange={setConfirmBulkRemove}
+      title={`Remove ${selectedLibraryIds.length} paper${selectedLibraryIds.length === 1 ? '' : 's'} from Library?`}
+      description={
+        `They leave your Library but are NOT deleted — the rows and their provenance ` +
+        `are kept (recoverable from the Corpus explorer), and the removal is recorded ` +
+        `as a negative preference signal that nudges Discovery away from similar papers.`
+      }
+      isPending={removeSelectedMutation.isPending}
+      onConfirm={() => {
+        removeSelectedMutation.mutate(selectedLibraryIds)
+        setConfirmBulkRemove(false)
+      }}
+    />
+    </>
   )
 }
