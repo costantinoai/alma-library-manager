@@ -2449,6 +2449,16 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
 # Paper map (per scope). Fingerprint covers Library/corpus paper count
 # and last update, embedding count for the active model, and the active
 # model itself — any of these change → cached layout is stale.
+# I-4: the fingerprint must shift on EVERY input the rendered map reads, not just
+# the paper set. Two were missing and are added here:
+#   * the embedding-recompute watermark (MAX created_at) — a re-embed that keeps the
+#     same row count and doesn't touch papers.updated_at would otherwise serve a map
+#     built on the OLD vectors; node positions + clusters depend on the vectors;
+#   * the reference count — the bibliographic-coupling edge layer is derived from
+#     publication_references, so a reference backfill changes the edges.
+# (Topics are deliberately NOT here: the noisy OpenAlex/S2 topic vocabulary was
+# removed from the machines in LABELLING_VERSION 2026.07-6 — labels come from title
+# text now, so publication_topics is no longer a graph input.)
 _PAPER_MAP_LIBRARY_FP_SQL = """
     SELECT
       (SELECT COUNT(*) FROM papers WHERE status = 'library'),
@@ -2456,7 +2466,11 @@ _PAPER_MAP_LIBRARY_FP_SQL = """
       (SELECT COUNT(*) FROM publication_embeddings pe
          JOIN papers p ON p.id = pe.paper_id
          WHERE p.status = 'library'),
-      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
+      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
+      (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library'),
+      (SELECT COUNT(*) FROM publication_references pr
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library')
 """
 
 _PAPER_MAP_CORPUS_FP_SQL = """
@@ -2464,18 +2478,30 @@ _PAPER_MAP_CORPUS_FP_SQL = """
       (SELECT COUNT(*) FROM papers),
       (SELECT COALESCE(MAX(updated_at), '') FROM papers),
       (SELECT COUNT(*) FROM publication_embeddings),
-      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
+      (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
+      (SELECT COALESCE(MAX(created_at), '') FROM publication_embeddings),
+      (SELECT COUNT(*) FROM publication_references)
 """
 
-# Author network. Fingerprint covers paper edges (which authors
-# co-author together is derived from the publication graph) and follow
-# state (followed authors get a different visual treatment).
+# Author network. The graph's structure is derived from the publication graph —
+# co-authorship (publication_authors) + bibliographic coupling (publication_references)
+# + the author-embedding semantic layer — and restyled by follow state. I-4: the
+# old fingerprint tracked only paper count/watermark + follows, so a re-attribution
+# of authorships, a reference backfill, or a re-embed (none of which need touch
+# papers.updated_at) served a stale network. Added: authorship count, reference
+# count, and the embedding-recompute watermark.
 _AUTHOR_NETWORK_LIBRARY_FP_SQL = """
     SELECT
       (SELECT COUNT(*) FROM papers WHERE status = 'library'),
       (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
       (SELECT COUNT(*) FROM followed_authors),
-      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors)
+      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
+      (SELECT COUNT(*) FROM publication_authors pa
+         JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library'),
+      (SELECT COUNT(*) FROM publication_references pr
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library'),
+      (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library')
 """
 
 _AUTHOR_NETWORK_CORPUS_FP_SQL = """
@@ -2483,7 +2509,10 @@ _AUTHOR_NETWORK_CORPUS_FP_SQL = """
       (SELECT COUNT(*) FROM papers),
       (SELECT COALESCE(MAX(updated_at), '') FROM papers),
       (SELECT COUNT(*) FROM followed_authors),
-      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors)
+      (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
+      (SELECT COUNT(*) FROM publication_authors),
+      (SELECT COUNT(*) FROM publication_references),
+      (SELECT COALESCE(MAX(created_at), '') FROM publication_embeddings)
 """
 
 # I-4: stamp the clustering/projection/labelling versions into the paper-map +
