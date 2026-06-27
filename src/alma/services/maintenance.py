@@ -432,19 +432,25 @@ def _count_library_dedup(conn: sqlite3.Connection, params=None) -> int:
 
 
 def _count_housekeeping(conn: sqlite3.Connection, params=None) -> int:
-    """Prunable Activity-log rows past the retention window + free DB pages —
-    a truthful 'is there housekeeping to do' signal."""
+    """Prunable Activity-log rows past the 30-day retention window — the actionable
+    'items to clean up' count.
+
+    Free DB pages (``PRAGMA freelist_count``) are deliberately NOT added: they are
+    reclaimable empty SPACE, compacted by a single VACUUM, not discrete items to
+    fix. Summing them in inflated the card's pending wildly (e.g. 3.3k prunable
+    rows + 53k free pages = "56,906 pending"), which read as 56k defects rather
+    than the handful of rows actually queued for pruning. The VACUUM still runs as
+    part of the housekeeping job; it just doesn't masquerade as 53k pending items.
+    """
     from datetime import timedelta
 
     try:
         cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
-        prunable = int(
+        return int(
             (conn.execute(
                 "SELECT COUNT(*) AS n FROM operation_logs WHERE timestamp < ?", (cutoff,)
             ).fetchone() or {"n": 0})["n"] or 0
         )
-        free = int((conn.execute("PRAGMA freelist_count").fetchone() or [0])[0] or 0)
-        return prunable + free
     except sqlite3.OperationalError:
         return 0
 
@@ -505,9 +511,17 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "Fetch missing abstracts, references, topics, authors, DOIs, and "
                 "dates from OpenAlex / Crossref for papers eligible for enrichment."
             ),
+            # NOTE: `papers.missing_references` is deliberately NOT claimed here.
+            # corpus_metadata's pending is `totals.eligible_now` (the OpenAlex
+            # metadata backlog), which doesn't track references; the dedicated
+            # reference_graph op's pending DOES (≈ the missing-references gap), so
+            # that dimension belongs to it alone. Listing it here too made
+            # missing_references render as a warning under this card while its
+            # pending sat at 0 (nothing this op could run to clear it) — the same
+            # pending-disagrees-with-gap confusion. corpus_metadata still fetches
+            # referenced_works incidentally; it just doesn't OWN the gap.
             health_dimensions=(
                 "papers.missing_abstract",
-                "papers.missing_references",
                 "papers.missing_topics",
                 "papers.missing_authorships",
                 "papers.missing_doi",
