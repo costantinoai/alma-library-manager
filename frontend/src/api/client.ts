@@ -199,6 +199,17 @@ export async function waitForJob<T>(jobId: string, opts: WaitForJobOptions = {})
   throw new Error(`Timeout waiting for job ${jobId}`)
 }
 
+/**
+ * Single non-throwing poll of a job's durable Activity status. Unlike
+ * `waitForJob` (which rejects on terminal failure and resolves with a result),
+ * this returns the raw status envelope every call — so a UI can DRIVE itself off
+ * the real terminal state (completed vs failed vs cancelled), e.g. the Health
+ * recommended-sequence runner (H-4).
+ */
+export function getJobStatus<T = unknown>(jobId: string): Promise<JobStatus<T>> {
+  return api.get<JobStatus<T>>(`/activity/${encodeURIComponent(jobId)}`)
+}
+
 // ── Health layer (task 24) ──
 
 /** A fix/mitigation attached to a health dimension. `operation_key` is the

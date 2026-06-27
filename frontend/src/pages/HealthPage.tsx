@@ -16,13 +16,14 @@
  * carries its run / auto-repair / cap / scope / batch controls once. Every
  * number reads the canonical endpoints (/insights/health + /health/operations).
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   getHealthOperations,
   getHealthSnapshot,
+  getJobStatus,
   runMaintenanceOperation,
   setMaintenanceConfig,
   type HealthDimension,
@@ -50,12 +51,13 @@ export function HealthPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [openDim, setOpenDim] = useState<HealthDimension | null>(null)
-  // "Run recommended sequence" auto-advance state. `sequenceActive` turns on a
-  // refetch loop; `lastFiredRef` records the op we last launched so we never
-  // re-fire the same step while it is still running (the backend only advances
-  // `recommended_next` once a step's pending drops, i.e. it completed).
+  // "Run recommended sequence" state (H-4). The sequence is driven by the DURABLE
+  // terminal state of the launched background job — never by a blind poll of
+  // `recommended_next`. `watchedJob` is the step we fired and are waiting on; we
+  // advance only after it COMPLETES, stop on failed/cancelled, and stop (instead
+  // of looping forever) if the same op is still recommended after it finished.
   const [sequenceActive, setSequenceActive] = useState(false)
-  const lastFiredRef = useRef<string | null>(null)
+  const [watchedJob, setWatchedJob] = useState<{ jobId: string; opKey: string } | null>(null)
 
   const snapshotQuery = useQuery({
     queryKey: SNAPSHOT_KEY,
@@ -68,20 +70,56 @@ export function HealthPage() {
     queryFn: getHealthOperations,
     staleTime: 30_000,
     retry: 1,
-    // While a sequence runs, re-plan on a cadence so `recommended_next` advances
-    // as each background step finishes.
-    refetchInterval: sequenceActive ? 3000 : false,
   })
+
+  // Poll the launched step's Activity status until it reaches a terminal state.
+  // refetch stops the moment it's terminal, so this isn't a perpetual loop.
+  const jobStatusQuery = useQuery({
+    queryKey: ['activity', watchedJob?.jobId],
+    queryFn: () => getJobStatus(watchedJob!.jobId),
+    enabled: !!watchedJob,
+    refetchInterval: (query) => {
+      const st = query.state.data?.status
+      return st && ['completed', 'failed', 'cancelled'].includes(st) ? false : 1500
+    },
+  })
+
+  // Stop the auto-advance sequence and clear the watched job. NOTE: this never
+  // cancels an already-running background job — it only stops launching the NEXT
+  // step (H-4: "Stop auto-advance" ≠ cancel). The control is labelled to match.
+  const stopSequence = (message?: string, tone: 'info' | 'error' = 'info') => {
+    setSequenceActive(false)
+    setWatchedJob(null)
+    if (message) {
+      if (tone === 'error') errorToast('Recommended sequence stopped', message)
+      else toast({ title: 'Recommended sequence', description: message })
+    }
+  }
 
   const runMutation = useMutation({
     // The atomic Run spec travels with the click (RepairCard builds it from its
     // visible controls). A bare `{ key }` — e.g. a drilldown "fix all" — sends no
     // max_items, so the backend applies the task's remembered manual limit.
-    mutationFn: ({ key, request }: { key: string; request?: MaintenanceRunRequest }) =>
+    // `sequence` marks a step fired by the auto-advance runner (H-4): on success
+    // we WATCH the job to terminal state instead of toasting and forgetting it.
+    mutationFn: ({ key, request }: { key: string; request?: MaintenanceRunRequest; sequence?: boolean }) =>
       runMaintenanceOperation(key, request ?? {}),
-    onSuccess: async (result) => {
+    onSuccess: async (result, variables) => {
       await invalidateQueries(queryClient, OPERATIONS_KEY, SNAPSHOT_KEY)
-      if (result.status === 'noop' || !result.job_id) {
+      const launched = result.status !== 'noop' && !!result.job_id
+      if (variables.sequence) {
+        // Enqueue succeeded, but a background FAILURE is not this mutation's
+        // onError — so we can't trust "started" as "will finish". If nothing was
+        // eligible, the step can't make progress → stop truthfully. Otherwise
+        // hand off to the job watcher, which advances only on COMPLETED.
+        if (!launched) {
+          stopSequence('The recommended step had nothing eligible to run — auto-advance stopped.')
+        } else {
+          setWatchedJob({ jobId: result.job_id as string, opKey: result.key })
+        }
+        return
+      }
+      if (!launched) {
         toast({ title: 'Nothing to run', description: 'No provider or no eligible items.' })
       } else {
         toast({
@@ -90,11 +128,10 @@ export function HealthPage() {
         })
       }
     },
-    onError: (err) => {
-      // A failed step stops the sequence (don't loop on a broken step).
-      setSequenceActive(false)
-      lastFiredRef.current = null
-      errorToast('Could not start maintenance', String(err))
+    onError: (err, variables) => {
+      // A failed enqueue stops the sequence (don't loop on a broken step).
+      if (variables?.sequence) stopSequence(String(err), 'error')
+      else errorToast('Could not start maintenance', String(err))
     },
   })
 
@@ -153,27 +190,38 @@ export function HealthPage() {
     .filter((group) => group.ops.length > 0)
   const recommended = operationsQuery.data?.recommended_next ?? null
 
-  // Auto-advance the recommended sequence (Checkpoint G). No per-job polling: the
-  // backend only moves `recommended_next` to the NEXT op once the current one's
-  // pending drops (it finished), so firing whenever the recommended key CHANGES
-  // walks one safe step at a time and naturally stops when `recommended_next`
-  // becomes null (everything healthy, or only manual-review gates remain).
+  // H-4: advance the sequence off the watched job's DURABLE terminal state.
+  //   - failed / cancelled → stop and surface it (a background failure never
+  //     reached the mutation's onError, so this is the only place it's caught);
+  //   - completed → re-plan, then either fire the NEXT op (progress) or stop if
+  //     the SAME op is still recommended (a bounded batch reduced but didn't
+  //     clear the backlog, or only a manual gate remains) — never an infinite loop.
   useEffect(() => {
-    if (!sequenceActive || runMutation.isPending) return
-    if (!recommended) {
-      setSequenceActive(false)
-      lastFiredRef.current = null
-      toast({
-        title: 'Recommended sequence finished',
-        description: 'No further safe steps — stopped (any manual-review gates remain for you).',
-      })
+    if (!watchedJob) return
+    const status = jobStatusQuery.data?.status
+    if (status === 'failed' || status === 'cancelled') {
+      stopSequence(`Step "${watchedJob.opKey}" ${status} — see Activity. Auto-advance stopped.`, 'error')
       return
     }
-    if (recommended.key !== lastFiredRef.current) {
-      lastFiredRef.current = recommended.key
-      runMutation.mutate({ key: recommended.key })
-    }
-  }, [sequenceActive, recommended, runMutation.isPending])
+    if (status !== 'completed') return
+
+    const completedKey = watchedJob.opKey
+    setWatchedJob(null) // consume this completion exactly once
+    if (!sequenceActive) return // user stopped while it ran — leave the job's results in place
+    void operationsQuery.refetch().then((res) => {
+      const next = res.data?.recommended_next ?? null
+      if (!next) {
+        stopSequence('Recommended sequence finished — no further safe steps (any manual-review gates remain for you).')
+      } else if (next.key === completedKey) {
+        stopSequence(
+          `"${next.label}" still has work after a full batch — run it again or review it. Auto-advance stopped.`,
+        )
+      } else {
+        runMutation.mutate({ key: next.key, sequence: true })
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- driven by the job status + identity
+  }, [jobStatusQuery.data?.status, watchedJob])
 
   const onRun = (key: string, request: MaintenanceRunRequest) =>
     runMutation.mutate({ key, request })
@@ -285,39 +333,39 @@ export function HealthPage() {
         runningKey={runningKey}
       />
 
-      {/* Recommended next — the safe one-click sequence driver. The backend only
-          ever points this at the first actionable, non-blocked, non-destructive,
-          non-manual op in dependency order, so running it repeatedly walks the
-          repair sequence and stops at a manual-review gate (re-planned on each
-          refetch). */}
-      {recommended ? (
+      {/* Recommended next — the safe one-click sequence driver. The backend points
+          this at the first actionable, non-blocked, non-destructive, non-manual op
+          in dependency order. "Run sequence" walks the steps, advancing only when
+          each launched job actually COMPLETES (H-4), and stops at a manual gate, a
+          failure, or a step that can't make further progress. Shown whenever there
+          IS a recommended op OR a sequence is mid-flight (so its controls/status
+          stay visible even as the recommended op changes underneath it). */}
+      {recommended || sequenceActive ? (
         <section className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 p-4">
           <div>
             <SectionLabel>Recommended next</SectionLabel>
-            <p className="mt-1 text-sm text-alma-900">
-              <strong>{recommended.label}</strong>
-              <span className="text-slate-500"> — {recommended.reason}</span>
-            </p>
+            {recommended ? (
+              <p className="mt-1 text-sm text-alma-900">
+                <strong>{recommended.label}</strong>
+                <span className="text-slate-500"> — {recommended.reason}</span>
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-slate-500">Re-planning…</p>
+            )}
             {sequenceActive ? (
               <p className="mt-1 text-xs text-slate-500">
-                Running the recommended sequence — advancing as each step completes, stopping at any
-                manual-review gate.
+                {watchedJob
+                  ? `Running "${watchedJob.opKey}" (${jobStatusQuery.data?.status ?? 'starting'}) — the next step waits for it to finish.`
+                  : 'Running the recommended sequence — advancing as each step completes, stopping at any manual-review gate.'}
               </p>
             ) : null}
           </div>
           <div className="flex items-center gap-2">
             {sequenceActive ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  setSequenceActive(false)
-                  lastFiredRef.current = null
-                }}
-              >
-                Stop
+              <Button size="sm" variant="outline" onClick={() => stopSequence()}>
+                Stop auto-advance
               </Button>
-            ) : (
+            ) : recommended ? (
               <>
                 <Button
                   size="sm"
@@ -330,14 +378,14 @@ export function HealthPage() {
                 <Button
                   size="sm"
                   onClick={() => {
-                    lastFiredRef.current = null
                     setSequenceActive(true)
+                    runMutation.mutate({ key: recommended.key, sequence: true })
                   }}
                 >
                   Run sequence
                 </Button>
               </>
-            )}
+            ) : null}
           </div>
         </section>
       ) : null}
