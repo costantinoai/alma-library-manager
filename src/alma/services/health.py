@@ -1287,6 +1287,24 @@ def dimension_items(
     return out
 
 
+def dimension_items_page(
+    conn: sqlite3.Connection, key: str, *, limit: int = 20, offset: int = 0
+) -> tuple[list[dict[str, Any]], bool]:
+    """``dimension_items`` plus an honest ``has_more`` flag (H-11).
+
+    Offset pagination can't tell a full page from the last page, so the old UI
+    showed "Load more" on an exact final page. This fetches ONE sentinel row
+    beyond the page (no second COUNT query) and reports whether it exists.
+
+    Returns ``(items[:limit], has_more)``. (At the 100-row service ceiling the
+    sentinel is absorbed by the internal clamp, so a page of exactly 100 can read
+    ``has_more=False``; the drilldown uses a page size of 20, well clear of it.)
+    """
+    page = max(1, min(int(limit), 100))
+    rows = dimension_items(conn, key, limit=page + 1, offset=offset)
+    return rows[:page], len(rows) > page
+
+
 # Valid drilldown keys = simple predicates + the special-cased dims.
 DIMENSION_ITEM_KEYS: frozenset[str] = frozenset(_DIMENSION_PREDICATES) | {
     "embeddings.s2_vector_missing",

@@ -89,7 +89,9 @@ export function HealthDimensionDrilldown({
     queryFn: async ({ pageParam }) => {
       const offset = typeof pageParam === 'number' ? pageParam : 0
       const res = await getHealthDimensionItems(dim!.key, PAGE, offset)
-      return { items: res.items, nextOffset: res.items.length === PAGE ? offset + PAGE : undefined }
+      // H-11: trust the backend's has_more, not "page was full" — the latter
+      // shows a dead "Load more" on an exact final page.
+      return { items: res.items, nextOffset: res.has_more ? offset + PAGE : undefined }
     },
     getNextPageParam: (last) => last.nextOffset,
     enabled: open && !!dim,

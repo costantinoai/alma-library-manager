@@ -438,6 +438,9 @@ export interface HealthDimensionItemsResponse {
   limit: number
   offset: number
   items: HealthDimensionItem[]
+  /** H-11: true when a row exists beyond this page — drives "Load more" honestly
+   *  (never shown on an exact final page). */
+  has_more: boolean
 }
 
 export function getHealthDimensionItems(

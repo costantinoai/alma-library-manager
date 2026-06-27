@@ -54,8 +54,10 @@ def get_dimension_items(
 ):
     if key not in health_service.DIMENSION_ITEM_KEYS:
         raise HTTPException(status_code=404, detail=f"No drilldown for dimension: {key}")
-    items = health_service.dimension_items(db, key, limit=limit, offset=offset)
-    return {"key": key, "limit": limit, "offset": offset, "items": items}
+    # H-11: report has_more (sentinel-row probe) so the UI never shows "Load more"
+    # on an exact final page.
+    items, has_more = health_service.dimension_items_page(db, key, limit=limit, offset=offset)
+    return {"key": key, "limit": limit, "offset": offset, "items": items, "has_more": has_more}
 
 
 @router.get(

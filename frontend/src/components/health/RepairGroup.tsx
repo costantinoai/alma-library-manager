@@ -31,6 +31,8 @@ interface RepairGroupProps {
   ) => void
   onOpenDim: (dim: HealthDimension) => void
   runningKey: string | null
+  /** H-11: key of the op whose config write is in flight (shows "Saving…"). */
+  configSavingKey: string | null
 }
 
 export function RepairGroup({
@@ -41,6 +43,7 @@ export function RepairGroup({
   onConfig,
   onOpenDim,
   runningKey,
+  configSavingKey,
 }: RepairGroupProps) {
   const reducedMotion = useReducedMotion()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -67,6 +70,7 @@ export function RepairGroup({
         onConfig={onConfig}
         onOpenDim={onOpenDim}
         running={runningKey === op.key}
+        savingConfig={configSavingKey === op.key}
       />
     </motion.div>
   )

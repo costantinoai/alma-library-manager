@@ -119,6 +119,9 @@ export function HealthPage() {
 
   const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY)
   const runningKey = runMutation.isPending ? (runMutation.variables?.key ?? null) : null
+  // H-11: the op whose auto-config write is in flight (shows a "Saving…" hint so
+  // the post-save snap to server truth doesn't look like a glitch).
+  const configSavingKey = configMutation.isPending ? (configMutation.variables?.key ?? null) : null
 
   const snapshot = snapshotQuery.data
   const operations = operationsQuery.data?.operations ?? []
@@ -184,7 +187,7 @@ export function HealthPage() {
     },
   ) => configMutation.mutate({ key, body })
 
-  const groupProps = { dimsOf, onRun, onConfig, onOpenDim: setOpenDim, runningKey }
+  const groupProps = { dimsOf, onRun, onConfig, onOpenDim: setOpenDim, runningKey, configSavingKey }
 
   return (
     <div className="space-y-6">

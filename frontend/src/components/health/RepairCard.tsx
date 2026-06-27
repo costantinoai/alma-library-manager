@@ -21,7 +21,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Eye, History, Play } from 'lucide-react'
+import { Eye, History, Loader2, Play } from 'lucide-react'
 
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
@@ -66,6 +66,9 @@ interface RepairCardProps {
   /** Open the affected-papers drilldown for one dimension. */
   onOpenDim: (dim: HealthDimension) => void
   running: boolean
+  /** H-11: this op's auto-config write is in flight — show a "Saving…" hint so
+   *  the post-save snap to server truth isn't surprising. */
+  savingConfig?: boolean
 }
 
 /** "followed_plus_library" → "Followed + library" for the scope dropdown. */
@@ -74,7 +77,7 @@ function prettyScope(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
-export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: RepairCardProps) {
+export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savingConfig }: RepairCardProps) {
   const [autoCap, setAutoCap] = useState(op.auto_daily_cap)
   useEffect(() => setAutoCap(op.auto_daily_cap), [op.auto_daily_cap])
   const [manualLimit, setManualLimit] = useState(op.manual_limit)
@@ -227,20 +230,29 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running }: Re
 
       {/* Controls footer: auto-repair · scope/cap · preview · run */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-3">
-        {!op.destructive ? (
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <Switch
-              checked={op.auto_enabled}
-              onCheckedChange={(value) => onConfig(op.key, { auto_enabled: value })}
-            />
-            <span className="inline-flex items-center gap-1">
-              Auto-repair
-              <span className="text-xs text-slate-400">{op.auto_enabled ? '(on)' : '(opt-in)'}</span>
+        <div className="flex items-center gap-2">
+          {!op.destructive ? (
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <Switch
+                checked={op.auto_enabled}
+                onCheckedChange={(value) => onConfig(op.key, { auto_enabled: value })}
+              />
+              <span className="inline-flex items-center gap-1">
+                Auto-repair
+                <span className="text-xs text-slate-400">{op.auto_enabled ? '(on)' : '(opt-in)'}</span>
+              </span>
+            </label>
+          ) : (
+            <span className="text-xs font-medium text-warning-700">Never runs automatically</span>
+          )}
+          {/* H-11: config write in flight — the controls will snap to server
+              truth on success, so name the save rather than let it look like a bug. */}
+          {savingConfig ? (
+            <span className="inline-flex items-center gap-1 text-xs text-slate-400" aria-live="polite">
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> Saving…
             </span>
-          </label>
-        ) : (
-          <span className="text-xs font-medium text-warning-700">Never runs automatically</span>
-        )}
+          ) : null}
+        </div>
 
         <div className="flex flex-wrap items-center gap-3">
           {scopeSpec ? (
