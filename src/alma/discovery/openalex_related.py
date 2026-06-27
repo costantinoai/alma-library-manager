@@ -17,6 +17,7 @@ from alma.openalex.client import (
     batch_fetch_works_by_openalex_ids,
     batch_fetch_recent_works_for_authors as _client_batch_author_works,
 )
+from alma.core.scoring_math import rank_score
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -65,10 +66,6 @@ def _extract_journal(work: dict) -> str:
 def _normalize_doi_url(doi_raw: str) -> str:
     doi = normalize_doi(doi_raw or "")
     return doi or (doi_raw or "")
-
-
-def _score_by_rank(index: int, total: int) -> float:
-    return round(max(0.0, 1.0 - (index / max(total, 1))), 4)
 
 
 def _work_to_result(work: dict, score: float) -> Optional[Dict]:
@@ -164,7 +161,7 @@ def fetch_related_works(
             works = (related_resp.json() or {}).get("results") or []
             results: List[Dict] = []
             for i, w in enumerate(works[:limit]):
-                mapped = _work_to_result(w, _score_by_rank(i, len(works)))
+                mapped = _work_to_result(w, rank_score(i, len(works)))
                 if mapped:
                     results.append(mapped)
             if results:
@@ -233,7 +230,7 @@ def fetch_related_works(
             if not w:
                 continue
             position = id_order.get(w_id, len(bare_ids))
-            mapped = _work_to_result(w, _score_by_rank(position, len(bare_ids)))
+            mapped = _work_to_result(w, rank_score(position, len(bare_ids)))
             if mapped:
                 results.append(mapped)
 
@@ -304,7 +301,7 @@ def fetch_referenced_works(
         work = work_map.get(work_id)
         if not work:
             continue
-        mapped = _work_to_result(work, _score_by_rank(idx, len(bare_ids)))
+        mapped = _work_to_result(work, rank_score(idx, len(bare_ids)))
         if mapped:
             results.append(mapped)
     return results
@@ -374,7 +371,7 @@ def search_works(
         results: List[Dict] = []
         total = max(len(works), 1)
         for i, w in enumerate(works):
-            mapped = _work_to_result(w, _score_by_rank(i, total))
+            mapped = _work_to_result(w, rank_score(i, total))
             if mapped:
                 results.append(mapped)
         return results
@@ -480,7 +477,7 @@ def fetch_citing_works(
         results: List[Dict] = []
 
         for i, w in enumerate(works):
-            mapped = _work_to_result(w, _score_by_rank(i, len(works)))
+            mapped = _work_to_result(w, rank_score(i, len(works)))
             if mapped:
                 results.append(mapped)
 
@@ -552,7 +549,7 @@ def fetch_recent_works_for_author(
         results: List[Dict] = []
 
         for i, w in enumerate(works):
-            mapped = _work_to_result(w, _score_by_rank(i, len(works)))
+            mapped = _work_to_result(w, rank_score(i, len(works)))
             if mapped:
                 results.append(mapped)
 
@@ -604,7 +601,7 @@ def batch_fetch_recent_works_for_authors(
     for aid, works in raw_map.items():
         mapped: List[Dict] = []
         for i, w in enumerate(works):
-            item = _work_to_result(w, _score_by_rank(i, len(works)))
+            item = _work_to_result(w, rank_score(i, len(works)))
             if item:
                 mapped.append(item)
         # Sort by score descending (position-based)

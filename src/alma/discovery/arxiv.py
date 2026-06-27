@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
+from alma.core.scoring_math import rank_score
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -16,10 +17,6 @@ _NS = {
     "atom": "http://www.w3.org/2005/Atom",
     "arxiv": "http://arxiv.org/schemas/atom",
 }
-
-
-def _score_by_rank(index: int, total: int) -> float:
-    return round(max(0.0, 1.0 - (index / max(total, 1))), 4)
 
 
 def _extract_year(published: str) -> Optional[int]:
@@ -100,7 +97,7 @@ def search_works(
         total = max(len(entries), 1)
         out: list[dict] = []
         for idx, entry in enumerate(entries):
-            candidate = _entry_to_candidate(entry, _score_by_rank(idx, total))
+            candidate = _entry_to_candidate(entry, rank_score(idx, total))
             if not candidate:
                 continue
             year = candidate.get("year")

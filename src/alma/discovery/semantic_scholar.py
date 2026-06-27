@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.http_sources import get_source_http_client
+from alma.core.scoring_math import rank_score
 from alma.core.utils import normalize_doi
 from alma.core.vector_blob import encode_vector
 
@@ -372,7 +373,7 @@ def search_papers(
         results: List[dict] = []
         total = max(len(papers), 1)
         for i, p in enumerate(papers):
-            score = round(max(0.0, 1.0 - (i / total)), 4)
+            score = rank_score(i, total)
             candidate = _s2_to_candidate(p, score=score)
             if candidate:
                 results.append(candidate)
@@ -478,7 +479,7 @@ def search_papers_bulk(
                         continue
                 except (TypeError, ValueError):
                     pass
-            score = round(max(0.0, 1.0 - (i / total)), 4)
+            score = rank_score(i, total)
             candidate = _s2_to_candidate(paper, score=score)
             if candidate:
                 filtered.append(candidate)
@@ -550,7 +551,7 @@ def fetch_related_papers(doi: str, limit: int = 20) -> List[dict]:
                 candidate_id = str((paper or {}).get("paperId") or "").strip()
                 if not candidate_id:
                     continue
-                score = round(max(0.0, 1.0 - (idx / total)), 4)
+                score = rank_score(idx, total)
                 relation_items.append((candidate_id, score))
         except Exception as exc:
             logger.debug("Semantic Scholar %s fetch failed: %s", relation_name, exc)
@@ -612,7 +613,7 @@ def recommend_for_paper(
     results: List[dict] = []
     total = max(len(papers), 1)
     for idx, paper in enumerate(papers):
-        score = round(max(0.0, 1.0 - (idx / total)), 4)
+        score = rank_score(idx, total)
         candidate = _s2_to_candidate(paper, score=score)
         if candidate:
             results.append(candidate)
@@ -677,7 +678,7 @@ def recommend_from_seeds(
     for idx, paper in enumerate(papers):
         # Rank-based descending score (same convention as search_papers);
         # downstream scorer re-ranks on the 10-signal formula anyway.
-        score = round(max(0.0, 1.0 - (idx / total)), 4)
+        score = rank_score(idx, total)
         candidate = _s2_to_candidate(paper, score=score)
         if candidate:
             results.append(candidate)
@@ -811,7 +812,7 @@ def fetch_author_papers(
         results: List[dict] = []
         total = max(len(papers), 1)
         for i, p in enumerate(papers):
-            score = round(max(0.0, 1.0 - (i / total)), 4)
+            score = rank_score(i, total)
             candidate = _s2_to_candidate(p, score=score)
             if candidate:
                 results.append(candidate)

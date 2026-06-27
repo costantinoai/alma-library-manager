@@ -21,6 +21,18 @@ def clamp(value: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, value))
 
 
+def rank_score(index: int, total: int, *, ndigits: int = 4) -> float:
+    """Descending position score in ``[0, 1]``: ``1.0`` for the top result,
+    decaying linearly to ``0`` at the tail.
+
+    ``round(max(0.0, 1.0 - index / max(total, 1)), ndigits)``. The discovery
+    source adapters (arxiv / crossref / openalex_related / semantic_scholar)
+    use this to turn a result's rank into a relevance proxy when the source
+    returns no numeric score. ``max(total, 1)`` guards the empty case.
+    """
+    return round(max(0.0, 1.0 - (index / max(total, 1))), ndigits)
+
+
 def age_decay(age_days: float | None, *, half_life_days: float) -> float:
     """Half-life decay factor in ``(0, 1]``.
 

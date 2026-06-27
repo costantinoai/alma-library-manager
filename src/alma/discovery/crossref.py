@@ -7,6 +7,7 @@ import re
 from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
+from alma.core.scoring_math import rank_score
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,6 @@ def parent_doi_from_relation(relation: object) -> Optional[str]:
             if parent:
                 return parent
     return None
-
-
-def _score_by_rank(index: int, total: int) -> float:
-    return round(max(0.0, 1.0 - (index / max(total, 1))), 4)
 
 
 def _extract_year(item: dict) -> Optional[int]:
@@ -346,7 +343,7 @@ def search_works(
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
-            candidate = _crossref_to_candidate(item, _score_by_rank(idx, total))
+            candidate = _crossref_to_candidate(item, rank_score(idx, total))
             if candidate:
                 out.append(candidate)
         return out
