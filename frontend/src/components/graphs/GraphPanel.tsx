@@ -50,6 +50,11 @@ interface ClusterSummary {
   word_cloud?: Array<{ term: string; weight: number }>
   avg_citations?: number
   avg_rating?: number
+  // I-13: cohesion = mean cosine of members to the cluster centroid (a real
+  // coherence quality signal); representative_selection names how the sample
+  // papers below were chosen ("centroid_mmr" = medoid+diverse, not citation rank).
+  cohesion?: number | null
+  representative_selection?: string
   year_range?: { min?: number | null; max?: number | null }
   publication_date_range?: { min?: string | null; max?: string | null }
   sample_papers?: Array<{
@@ -370,6 +375,13 @@ export function GraphPanel() {
           semantic (embedding neighbours), bibliographic coupling (shared
           references), co-authorship — and each layer can be toggled.
         </p>
+        <p className="mt-2">
+          The <strong>Cluster detail</strong> slider tunes how finely the density
+          algorithm carves the space — higher splits the map into more, smaller
+          clusters; lower merges them into fewer, broader ones. It adjusts the
+          minimum cluster size, so it changes how many clusters <em>emerge</em>; it
+          does not force a target number (the data still decides what holds together).
+        </p>
       </ConceptCallout>
 
       <div className="flex gap-2">
@@ -653,6 +665,16 @@ export function GraphPanel() {
                           {selectedCluster.year_range.min}–{selectedCluster.year_range.max}
                         </Badge>
                       )}
+                      {/* I-13: coherence — how tightly the members sit around the
+                          cluster centroid (1.0 = a crisp, on-topic cluster). */}
+                      {selectedCluster.cohesion != null && (
+                        <Badge
+                          variant="outline"
+                          title="Mean cosine similarity of the cluster's papers to its centroid. Higher = a tighter, more coherent topic."
+                        >
+                          Cohesion {selectedCluster.cohesion.toFixed(2)}
+                        </Badge>
+                      )}
                       {selectedCluster.label_model && (
                         <Badge variant="outline" className="text-[10px]">via {selectedCluster.label_model}</Badge>
                       )}
@@ -687,7 +709,19 @@ export function GraphPanel() {
                   )}
                   {selectedCluster.sample_papers && selectedCluster.sample_papers.length > 0 && (
                     <div>
-                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Representative Papers</p>
+                      <p
+                        className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500"
+                        title={
+                          selectedCluster.representative_selection === 'centroid_mmr'
+                            ? 'Papers nearest the cluster centroid, made diverse (MMR) — the topical core, not the most-cited members.'
+                            : 'Most-cited / recent members (no embedding vectors available for centroid selection).'
+                        }
+                      >
+                        Representative Papers
+                        {selectedCluster.representative_selection === 'centroid_mmr' && (
+                          <span className="ml-1.5 font-normal normal-case text-slate-400">· centroid + diverse</span>
+                        )}
+                      </p>
                       <div className="space-y-2">
                         {selectedCluster.sample_papers.map((paper) => (
                           <button
