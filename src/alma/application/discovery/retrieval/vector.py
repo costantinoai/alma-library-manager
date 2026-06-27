@@ -7,6 +7,7 @@ gracefully when numpy is unavailable.
 
 from __future__ import annotations
 
+from alma.core.components import not_component_sql
 from alma.discovery import similarity as sim_module
 
 try:
@@ -72,6 +73,7 @@ def _retrieve_vector_channel(
         FROM publication_embeddings pe
         JOIN papers p ON p.id = pe.paper_id
         WHERE pe.model = ? AND p.status NOT IN ('dismissed', 'removed')
+          AND """ + not_component_sql("p") + """
         """,
         [active_model],
     ).fetchall()

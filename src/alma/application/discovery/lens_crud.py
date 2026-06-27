@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from alma.application import library as library_app
+from alma.core.components import not_component_sql
 from alma.core.db_write import run_write_unit
 from alma.core.scoring_math import age_decay, clamp
 from alma.discovery.defaults import (
@@ -156,10 +157,14 @@ def list_recommendations(
     # `canonical_paper_id IS NULL` drops recs whose paper was merged
     # into a published journal twin (preprint_dedup). The canonical
     # version will have its own rec row if the lens retrieval touched it.
+    # `not_component_sql` drops figures / SI / datasets / author responses —
+    # the same component read-gate the Feed inbox uses, so a part-of-a-paper
+    # never surfaces as a standalone recommendation either.
     query.append(
         "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
         "AND COALESCE(TRIM(p.reading_status), '') = '' "
         "AND COALESCE(p.canonical_paper_id, '') = '' "
+        "AND " + not_component_sql("p") + " "
         "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
     )
     params.extend([limit, offset])
