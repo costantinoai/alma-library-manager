@@ -780,34 +780,99 @@ def _cluster_label_refresh_impl(
     return summary
 
 
+def _load_vectors_for(
+    conn: sqlite3.Connection, paper_ids: list[str]
+) -> dict[str, "np.ndarray"]:
+    """Decode active-model embedding vectors for specific paper ids (I-13 helper).
+
+    The representative selector needs the members' vectors; this loads + decodes
+    just the requested ids through the canonical ``decode_vector`` (so float16 /
+    legacy float32 are handled identically to ``_load_embeddings``). Returns the
+    subset that actually has a vector — callers fall back when it's too sparse.
+    """
+    if not paper_ids:
+        return {}
+    from alma.core.vector_blob import decode_vector
+    from alma.discovery.similarity import get_active_embedding_model
+
+    try:
+        model = get_active_embedding_model(conn)
+        placeholders = ",".join("?" * len(paper_ids))
+        rows = conn.execute(
+            f"SELECT paper_id, embedding FROM publication_embeddings "
+            f"WHERE model = ? AND paper_id IN ({placeholders})",
+            [model, *paper_ids],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, np.ndarray] = {}
+    for r in rows:
+        pid = r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]
+        blob = r["embedding"] if isinstance(r, sqlite3.Row) else r[1]
+        if not blob:
+            continue
+        try:
+            out[pid] = decode_vector(blob)
+        except Exception:
+            continue
+    return out
+
+
 def _collect_paper_cluster_context(
     conn: sqlite3.Connection,
     paper_ids: list[str],
     *,
     limit: int = 6,
 ) -> tuple[list[str], list[str]]:
-    """Return representative titles + abstracts for an LLM label prompt."""
+    """Representative titles + abstracts for a paper cluster's label context.
+
+    I-13: the representatives are the cluster's centroid-nearest + diverse members
+    (``select_representatives`` over their embeddings), NOT the top-cited/recent
+    papers — so the label reflects the cluster's topical core rather than its most
+    famous members. Falls back to citation/recency order only when the members
+    have too few usable vectors (the text-fallback / un-embedded case).
+    """
     if not paper_ids:
         return [], []
-    placeholders = ",".join("?" * len(paper_ids))
+    from alma.ai.clustering import select_representatives
+
+    vectors = _load_vectors_for(conn, paper_ids)
+    if len(vectors) >= 2:
+        rep_ids = select_representatives(list(paper_ids), vectors, k=limit, diversity=0.3)
+    else:
+        placeholders = ",".join("?" * len(paper_ids))
+        rows = conn.execute(
+            f"""
+            SELECT id FROM papers WHERE id IN ({placeholders})
+            ORDER BY COALESCE(cited_by_count, 0) DESC, COALESCE(publication_date, '') DESC
+            LIMIT ?
+            """,
+            [*paper_ids, limit],
+        ).fetchall()
+        rep_ids = [str(r["id"] if isinstance(r, sqlite3.Row) else r[0]) for r in rows]
+    if not rep_ids:
+        return [], []
+
+    # Fetch the representatives' text and emit it in the selected order.
+    placeholders = ",".join("?" * len(rep_ids))
     rows = conn.execute(
-        f"""
-        SELECT title, abstract, cited_by_count
-        FROM papers
-        WHERE id IN ({placeholders})
-        ORDER BY COALESCE(cited_by_count, 0) DESC,
-                 COALESCE(publication_date, '') DESC
-        LIMIT ?
-        """,
-        [*paper_ids, limit],
+        f"SELECT id, title, abstract FROM papers WHERE id IN ({placeholders})",
+        list(rep_ids),
     ).fetchall()
+    by_id: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        rid = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
+        abstract = row["abstract"] if isinstance(row, sqlite3.Row) else row[2]
+        by_id[rid] = (str(title or "").strip() or "(untitled)", str(abstract or "").strip())
+
     titles: list[str] = []
     abstracts: list[str] = []
-    for row in rows:
-        title = row["title"] if isinstance(row, sqlite3.Row) else row[0]
-        abstract = row["abstract"] if isinstance(row, sqlite3.Row) else row[1]
-        titles.append(str(title or "").strip() or "(untitled)")
-        abstracts.append(str(abstract or "").strip())
+    for rid in rep_ids:
+        if rid in by_id:
+            t, a = by_id[rid]
+            titles.append(t)
+            abstracts.append(a)
     return titles, abstracts
 
 
@@ -1419,6 +1484,7 @@ def _build_cluster_detail(
     coords: dict[str, tuple[float, float]],
     label: str | None = None,
     cached_labels: dict[str, dict[str, object]] | None = None,
+    member_vectors: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     xs = [coords[paper_id][0] for paper_id in members if paper_id in coords]
     ys = [coords[paper_id][1] for paper_id in members if paper_id in coords]
@@ -1457,15 +1523,32 @@ def _build_cluster_detail(
             }
         )
 
-    sample_rows.sort(
-        key=lambda item: (
-            int(item.get("cited_by_count") or 0),
-            str(item.get("publication_date") or ""),
-            int(item.get("year") or 0),
-            str(item.get("title") or ""),
-        ),
-        reverse=True,
-    )
+    # I-13: representatives are the papers nearest the cluster CENTROID, made
+    # diverse via MMR — NOT citation/recency rank (which biased the samples AND the
+    # labels toward famous/recent members rather than the cluster's topical core).
+    # Falls back to citation order only when no embedding vectors are available
+    # (the text-fallback map / tiny clusters).
+    from alma.ai.clustering import cluster_cohesion, select_representatives
+
+    row_by_id = {row["paper_id"]: row for row in sample_rows}
+    cohesion = cluster_cohesion(members, member_vectors) if member_vectors else None
+    if member_vectors and any(pid in member_vectors for pid in members):
+        rep_ids = select_representatives(members, member_vectors, k=4, diversity=0.3)
+        sample_papers = [row_by_id[pid] for pid in rep_ids if pid in row_by_id]
+        representative_selection = "centroid_mmr"
+    else:
+        sample_rows.sort(
+            key=lambda item: (
+                int(item.get("cited_by_count") or 0),
+                str(item.get("publication_date") or ""),
+                int(item.get("year") or 0),
+                str(item.get("title") or ""),
+            ),
+            reverse=True,
+        )
+        sample_papers = sample_rows[:4]
+        representative_selection = "citation_rank"
+
     from alma.ai.cluster_labels import compute_cluster_signature
 
     cluster_signature = compute_cluster_signature(members)
@@ -1495,7 +1578,12 @@ def _build_cluster_detail(
         "x": round(float(np.mean(xs)), 4) if xs else 0.5,
         "y": round(float(np.mean(ys)), 4) if ys else 0.5,
         "top_topics": top_topics,
-        "sample_papers": sample_rows[:4],
+        "sample_papers": sample_papers,
+        # I-13: which papers represent the cluster + how they were chosen + a real
+        # coherence metric (mean cosine to centroid), surfaced in the method panel.
+        "representative_ids": [row["paper_id"] for row in sample_papers],
+        "representative_selection": representative_selection,
+        "cohesion": cohesion,
         "avg_citations": round(float(np.mean(citations)), 1) if citations else 0.0,
         "avg_rating": round(float(np.mean(ratings)), 2) if ratings else 0.0,
         "year_range": {
@@ -1517,6 +1605,7 @@ def _build_cluster_info(
     labels_by_cluster: dict[int, str] | None = None,
     cached_labels: dict[str, dict[str, object]] | None = None,
     cluster_texts: dict[str, str] | None = None,
+    vectors_by_id: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     labels = labels_by_cluster or {}
     word_clouds: dict[int, list[dict[str, Any]]] = {}
@@ -1531,6 +1620,9 @@ def _build_cluster_info(
             coords=coords,
             label=labels.get(int(cid), f"Cluster {int(cid) + 1}"),
             cached_labels=cached_labels,
+            # I-13: the member vectors let the detail pick centroid-nearest +
+            # diverse representatives (select_representatives filters by membership).
+            member_vectors=vectors_by_id,
         )
         detail["word_cloud"] = word_clouds.get(int(cid), [])
         details.append(detail)
@@ -2175,6 +2267,8 @@ def _build_embedding_paper_map(
         labels_by_cluster=labels_by_cluster,
         cached_labels=cached_labels,
         cluster_texts=texts,
+        # I-13: medoid/diverse representative selection runs on these vectors.
+        vectors_by_id=vectors_by_id,
     )
 
     # Unified clustering diagnostics (I-4/I-6) for the method/uncertainty panel.

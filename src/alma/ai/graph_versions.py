@@ -82,7 +82,13 @@ CLUSTERING_ALGO_VERSION = "2026.07-5"
 # 2026.07-6: noisy OpenAlex/S2 topics removed from the machines — BOTH graphs now
 #            label clusters from real title text via the shared embedding_graph
 #            pipeline (the author network previously labelled from publication_topics).
-LABELLING_VERSION = "2026.07-6"
+# 2026.07-7: I-13 — cluster representatives (label context + the cluster-detail
+#            sample papers) are now centroid-nearest + MMR-diverse via
+#            clustering.select_representatives, NOT citation/recency rank (which
+#            biased labels toward famous members). The cluster-detail payload also
+#            gains a cohesion metric + a representative_selection marker; re-key so
+#            the cached label + the default graph payload rebuild with the new picks.
+LABELLING_VERSION = "2026.07-7"
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding

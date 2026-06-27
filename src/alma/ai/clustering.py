@@ -569,6 +569,94 @@ def cluster_publications(
     )
 
 
+def select_representatives(
+    member_keys: list[str],
+    vectors: dict[str, Any],
+    *,
+    k: int = 6,
+    diversity: float = 0.3,
+) -> list[str]:
+    """Pick ``k`` representative members near the cluster CENTROID, made diverse
+    by Maximal Marginal Relevance (I-13).
+
+    The old representative selection ordered by citation count + recency, biasing
+    cluster labels and the cluster-detail samples toward famous/recent papers
+    rather than the cluster's actual topical centre. This selects on EMBEDDING
+    geometry instead:
+
+      1. centroid = mean of the L2-normalised member vectors (the cluster's
+         semantic centre);
+      2. greedily pick by MMR — each pick maximises
+         ``(1 − diversity)·cos(x, centroid) − diversity·max_{s∈picked} cos(x, s)``
+         so it is close to the centre AND not redundant with earlier picks.
+
+    ``diversity`` ∈ [0, 1]: ``0`` = pure centroid-nearest (the medoid-like core),
+    higher = more spread across the cluster. Returns member keys ordered by
+    selection (most central first). Degrades gracefully to the input order when
+    fewer than two members carry a vector (the text-fallback / tiny-cluster case).
+    """
+    keyed = [(key, vectors[key]) for key in member_keys if key in vectors]
+    if len(keyed) <= 1:
+        return ([key for key, _ in keyed] or list(member_keys))[:k]
+
+    keys = [key for key, _ in keyed]
+    X = np.asarray([np.asarray(v, dtype=np.float32) for _, v in keyed], dtype=np.float32)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    Xn = X / norms  # unit rows → dot product is cosine
+    centroid = Xn.mean(axis=0)
+    cn = float(np.linalg.norm(centroid))
+    if cn == 0.0:
+        return keys[:k]
+    centroid = centroid / cn
+    cos_centroid = Xn @ centroid
+
+    n = len(keys)
+    k = min(max(1, k), n)
+    picked: list[int] = []
+    picked_mask = np.zeros(n, dtype=bool)
+    max_sim_to_picked = np.full(n, -1.0, dtype=np.float32)
+
+    first = int(np.argmax(cos_centroid))  # most central member seeds the set
+    picked.append(first)
+    picked_mask[first] = True
+    max_sim_to_picked = np.maximum(max_sim_to_picked, Xn @ Xn[first])
+
+    while len(picked) < k:
+        mmr = (1.0 - diversity) * cos_centroid - diversity * max_sim_to_picked
+        mmr[picked_mask] = -np.inf
+        nxt = int(np.argmax(mmr))
+        if not np.isfinite(mmr[nxt]):
+            break
+        picked.append(nxt)
+        picked_mask[nxt] = True
+        max_sim_to_picked = np.maximum(max_sim_to_picked, Xn @ Xn[nxt])
+
+    return [keys[i] for i in picked]
+
+
+def cluster_cohesion(member_keys: list[str], vectors: dict[str, Any]) -> Optional[float]:
+    """Mean cosine of a cluster's members to its centroid — a coherence metric.
+
+    A real quality signal for the cluster-detail panel (I-13): ~1.0 means a tight,
+    on-topic cluster; low means a loose grab-bag. ``None`` when fewer than two
+    members carry a vector or the centroid is degenerate.
+    """
+    vecs = [np.asarray(vectors[k], dtype=np.float32) for k in member_keys if k in vectors]
+    if len(vecs) < 2:
+        return None
+    X = np.asarray(vecs, dtype=np.float32)
+    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    Xn = X / norms
+    centroid = Xn.mean(axis=0)
+    cn = float(np.linalg.norm(centroid))
+    if cn == 0.0:
+        return None
+    centroid = centroid / cn
+    return round(float((Xn @ centroid).mean()), 4)
+
+
 def _select_label_terms(
     scored: list[tuple[str, float]],
     top_n: int,
