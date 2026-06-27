@@ -1974,6 +1974,7 @@ def _apply_crossref_candidate(
     conn: sqlite3.Connection, *, paper_id: str, candidate: dict
 ) -> list[str]:
     """Fill-only paper UPDATE from a Crossref candidate dict."""
+    from alma.core.components import resolve_component
     from alma.core.paper_updates import fill_only_update_paper
     from alma.core.utils import normalize_doi
 
@@ -1991,6 +1992,26 @@ def _apply_crossref_candidate(
     except (TypeError, ValueError):
         cited_by_count = 0
 
+    # Phase-2 component linkage: a Crossref `is-supplement-to` relation can name
+    # this work's parent paper. When that parent is already in the corpus, mark
+    # + link the component so it leaves the Feed and shows under its parent.
+    # component_type is fill-only (won't override a dataset typed at ingest);
+    # parent_paper_id is fill-null (set-once link). No relation → both None,
+    # skipped by fill_only_update_paper.
+    component_type: str | None = None
+    parent_paper_id: str | None = None
+    relation_parent_doi = str(candidate.get("parent_doi") or "").strip() or None
+    if relation_parent_doi:
+        wt_row = conn.execute(
+            "SELECT work_type FROM papers WHERE id = ?", (paper_id,)
+        ).fetchone()
+        work_type = wt_row["work_type"] if wt_row is not None else None
+        component_type, parent_paper_id = resolve_component(
+            conn, doi=doi, work_type=work_type, relation_parent_doi=relation_parent_doi
+        )
+        if parent_paper_id == paper_id:  # never self-link
+            parent_paper_id = None
+
     return fill_only_update_paper(
         conn,
         paper_id,
@@ -2000,8 +2021,9 @@ def _apply_crossref_candidate(
             "publication_date": publication_date,
             "url": url,
             "doi": doi,
+            "component_type": component_type,
         },
-        fill_null_fields={"year": year},
+        fill_null_fields={"year": year, "parent_paper_id": parent_paper_id},
         max_int_fields={"cited_by_count": cited_by_count},
     )
 

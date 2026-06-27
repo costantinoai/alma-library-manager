@@ -19,6 +19,28 @@ def _strip_jats(text: str) -> str:
     return " ".join(cleaned.split()).strip()
 
 
+def parent_doi_from_relation(relation: object) -> Optional[str]:
+    """Parent DOI from a Crossref ``relation`` block, or ``None``.
+
+    Only ``is-supplement-to`` is trusted: it explicitly means "this work is
+    supplementary material to <DOI>", which is exactly the part-of signal we
+    want for datasets / supplements (alma.core.components). ``is-part-of`` is
+    deliberately NOT used — it often points at the journal / proceedings, which
+    would wrongly classify a real article as a component.
+    """
+    if not isinstance(relation, dict):
+        return None
+    entries = relation.get("is-supplement-to")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and str(entry.get("id-type") or "").lower() == "doi":
+            parent = normalize_doi(str(entry.get("id") or ""))
+            if parent:
+                return parent
+    return None
+
+
 def _score_by_rank(index: int, total: int) -> float:
     return round(max(0.0, 1.0 - (index / max(total, 1))), 4)
 
@@ -119,6 +141,9 @@ def _crossref_to_candidate(item: dict, score: float) -> Optional[dict]:
         "url": url,
         "cited_by_count": int(item.get("is-referenced-by-count") or 0),
         "abstract": abstract,
+        # Part-of signal: the parent paper this work supplements, if Crossref
+        # declares it (alma.core.components links datasets / supplements here).
+        "parent_doi": parent_doi_from_relation(item.get("relation")),
         "score": round(float(score), 4),
         "source_api": "crossref",
     }
@@ -175,7 +200,7 @@ def _fetch_works_chunk(chunk: list[str]) -> dict[str, dict]:
         "rows": len(chunk),
         "select": (
             "DOI,title,author,abstract,container-title,issued,"
-            "published-print,published-online,is-referenced-by-count,URL"
+            "published-print,published-online,is-referenced-by-count,URL,relation"
         ),
     }
     try:
