@@ -481,16 +481,14 @@ def _count_preprint_twins(conn: sqlite3.Connection, params=None) -> int:
 
 
 def _count_title_resolution_eligible(conn: sqlite3.Connection, params=None) -> int:
-    """Papers the title-resolution sweep would ACTUALLY process now — its own
-    eligibility predicate, which excludes papers already stamped terminal
-    (`terminal_no_match` / `unmatched`). The raw `identity.unresolved` dimension
-    counts every paper without an OpenAlex id, so reading it as the op's pending
-    over-reported work the sweep then skips; this keeps the count honest."""
-    from alma.discovery.similarity import get_active_embedding_model
-    from alma.services.title_resolution import _count_remaining_eligible
+    """Papers the title-resolution sweep would ACTUALLY process now — its shared
+    eligibility predicate. The Health `identity.unresolved` dimension now counts
+    this SAME population (via `count_remaining_eligible`), so the op's pending and
+    its dimension agree by construction."""
+    from alma.services.title_resolution import count_remaining_eligible
 
     try:
-        return int(_count_remaining_eligible(conn, get_active_embedding_model(conn)) or 0)
+        return int(count_remaining_eligible(conn) or 0)
     except Exception:
         logger.exception("title-resolution eligible count failed")
         return 0

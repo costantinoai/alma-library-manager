@@ -407,6 +407,54 @@ def _count_remaining_eligible(conn: sqlite3.Connection, model: str) -> int:
     return int(row["c"]) if row else 0
 
 
+def _active_model(conn: sqlite3.Connection) -> str:
+    from alma.discovery.similarity import get_active_embedding_model
+
+    return get_active_embedding_model(conn)
+
+
+def count_remaining_eligible(conn: sqlite3.Connection, model: Optional[str] = None) -> int:
+    """Public count of papers still eligible for title resolution.
+
+    The Health ``identity.unresolved`` dimension count, the maintenance op's
+    pending count, and this op's drilldown ALL share ONE definition (the
+    ``_ELIGIBILITY_FROM_WHERE`` predicate) so the dimension reconciles with both
+    its repair op and its drilldown. Defaults to the active embedding model.
+    """
+    return _count_remaining_eligible(conn, model or _active_model(conn))
+
+
+def list_remaining_eligible(
+    conn: sqlite3.Connection,
+    model: Optional[str] = None,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[sqlite3.Row]:
+    """Paginated papers eligible for title resolution — the drilldown behind the
+    Health ``identity.unresolved`` dimension.
+
+    Uses the SAME ``_ELIGIBILITY_FROM_WHERE`` as the count + the runner, so the
+    drilldown shows exactly the population the count reports and the op processes
+    (H-1 reconciliation). Returns rows shaped for the health drilldown
+    (``paper_id``/title/date/authors/status/doi/openalex_id + the fetch status).
+    """
+    mdl = model or _active_model(conn)
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    sql = f"""
+        SELECT p.id AS paper_id, p.title, p.publication_date, p.authors, p.status,
+               p.doi, p.openalex_id, COALESCE(fs.status, '') AS resolution_status
+        {_ELIGIBILITY_FROM_WHERE}
+        ORDER BY COALESCE(p.publication_date, '') DESC, p.title
+        LIMIT ? OFFSET ?
+    """
+    return conn.execute(
+        sql,
+        (mdl, EMBEDDING_SOURCE_SEMANTIC_SCHOLAR, mdl, EMBEDDING_SOURCE_SEMANTIC_SCHOLAR, limit, offset),
+    ).fetchall()
+
+
 def run_title_resolution_sweep(
     job_id: str,
     *,

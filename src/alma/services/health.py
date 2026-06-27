@@ -610,33 +610,46 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     orphans, orphans_ok = _safe_assess("canonical_orphans", lambda: _count_canonical_orphans(conn))
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
+    # identity.unresolved now counts the population title_resolution ACTUALLY
+    # processes — papers with no usable DOI/S2 identity for embedding (or stuck
+    # 'unmatched') — NOT just papers with no OpenAlex id. The dimension, its repair
+    # op's pending, and its drilldown all share title_resolution's one eligibility
+    # predicate, so the card's count agrees with its pending and its drilldown
+    # (the old without-OpenAlex-id count was a narrow ~4 against a ~2,300 pending).
+    from alma.services.title_resolution import count_remaining_eligible
+
+    unresolved, unres_ok = _safe_assess(
+        "title_resolution_eligible", lambda: count_remaining_eligible(conn)
+    )
+    unresolved = int(unresolved or 0)
 
     dims: list[dict[str, Any]] = []
 
     # --- Identity ----------------------------------------------------------
-    # High impact: an unresolved id blocks abstracts, references, topics, vectors.
+    # High impact: a paper with no usable identity can't be embedded or ranked.
     id_sev, id_state, id_reason = _gap_dim_args(
-        without_oa, papers_total, impact="high", ok=enr_ok
+        unresolved, papers_total, impact="high", ok=unres_ok
     )
     dims.append(
         _dimension(
             key="identity.unresolved",
             entity="identity",
             label="Unresolved identity",
-            count=without_oa if enr_ok else None,
+            count=unresolved if unres_ok else None,
             total=papers_total,
             state=id_state,
             severity=id_sev,
             severity_reason=id_reason,
             impact_tier="high",
             explanation=(
-                f"{without_oa} papers aren't resolved to an OpenAlex id, so they "
-                "lack rich metadata, citations, and topics. Resolve missing identity "
-                "(Semantic Scholar title search) is the fix — including papers a previous "
-                "search left stuck as 'unmatched'; until they resolve they can't be "
-                "enriched or embedded."
+                f"{unresolved} papers have no usable identity for embedding — no "
+                "Semantic Scholar id or DOI, or a previous title search left them "
+                "'unmatched'. Resolve missing identity (Semantic Scholar title search) "
+                "finds a match so they can be embedded and ranked."
+                if unres_ok
+                else "Couldn't measure — see logs."
             ),
-            impact="OpenAlex resolution unlocks abstracts, references, topics, and vectors.",
+            impact="A usable DOI / Semantic Scholar identity unlocks vectors, ranking, and enrichment.",
             repair_task="title_resolution",
         )
     )
@@ -844,7 +857,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # one rebuild so the corrected coverage lands.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v8',
+      'health-logic-v9',
       (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
@@ -1152,12 +1165,11 @@ _SPECTER2_MODEL = "allenai/specter2_base"
 _HAS_OA = "COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') <> ''"
 
 # dim key → WHERE predicate (alias ``p`` = papers). Special dims that need a
-# join (s2 vectors, coverage, retry) are handled separately in dimension_items.
+# join (identity, s2 vectors, coverage, retry) are handled separately in
+# dimension_items. ``identity.unresolved`` is NOT a simple predicate: it shares
+# title_resolution's eligibility (no usable DOI/S2 identity), reused below so the
+# drilldown reconciles with the dimension count + the op's pending.
 _DIMENSION_PREDICATES: dict[str, str] = {
-    "identity.unresolved": (
-        "COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') = '' "
-        "AND COALESCE(p.canonical_paper_id, '') = ''"
-    ),
     "papers.missing_abstract": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''",
     "papers.missing_doi": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.doi), ''), '') = ''",
     "papers.missing_url": f"{_HAS_OA} AND COALESCE(NULLIF(TRIM(p.url), ''), '') = ''",
@@ -1186,7 +1198,7 @@ _DIMENSION_PREDICATES: dict[str, str] = {
 
 # Short, dimension-specific "what's wrong with this row" label.
 _DIMENSION_DETAIL: dict[str, str] = {
-    "identity.unresolved": "No OpenAlex id",
+    "identity.unresolved": "No usable DOI / S2 identity",
     "papers.missing_abstract": "Abstract empty",
     "papers.missing_doi": "No DOI",
     "papers.missing_url": "No URL",
@@ -1206,6 +1218,33 @@ _ITEM_COLUMNS = (
 )
 
 
+def _project_dimension_rows(key: str, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """Shape drilldown rows into the uniform item dict (shared by every dim path)."""
+    out: list[dict[str, Any]] = []
+    base_detail = _DIMENSION_DETAIL.get(key, "")
+    for r in rows:
+        detail = base_detail
+        # `extra` only exists on the SQL-built rows; the key guard short-circuits
+        # before touching it for paths (e.g. identity) whose rows omit the column.
+        if key == "ledger.retry_waiting" and r["extra"]:
+            detail = f"Retry at {r['extra']}"
+        elif key == "identity.unresolved" and r["resolution_status"]:
+            detail = f"Needs resolution ({r['resolution_status']})" if r["resolution_status"] else detail
+        out.append(
+            {
+                "paper_id": r["paper_id"],
+                "title": r["title"] or "(untitled)",
+                "publication_date": r["publication_date"] or None,
+                "authors": r["authors"] or None,
+                "status": r["status"],
+                "doi": r["doi"] or None,
+                "openalex_id": r["openalex_id"] or None,
+                "detail": detail,
+            }
+        )
+    return out
+
+
 def dimension_items(
     conn: sqlite3.Connection, key: str, *, limit: int = 20, offset: int = 0
 ) -> list[dict[str, Any]]:
@@ -1214,6 +1253,20 @@ def dimension_items(
     offset = max(0, int(offset))
     order = "ORDER BY COALESCE(p.publication_date, '') DESC, p.title"
     extra = ""  # extra selected column appended for special dims
+
+    # identity.unresolved drills via title_resolution's shared eligibility
+    # predicate — the SAME one its count and the op's pending use — so the list
+    # reconciles with both (H-1). `list_remaining_eligible` returns rows shaped
+    # like _ITEM_COLUMNS (+ the fetch status), so it joins the common output loop.
+    if key == "identity.unresolved":
+        from alma.services.title_resolution import list_remaining_eligible
+
+        try:
+            rows = list_remaining_eligible(conn, limit=limit, offset=offset)
+        except sqlite3.OperationalError as exc:
+            logger.error("dimension_items drilldown %r failed: %s", key, exc, exc_info=True)
+            return []
+        return _project_dimension_rows(key, rows)
 
     pred = _DIMENSION_PREDICATES.get(key)
     if pred is not None:
@@ -1284,27 +1337,7 @@ def dimension_items(
         logger.error("dimension_items drilldown %r failed: %s", key, exc, exc_info=True)
         return []
 
-    out: list[dict[str, Any]] = []
-    base_detail = _DIMENSION_DETAIL.get(key, "")
-    for r in rows:
-        detail = base_detail
-        if key == "ledger.retry_waiting" and r["extra"]:
-            detail = f"Retry at {r['extra']}"
-        elif key == "identity.unresolved" and r["resolution_status"]:
-            detail = f"Resolution: {r['resolution_status']}"
-        out.append(
-            {
-                "paper_id": r["paper_id"],
-                "title": r["title"] or "(untitled)",
-                "publication_date": r["publication_date"] or None,
-                "authors": r["authors"] or None,
-                "status": r["status"],
-                "doi": r["doi"] or None,
-                "openalex_id": r["openalex_id"] or None,
-                "detail": detail,
-            }
-        )
-    return out
+    return _project_dimension_rows(key, rows)
 
 
 def dimension_items_page(
@@ -1327,6 +1360,7 @@ def dimension_items_page(
 
 # Valid drilldown keys = simple predicates + the special-cased dims.
 DIMENSION_ITEM_KEYS: frozenset[str] = frozenset(_DIMENSION_PREDICATES) | {
+    "identity.unresolved",
     "embeddings.s2_vector_missing",
     "embeddings.coverage",
     "ledger.retry_waiting",
