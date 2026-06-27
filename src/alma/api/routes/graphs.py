@@ -27,6 +27,7 @@ from alma.ai.graph_versions import (
     with_version,
 )
 from alma.config import get_db_path
+from alma.core.db_write import write_section
 from alma.core.scope import Scope
 
 logger = logging.getLogger(__name__)
@@ -488,10 +489,6 @@ def _rebuild_graphs_impl(
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.openalex.client import backfill_missing_publication_references
 
-    def _flush() -> None:
-        if conn.in_transaction:
-            conn.commit()
-
     def _cancelled() -> bool:
         return bool(job_id and is_cancellation_requested(job_id))
 
@@ -510,25 +507,27 @@ def _rebuild_graphs_impl(
             message=f"Rebuilding graphs: {phase_name}",
         )
 
-    # Phase 1: clear cache. Short write that would otherwise hold the
-    # writer lock across the remote reference backfill that follows.
+    # Each phase owns its own gated write window — phase 1's `write_section`
+    # here, then the reference backfill, `mv.rebuild`, and the cluster persist
+    # each gate their own writes. So the writer lock is released between phases
+    # with no cross-phase commit of a held transaction (the old `_flush`).
+
+    # Phase 1: clear cache. Short local write, gated so it can't hold the writer
+    # lock across the remote reference backfill that follows.
     _mark_progress(0, "clear_cache")
     try:
-        conn.execute("DELETE FROM graph_cache")
-        # Force a full RE-CLUSTER for this scope: drop its cached
-        # publication_clusters layout so the paper_map phase re-runs
-        # cluster_publications with the CURRENT algorithm. Without this the
-        # incremental path reused the stale cached layout (I-7), so a clustering
-        # change (I-5: eom / no-forced-K) never reached the rebuilt map — i.e.
-        # "Rebuild" didn't actually re-cluster. I-1: the cache is now scope-keyed,
-        # so we clear exactly this scope's rows (no papers join needed).
-        try:
+        with write_section(conn, label="graphs rebuild: clear_cache"):
+            conn.execute("DELETE FROM graph_cache")
+            # Force a full RE-CLUSTER for this scope: drop its cached
+            # publication_clusters layout so the paper_map phase re-runs
+            # cluster_publications with the CURRENT algorithm. Without this the
+            # incremental path reused the stale cached layout (I-7), so a clustering
+            # change (I-5: eom / no-forced-K) never reached the rebuilt map — i.e.
+            # "Rebuild" didn't actually re-cluster. I-1: the cache is now scope-keyed,
+            # so we clear exactly this scope's rows (no papers join needed).
             conn.execute(
                 "DELETE FROM publication_clusters WHERE scope = ?", (str(scope),)
             )
-        except sqlite3.OperationalError:
-            pass
-        _flush()
         if job_id:
             add_job_log(job_id, "Cleared graph cache + scope layout (forces full recluster)", step="clear_cache")
     except sqlite3.OperationalError:
@@ -540,7 +539,7 @@ def _rebuild_graphs_impl(
             add_job_log(job_id, "Cancellation requested before reference backfill", step="cancelled")
         return {"rebuilt": rebuilt, "count": 0, "cancelled": True}
 
-    # Phase 2: reference backfill (remote fetches + its own commit).
+    # Phase 2: reference backfill (remote fetches; gates its own write window).
     _mark_progress(1, "reference_backfill")
     graph_backfill = {
         "candidates": 0,
@@ -550,11 +549,9 @@ def _rebuild_graphs_impl(
     }
     try:
         graph_backfill = backfill_missing_publication_references(conn, limit=500)
-        _flush()
         if job_id:
             add_job_log(job_id, "Backfilled missing publication references", step="reference_backfill", data=graph_backfill)
     except Exception as e:
-        _flush()
         logger.warning("Failed to backfill publication references before graph rebuild: %s", e)
         if job_id:
             add_job_log(job_id, f"Reference backfill failed: {e}", level="WARNING", step="reference_backfill")
@@ -564,21 +561,18 @@ def _rebuild_graphs_impl(
             add_job_log(job_id, "Cancellation requested before paper map", step="cancelled")
         return {"rebuilt": rebuilt, "count": 0, "cancelled": True, "reference_backfill": graph_backfill}
 
-    # Phase 3: paper_map — reads embeddings, runs clustering/projection,
-    # writes publication_clusters and the materialised-view payload.
-    # Flush when done so the next phase starts with no pending writer
-    # lock. Forced through `mv.rebuild` (not the GET-side `mv.get`) so
-    # the rebuild fires unconditionally even if the fingerprint happens
-    # to match the cached row.
+    # Phase 3: paper_map — reads embeddings, runs clustering/projection, and
+    # writes publication_clusters (gated per batch inside `_build_embedding_paper_map`)
+    # plus the materialised-view payload (mv's own gated write). Forced through
+    # `mv.rebuild` (not the GET-side `mv.get`) so the rebuild fires unconditionally
+    # even if the fingerprint happens to match the cached row.
     _mark_progress(2, "paper_map")
     try:
         if job_id:
             add_job_log(job_id, f"Rebuilding paper map ({scope.label()})", step="paper_map")
         mv.rebuild(conn, scope.view_key("paper_map"))
-        _flush()
         rebuilt.append(scope.view_key("paper_map"))
     except Exception as e:
-        _flush()
         logger.warning("Failed to rebuild paper_map: %s", e)
         if job_id:
             add_job_log(job_id, f"Failed rebuilding paper_map: {e}", level="ERROR", step="paper_map")
@@ -594,10 +588,8 @@ def _rebuild_graphs_impl(
         if job_id:
             add_job_log(job_id, f"Rebuilding author network ({scope.label()})", step="author_network")
         mv.rebuild(conn, scope.view_key("author_network"))
-        _flush()
         rebuilt.append(scope.view_key("author_network"))
     except Exception as e:
-        _flush()
         logger.warning("Failed to rebuild author_network: %s", e)
         if job_id:
             add_job_log(job_id, f"Failed rebuilding author_network: {e}", level="ERROR", step="author_network")
@@ -615,8 +607,10 @@ def _backfill_references_impl(conn: sqlite3.Connection, *, job_id: str | None = 
 
     if job_id:
         add_job_log(job_id, "Starting publication-reference backfill", step="reference_backfill")
+    # `backfill_missing_publication_references` already gathers OpenAlex outside
+    # the lock then commits its inserts in its own `write_section` — no caller
+    # commit needed (and a raw one here would just be ungated).
     summary = backfill_missing_publication_references(conn, limit=500)
-    conn.commit()
     if job_id:
         add_job_log(job_id, "Publication-reference backfill completed", step="done", data=summary)
     return summary
@@ -1973,43 +1967,45 @@ def _build_embedding_paper_map(
     # Persist computed layout rows so subsequent refreshes can be incremental.
     # I-2: ONLY on the rebuild path (persist=True). A GET request never reaches
     # this block (the custom-options GET passes persist=False), so reads stay pure.
-    # Commit in bounded batches to release the SQLite writer lock between chunks
-    # (1000+ upserts under one txn held the lock for seconds — see
-    # ``tasks/10_ACTIVITY_CONCURRENCY.md``). NOTE: the residual raw commit here is
-    # the background-rebuild write that task 09 (_MIGRATION_BACKLOG) gates via
-    # write_section — left to 09 per the I-2↔09 cross-reference; do not double-fix.
+    # Gather-then-write: assignments/coords are computed above; persist each
+    # bounded batch in its OWN gated `write_section` so a 1000+-upsert rebuild
+    # takes BEGIN IMMEDIATE per chunk and releases the SQLite writer lock between
+    # chunks (one txn over every upsert held the lock for seconds — see
+    # ``tasks/10_ACTIVITY_CONCURRENCY.md``). Task 09: routes the old raw per-batch
+    # commit through the central writer-gate primitive.
     if persist:
         now_iso = datetime.now().isoformat()
         _CLUSTER_BATCH_SIZE = 200
         try:
             for batch_start in range(0, len(paper_ids), _CLUSTER_BATCH_SIZE):
                 batch = paper_ids[batch_start:batch_start + _CLUSTER_BATCH_SIZE]
-                for paper_id in batch:
-                    # Default to the Unclustered group (not cluster 0) for any
-                    # paper without an assignment — honest "we don't know" (I-6).
-                    cid = int(assignments.get(paper_id, OUTLIER_CLUSTER_ID))
-                    x, y = coords.get(paper_id, (0.5, 0.5))
-                    label = labels_by_cluster.get(cid) or (
-                        OUTLIER_LABEL if cid < 0 else f"Cluster {cid + 1}"
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO publication_clusters (paper_id, scope, cluster_id, label, x, y, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(paper_id, scope) DO UPDATE SET
-                            cluster_id = excluded.cluster_id,
-                            label = excluded.label,
-                            x = excluded.x,
-                            y = excluded.y,
-                            updated_at = excluded.updated_at
-                        """,
-                        (paper_id, layout_scope, cid, label, float(x), float(y), now_iso),
-                    )
-                if conn.in_transaction:
-                    conn.commit()
+                with write_section(conn, label="graphs paper_map: persist clusters"):
+                    for paper_id in batch:
+                        # Default to the Unclustered group (not cluster 0) for any
+                        # paper without an assignment — honest "we don't know" (I-6).
+                        cid = int(assignments.get(paper_id, OUTLIER_CLUSTER_ID))
+                        x, y = coords.get(paper_id, (0.5, 0.5))
+                        label = labels_by_cluster.get(cid) or (
+                            OUTLIER_LABEL if cid < 0 else f"Cluster {cid + 1}"
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO publication_clusters (paper_id, scope, cluster_id, label, x, y, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(paper_id, scope) DO UPDATE SET
+                                cluster_id = excluded.cluster_id,
+                                label = excluded.label,
+                                x = excluded.x,
+                                y = excluded.y,
+                                updated_at = excluded.updated_at
+                            """,
+                            (paper_id, layout_scope, cid, label, float(x), float(y), now_iso),
+                        )
         except sqlite3.OperationalError:
-            if conn.in_transaction:
-                conn.rollback()
+            # A transient lock means this pass didn't fully cache the layout; the MV
+            # row still persists and the next rebuild/refresh retries. write_section
+            # already rolled back the in-flight batch.
+            logger.warning("paper_map cluster persist hit a lock; layout not fully cached this pass")
 
     # PROTOTYPE (task 19): fused multi-view layout. Clusters stay SEMANTIC
     # (computed/cached above — stable), but POSITIONS are re-blended from
