@@ -330,7 +330,7 @@ def schedule_post_s2_chain(
     """After S2 vector backfill: queue local SPECTER2 fill if useful.
 
     Skips unless the active provider IS local SPECTER2. The previous
-    decision (`EMBEDDINGS_COMPONENT.md` Phase 3) explicitly forbids
+    decision (`CONTRACTS.md` Phase 3) explicitly forbids
     auto-fanout on a model switch — this hook only fires because the
     user already opted in by configuring the local provider AND a paper
     was inserted, so there's clear intent.

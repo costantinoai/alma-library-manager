@@ -43,7 +43,7 @@ const MAX_COLUMNS = 6
 const FALLBACK_COLUMNS = 3
 
 // ── Durable follow-intent journal ────────────────────────────────────
-// "Queued" is a real author status (see tasks/AUTHORS_COMPONENT.md): once
+// "Queued" is a real author status (see tasks/CONTRACTS.md): once
 // the user clicks Follow, that author must NEVER be re-suggested — even if
 // the page reloads before the API call commits. Each intent is journalled
 // to localStorage on click and removed on success / permanent failure; on
