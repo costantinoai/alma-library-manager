@@ -1138,6 +1138,36 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
         """,
         (OPENALEX_SOURCE, METADATA_PURPOSE, RETRYABLE_STATUS, _utcnow_iso()),
     ).fetchone()
+    # Per-field EXHAUSTED counts: papers still missing a field whose OpenAlex
+    # metadata fetch already COMPLETED (`status='enriched'`) — i.e. the source has
+    # no value to give, so no rehydrate run can fill them. This is why the Health
+    # "Rehydrate metadata" op can read pending=0 while the missing-* dimensions
+    # show thousands: most of that gap is exhausted, not pending. Surfacing it lets
+    # each dimension show "N missing · M already tried" and rank severity on the
+    # FIXABLE remainder, so the card's pending agrees with its gap. Same field
+    # predicates as `missing` above, restricted to already-enriched papers.
+    exhausted = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' THEN 1 ELSE 0 END) AS doi,
+            SUM(CASE WHEN COALESCE(NULLIF(TRIM(abstract), ''), '') = '' THEN 1 ELSE 0 END) AS abstract,
+            SUM(CASE WHEN COALESCE(NULLIF(TRIM(url), ''), '') = '' THEN 1 ELSE 0 END) AS url,
+            SUM(CASE WHEN COALESCE(NULLIF(TRIM(publication_date), ''), '') = '' THEN 1 ELSE 0 END) AS publication_date,
+            SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM publication_authors pa WHERE pa.paper_id = papers.id)
+                     THEN 1 ELSE 0 END) AS authorships,
+            SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM publication_topics pt WHERE pt.paper_id = papers.id)
+                     THEN 1 ELSE 0 END) AS topics
+        FROM papers
+        WHERE COALESCE(canonical_paper_id, '') = ''
+          AND COALESCE(NULLIF(TRIM(openalex_id), ''), '') != ''
+          AND EXISTS (
+              SELECT 1 FROM paper_enrichment_status es
+              WHERE es.paper_id = papers.id AND es.source = ? AND es.purpose = ?
+                AND es.status = 'enriched'
+          )
+        """,
+        (OPENALEX_SOURCE, METADATA_PURPOSE),
+    ).fetchone()
     return {
         "source": OPENALEX_SOURCE,
         "purpose": METADATA_PURPOSE,
@@ -1157,6 +1187,17 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
             "authorships": int(missing["missing_authorships"] or 0) if missing else 0,
             "topics": int(missing["missing_topics"] or 0) if missing else 0,
             "references": int(missing["missing_references"] or 0) if missing else 0,
+        },
+        # Subset of `missing` that OpenAlex already tried and can't fill (no source
+        # value). `references` is omitted: its repair op (reference_graph) is a
+        # separate fetch whose pending already tracks the gap, so it isn't exhausted.
+        "exhausted": {
+            "doi": int(exhausted["doi"] or 0) if exhausted else 0,
+            "abstract": int(exhausted["abstract"] or 0) if exhausted else 0,
+            "url": int(exhausted["url"] or 0) if exhausted else 0,
+            "publication_date": int(exhausted["publication_date"] or 0) if exhausted else 0,
+            "authorships": int(exhausted["authorships"] or 0) if exhausted else 0,
+            "topics": int(exhausted["topics"] or 0) if exhausted else 0,
         },
     }
 

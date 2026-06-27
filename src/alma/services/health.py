@@ -596,6 +596,11 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     enr_state = DIM_MEASURED if enr_ok else DIM_ERROR
     papers_total = int(enr.get("papers_total") or 0)
     missing = enr.get("missing") or {}
+    # Per-field exhausted = the slice of the gap OpenAlex already tried and can't
+    # fill (no source value). Severity ranks on the FIXABLE remainder, and the UI
+    # shows "N missing · M no fix", so the dimension agrees with its repair op's
+    # pending instead of flagging a warning the op can never move.
+    exhausted_by_field = enr.get("exhausted") or {}
     coverage = embedding_coverage(conn)  # carries its own ``error`` flag (assessed below)
     s2_missing, s2_ok = _safe_assess("s2_fetch_candidates", lambda: _count_s2_fetch_candidates(conn))
     s2_terminal, _ = _safe_assess("s2_fetch_terminal", lambda: _count_s2_fetch_terminal(conn))
@@ -662,7 +667,21 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     for field, meta in _MISSING_FIELD_META.items():
         count = int(missing.get(field) or 0)
         label, why, impact, repair, tier = meta
-        sev, st, reason = _gap_dim_args(count, papers_total, impact=tier, ok=enr_ok)
+        # Rank severity on the FIXABLE remainder (total gap − already-exhausted), so
+        # a gap OpenAlex can't fill (e.g. 1,565 of 1,570 missing abstracts already
+        # tried) reads as informational rather than a warning no run can clear — and
+        # the dimension's actionable count agrees with the repair op's pending.
+        exhausted = int(exhausted_by_field.get(field) or 0)
+        fixable = max(0, count - exhausted)
+        sev, st, reason = _gap_dim_args(fixable, papers_total, impact=tier, ok=enr_ok)
+        explanation = (
+            f"{count} papers {why}." if enr_ok else "Couldn't measure — see logs."
+        )
+        if enr_ok and exhausted:
+            explanation += (
+                f" {exhausted} were already fetched from OpenAlex, which has no value "
+                f"for them — only the remaining {fixable} can still be filled."
+            )
         dims.append(
             _dimension(
                 key=f"papers.missing_{field}",
@@ -674,9 +693,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 severity=sev,
                 severity_reason=reason,
                 impact_tier=tier,
-                explanation=(f"{count} papers {why}." if enr_ok else "Couldn't measure — see logs."),
+                explanation=explanation,
                 impact=impact,
                 repair_task=repair,
+                exhausted=exhausted if (enr_ok and exhausted) else None,
             )
         )
 
@@ -824,7 +844,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # one rebuild so the corrected coverage lands.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v7',
+      'health-logic-v8',
       (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
