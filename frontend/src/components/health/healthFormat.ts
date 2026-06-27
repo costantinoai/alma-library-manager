@@ -133,13 +133,18 @@ export function opSeverity(dims: HealthDimension[]): Severity | null {
 }
 
 /**
- * An op "needs attention" when any dimension it repairs is non-healthy, or —
- * for a dimension-less cleanup op — when it has items pending. Healthy + idle
- * ops collapse into the group's "All clear" strip.
+ * An op "needs attention" when any dimension it repairs is non-healthy OR it has
+ * items pending. Only healthy AND idle ops collapse into the "All clear" strip.
+ *
+ * The pending check is NOT gated on being dimension-less: an op can have pending
+ * work while every dimension it repairs reads healthy (the dimension measures a
+ * different/narrower population than the op processes — e.g. an op with 90
+ * pending whose mapped dimension is at 0). Hiding such an op as "All clear" was
+ * the bug where a backlog silently disappeared from the page.
  */
 export function isOpAttention(op: MaintenanceOperation, dims: HealthDimension[]): boolean {
   const sev = opSeverity(dims)
-  if (sev != null) return sev !== 'ok'
+  if (sev != null && sev !== 'ok') return true
   return op.candidates_pending > 0
 }
 

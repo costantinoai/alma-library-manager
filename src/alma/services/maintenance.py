@@ -626,14 +626,15 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "Fill author profile fields + affiliation evidence from OpenAlex, "
                 "ORCID, Semantic Scholar, and Crossref for authors that need it."
             ),
-            # Truthful repair claim. Re-hydration refreshes affiliation EVIDENCE
-            # across sources, so it CAN clear stale `affiliation_conflicts`. It
-            # canNOT mint an OpenAlex id for an author that has none, so it does
-            # NOT heal `followed_unresolved` — those are an identity gap resolved
-            # per-author on the Authors page (retry / paste id / accept as
-            # unidentifiable), not by a bulk re-hydrate. Claiming it made the
-            # "maintenance due" count advertise a fix that never moved the number.
-            health_dimensions=("authors.affiliation_conflicts",),
+            # No health dimension. Re-hydration is a PRODUCER of affiliation
+            # evidence, not a RESOLVER of conflicts: an `affiliation_conflicts`
+            # flag means current sources genuinely disagree, which a re-fetch only
+            # re-confirms — it's cleared by a human PICK on the Authors page
+            # (pick_affiliation), not by this op. Mapping the op to that dimension
+            # made the card advertise a fix it can't perform AND mismatched its
+            # pending count (0 to rehydrate) against the conflict count (≥1). The
+            # conflict is surfaced instead as an Observed/needs-review dimension.
+            health_dimensions=(),
             candidate_path="",
             operation_key="authors.rehydrate_metadata",
             job_id_prefix="maint_author_metadata",
@@ -737,7 +738,14 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "and auto-merge (richer-profile-wins) or record an alias so duplicates "
                 "stop resurfacing in suggestions."
             ),
-            health_dimensions=("authors.merge_conflicts",),
+            # No health dimension. This op CREATES merges (it can even leave a
+            # `merge_conflicts` behind when a merge keeps a conflicting hard id);
+            # it does not RESOLVE them — that's a human decision on the Authors
+            # page (resolve_conflict). Mapping it to `merge_conflicts` both
+            # mis-claimed the repair AND collapsed the op into "All clear" whenever
+            # the conflict count was 0, hiding its real pending dedup work. Its
+            # pending count (ORCID-dedup candidates) now stands on its own.
+            health_dimensions=(),
             candidate_path="",
             operation_key="authors.dedup_by_orcid",
             job_id_prefix="maint_dedup_orcid",
