@@ -221,6 +221,10 @@ export interface HealthDimension {
   total: number | null
   coverage_pct: number | null
   severity: 'ok' | 'info' | 'warning' | 'critical'
+  /** H-7: one-line justification for the severity (impact-aware, not a flat %). */
+  severity_reason?: string
+  /** H-7: impact tier driving the thresholds — 'integrity' | 'high' | 'medium' | 'low'. */
+  impact_tier?: string | null
   explanation: string
   impact: string
   repair_task: string | null
@@ -228,8 +232,28 @@ export interface HealthDimension {
   scope: 'corpus' | 'library' | string
   /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
   exhausted: number | null
-  /** H-2: 'measured' normally; 'error' when the assessor raised (count is null). */
-  state?: 'measured' | 'error'
+  /** Measurement state (H-2 / H-7): 'measured' normally; 'error' when the
+   *  assessor raised (count null); 'not_applicable' when the feature is off;
+   *  'insufficient_data' when the universe is empty (onboarding, NOT a failure). */
+  state?: 'measured' | 'error' | 'not_applicable' | 'insufficient_data'
+}
+
+/** Per-view freshness for the unified health snapshot (H-8): corpus and authors
+ *  are separate materialized views, so each carries its own timestamp/flags. */
+export interface HealthViewFreshness {
+  computed_at?: string | null
+  generated_at?: string | null
+  stale: boolean
+  rebuilding: boolean
+}
+
+/** H-10: author totals — issue sum vs DISTINCT affected head count (not the same). */
+export interface HealthAuthorTotals {
+  authors_total: number
+  issue_count: number
+  unique_affected_authors: number
+  attention_total: number
+  dimensions_by_severity?: Record<string, number>
 }
 
 /** GET /insights/health — flattened MV envelope (payload fields + SWR flags). */
@@ -243,11 +267,19 @@ export interface HealthSnapshot {
     embedding_coverage_pct: number
     embeddings_ready: boolean
     dimensions_by_severity: Record<string, number>
+    /** H-10: author-side counts, nested so they're never read as paper counts. */
+    authors?: HealthAuthorTotals
   }
   dimensions: HealthDimension[]
   stale?: boolean
   rebuilding?: boolean
   computed_at?: string | null
+  /** H-8: per-view freshness — `generated_at`/`stale`/`rebuilding` are the
+   *  OLDEST/OR aggregate across these, so the headline never hides a stale part. */
+  views?: {
+    corpus: HealthViewFreshness
+    authors: HealthViewFreshness
+  }
 }
 
 export interface MaintenanceLastRun {

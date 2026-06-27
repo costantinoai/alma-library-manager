@@ -19,16 +19,30 @@ import { StatusRow } from './StatusRow'
 export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOpen: () => void }) {
   const isAuthorDim = dim.key.startsWith('authors.')
   const isError = dim.state === 'error'
-  const isCoverage = !isError && dim.coverage_pct != null
+  // H-7: empty/unconfigured universes are typed states, not measured zeros — they
+  // render as muted "not applicable" / "not enough data", never a healthy count.
+  const isNotApplicable = dim.state === 'not_applicable'
+  const isInsufficient = dim.state === 'insufficient_data'
+  const isUnmeasured = isError || isNotApplicable || isInsufficient
+  const isCoverage = !isUnmeasured && dim.coverage_pct != null
   const pct = Math.round(dim.coverage_pct ?? 0)
 
   // H-2: a failed assessor must read as "couldn't measure", never a healthy 0.
+  // H-7: not-applicable / insufficient-data read as their own muted states.
   const metric = isError ? (
     <span
       className="shrink-0 text-xs italic text-warning-600"
       title="The health assessor for this dimension failed — see the server log. This is NOT a measured zero."
     >
       couldn’t measure
+    </span>
+  ) : isNotApplicable ? (
+    <span className="shrink-0 text-xs italic text-slate-400" title={dim.severity_reason}>
+      not applicable
+    </span>
+  ) : isInsufficient ? (
+    <span className="shrink-0 text-xs italic text-slate-400" title={dim.severity_reason}>
+      not enough data
     </span>
   ) : isCoverage ? (
     <span className="flex items-center gap-2">
@@ -69,5 +83,16 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
       ? () => navigateTo('authors', { focus: 'needs-attention' })
       : undefined
 
-  return <StatusRow severity={dim.severity} label={dim.label} metric={metric} onOpen={handleOpen} />
+  // H-7: the impact-aware reason ("17% of the corpus affected — ≥5% warns for
+  // high-impact gaps") rides as the row tooltip, so the severity is explained,
+  // not just asserted.
+  return (
+    <StatusRow
+      severity={dim.severity}
+      label={dim.label}
+      metric={metric}
+      onOpen={handleOpen}
+      title={dim.severity_reason || undefined}
+    />
+  )
 }

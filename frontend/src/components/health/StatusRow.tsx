@@ -22,9 +22,11 @@ interface StatusRowProps {
   metric?: React.ReactNode
   /** When provided the row becomes a button that opens a drilldown. */
   onOpen?: () => void
+  /** Native tooltip — used to surface the severity reason (H-7) on hover. */
+  title?: string
 }
 
-export function StatusRow({ severity, label, metric, onOpen }: StatusRowProps) {
+export function StatusRow({ severity, label, metric, onOpen, title }: StatusRowProps) {
   const clickable = !!onOpen
   const inner = (
     <>
@@ -40,11 +42,12 @@ export function StatusRow({ severity, label, metric, onOpen }: StatusRowProps) {
       ) : null}
     </>
   )
-  if (!clickable) return <div className={BASE}>{inner}</div>
+  if (!clickable) return <div className={BASE} title={title}>{inner}</div>
   return (
     <button
       type="button"
       onClick={onOpen}
+      title={title}
       className={cn(
         BASE,
         'group transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',

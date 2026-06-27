@@ -39,6 +39,7 @@ import { SystemStatusCards } from '@/components/health/SystemStatusCards'
 import { SectionLabel } from '@/components/health/SectionLabel'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { freshnessNote } from '@/components/health/healthFormat'
 import { formatRelativeShort } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
@@ -199,7 +200,7 @@ export function HealthPage() {
           {snapshot ? (
             <span className="text-xs text-slate-400">
               Last assessed {formatRelativeShort(snapshot.generated_at)}
-              {snapshot.rebuilding ? ' · updating…' : ''}
+              {freshnessNote(snapshot) ? ` · ${freshnessNote(snapshot)}` : ''}
             </span>
           ) : null}
           <Button

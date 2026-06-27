@@ -41,10 +41,13 @@ logger = logging.getLogger(__name__)
 # embeddings_ready flips true at this coverage % (user decision 2026-05-25).
 EMBEDDINGS_READY_THRESHOLD = 80.0
 
-# Dimension measurement states (H-2). The UI renders these distinctly so a real
-# failure can never masquerade as a healthy "0". ``measured`` is the normal path.
+# Dimension measurement states (H-2 / H-7). The UI renders each distinctly so a
+# real failure, an empty corpus, or a switched-off feature can never masquerade
+# as a healthy measured "0". ``measured`` is the normal path.
 DIM_MEASURED = "measured"
 DIM_ERROR = "error"  # the assessor raised — count is unknown, NOT zero
+DIM_NOT_APPLICABLE = "not_applicable"  # the feature isn't configured — N/A, not a gap
+DIM_INSUFFICIENT_DATA = "insufficient_data"  # empty universe — nothing to measure yet
 
 
 def _safe_assess(label: str, fn: Callable[[], Any]) -> Tuple[Any, bool]:
@@ -191,29 +194,128 @@ def author_attention_where_sql() -> str:
 # --------------------------------------------------------------------------
 
 
-def _severity_from_fraction(
-    count: int, total: int, *, warn: float = 0.05, crit: float = 0.25
-) -> Severity:
-    """Severity for a "fewer is better" count (e.g. missing abstracts)."""
-    if count <= 0:
-        return "ok"
+# --------------------------------------------------------------------------
+# Severity policy — impact-aware, not one-size-fits-all (H-7).
+#
+# A raw proportion is not severity: 100% of 3 papers missing a landing-page URL
+# is not a crisis, but a single broken canonical pointer (a paper silently
+# vanishes) is. So every "fewer is better" gap is tagged with an IMPACT TIER and
+# the tier — not a universal 5%/25% — decides the thresholds:
+#   - proportion thresholds scale with how much the gap hurts (a high-impact gap
+#     crosses to critical far sooner than a low-impact one);
+#   - an absolute ``floor`` caps a tiny gap at ``info`` regardless of proportion,
+#     so a near-empty corpus doesn't paint everything critical — EXCEPT the
+#     ``integrity`` tier, where even one corrupt row warrants a warning;
+#   - the empty / unconfigured universe is a typed ``insufficient_data`` /
+#     ``not_applicable`` state (NOT critical), so onboarding and "feature off"
+#     never read as failure.
+# The chosen tier + a one-line reason ride along in the payload (``impact_tier`` /
+# ``severity_reason``) so the UI can show WHY a row is the color it is — there is
+# deliberately NO single opaque "health score".
+# --------------------------------------------------------------------------
+
+Impact = str  # "integrity" | "high" | "medium" | "low"
+
+# Impact tier → thresholds. ``floor`` = absolute count below which the gap is
+# capped at ``info`` (a handful of rows isn't an emergency); ``integrity`` sets
+# it to 0 so a single corruption still warns.
+_IMPACT_TIERS: dict[Impact, dict[str, float]] = {
+    "integrity": {"warn_frac": 0.0, "crit_frac": 0.02, "floor": 0},
+    "high": {"warn_frac": 0.05, "crit_frac": 0.25, "floor": 5},
+    "medium": {"warn_frac": 0.15, "crit_frac": 0.50, "floor": 10},
+    "low": {"warn_frac": 0.40, "crit_frac": 0.80, "floor": 25},
+}
+
+
+def _assess_gap(count: int, total: int, *, impact: Impact) -> tuple[Severity, str, str]:
+    """Impact-aware severity for a "fewer is better" gap (H-7).
+
+    Returns ``(severity, state, reason)``. ``state`` is ``insufficient_data`` for
+    an empty universe (NOT ``critical``) so onboarding reads as onboarding; the
+    ``reason`` is the one-line justification surfaced in the payload.
+    """
+    tier = _IMPACT_TIERS[impact]
     if total <= 0:
-        return "info"
+        return "ok", DIM_INSUFFICIENT_DATA, "No papers assessed yet — nothing to measure."
+    if count <= 0:
+        return "ok", DIM_MEASURED, "No affected papers."
     frac = count / total
-    if frac >= crit:
-        return "critical"
-    if frac >= warn:
-        return "warning"
-    return "info"
+    pct = round(frac * 100, 1)
+    floor = int(tier["floor"])
+    warn_at = int(tier["warn_frac"] * 100)
+    crit_at = int(tier["crit_frac"] * 100)
+    if count < floor:
+        return (
+            "info",
+            DIM_MEASURED,
+            f"{count} affected ({pct}%) — under the {floor}-paper floor for {impact}-impact gaps.",
+        )
+    if frac >= tier["crit_frac"]:
+        return (
+            "critical",
+            DIM_MEASURED,
+            f"{pct}% of the corpus affected (≥{crit_at}% is critical for {impact}-impact gaps).",
+        )
+    if frac >= tier["warn_frac"]:
+        return (
+            "warning",
+            DIM_MEASURED,
+            f"{pct}% of the corpus affected (≥{warn_at}% warns for {impact}-impact gaps).",
+        )
+    return "info", DIM_MEASURED, f"{pct}% affected — below the {warn_at}% warning threshold."
 
 
-def _coverage_severity(pct: float) -> Severity:
-    """Severity for a "more is better" coverage percentage."""
+def _count_severity(
+    count: int | None, *, warn_at: int | None, crit_at: int | None, noun: str
+) -> tuple[Severity, str, str]:
+    """Severity from an ABSOLUTE count (H-7), for dimensions with no honest
+    denominator — the author buckets, where "total authors" is dominated by
+    co-authors so any proportion rounds to ~0% and would hide a real problem.
+
+    ``warn_at`` / ``crit_at`` are absolute thresholds; ``None`` means the
+    dimension never escalates to that level (``warn_at=None`` → stays ``info``).
+    """
+    if not count or count <= 0:
+        return "ok", DIM_MEASURED, f"No {noun}."
+    if crit_at is not None and count >= crit_at:
+        return "critical", DIM_MEASURED, f"{count} {noun} — past the {crit_at} critical line."
+    if warn_at is not None and count >= warn_at:
+        return "warning", DIM_MEASURED, f"{count} {noun} — needs attention."
+    return "info", DIM_MEASURED, f"{count} {noun}."
+
+
+def _assess_coverage(cov: dict[str, Any]) -> tuple[Severity, str, str]:
+    """Impact-aware severity for embedding coverage — a "more is better" % (H-7).
+
+    Configured-aware: a measurement error (carried on ``cov``) → ``error``; an
+    empty corpus → ``insufficient_data``; no active model → ``not_applicable``.
+    Only a populated, configured corpus gets warning/critical for low coverage,
+    so an empty/onboarding corpus is never falsely critical.
+    """
+    if cov.get("error"):
+        return "warning", DIM_ERROR, "Couldn't measure embedding coverage — see logs."
+    if not cov.get("active_model"):
+        return "ok", DIM_NOT_APPLICABLE, "No embedding model configured — coverage doesn't apply."
+    if int(cov.get("papers_count") or 0) <= 0:
+        return "ok", DIM_INSUFFICIENT_DATA, "No papers to embed yet."
+    pct = float(cov.get("coverage_pct") or 0.0)
+    ready = int(EMBEDDINGS_READY_THRESHOLD)
     if pct >= EMBEDDINGS_READY_THRESHOLD:
-        return "ok"
+        return "ok", DIM_MEASURED, f"{pct}% covered (ready at ≥{ready}%)."
     if pct >= 50.0:
-        return "warning"
-    return "critical"
+        return "warning", DIM_MEASURED, f"{pct}% covered — below the {ready}% ready line."
+    return "critical", DIM_MEASURED, f"Only {pct}% covered — semantic ranking is largely unavailable."
+
+
+def _gap_dim_args(
+    count: int | None, total: int, *, impact: Impact, ok: bool
+) -> tuple[Severity, str, str]:
+    """``(severity, state, reason)`` for a gap dimension, honoring the assessor
+    ok-flag (H-2 + H-7). A failed assessor yields a typed ``error`` state — never
+    a measured zero — so the two concerns compose in one place."""
+    if not ok:
+        return "warning", DIM_ERROR, "Couldn't measure — see logs."
+    return _assess_gap(int(count or 0), total, impact=impact)
 
 
 # --------------------------------------------------------------------------
@@ -277,6 +379,8 @@ def _dimension(
     extra_actions: list[dict[str, str]] | None = None,
     exhausted: int | None = None,
     state: str = DIM_MEASURED,
+    severity_reason: str = "",
+    impact_tier: str | None = None,
 ) -> dict[str, Any]:
     """Build one uniform dimension record (the shape every surface reads).
 
@@ -284,9 +388,13 @@ def _dimension(
     fix — tried and terminal (e.g. Semantic Scholar has no vector for them). The
     UI splits it out so the user isn't surprised that Run-now skips them.
 
-    ``state`` (H-2): ``measured`` normally, ``error`` when the assessor failed —
-    then ``count`` is ``None`` (unknown), NOT ``0``, so the UI shows "couldn't
-    measure" instead of a misleading healthy zero.
+    ``state`` (H-2 / H-7): ``measured`` normally; ``error`` when the assessor
+    failed; ``not_applicable`` / ``insufficient_data`` when the feature is off or
+    the universe is empty. ``count`` is ``None`` for ``error`` (unknown, NOT 0).
+
+    ``severity_reason`` / ``impact_tier`` (H-7): the one-line justification and
+    the impact tier behind the severity, so the UI can explain WHY a row is the
+    color it is rather than presenting an opaque verdict.
     """
     actions = list(_REPAIR_ACTIONS.get(repair_task or "", []))
     if extra_actions:
@@ -299,6 +407,8 @@ def _dimension(
         "total": int(total) if total is not None else None,
         "coverage_pct": coverage_pct,
         "severity": severity,
+        "severity_reason": severity_reason,
+        "impact_tier": impact_tier,
         "explanation": explanation,
         "impact": impact,
         "repair_task": repair_task,
@@ -311,51 +421,60 @@ def _dimension(
 
 # --------------------------------------------------------------------------
 # Missing-field metadata — drives the per-field paper dimensions.
-# (key suffix, label, why-missing clause, impact, repair_task)
+# (label, why-missing clause, impact text, repair_task, impact_tier)
+# The ``impact_tier`` (H-7) sets the severity policy: a missing abstract makes a
+# paper unembeddable (``high``), a missing landing-page URL is cosmetic (``low``).
 # --------------------------------------------------------------------------
 
-_MISSING_FIELD_META: dict[str, tuple[str, str, str, str]] = {
+_MISSING_FIELD_META: dict[str, tuple[str, str, str, str, str]] = {
     "abstract": (
         "Missing abstract",
         "have an OpenAlex id but no abstract",
         "Abstracts power embeddings and ranking — without one a paper is hard to embed or recommend.",
         "corpus_metadata",
+        "high",
     ),
     "references": (
         "Missing references",
         "have no stored reference list",
         "References build the citation graph that Discovery and the graph views rely on.",
         "corpus_metadata",
+        "medium",
     ),
     "topics": (
         "Missing topics",
         "have no topics",
         "Topics drive topic-overlap scoring and the topic map.",
         "corpus_metadata",
+        "medium",
     ),
     "authorships": (
         "Missing authors",
         "have no author rows",
         "Author links feed author tracking, suggestions, and dedup.",
         "corpus_metadata",
+        "high",
     ),
     "doi": (
         "Missing DOI",
         "have an OpenAlex id but no DOI",
         "A DOI is the most reliable cross-source key for vectors and dedup.",
         "corpus_metadata",
+        "medium",
     ),
     "publication_date": (
         "Missing publication date",
         "have no publication date",
         "Dates drive recency in Feed and Discovery.",
         "corpus_metadata",
+        "medium",
     ),
     "url": (
         "Missing URL",
         "have no landing-page URL",
         "A URL lets you open the paper at the source.",
         "corpus_metadata",
+        "low",
     ),
 }
 
@@ -477,8 +596,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     enr_state = DIM_MEASURED if enr_ok else DIM_ERROR
     papers_total = int(enr.get("papers_total") or 0)
     missing = enr.get("missing") or {}
-    coverage = embedding_coverage(conn)  # carries its own ``error`` flag
-    coverage_state = DIM_ERROR if coverage.get("error") else DIM_MEASURED
+    coverage = embedding_coverage(conn)  # carries its own ``error`` flag (assessed below)
     s2_missing, s2_ok = _safe_assess("s2_fetch_candidates", lambda: _count_s2_fetch_candidates(conn))
     s2_terminal, _ = _safe_assess("s2_fetch_terminal", lambda: _count_s2_fetch_terminal(conn))
     local_computable, local_ok = _safe_assess(
@@ -491,6 +609,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     dims: list[dict[str, Any]] = []
 
     # --- Identity ----------------------------------------------------------
+    # High impact: an unresolved id blocks abstracts, references, topics, vectors.
+    id_sev, id_state, id_reason = _gap_dim_args(
+        without_oa, papers_total, impact="high", ok=enr_ok
+    )
     dims.append(
         _dimension(
             key="identity.unresolved",
@@ -498,8 +620,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Unresolved identity",
             count=without_oa if enr_ok else None,
             total=papers_total,
-            state=enr_state,
-            severity=_severity_from_fraction(without_oa, papers_total) if enr_ok else "warning",
+            state=id_state,
+            severity=id_sev,
+            severity_reason=id_reason,
+            impact_tier="high",
             explanation=(
                 f"{without_oa} papers aren't resolved to an OpenAlex id, so they "
                 "lack rich metadata, citations, and topics. Resolve missing identity "
@@ -512,6 +636,9 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         )
     )
     if orphans_ok and orphans:  # on assessor failure: skip (already loud in the log), don't claim 0
+        # Integrity tier: a single dangling pointer silently hides a paper, so any
+        # occurrence warns (≥2% of the corpus escalates to critical).
+        orph_sev, _, orph_reason = _assess_gap(orphans, papers_total, impact="integrity")
         dims.append(
             _dimension(
                 key="identity.canonical_orphans",
@@ -519,7 +646,9 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 label="Orphaned merge pointers",
                 count=orphans,
                 total=papers_total,
-                severity="warning" if orphans else "ok",
+                severity=orph_sev,
+                severity_reason=orph_reason,
+                impact_tier="integrity",
                 explanation=(
                     f"{orphans} papers point to a canonical (merged) paper that no "
                     "longer exists — they'll be hidden from normal views."
@@ -532,7 +661,8 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # --- Per-field metadata gaps ------------------------------------------
     for field, meta in _MISSING_FIELD_META.items():
         count = int(missing.get(field) or 0)
-        label, why, impact, repair = meta
+        label, why, impact, repair, tier = meta
+        sev, st, reason = _gap_dim_args(count, papers_total, impact=tier, ok=enr_ok)
         dims.append(
             _dimension(
                 key=f"papers.missing_{field}",
@@ -540,8 +670,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 label=label,
                 count=count if enr_ok else None,
                 total=papers_total,
-                state=enr_state,
-                severity=_severity_from_fraction(count, papers_total) if enr_ok else "warning",
+                state=st,
+                severity=sev,
+                severity_reason=reason,
+                impact_tier=tier,
                 explanation=(f"{count} papers {why}." if enr_ok else "Couldn't measure — see logs."),
                 impact=impact,
                 repair_task=repair,
@@ -549,25 +681,27 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         )
 
     # --- Embeddings --------------------------------------------------------
+    # Configured-aware coverage (H-7): an empty/onboarding corpus reads as
+    # insufficient_data, not a false "critically low coverage".
+    cov_sev, cov_state, cov_reason = _assess_coverage(coverage)
+    cov_measured = cov_state == DIM_MEASURED
     dims.append(
         _dimension(
             key="embeddings.coverage",
             entity="embedding",
             label="Embedding coverage",
-            count=coverage["embeddings_count"] if coverage_state == DIM_MEASURED else None,
-            total=coverage["papers_count"] if coverage_state == DIM_MEASURED else None,
+            count=coverage["embeddings_count"] if cov_measured else None,
+            total=coverage["papers_count"] if cov_measured else None,
             coverage_pct=coverage["coverage_pct"],
-            state=coverage_state,
-            severity=(
-                _coverage_severity(coverage["coverage_pct"])
-                if coverage_state == DIM_MEASURED
-                else "warning"
-            ),
+            state=cov_state,
+            severity=cov_sev,
+            severity_reason=cov_reason,
+            impact_tier="high",
             explanation=(
                 f"{coverage['coverage_pct']}% of papers have a vector for the active "
                 f"model. Ready at ≥{int(EMBEDDINGS_READY_THRESHOLD)}%."
-                if coverage_state == DIM_MEASURED
-                else "Couldn't measure embedding coverage — see logs."
+                if cov_measured
+                else cov_reason
             ),
             impact="Discovery similarity and the paper map depend on embedding coverage.",
             # Coverage itself isn't a single runner; it improves by fetching S2
@@ -576,6 +710,9 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             extra_actions=_REPAIR_ACTIONS["s2_vector"] + _REPAIR_ACTIONS["embedding"],
         )
     )
+    # Medium impact: fetched vectors improve coverage but local compute is a
+    # fallback, so a backlog degrades rather than blocks.
+    s2_sev, s2_state, s2_reason = _gap_dim_args(s2_missing, papers_total, impact="medium", ok=s2_ok)
     dims.append(
         _dimension(
             key="embeddings.s2_vector_missing",
@@ -583,8 +720,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Fetchable S2 vectors",
             count=s2_missing if s2_ok else None,
             total=papers_total,
-            state=DIM_MEASURED if s2_ok else DIM_ERROR,
-            severity=_severity_from_fraction(s2_missing, papers_total) if s2_ok else "warning",
+            state=s2_state,
+            severity=s2_sev,
+            severity_reason=s2_reason,
+            impact_tier="medium",
             explanation=(
                 f"{s2_missing} papers have a DOI/S2 id and could fetch a precomputed "
                 "SPECTER2 vector from Semantic Scholar. Papers that Semantic Scholar "
@@ -599,6 +738,9 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             exhausted=s2_terminal,
         )
     )
+    local_sev, local_state, local_reason = _gap_dim_args(
+        local_computable, papers_total, impact="medium", ok=local_ok
+    )
     dims.append(
         _dimension(
             key="embeddings.local_computable",
@@ -606,8 +748,10 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Locally computable embeddings",
             count=local_computable if local_ok else None,
             total=papers_total,
-            state=DIM_MEASURED if local_ok else DIM_ERROR,
-            severity=_severity_from_fraction(local_computable, papers_total) if local_ok else "warning",
+            state=local_state,
+            severity=local_sev,
+            severity_reason=local_reason,
+            impact_tier="medium",
             explanation=(
                 f"{local_computable} papers have a title + abstract and can be embedded "
                 "locally with SPECTER2 — this is the only fix for papers Semantic Scholar "
@@ -680,7 +824,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # one rebuild so the corrected coverage lands.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v6',
+      'health-logic-v7',
       (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
@@ -729,6 +873,12 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     """
     total = 0
     n_error = n_no_match = n_review = n_followed_unresolved = 0
+    # H-10: the four status buckets OVERLAP (a followed author can also be an
+    # 'error'), so their sum is an ISSUE count, not a head count. This separate
+    # DISTINCT-row tally over the shared attention predicate is the honest
+    # "how many authors actually need attention" — reported alongside, never
+    # conflated with, the issue total.
+    n_unique_attention = 0
     try:
         row = conn.execute(
             f"""
@@ -741,7 +891,9 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
               SUM(CASE WHEN COALESCE(a.id_resolution_status, '') = 'needs_manual_review'
                        THEN 1 ELSE 0 END) AS n_review,
               SUM(CASE WHEN ({_AUTHOR_FOLLOWED_UNRESOLVED_SQL})
-                       THEN 1 ELSE 0 END) AS n_followed_unresolved
+                       THEN 1 ELSE 0 END) AS n_followed_unresolved,
+              SUM(CASE WHEN ({author_attention_where_sql()})
+                       THEN 1 ELSE 0 END) AS n_unique_attention
             FROM authors a
             """
         ).fetchone()
@@ -751,6 +903,7 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             n_no_match = int(row["n_no_match"] or 0)
             n_review = int(row["n_review"] or 0)
             n_followed_unresolved = int(row["n_followed_unresolved"] or 0)
+            n_unique_attention = int(row["n_unique_attention"] or 0)
     except sqlite3.OperationalError as exc:
         # Documented degradation: the id_resolution_* columns may not exist yet on
         # a mid-migration DB → zeros are the right answer there. But log it (H-2)
@@ -775,6 +928,21 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         "author_affiliation_conflicts", _count_affiliation_conflicts
     )
 
+    # H-7: author buckets use ABSOLUTE-count severity, not a fraction of all
+    # authors — "total authors" is dominated by co-authors, so any proportion
+    # rounds to ~0% and would mask a real problem. Thresholds reflect meaning:
+    # a refresh error is worse than an unmatched co-author; a followed author the
+    # resolver never bridged is a warning even at count 1 (the user asked for it).
+    err_sev, _, err_reason = _count_severity(n_error, warn_at=1, crit_at=10, noun="refresh errors")
+    nomatch_sev, _, nomatch_reason = _count_severity(
+        n_no_match, warn_at=10, crit_at=None, noun="unmatched authors"
+    )
+    review_sev, _, review_reason = _count_severity(
+        n_review, warn_at=None, crit_at=None, noun="ambiguous authors"
+    )
+    follow_sev, _, follow_reason = _count_severity(
+        n_followed_unresolved, warn_at=1, crit_at=None, noun="followed-but-unresolved authors"
+    )
     dims: list[dict[str, Any]] = [
         _dimension(
             key="authors.resolution_error",
@@ -782,7 +950,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Refresh errors",
             count=n_error,
             total=total,
-            severity=_severity_from_fraction(n_error, total),
+            severity=err_sev,
+            severity_reason=err_reason,
             explanation=f"{n_error} authors hit an exception on their last identity refresh.",
             impact="Their profile, affiliation, and corpus can't update until the refresh succeeds.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -793,7 +962,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             label="No OpenAlex match",
             count=n_no_match,
             total=total,
-            severity=_severity_from_fraction(n_no_match, total),
+            severity=nomatch_sev,
+            severity_reason=nomatch_reason,
             explanation=f"{n_no_match} authors returned zero OpenAlex candidates by name.",
             impact="Without an OpenAlex id an author can't be tracked or deduped automatically.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -804,7 +974,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Ambiguous candidates",
             count=n_review,
             total=total,
-            severity="info" if n_review else "ok",
+            severity=review_sev,
+            severity_reason=review_reason,
             explanation=f"{n_review} authors had multiple OpenAlex candidates scored too close to auto-pick.",
             impact="A human pick resolves the identity; until then the author stays unlinked.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
@@ -815,7 +986,8 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Followed but unresolved",
             count=n_followed_unresolved,
             total=total,
-            severity="warning" if n_followed_unresolved else "ok",
+            severity=follow_sev,
+            severity_reason=follow_reason,
             explanation=(
                 f"{n_followed_unresolved} followed authors still have no OpenAlex id, "
                 "so their feed and corpus can't refresh cleanly."
@@ -826,11 +998,22 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         _dimension(
             key="authors.merge_conflicts",
             entity="author",
+            # Integrity-adjacent: a kept conflicting identifier can mis-attribute
+            # papers across people, so any unresolved conflict warns.
             label="Unresolved merge conflicts",
             count=merge_conflicts if merge_ok else None,
             total=total,
             state=DIM_MEASURED if merge_ok else DIM_ERROR,
-            severity=("warning" if merge_conflicts else "ok") if merge_ok else "warning",
+            severity=(
+                _count_severity(merge_conflicts, warn_at=1, crit_at=None, noun="merge conflicts")[0]
+                if merge_ok
+                else "warning"
+            ),
+            severity_reason=(
+                _count_severity(merge_conflicts, warn_at=1, crit_at=None, noun="merge conflicts")[2]
+                if merge_ok
+                else "Couldn't measure merge conflicts — see logs."
+            ),
             explanation=(
                 f"{merge_conflicts} merges kept a conflicting hard identifier "
                 "(orcid / scholar id) that needs a human decision."
@@ -847,7 +1030,17 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             count=affiliation_conflicts if affil_ok else None,
             total=total,
             state=DIM_MEASURED if affil_ok else DIM_ERROR,
-            severity=("info" if affiliation_conflicts else "ok") if affil_ok else "warning",
+            # Display-only disagreement → informational (never escalates).
+            severity=(
+                _count_severity(affiliation_conflicts, warn_at=None, crit_at=None, noun="affiliation conflicts")[0]
+                if affil_ok
+                else "warning"
+            ),
+            severity_reason=(
+                _count_severity(affiliation_conflicts, warn_at=None, crit_at=None, noun="affiliation conflicts")[2]
+                if affil_ok
+                else "Couldn't measure affiliation conflicts — see logs."
+            ),
             explanation=(
                 f"{affiliation_conflicts} authors have affiliation evidence that "
                 "disagrees across sources."
@@ -863,18 +1056,30 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     for d in dims:
         by_severity[d["severity"]] = by_severity.get(d["severity"], 0) + 1
 
+    # H-10: `issue_count` is the sum of overlapping buckets (one author can raise
+    # several issues); `unique_affected_authors` is the DISTINCT head count of
+    # authors flagged by the shared status predicate. They are reported as two
+    # explicitly-named numbers so neither is mistaken for the other — plus the
+    # two conflict tallies, which are issue rows (in their own tables), not author
+    # rows, hence folded into the issue total only.
+    # `or 0`: a failed conflict assessor (None) must not crash the totals — its
+    # dimension already carries the error state.
+    issue_count = (
+        n_error
+        + n_no_match
+        + n_review
+        + n_followed_unresolved
+        + (merge_conflicts or 0)
+        + (affiliation_conflicts or 0)
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "totals": {
             "authors_total": total,
-            # `or 0`: a failed conflict assessor (None) must not crash the total —
-            # its dimension already carries the error state.
-            "attention_total": n_error
-            + n_no_match
-            + n_review
-            + n_followed_unresolved
-            + (merge_conflicts or 0)
-            + (affiliation_conflicts or 0),
+            "issue_count": issue_count,
+            "unique_affected_authors": n_unique_attention,
+            # Back-compat alias: `attention_total` has always meant the issue sum.
+            "attention_total": issue_count,
             "dimensions_by_severity": by_severity,
         },
         "dimensions": dims,
@@ -887,7 +1092,7 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
 # output shape / dimensions / actions change.
 _HEALTH_AUTHORS_FINGERPRINT_SQL = """
     SELECT
-      'health-authors-v2',
+      'health-authors-v3',
       (SELECT COUNT(*) FROM authors),
       (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
       (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),

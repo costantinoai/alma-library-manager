@@ -1760,15 +1760,44 @@ def get_corpus_health(
     for dim in all_dims:
         sev = dim.get("severity") or "ok"
         by_severity[sev] = by_severity.get(sev, 0) + 1
-    totals = {**(payload.get("totals") or {}), "dimensions_by_severity": by_severity}
+    # Corpus totals stay top-level (papers/coverage are corpus facts); author
+    # totals nest under `authors` so the honest issue-vs-unique counts (H-10) are
+    # observable without conflating them with paper counts.
+    totals = {
+        **(payload.get("totals") or {}),
+        "dimensions_by_severity": by_severity,
+        "authors": authors_payload.get("totals") or {},
+    }
+
+    # H-8: corpus and author health are SEPARATE materialized views with
+    # independent freshness. Centering one view's timestamp would let the other be
+    # newer/older/rebuilding silently. Expose per-view metadata and an honest
+    # aggregate: the snapshot is only as fresh as its STALEST part, so the headline
+    # `generated_at` is the OLDER of the two and the flags are the OR.
+    corpus_view = {
+        "computed_at": envelope.get("computed_at"),
+        "generated_at": payload.get("generated_at"),
+        "stale": bool(envelope.get("stale", False)),
+        "rebuilding": bool(envelope.get("rebuilding", False)),
+    }
+    authors_view = {
+        "computed_at": authors_envelope.get("computed_at"),
+        "generated_at": authors_payload.get("generated_at"),
+        "stale": bool(authors_envelope.get("stale", False)),
+        "rebuilding": bool(authors_envelope.get("rebuilding", False)),
+    }
+    _generated = [v for v in (corpus_view["generated_at"], authors_view["generated_at"]) if v]
+    oldest_generated = min(_generated) if _generated else payload.get("generated_at")
 
     return {
         **payload,
+        "generated_at": oldest_generated,
         "dimensions": all_dims,
         "totals": totals,
-        "stale": envelope.get("stale", False) or authors_envelope.get("stale", False),
-        "rebuilding": envelope.get("rebuilding", False) or authors_envelope.get("rebuilding", False),
+        "stale": corpus_view["stale"] or authors_view["stale"],
+        "rebuilding": corpus_view["rebuilding"] or authors_view["rebuilding"],
         "computed_at": envelope.get("computed_at"),
+        "views": {"corpus": corpus_view, "authors": authors_view},
     }
 
 

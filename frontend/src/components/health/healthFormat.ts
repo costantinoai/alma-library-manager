@@ -9,7 +9,7 @@
  */
 import type { MetricTileTone } from '@/components/shared/MetricTile'
 import type { StatusBadgeTone } from '@/components/ui/status-badge'
-import type { HealthDimension, MaintenanceOperation } from '@/api/client'
+import type { HealthDimension, HealthSnapshot, MaintenanceOperation } from '@/api/client'
 
 type Severity = HealthDimension['severity']
 
@@ -99,6 +99,24 @@ export function sortBySeverity(dims: HealthDimension[]): HealthDimension[] {
 /** A dimension is "needs attention" when it is anything but healthy. */
 export function isAttention(dim: HealthDimension): boolean {
   return dim.severity !== 'ok'
+}
+
+/**
+ * H-8: an honest one-line freshness note for the unified snapshot. Corpus and
+ * author health are SEPARATE materialized views, so when only one is
+ * rebuilding/stale we name WHICH — never a blanket "updating…" that hides a
+ * fresh part or implies the whole page is stale. Returns null when both are
+ * current. (Falls back to the flat `rebuilding` flag on an older payload with no
+ * per-view metadata.)
+ */
+export function freshnessNote(snapshot: HealthSnapshot): string | null {
+  const v = snapshot.views
+  if (!v) return snapshot.rebuilding ? 'updating…' : null
+  const label = (k: 'corpus' | 'authors') => (k === 'authors' ? 'author health' : 'corpus')
+  const updating = (['corpus', 'authors'] as const).filter((k) => v[k].rebuilding || v[k].stale)
+  if (updating.length === 2) return 'updating…'
+  if (updating.length === 1) return `${label(updating[0])} updating…`
+  return null
 }
 
 /**
