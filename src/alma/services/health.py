@@ -804,8 +804,13 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+# H-3: every input to assess_authors must appear here or the ribbon goes stale.
+# The leading logic-version literal forces a one-time rebuild on assessment-logic
+# changes (the data fingerprint can't see code changes); bump it when the authors
+# output shape / dimensions / actions change.
 _HEALTH_AUTHORS_FINGERPRINT_SQL = """
     SELECT
+      'health-authors-v1',
       (SELECT COUNT(*) FROM authors),
       (SELECT COALESCE(MAX(id_resolution_updated_at), '') FROM authors),
       (SELECT COALESCE(MAX(last_fetched_at), '') FROM authors),
@@ -814,7 +819,13 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
       -- (a manual pick OR an auto-refresh replacing source rows) must
       -- invalidate it — otherwise the ribbon shows a stale conflict count.
       (SELECT COUNT(*) FROM author_affiliation_evidence),
-      (SELECT COALESCE(MAX(observed_at), '') FROM author_affiliation_evidence)
+      (SELECT COALESCE(MAX(observed_at), '') FROM author_affiliation_evidence),
+      -- H-3: unresolved merge-conflict count (the dimension's metric) + a
+      -- mutation marker, so creating OR resolving a conflict rebuilds the view
+      -- even when the net count is unchanged (one resolved, one created).
+      (SELECT COUNT(*) FROM author_merge_conflicts WHERE status = 'unresolved'),
+      (SELECT COALESCE(MAX(created_at), '') || '|' || COALESCE(MAX(resolved_at), '')
+         FROM author_merge_conflicts)
 """
 
 

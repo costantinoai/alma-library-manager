@@ -395,6 +395,24 @@ def init_db_schema() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_author_affiliation_evidence_author "
                 "ON author_affiliation_evidence(author_id, is_current DESC, observed_at DESC)"
             )
+            # Durable merge-conflict state (a merge that kept a conflicting hard
+            # identifier). Bootstrapped here — not only lazily in author_merge —
+            # so the health:authors fingerprint can safely COUNT it (H-3) on a
+            # DB that has never run a merge. Mirrors author_merge.py's DDL.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_merge_conflicts (
+                    id TEXT PRIMARY KEY,
+                    primary_author_id TEXT NOT NULL,
+                    alt_openalex_id TEXT NOT NULL,
+                    field TEXT NOT NULL,
+                    primary_value TEXT,
+                    alt_value TEXT,
+                    status TEXT NOT NULL DEFAULT 'unresolved',
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    UNIQUE (primary_author_id, alt_openalex_id, field)
+                )"""
+            )
 
             # ==============================================================
             # FEED: Author-based inbox
