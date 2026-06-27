@@ -418,65 +418,11 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
     except Exception:
         pass
 
-    workflow = _library_workflow_counts(db)
-    if int(workflow["untriaged_count"]) > 0:
-        templates.append(
-            {
-                "key": "library-workflow:untriaged",
-                "category": "library_workflow",
-                "title": "Untriaged acquisition cleanup",
-                "description": "Create a daily digest for new library papers that still have no reading state.",
-                "rationale": f"{workflow['untriaged_count']} library papers are still untriaged.",
-                "metrics": {
-                    "untriaged_count": workflow["untriaged_count"],
-                    "queued_count": workflow["queued_count"],
-                },
-                "rule": {
-                    "name": "Library workflow: untriaged acquisitions",
-                    "rule_type": "library_workflow",
-                    "rule_config": {"workflow": "untriaged", "limit": 20},
-                    "channels": ["slack"],
-                    "enabled": True,
-                },
-                "alert": {
-                    "name": "Daily library cleanup",
-                    "channels": ["slack"],
-                    "schedule": "daily",
-                    "schedule_config": {"time": "17:30"},
-                    "format": "text",
-                    "enabled": True,
-                },
-            }
-        )
-    if int(workflow["queued_count"]) > 0:
-        templates.append(
-            {
-                "key": "library-workflow:queued",
-                "category": "library_workflow",
-                "title": "Queued reading reminder",
-                "description": "Create a weekly digest for the current reading queue.",
-                "rationale": f"{workflow['queued_count']} papers are queued for reading.",
-                "metrics": {
-                    "queued_count": workflow["queued_count"],
-                    "reading_count": workflow["reading_count"],
-                },
-                "rule": {
-                    "name": "Library workflow: queued reading",
-                    "rule_type": "library_workflow",
-                    "rule_config": {"workflow": "queued", "limit": 15},
-                    "channels": ["slack"],
-                    "enabled": True,
-                },
-                "alert": {
-                    "name": "Weekly reading queue reminder",
-                    "channels": ["slack"],
-                    "schedule": "weekly",
-                    "schedule_config": {"day": "friday", "time": "16:00"},
-                    "format": "text",
-                    "enabled": True,
-                },
-            }
-        )
+    # D2: saving a paper is NOT a reading chore. The `queued` reading-state and the
+    # derived `untriaged` backlog were removed ("saved means saved"), so this
+    # surface no longer suggests untriaged-cleanup / reading-queue alert
+    # automations. (Reading/done/excluded stay available as opt-in `library_workflow`
+    # rule values for users who DO track reading — just not nagged-about by default.)
 
     return templates[:10]
 
@@ -900,39 +846,6 @@ def _resolve_feed_monitor_id(db: sqlite3.Connection, config: dict[str, Any]) -> 
     return str((row["id"] if row else "") or "").strip()
 
 
-def _library_workflow_counts(db: sqlite3.Connection) -> dict[str, int]:
-    # Guard: papers table may not exist yet on a fresh database
-    exists = db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='papers'"
-    ).fetchone()
-    if not exists:
-        return {"queued_count": 0, "reading_count": 0, "done_count": 0, "excluded_count": 0, "untriaged_count": 0}
-    row = db.execute(
-        """
-        SELECT
-            COALESCE(SUM(CASE WHEN reading_status = 'queued' THEN 1 ELSE 0 END), 0) AS queued_count,
-            COALESCE(SUM(CASE WHEN reading_status = 'reading' THEN 1 ELSE 0 END), 0) AS reading_count,
-            COALESCE(SUM(CASE WHEN reading_status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
-            COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count,
-            COALESCE(SUM(
-                CASE
-                    WHEN status = 'library'
-                     AND (reading_status IS NULL OR TRIM(reading_status) = '')
-                    THEN 1 ELSE 0
-                END
-            ), 0) AS untriaged_count
-        FROM papers
-        """
-    ).fetchone()
-    return {
-        "queued_count": int((row["queued_count"] if row else 0) or 0),
-        "reading_count": int((row["reading_count"] if row else 0) or 0),
-        "done_count": int((row["done_count"] if row else 0) or 0),
-        "excluded_count": int((row["excluded_count"] if row else 0) or 0),
-        "untriaged_count": int((row["untriaged_count"] if row else 0) or 0),
-    }
-
-
 def _evaluate_rule(
     rule_row: dict,
     db: sqlite3.Connection,
@@ -1253,15 +1166,16 @@ def _evaluate_rule(
         return [dict(r) for r in rows]
 
     if rule_type == "library_workflow":
+        # D2: `queued` and the derived `untriaged` backlog were removed — only the
+        # opt-in reading states remain valid rule values. An obsolete rule that
+        # still names queued/untriaged matches nothing (returns []), so a stale
+        # saved rule degrades silently rather than resurrecting the chore.
         workflow = str(config.get("workflow") or config.get("state") or "").strip().lower()
         limit = max(1, min(500, int(config.get("limit", 25) or 25)))
-        if workflow == "untriaged":
-            where = "p.status = 'library' AND (p.reading_status IS NULL OR TRIM(p.reading_status) = '')"
-        elif workflow in {"queued", "reading", "done", "excluded"}:
-            where = "p.reading_status = ?"
-        else:
+        if workflow not in {"reading", "done", "excluded"}:
             return []
-        params = [workflow] if workflow in {"queued", "reading", "done", "excluded"} else []
+        where = "p.reading_status = ?"
+        params = [workflow]
         rows = db.execute(
             f"""
             SELECT p.*
