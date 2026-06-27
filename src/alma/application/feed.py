@@ -35,7 +35,17 @@ from alma.core.http_sources import (
     source_diagnostics_scope,
 )
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
+from alma.core.components import (
+    link_orphan_components,
+    not_component_sql,
+    resolve_component,
+)
+from alma.core.utils import (
+    clean_display_text,
+    normalize_doi,
+    normalize_title_key,
+    resolve_existing_paper_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -456,7 +466,10 @@ def _upsert_candidate_paper(
     now: str,
     pending_hydration_ids: set[str] | None = None,
 ) -> str | None:
-    title = str(candidate.get("title") or "").strip()
+    # Clean the display fields at the boundary: figure / SI titles arrive
+    # HTML-wrapped (`<p>…</p>`). The fill_only_update_paper path re-cleans
+    # (idempotent), but the direct INSERT below relies on this.
+    title = clean_display_text(str(candidate.get("title") or "").strip())
     if not title:
         return None
 
@@ -470,14 +483,22 @@ def _upsert_candidate_paper(
         year = int(candidate.get("year")) if candidate.get("year") is not None and str(candidate.get("year")).strip() else None
     except (TypeError, ValueError):
         year = None
-    authors = str(candidate.get("authors") or "").strip()
-    journal = str(candidate.get("journal") or candidate.get("published_journal") or "").strip()
-    abstract = str(candidate.get("abstract") or "").strip()
+    authors = clean_display_text(str(candidate.get("authors") or "").strip())
+    journal = clean_display_text(str(candidate.get("journal") or candidate.get("published_journal") or "").strip())
+    abstract = clean_display_text(str(candidate.get("abstract") or "").strip())
     url = str(candidate.get("url") or "").strip()
     try:
         cited_by_count = int(candidate.get("cited_by_count") or 0)
     except (TypeError, ValueError):
         cited_by_count = 0
+
+    # OpenAlex `type`; falls back to a bare `type` key from non-author sources.
+    work_type = str(candidate.get("work_type") or candidate.get("type") or "").strip()
+
+    # Is this a paper, or a *part* of one (figure / SI / dataset / author
+    # response)? Components are upserted into the corpus but the `_insert_feed_item`
+    # gate keeps them out of the inbox; they surface inside the parent's popup.
+    component_type, parent_paper_id = resolve_component(db, doi=doi, work_type=work_type)
 
     existing_paper_id = resolve_existing_paper_id(
         db,
@@ -503,8 +524,16 @@ def _upsert_candidate_paper(
                 "url": url,
                 "doi": doi,
                 "openalex_id": openalex_id,
+                "work_type": work_type,
             },
-            fill_null_fields={"year": year},
+            # Component facts are structural and set-once (skipped when None,
+            # so a normal paper is untouched and a re-classified parent link
+            # isn't churned).
+            fill_null_fields={
+                "year": year,
+                "component_type": component_type,
+                "parent_paper_id": parent_paper_id,
+            },
             max_int_fields={"cited_by_count": cited_by_count},
             prefer_specific_date_fields={"publication_date": publication_date or ""},
         )
@@ -514,8 +543,9 @@ def _upsert_candidate_paper(
         db.execute(
             """INSERT OR IGNORE INTO papers
                (id, title, authors, year, journal, abstract, url, doi, publication_date,
-                openalex_id, cited_by_count, status, added_from, added_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'tracked', 'feed', ?)""",
+                openalex_id, cited_by_count, work_type, component_type, parent_paper_id,
+                status, added_from, added_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'tracked', 'feed', ?)""",
             (
                 paper_id,
                 title,
@@ -528,9 +558,18 @@ def _upsert_candidate_paper(
                 publication_date,
                 openalex_id or None,
                 cited_by_count,
+                work_type or None,
+                component_type,
+                parent_paper_id,
                 now,
             ),
         )
+
+    # Orphan reconcile: if THIS paper is a parent (not itself a component) with a
+    # DOI, adopt any suffix children (figures / SI) that were ingested before it
+    # in this same refresh and are still unlinked.
+    if component_type is None and doi:
+        link_orphan_components(db, parent_paper_id=paper_id, parent_doi=doi)
 
     try:
         from alma.openalex.client import upsert_work_sidecars
@@ -572,6 +611,15 @@ def _insert_feed_item(
     monitor_type: str | None,
     monitor_label: str | None,
 ) -> bool:
+    # Components (figures / SI / datasets / author responses) live in the
+    # corpus but never enter the Feed inbox — they're shown inside their parent
+    # paper's popup. ONE gate here keeps every monitor loop DRY and also
+    # protects retroactively (a paper re-classified as a component by the
+    # backfill stops producing new feed items).
+    row = db.execute("SELECT component_type FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if row is not None and str(row["component_type"] or "").strip():
+        return False
+
     feed_id = uuid.uuid4().hex
     db.execute(
         """INSERT OR IGNORE INTO feed_items
@@ -651,6 +699,7 @@ def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_day
               AND pp.earliest >= ?
               AND pp.earliest <= ?
               AND COALESCE(NULLIF(p.publication_date, ''), pp.earliest) >= ?
+              AND """ + not_component_sql("p") + """
             """,
             (start, finish, cutoff),
         ).fetchone()
@@ -687,6 +736,11 @@ def list_feed_items(
     # the corpus survives. Excluded across every status filter (including
     # "all"), so a dismissed paper never reappears on refresh.
     where.append("COALESCE(fi.status, 'new') <> 'dismissed'")
+    # Components (figures / SI / datasets / author responses) never appear in the
+    # inbox — they're shown inside their parent paper's popup. Defense in depth
+    # alongside the `_insert_feed_item` gate: this also hides any historical
+    # component row the backfill re-classified, with no feed_items deletion.
+    where.append(not_component_sql("p"))
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
     filter_to_new_papers = False
@@ -1282,6 +1336,11 @@ def _normalize_author_work_to_candidate(work: dict) -> dict:
         "doi": work.get("doi"),
         "openalex_id": work.get("openalex_id"),
         "cited_by_count": work.get("num_citations", 0),
+        # The OpenAlex `type` (article / preprint / dataset / peer-review /
+        # other …). Carried forward so the component classifier can tell a
+        # dataset / author-response apart from a paper at ingest time, before
+        # any later hydration runs (see alma.core.components).
+        "work_type": work.get("type"),
         "topics": work.get("topics") or [],
         "keywords": work.get("keywords") or [],
         "institutions": work.get("institutions") or [],
