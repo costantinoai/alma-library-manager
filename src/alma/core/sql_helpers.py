@@ -40,3 +40,20 @@ def paper_date_sort_expr(alias: str = "", *, added_at_fallback: bool = False) ->
         f"COALESCE({prefix}publication_date, "
         f"printf('%04d-01-01', COALESCE({prefix}year, 0)), {tail})"
     )
+
+
+def canonical_paper_filter(alias: str = "p", *, leading_and: bool = False) -> str:
+    """SQL predicate selecting CANONICAL papers — those that are NOT a merged-away
+    duplicate of another row.
+
+    A paper whose ``canonical_paper_id`` points at another paper is an alias
+    (preprint↔journal dedup; see ``alma.application.preprint_dedup``), not a
+    distinct work. The corpus "universe" for coverage / health / dedup counts is
+    canonical papers ONLY, so a metric's numerator, denominator, fingerprint, and
+    affected-items drilldown must all share THIS predicate — otherwise the headline
+    counts aliases the drilldown can't show, and they fail to reconcile (Health
+    H-1). ``alias`` is the ``papers`` table alias; ``leading_and=True`` prepends
+    ``" AND "`` for appending onto an existing ``WHERE``.
+    """
+    clause = f"COALESCE({alias}.canonical_paper_id, '') = ''"
+    return f" AND {clause}" if leading_and else clause

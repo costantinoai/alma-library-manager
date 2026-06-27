@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from alma.application import materialized_views as mv
+from alma.core.sql_helpers import canonical_paper_filter
 
 # embeddings_ready flips true at this coverage % (user decision 2026-05-25).
 EMBEDDINGS_READY_THRESHOLD = 80.0
@@ -337,7 +338,8 @@ _MISSING_FIELD_META: dict[str, tuple[str, str, str, str]] = {
 def embedding_coverage(
     conn: sqlite3.Connection, model: str | None = None
 ) -> dict[str, Any]:
-    """Canonical embedding-coverage definition: active-model vectors / all papers.
+    """Canonical embedding-coverage definition: active-model vectors / CANONICAL
+    papers.
 
     This is the single source of truth for the headline coverage % — both the
     Health snapshot (``assess_corpus``) and Settings' ``/ai/status`` call it so
@@ -347,6 +349,13 @@ def embedding_coverage(
     it explicitly so their headline matches their own per-model breakdown.
     (``graphs.py`` still keeps an equivalent inline copy — folding it in is a
     separate DRY follow-up.)
+
+    H-1: numerator AND denominator are restricted to CANONICAL papers (via
+    ``canonical_paper_filter``) — the same universe the ``embeddings.coverage``
+    drilldown uses — so the headline % reconciles with the affected-items list
+    (covered + missing = canonical total). Counting merged-away alias rows here
+    (as it did before) inflated both counts with papers the drilldown could never
+    show, and could even push the numerator above the denominator.
     """
     try:
         if model is None:
@@ -354,7 +363,12 @@ def embedding_coverage(
 
             model = get_active_embedding_model(conn)
         emb = conn.execute(
-            "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
+            f"""
+            SELECT COUNT(*) AS c
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ? AND {canonical_paper_filter('p')}
+            """,
             (model,),
         ).fetchone()
         emb_count = int((emb["c"] if emb else 0) or 0)
@@ -362,7 +376,9 @@ def embedding_coverage(
         model = ""
         emb_count = 0
     try:
-        pub = conn.execute("SELECT COUNT(*) AS c FROM papers").fetchone()
+        pub = conn.execute(
+            f"SELECT COUNT(*) AS c FROM papers p WHERE {canonical_paper_filter('p')}"
+        ).fetchone()
         pub_count = int((pub["c"] if pub else 0) or 0)
     except Exception:
         pub_count = 0
@@ -593,14 +609,20 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # *assessment logic* changes (the data fingerprint can't see code changes — e.g.
 # adding actions to a dimension). Bump it when assess_corpus' output shape /
 # dimensions / actions change.
-_HEALTH_CORPUS_FINGERPRINT_SQL = """
+# H-1: the paper count AND the embedding count are both over the CANONICAL
+# universe (the helper), matching embedding_coverage's numerator/denominator —
+# the fingerprint used to mix canonical papers with ALL embedding rows, so an
+# alias gaining/losing a vector wouldn't invalidate the snapshot. v4→v5 forces
+# one rebuild so the corrected coverage lands.
+_HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v4',
-      (SELECT COUNT(*) FROM papers WHERE COALESCE(canonical_paper_id,'')=''),
+      'health-logic-v5',
+      (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
       (SELECT COALESCE(MAX(updated_at),'') FROM paper_enrichment_status),
-      (SELECT COUNT(*) FROM publication_embeddings),
+      (SELECT COUNT(*) FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE {canonical_paper_filter('p')}),
       (SELECT COUNT(*) FROM publication_embedding_fetch_status),
       (SELECT COALESCE(MAX(value),'') FROM discovery_settings WHERE key LIKE '%embedding_model%')
 """
@@ -912,10 +934,12 @@ def dimension_items(
             model = get_active_embedding_model(conn)
         except Exception:
             model = _SPECTER2_MODEL
+        # Same CANONICAL universe + model as embedding_coverage()'s denominator,
+        # so this affected-items list == (canonical total − covered) (H-1).
         sql = f"""
             SELECT {_ITEM_COLUMNS}, '' AS extra
             FROM papers p
-            WHERE COALESCE(p.canonical_paper_id, '') = ''
+            WHERE {canonical_paper_filter('p')}
               AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?
