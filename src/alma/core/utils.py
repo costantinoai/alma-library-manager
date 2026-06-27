@@ -4,6 +4,7 @@ This module centralizes common operations to avoid duplication across
 the codebase, particularly for text normalization and data transformations.
 """
 
+import html
 import re
 import sqlite3
 import unicodedata
@@ -79,6 +80,46 @@ def repair_display_text(value: Optional[str]) -> str:
     if not value:
         return value or ""
     return unicodedata.normalize("NFC", _DOTLESS_I_PLUS_COMBINING_RE.sub("i\\1", value))
+
+
+# A real HTML/XML tag: ``<`` then an (optionally closing) ASCII-letter-led name.
+# The letter requirement is the safety margin — it refuses to match a
+# mathematical ``<`` / ``>`` (``p < 0.05``, ``N > 30``) as a tag, so scientific
+# titles with inequalities survive untouched.
+_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^<>]*>")
+
+
+def strip_html(value: Optional[str]) -> str:
+    """Remove HTML/XML markup + decode entities from a display string.
+
+    Source titles for figures / supporting-info arrive wrapped in markup
+    (``<p>Cytochrome oxidase…</p>``, ``using <i>N</i> = 6``). This decodes
+    entities (``&amp;`` → ``&``), drops letter-led tags (replacing each with a
+    space so words don't fuse: ``a<br>b`` → ``a b``), and collapses the
+    resulting whitespace.
+
+    A NO-OP on clean text: when the value has no ``<`` and no ``&`` it is
+    returned verbatim (so clean multi-paragraph abstracts keep their
+    whitespace). Mathematical ``<`` / ``>`` is preserved (see ``_HTML_TAG_RE``).
+    """
+    if not value or ("<" not in value and "&" not in value):
+        return value or ""
+    text = html.unescape(value)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # A tag sitting between a word and its punctuation (`differs</i>.`) leaves a
+    # stray space (`differs .`); pull punctuation back onto the word.
+    return re.sub(r"\s+([.,;:!?])", r"\1", text)
+
+
+def clean_display_text(value: Optional[str]) -> str:
+    """Write-time cleaner for display fields: ``strip_html`` then diacritic repair.
+
+    The canonical composition applied at every paper/author persistence
+    chokepoint for title/journal/abstract-style fields — see
+    :func:`strip_html` and :func:`repair_display_text`.
+    """
+    return repair_display_text(strip_html(value))
 
 
 _TITLE_KEY_NOISE_RE = re.compile(r"[^a-z0-9]+")

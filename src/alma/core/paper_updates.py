@@ -13,20 +13,20 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Mapping
 
-from alma.core.utils import repair_display_text
+from alma.core.utils import clean_display_text
 
-# Display-text columns on ``papers`` that get NFC + dotless-ı repair at write
-# time (mirrors the frontend repair allowlist). Identifier / URL / date columns
-# are deliberately excluded — they must round-trip byte-for-byte.
+# Display-text columns on ``papers`` that get HTML-strip + NFC + dotless-ı repair
+# at write time (mirrors the frontend repair allowlist). Identifier / URL / date
+# columns are deliberately excluded — they must round-trip byte-for-byte.
 _DISPLAY_TEXT_FIELDS = frozenset({"title", "authors", "journal", "abstract", "tldr"})
 
 
 def _normalize_write_value(field: str, value: Any) -> Any:
-    """Strip strings; additionally repair display-text fields (NFC + dotless-ı)."""
+    """Strip strings; additionally clean display-text fields (HTML + NFC + dotless-ı)."""
     if not isinstance(value, str):
         return value
     if field in _DISPLAY_TEXT_FIELDS:
-        return repair_display_text(value).strip()
+        return clean_display_text(value).strip()
     return value.strip()
 
 

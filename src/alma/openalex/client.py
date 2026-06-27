@@ -832,9 +832,9 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     import uuid
     from datetime import datetime
 
-    from alma.core.utils import normalize_doi, repair_display_text, resolve_existing_paper_id
+    from alma.core.utils import clean_display_text, normalize_doi, resolve_existing_paper_id
 
-    title = repair_display_text((w.get("title") or "").strip())
+    title = clean_display_text((w.get("title") or "").strip())
     if not title:
         return None
 
@@ -852,9 +852,9 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     openalex_id = _normalize_openalex_work_id((w.get("openalex_id") or "").strip()) or None
     doi = normalize_doi((w.get("doi") or "").strip()) or None
     url = (w.get("pub_url") or "").strip()
-    journal = repair_display_text((w.get("journal") or "").strip())
-    authors_str = repair_display_text((w.get("authors") or "").strip())
-    abstract = repair_display_text((w.get("abstract") or "").strip())
+    journal = clean_display_text((w.get("journal") or "").strip())
+    authors_str = clean_display_text((w.get("authors") or "").strip())
+    abstract = clean_display_text((w.get("abstract") or "").strip())
     year = w.get("year")
     pub_date = w.get("publication_date")
     topics = w.get("topics") or []

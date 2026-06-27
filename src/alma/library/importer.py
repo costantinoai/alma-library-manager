@@ -17,9 +17,9 @@ from typing import Any, Dict, List, Optional
 
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
 from alma.core.utils import (
+    clean_display_text,
     generate_paper_id,
     normalize_doi as _normalize_doi_core,
-    repair_display_text,
     resolve_existing_paper_id,
 )
 
@@ -116,9 +116,10 @@ def _clean_latex(text: str) -> str:
     text = text.replace('{', '').replace('}', '')
     # Strip remaining backslash commands like \emph, \textbf, etc.
     text = re.sub(r'\\[a-zA-Z]+\s*', '', text)
-    # Repair LaTeX-leaked dotless-ı + combining marks and NFC-normalize so the
-    # imported name/title is stored clean (e.g. `Rodrı́guez` → `Rodríguez`).
-    return repair_display_text(text.strip())
+    # Strip any HTML, then repair LaTeX-leaked dotless-ı + combining marks and
+    # NFC-normalize so the imported name/title is stored clean (e.g.
+    # `Rodrı́guez` → `Rodríguez`).
+    return clean_display_text(text.strip())
 
 
 # ---------------------------------------------------------------------------
