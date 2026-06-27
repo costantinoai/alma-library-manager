@@ -818,6 +818,20 @@ def get_paper_details(
         (paper_id,),
     ).fetchall()
     paper["topics"] = [dict(r) for r in topic_rows]
+
+    # Components (figures / supporting-info / datasets / author responses) that
+    # belong to this paper. They're hidden from the Feed inbox + Discovery and
+    # shown here, inside the parent's popup. See alma.core.components.
+    component_rows = db.execute(
+        """
+        SELECT id, title, doi, url, component_type, work_type
+        FROM papers
+        WHERE parent_paper_id = ?
+        ORDER BY component_type ASC, doi ASC
+        """,
+        (paper_id,),
+    ).fetchall()
+    paper["components"] = [dict(r) for r in component_rows]
     return paper
 
 

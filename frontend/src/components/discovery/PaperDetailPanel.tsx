@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
+  Database,
   Edit3,
   ExternalLink,
   FileText,
+  Image as ImageIcon,
   Loader2,
+  MessageSquare,
   MoreHorizontal,
   RefreshCw,
   Star,
@@ -47,6 +50,7 @@ import {
   resolveImportedPublicationsOpenAlex,
   updateReadingStatus,
   updateSavedPaper,
+  type PaperComponent,
   type Publication,
   type RelatedWork,
 } from '@/api/client'
@@ -73,7 +77,21 @@ interface PaperDetails extends Publication {
   topics?: PaperTopic[] | null
   is_retracted?: boolean
   referenced_works_count?: number
+  components?: PaperComponent[] | null
 }
+
+// Render order + presentation for the "Related items" section. Each group is
+// one component_type the backend classifier emits (alma.core.components).
+const COMPONENT_GROUPS: ReadonlyArray<{
+  key: PaperComponent['component_type']
+  label: string
+  icon: typeof ImageIcon
+}> = [
+  { key: 'figure', label: 'Figures', icon: ImageIcon },
+  { key: 'supplementary', label: 'Supplementary', icon: FileText },
+  { key: 'dataset', label: 'Data', icon: Database },
+  { key: 'peer_review', label: 'Peer review', icon: MessageSquare },
+]
 
 interface PaperDetailPanelProps {
   paper: Publication | null
@@ -169,6 +187,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
   const publishedLabel = formatPublicationDate(p) || null
   const topics = (details?.topics ?? []).filter((t) => t && t.term)
   const keywords = Array.isArray(p?.keywords) ? (p?.keywords as string[]).filter(Boolean) : []
+  const components = (details?.components ?? []).filter((c) => c && c.id)
   const isLibraryPaper = p?.status === 'library'
   const hasUnsavedNotes = (p?.notes ?? '') !== notesDraft
 
@@ -522,6 +541,53 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                   {keywords.map((kw) => (
                     <StatusBadge key={kw} tone="info" size="sm">{kw}</StatusBadge>
                   ))}
+                </div>
+              </section>
+            )}
+
+            {/* Related items — figures / supplementary / data / peer review
+                that belong to this paper. They're hidden from the Feed inbox
+                and surfaced here instead (alma.core.components). */}
+            {components.length > 0 && (
+              <section>
+                <EyebrowLabel tone="muted" className="mb-1">Related items</EyebrowLabel>
+                <div className="space-y-3">
+                  {COMPONENT_GROUPS.map((group) => {
+                    const items = components.filter((c) => c.component_type === group.key)
+                    if (items.length === 0) return null
+                    const Icon = group.icon
+                    return (
+                      <div key={group.key}>
+                        <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500">
+                          <Icon className="h-3.5 w-3.5" />
+                          {group.label}
+                          <StatusBadge tone="info" size="sm">{items.length}</StatusBadge>
+                        </div>
+                        <ul className="space-y-1 text-xs">
+                          {items.map((c) => {
+                            const label = c.title || c.doi || 'Untitled item'
+                            return (
+                              <li key={c.id}>
+                                {c.url ? (
+                                  <a
+                                    href={c.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-start gap-1 text-alma-700 hover:text-alma-800 hover:underline"
+                                  >
+                                    <ExternalLink className="mt-0.5 h-3 w-3 shrink-0" />
+                                    <span>{label}</span>
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-600">{label}</span>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )
+                  })}
                 </div>
               </section>
             )}

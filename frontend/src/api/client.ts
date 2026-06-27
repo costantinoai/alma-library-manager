@@ -687,6 +687,18 @@ export interface Publication {
   influential_citation_count?: number
 }
 
+/** A part-of-a-paper child (figure / supporting-info / dataset / author
+ *  response). Returned by `GET /papers/{id}/details` as `components`; hidden
+ *  from Feed + Discovery and shown only inside the parent's popup. */
+export interface PaperComponent {
+  id: string
+  title?: string | null
+  doi?: string | null
+  url?: string | null
+  component_type: 'figure' | 'supplementary' | 'peer_review' | 'dataset'
+  work_type?: string | null
+}
+
 export interface Stats {
   total_authors: number
   total_publications: number
