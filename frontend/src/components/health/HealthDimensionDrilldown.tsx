@@ -9,7 +9,7 @@
  * dimension" action. Edit/remove apply to Library papers only.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ExternalLink, Loader2, Pencil, Plus, Trash2, Wrench } from 'lucide-react'
 
 import {
@@ -27,10 +27,12 @@ import { Input } from '@/components/ui/input'
 import { AsyncButton } from '@/components/settings/primitives'
 import {
   bulkRemoveFromLibrary,
+  estimateMaintenanceOperation,
   getHealthDimensionItems,
   removeFromLibrary,
   runMaintenanceOperation,
   updateSavedPaper,
+  type HealthAction,
   type HealthDimension,
   type HealthDimensionItem,
 } from '@/api/client'
@@ -47,6 +49,56 @@ interface HealthDimensionDrilldownProps {
   /** Bulk fix the whole dimension (reuses the page's run mutation). */
   onRun: (operationKey: string) => void
   runningKey: string | null
+}
+
+/**
+ * DrilldownRunButton — the header "fix the whole dimension" action, labelled
+ * with its REAL bounded scope (H-6). A bare run sends no max_items, so the
+ * backend applies the op's remembered manual limit — "(all)" was a lie. This
+ * fetches the SAME plan the run will use and shows "(next N)" / "(all N)" from
+ * the plan's `selected_items` vs `candidates_pending`. No frontend-only estimate.
+ */
+function DrilldownRunButton({
+  action,
+  open,
+  onRun,
+  runningKey,
+}: {
+  action: HealthAction
+  open: boolean
+  onRun: (key: string) => void
+  runningKey: string | null
+}) {
+  const planQuery = useQuery({
+    queryKey: ['health', 'drilldown-plan', action.operation_key],
+    queryFn: () => estimateMaintenanceOperation(action.operation_key),
+    enabled: open,
+    staleTime: 30_000,
+  })
+  const plan = planQuery.data
+  const selected = plan?.selected_items
+  const pending = plan?.candidates_pending
+  // No false label while the plan loads; once known, name the exact scope.
+  const scope =
+    selected == null
+      ? ''
+      : pending != null && selected >= pending
+        ? ` (all ${selected.toLocaleString()})`
+        : ` (next ${selected.toLocaleString()})`
+  return (
+    <AsyncButton
+      size="sm"
+      variant="outline"
+      icon={<Wrench className="h-4 w-4" />}
+      pending={runningKey === action.operation_key}
+      disabled={runningKey != null && runningKey !== action.operation_key}
+      className="border-alma-200 text-alma-700 hover:bg-alma-50"
+      onClick={() => onRun(action.operation_key)}
+    >
+      {action.label}
+      {scope}
+    </AsyncButton>
+  )
 }
 
 function inlineEditField(key?: string): 'abstract' | 'authors' | null {
@@ -192,18 +244,13 @@ export function HealthDimensionDrilldown({
               {runActions.length > 0 ? (
                 <div className="flex flex-wrap gap-2 pt-1">
                   {runActions.map((action) => (
-                    <AsyncButton
+                    <DrilldownRunButton
                       key={action.operation_key}
-                      size="sm"
-                      variant="outline"
-                      icon={<Wrench className="h-4 w-4" />}
-                      pending={runningKey === action.operation_key}
-                      disabled={runningKey != null && runningKey !== action.operation_key}
-                      className="border-alma-200 text-alma-700 hover:bg-alma-50"
-                      onClick={() => onRun(action.operation_key)}
-                    >
-                      {action.label} (all)
-                    </AsyncButton>
+                      action={action}
+                      open={open}
+                      onRun={onRun}
+                      runningKey={runningKey}
+                    />
                   ))}
                 </div>
               ) : null}

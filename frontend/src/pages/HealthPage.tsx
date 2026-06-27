@@ -342,13 +342,35 @@ export function HealthPage() {
         </section>
       ) : null}
 
-      {/* Repair groups — status + action in one card, in backend stage order. */}
-      {operations.length > 0 ? (
+      {/* Repair groups — status + action in one card, in backend stage order.
+          H-5: a FAILED operations plan must be distinct from "loading" and from
+          "healthy / no repairs". The read-only diagnostics above still render —
+          a broken repair plan never blocks the snapshot. */}
+      {operationsQuery.isError ? (
+        <section className="flex flex-wrap items-center justify-between gap-3 rounded-sm border border-critical-100 bg-critical-50 p-4">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-critical-600" />
+            <div>
+              <p className="text-sm font-medium text-critical-700">
+                Couldn't load the repair plan.
+              </p>
+              <p className="text-xs text-critical-600">
+                Diagnostics above are still current — only the repair operations failed to load.
+              </p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => operationsQuery.refetch()}>
+            Retry
+          </Button>
+        </section>
+      ) : operations.length > 0 ? (
         stageGroups.map((group) => (
           <RepairGroup key={group.key} title={group.label} ops={group.ops} {...groupProps} />
         ))
-      ) : (
+      ) : operationsQuery.isLoading ? (
         <p className="text-sm text-slate-500">Loading repair operations…</p>
+      ) : (
+        <p className="text-sm text-success-700">No repair operations pending — everything's clear.</p>
       )}
 
       {/* Observed dimensions with no repair op. */}
