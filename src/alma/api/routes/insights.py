@@ -1637,6 +1637,14 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
         "where": "LOWER(TRIM(pi.institution_name)) = LOWER(TRIM(?)) AND p.status = 'library'",
         "coerce": str,
     },
+    # Geographic-distribution drilldown — same grouping key (country_code) the
+    # overview's Geographic chart aggregates on, so clicking a country bar lists
+    # exactly the papers it counted.
+    "country": {
+        "join": "JOIN publication_institutions pi ON pi.paper_id = p.id",
+        "where": "UPPER(TRIM(pi.country_code)) = UPPER(TRIM(?)) AND p.status = 'library'",
+        "coerce": str,
+    },
     "year": {
         "join": "",
         "where": "p.year = ? AND p.status = 'library'",
@@ -1660,7 +1668,7 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
     ),
 )
 def get_insights_papers(
-    filter_type: str = Query(..., description="cluster | topic | journal | institution | year | source"),
+    filter_type: str = Query(..., description="cluster | topic | journal | institution | country | year | source"),
     filter_value: str = Query(..., description="the figure's value (cluster id, topic name, …)"),
     scope: str = Query("library", description="library | corpus — only affects cluster"),
     limit: int = Query(30, ge=1, le=100),

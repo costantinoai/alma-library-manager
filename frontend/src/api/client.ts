@@ -472,6 +472,7 @@ export type InsightsDrilldownFilter =
   | 'topic'
   | 'journal'
   | 'institution'
+  | 'country'
   | 'year'
   | 'source'
 

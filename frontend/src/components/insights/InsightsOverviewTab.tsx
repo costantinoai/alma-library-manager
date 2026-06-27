@@ -142,7 +142,7 @@ export function InsightsOverviewTab({
           all-time aggregate. State it once so no number is read as corpus-wide. */}
       <p className="text-xs text-slate-400">
         All figures cover your <span className="font-medium text-slate-500">saved Library</span> (all-time).
-        Click a topic, journal, institution, or year to see the papers behind it.
+        Click a topic, journal, institution, country, or year to see the papers behind it.
       </p>
 
       {/* ── Summary Cards ── */}
@@ -236,7 +236,16 @@ export function InsightsOverviewTab({
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                   <YAxis dataKey="country_code" type="category" width={40} tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                   <Tooltip {...tooltipStyle} />
-                  <Bar dataKey="count" name="Publications" fill={colors.green} radius={[0, 2, 2, 0]} />
+                  <Bar
+                    dataKey="count"
+                    name="Publications"
+                    fill={colors.green}
+                    radius={[0, 2, 2, 0]}
+                    cursor="pointer"
+                    onClick={(d: { country_code?: string }) =>
+                      openDrilldown('country', d?.country_code, `Papers from ${d?.country_code}`)
+                    }
+                  />
                 </BarChart>
               </ResponsiveContainer>
             )}
