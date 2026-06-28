@@ -811,6 +811,98 @@ def _m_0023_influential_citation_count_heal(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0024_authors_orcid_swept_at(conn: sqlite3.Connection) -> None:
+    """ORCID-dedup sweep freshness marker (2026-06-28).
+
+    The Health "Dedup authors by ORCID" card used to count *every* followed
+    author with an OpenAlex id — the set the sweep WALKS — so its pending count
+    equalled the whole followed list and never dropped after a run (running the
+    sweep doesn't unfollow anyone). ``orcid_swept_at`` records when the sweep
+    last scanned each author, so the card can count only authors NOT yet scanned
+    (or stale) and fall to zero once everyone's been checked. NULL = never
+    swept = pending — the correct default for both legacy and fresh rows, so no
+    data heal is needed."""
+    _add_columns(conn, "authors", {"orcid_swept_at": "TEXT"})
+
+
+def _m_0025_author_merge_candidates(conn: sqlite3.Connection) -> None:
+    """ORCID-dedup review queue (2026-06-28).
+
+    The ORCID sweep no longer auto-merges. It SCANS (network discovery) and
+    RECORDS each mergeable split-profile pair here as a pending candidate; the
+    Health "Merge ORCID duplicates" card counts these (the truthful "N to merge"
+    number — never the author total) and lists them for review before the user
+    applies the destructive merge. A row is consumed (deleted) once its merge is
+    applied. UNIQUE(primary,alt) keeps a re-scan idempotent.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS author_merge_candidates (
+            id TEXT PRIMARY KEY,
+            primary_author_id TEXT NOT NULL,
+            alt_author_id TEXT NOT NULL,
+            alt_openalex_id TEXT,
+            shared_orcid TEXT,
+            papers_estimate INTEGER DEFAULT 0,
+            discovered_at TEXT,
+            UNIQUE (primary_author_id, alt_author_id)
+        )
+        """
+    )
+
+
+def _m_0026_merge_candidate_source_and_rejections(conn: sqlite3.Connection) -> None:
+    """Name-match dedup + a permanent reject system (2026-06-28).
+
+    Duplicate detection now has TWO sources — authoritative ORCID and a
+    name/initials heuristic ("E. van Hove" ≈ "Emily van Hove") — so each
+    candidate carries its `source` + `confidence` for the review badge. And the
+    user can REJECT a wrong suggestion: the unordered author pair goes into
+    `author_merge_rejections` (canonical lo/hi ordering, permanent — no decay) and
+    every detector skips a rejected pair forever, so it is never resurfaced."""
+    _add_columns(
+        conn,
+        "author_merge_candidates",
+        {
+            # 'orcid' (shared ORCID, authoritative) | 'name' (name/initials match)
+            "source": "TEXT DEFAULT 'orcid'",
+            # 'high' | 'medium' | 'low' — only meaningful for source='name'
+            "confidence": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS author_merge_rejections (
+            id TEXT PRIMARY KEY,
+            author_id_lo TEXT NOT NULL,
+            author_id_hi TEXT NOT NULL,
+            source TEXT,
+            reason TEXT,
+            rejected_at TEXT,
+            UNIQUE (author_id_lo, author_id_hi)
+        )
+        """
+    )
+
+
+def _m_0027_suggestion_not_duplicate(conn: sqlite3.Connection) -> None:
+    """"Not a duplicate" verdicts for the suggestion rail (2026-06-28).
+
+    When a suggested author is flagged as a possible name-duplicate of someone you
+    follow but the user says "no, different person", we record the suggested
+    OpenAlex id here. `_annotate_duplicate_suggestions` then stops flagging it, so
+    it returns to the normal "follow a new author" rail instead of being
+    suppressed entirely."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS author_suggestion_not_duplicate (
+            openalex_id TEXT PRIMARY KEY,
+            created_at TEXT
+        )
+        """
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -835,6 +927,10 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (21, "publication_clusters_scope", _m_0021_publication_clusters_scope),
     (22, "papers_component_columns", _m_0022_papers_component_columns),
     (23, "influential_citation_count_heal", _m_0023_influential_citation_count_heal),
+    (24, "authors_orcid_swept_at", _m_0024_authors_orcid_swept_at),
+    (25, "author_merge_candidates", _m_0025_author_merge_candidates),
+    (26, "merge_candidate_source_and_rejections", _m_0026_merge_candidate_source_and_rejections),
+    (27, "suggestion_not_duplicate", _m_0027_suggestion_not_duplicate),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

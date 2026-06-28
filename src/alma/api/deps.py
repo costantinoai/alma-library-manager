@@ -325,7 +325,13 @@ def init_db_schema() -> None:
 
                     -- Stable dedup identity; values recomputed by
                     -- library/deduplication.ensure_stable_ids.
-                    author_uid TEXT
+                    author_uid TEXT,
+
+                    -- ORCID-dedup sweep freshness (2026-06-28): when the
+                    -- ORCID sweep last scanned this author. NULL = never
+                    -- swept = pending; drives the Health dedup card's
+                    -- truthful pending count (migration 24).
+                    orcid_swept_at TEXT
                 )"""
             )
 
@@ -345,6 +351,51 @@ def init_db_schema() -> None:
                 conn,
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_followed_authors_one_owner "
                 "ON followed_authors(is_owner) WHERE is_owner = 1",
+            )
+
+            # Dedup review queue (migrations 25/26): the scan records mergeable
+            # pairs here from TWO sources — `source` 'orcid' (shared ORCID) or
+            # 'name' (name/initials heuristic) with a `confidence` tier; the Health
+            # merge card counts + lists them; a row is consumed when merged.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_merge_candidates (
+                    id TEXT PRIMARY KEY,
+                    primary_author_id TEXT NOT NULL,
+                    alt_author_id TEXT NOT NULL,
+                    alt_openalex_id TEXT,
+                    shared_orcid TEXT,
+                    papers_estimate INTEGER DEFAULT 0,
+                    discovered_at TEXT,
+                    source TEXT DEFAULT 'orcid',
+                    confidence TEXT,
+                    UNIQUE (primary_author_id, alt_author_id)
+                )"""
+            )
+
+            # Rejected merge pairs (migration 26): a user "no, not the same person"
+            # is permanent — every detector skips the unordered pair forever, so a
+            # rejected suggestion is never resurfaced. Canonical lo/hi ordering
+            # makes it direction-independent.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_merge_rejections (
+                    id TEXT PRIMARY KEY,
+                    author_id_lo TEXT NOT NULL,
+                    author_id_hi TEXT NOT NULL,
+                    source TEXT,
+                    reason TEXT,
+                    rejected_at TEXT,
+                    UNIQUE (author_id_lo, author_id_hi)
+                )"""
+            )
+
+            # "Not a duplicate" verdicts for the suggestion rail (migration 27):
+            # a suggested OpenAlex id the user said is NOT the followed author it
+            # name-matched, so it returns to the normal follow rail.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_suggestion_not_duplicate (
+                    openalex_id TEXT PRIMARY KEY,
+                    created_at TEXT
+                )"""
             )
 
             conn.execute(
