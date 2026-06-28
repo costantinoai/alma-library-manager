@@ -48,6 +48,13 @@ export interface MetricTileProps {
    * Only honored on the bordered (no-icon) variant.
    */
   align?: 'left' | 'center'
+  /**
+   * When set, the tile becomes an interactive control that drills into the
+   * entities behind its number (e.g. the papers behind a summary count). Adds a
+   * hover affordance + full keyboard activation (Enter / Space) and the right
+   * ARIA role. Honored on BOTH variants.
+   */
+  onClick?: () => void
   className?: string
 }
 
@@ -72,13 +79,35 @@ export function MetricTile({
   iconColor,
   labelSuffix,
   align = 'left',
+  onClick,
   className,
 }: MetricTileProps) {
   const formatted = typeof value === 'number' ? formatNumber(value) : value
 
+  // Shared interactive contract so both variants drill the same way: button
+  // semantics + Enter/Space activation. Spread onto whichever root renders.
+  const interactiveProps = onClick
+    ? {
+        onClick,
+        role: 'button' as const,
+        tabIndex: 0,
+        'aria-label': `${label}: ${formatted}`,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onClick()
+          }
+        },
+      }
+    : {}
+
   if (Icon) {
     return (
-      <Card className={cn('relative overflow-hidden', className)}>
+      <Card
+        interactive={!!onClick}
+        className={cn('relative overflow-hidden', className)}
+        {...interactiveProps}
+      >
         <CardContent className="p-5">
           <div className="flex items-center gap-4">
             <div
@@ -108,8 +137,13 @@ export function MetricTile({
         // narrow-column overflow that the v2 tiles suffered from on
         // sub-400px grids.
         'min-w-0 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm',
+        // Interactive (drilldown) tiles get the folio accent on hover/focus —
+        // the single interactive identity (no new color).
+        onClick &&
+          'cursor-pointer transition-colors hover:border-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
         className,
       )}
+      {...interactiveProps}
     >
       <p
         className={cn(

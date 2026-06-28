@@ -769,24 +769,44 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
     )
 
     workflow_snapshot = _library_workflow_snapshot(db)
-    total_library = max(1, _safe_int(workflow_snapshot.get("total_library")))
-    # D2/I-22: there is no triage backlog to penalise ("saved means saved").
-    # Library Workflow now measures reading PROGRESS only — the share of the
-    # saved library that has been read or is currently being read.
-    workflow_score = max(
-        0,
-        min(
-            100,
-            round(
-                safe_div(
-                    _safe_int(workflow_snapshot.get("done_count"))
-                    + _safe_int(workflow_snapshot.get("reading_count")),
-                    total_library,
-                )
-                * 100
-            ),
-        ),
-    )
+    workflow_total = _safe_int(workflow_snapshot.get("total_library"))
+    reading_count = _safe_int(workflow_snapshot.get("reading_count"))
+    done_count = _safe_int(workflow_snapshot.get("done_count"))
+    # D2/I-22: a save is NOT a reading chore, so reading/done are OPT-IN activity,
+    # never a backlog to grade. The old 0–100 "workflow score" turned an unread
+    # library red (e.g. 17/100) — exactly the obligation D2 removed. Report the
+    # reading-progress DISTRIBUTION as OBSERVED measures instead (no composite
+    # grade), mirroring the AI Retrieval Quality card (I-23). Denominator is the
+    # saved library; each measure carries its own sample size.
+    workflow_measures = [
+        {
+            "key": "reading",
+            "label": "Currently reading",
+            "value": reading_count,
+            "unit": "",
+            "sample_size": workflow_total,
+            "sufficient": workflow_total > 0,
+            "detail": f"{reading_count} of {workflow_total} saved papers are being read.",
+        },
+        {
+            "key": "done",
+            "label": "Completed",
+            "value": done_count,
+            "unit": "",
+            "sample_size": workflow_total,
+            "sufficient": workflow_total > 0,
+            "detail": f"{done_count} of {workflow_total} saved papers are marked done.",
+        },
+        {
+            "key": "saved",
+            "label": "Saved library",
+            "value": workflow_total,
+            "unit": "",
+            "sample_size": workflow_total,
+            "sufficient": workflow_total > 0,
+            "detail": f"{workflow_total} papers saved — reading is opt-in, not required.",
+        },
+    ]
 
     authors_summary = authors_payload.get("summary") or {}
     tracked_authors = max(1, _safe_int(authors_summary.get("tracked_authors")))
@@ -999,17 +1019,18 @@ def _build_diag_evaluation(db: sqlite3.Connection) -> dict[str, Any]:
         _make_scorecard(
             id="library_workflow",
             label="Library Workflow",
-            sample_size=_safe_int(workflow_snapshot.get("total_library")),
+            sample_size=workflow_total,
             min_sample=1,
-            score=workflow_score,
+            score=None,
+            measures=workflow_measures,
             summary=(
-                f"{_safe_int(workflow_snapshot.get('reading_count'))} reading, "
-                f"{_safe_int(workflow_snapshot.get('done_count'))} done of "
-                f"{_safe_int(workflow_snapshot.get('total_library'))} saved papers."
+                f"{reading_count} reading, {done_count} done of "
+                f"{workflow_total} saved papers."
             ),
             detail=(
-                "Workflow score reflects how much of your saved library you have "
-                "read or are actively reading (D2: a save is not a reading chore)."
+                "Observed reading-progress distribution. Reading and completion are "
+                "opt-in — a saved paper is not a reading chore (D2) — so this is "
+                "reported, not scored."
             ),
             insufficient_summary="No saved library papers yet.",
         ),

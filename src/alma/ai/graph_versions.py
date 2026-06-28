@@ -102,7 +102,14 @@ LABELLING_VERSION = "2026.07-7"
 #            monitors / no alert runs no longer misgraded) + full-population feed
 #            yield; I-25 prescriptive branch/source advice gated behind a sample
 #            + Wilson bound.
-INSIGHTS_LOGIC_VERSION = "2026.07-4"
+# 2026.07-5: overview summary gains median_citations_per_paper (the outlier-robust
+#            companion to the mean) — new payload field, so the cached overview MV
+#            must rebuild to carry it.
+# 2026.07-6: Library Workflow scorecard → OBSERVED card (D2/I-22). The graded
+#            0–100 "workflow score" turned an unread library red; reading/done are
+#            opt-in, not an obligation, so it's now reading-progress measures with
+#            no composite grade. Evaluation MV payload shape changed → rebuild.
+INSIGHTS_LOGIC_VERSION = "2026.07-6"
 
 
 def with_version(fingerprint_sql: str, *versions: str) -> str:

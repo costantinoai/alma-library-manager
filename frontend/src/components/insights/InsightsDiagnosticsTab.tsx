@@ -6,13 +6,11 @@ import {
   Compass,
   Gauge,
   GitBranch,
-  Loader2,
   Radio,
   Sparkles,
   TrendingUp,
   UserRound,
   Waves,
-  Zap,
 } from 'lucide-react'
 import {
   Bar,
@@ -44,10 +42,6 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge, scoreStatusTone } from '@/components/ui/status-badge'
 import { MetricTile, SectionHeader } from '@/components/shared'
-import {
-  InsightsRecommendedActionsCard,
-  type SavedDrilldown,
-} from '@/components/insights/InsightsRecommendedActionsCard'
 import { navigateTo } from '@/lib/hashRoute'
 import { formatTimestamp } from '@/lib/utils'
 
@@ -69,11 +63,6 @@ interface TooltipStyle {
   contentStyle: React.CSSProperties
 }
 
-interface BranchActionVariables {
-  branchId: string
-  action: 'pin' | 'boost' | 'mute' | 'reset' | 'cool'
-}
-type BranchAction = BranchActionVariables['action']
 
 // ── Per-section state contract ---------------------------------------------
 //
@@ -106,16 +95,6 @@ export interface InsightsDiagnosticsSections {
 
 export interface InsightsDiagnosticsTabProps {
   sections: InsightsDiagnosticsSections
-
-  // Drilldown persistence + handlers (unchanged contract)
-  savedDrilldowns: SavedDrilldown[]
-  onSaveDrilldown: (drilldown: SavedDrilldown) => void
-  onRemoveSavedDrilldown: (id: string) => void
-
-  // Branch mutations
-  onBranchAction: (variables: BranchActionVariables) => void
-  branchActionPending: boolean
-  branchActionVariables?: BranchActionVariables | null
 
   // Chart palette (shared with Overview/Reports)
   colors: Palette
@@ -163,40 +142,6 @@ function SectionGate<T>({
 /** Action chip for branch tuning. Loops the four identical variants instead
  *  of duplicating the loading/disabled logic four times.
  */
-function BranchActionButton({
-  branchId,
-  action,
-  label,
-  variant = 'outline',
-  onClick,
-  pending,
-  pendingVariables,
-}: {
-  branchId?: string | null
-  action: BranchAction
-  label: string
-  variant?: 'outline' | 'ghost'
-  onClick: (variables: BranchActionVariables) => void
-  pending: boolean
-  pendingVariables?: BranchActionVariables | null
-}) {
-  const isThisPending =
-    pending &&
-    pendingVariables?.branchId === branchId &&
-    pendingVariables?.action === action
-  return (
-    <Button
-      size="sm"
-      variant={variant}
-      onClick={() => branchId && onClick({ branchId, action })}
-      disabled={!branchId || pending}
-    >
-      {isThisPending && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-      {label}
-    </Button>
-  )
-}
-
 /** One row in the "Recent refreshes" card. */
 function RefreshEntryRow({
   status,
@@ -240,17 +185,14 @@ function branchDeltaTone(delta: number): 'good' | 'attention' | 'critical' {
 
 export function InsightsDiagnosticsTab({
   sections,
-  savedDrilldowns,
-  onSaveDrilldown,
-  onRemoveSavedDrilldown,
-  onBranchAction,
-  branchActionPending,
-  branchActionVariables,
   colors,
   tooltipStyle,
 }: InsightsDiagnosticsTabProps) {
   // `operational` is intentionally not destructured — operational health moved
-  // to the Health page's Status tab; this tab is analytics only.
+  // to the Health page's Status tab; this tab is analytics only (I-27). The
+  // evaluation section still carries operational_health / recommended_actions /
+  // automation_opportunities, but those are deliberately NOT rendered here for
+  // the same reason (see the Evaluation Scorecards block below).
   const { feed, discovery, ai, authors, alerts, feedback, evaluation } = sections
 
   // Headline tiles depend on feed + discovery.
@@ -333,23 +275,31 @@ export function InsightsDiagnosticsTab({
         )}
       </div>
 
-      {/* ── Evaluation + Recommended actions ── */}
-      <div className="grid gap-6 xl:grid-cols-[1.6fr,1fr]">
+      {/* ── Evaluation Scorecards ── */}
+      {/* I-27: descriptive product-quality scores only. The operational_health
+          scorecard, the Recommended-Actions repair list, and Automation
+          Opportunities are intentionally NOT rendered here — operational
+          diagnosis + repair + automation setup live on the Health / Alerts
+          pages; Insights stays read-only analytics (D7). */}
+      <div className="space-y-6">
         <Card>
           <SectionHeader
             icon={Gauge}
             accent="text-alma-600"
             title="Evaluation Scorecards"
-            description="Product-level health across intake, discovery quality, branch behavior, and reading workflow."
+            description="Product-level quality across intake, discovery, branch behavior, and reading workflow."
           />
           <CardContent>
             <SectionGate section={evaluation} skeletonHeight={220}>
-              {(data) =>
-                data.scorecards.length === 0 ? (
+              {(data) => {
+                // I-27: drop the operational-health scorecard (system degradation
+                // is the Health page's job); keep the descriptive quality cards.
+                const cards = data.scorecards.filter((c) => c.id !== 'operational_health')
+                return cards.length === 0 ? (
                   <EmptyState title="No evaluation scorecards available yet" />
                 ) : (
                   <div className="grid gap-3 md:grid-cols-2">
-                    {data.scorecards.map((card) => (
+                    {cards.map((card) => (
                       <div
                         key={card.id}
                         className="rounded-sm border border-[var(--color-border)] p-4"
@@ -409,83 +359,11 @@ export function InsightsDiagnosticsTab({
                     ))}
                   </div>
                 )
-              }
+              }}
             </SectionGate>
           </CardContent>
         </Card>
-
-        <SectionGate section={evaluation} skeletonHeight={260}>
-          {(data) => (
-            <InsightsRecommendedActionsCard
-              actions={data.recommended_actions}
-              savedDrilldowns={savedDrilldowns}
-              onSaveDrilldown={onSaveDrilldown}
-              onRemoveSavedDrilldown={onRemoveSavedDrilldown}
-            />
-          )}
-        </SectionGate>
       </div>
-
-      {/* ── Automation opportunities ── */}
-      <Card>
-        <SectionHeader
-          icon={Zap}
-          accent="text-gold-600"
-          title="Automation Opportunities"
-          description="Alert hooks inferred from productive monitors, strong branches, and current workflow pressure."
-        />
-        <CardContent>
-          <SectionGate section={evaluation} skeletonHeight={140}>
-            {(data) =>
-              data.automation_opportunities.length === 0 ? (
-                <EmptyState title="No automation opportunities available yet" />
-              ) : (
-                <div className="grid gap-3 xl:grid-cols-2">
-                  {data.automation_opportunities.map((template) => (
-                    <div
-                      key={template.key}
-                      className="rounded-sm border border-[var(--color-border)] p-3"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-alma-800">{template.title}</p>
-                          <p className="mt-1 text-sm text-slate-500">{template.description}</p>
-                        </div>
-                        <Badge variant="secondary">{template.category.replace(/_/g, ' ')}</Badge>
-                      </div>
-                      {template.rationale && (
-                        <p className="mt-3 text-xs text-slate-500">{template.rationale}</p>
-                      )}
-                      <div className="mt-3 flex items-center justify-between gap-3">
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(template.metrics).map(([key, value]) => (
-                            <Badge
-                              key={`${template.key}-${key}`}
-                              variant="outline"
-                              className="text-[11px]"
-                            >
-                              {key.replace(/_/g, ' ')}: {String(value)}
-                            </Badge>
-                          ))}
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            navigateTo('alerts')
-                          }}
-                        >
-                          Alerts
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )
-            }
-          </SectionGate>
-        </CardContent>
-      </Card>
 
       {/* ── AI and Similarity Health ── (AI Recommendations moved to Health → Status) */}
       <div className="grid gap-6">
@@ -1249,6 +1127,11 @@ export function InsightsDiagnosticsTab({
                           <div className="mt-3 rounded-md border border-[var(--color-border)] bg-surface-2 px-2.5 py-2 text-xs text-slate-600">
                             {branch.tuning_hint}
                           </div>
+                          {/* I-27: branch TUNING (pin/boost/mute/reset) is a
+                              mutation and lives on its owning Discovery surface
+                              (Branch Studio, which already pins/boosts/mutes per
+                              lens). Read-only Insights links there instead of
+                              mutating from analytics. */}
                           <div className="mt-3 flex flex-wrap justify-end gap-2">
                             <Button
                               size="sm"
@@ -1257,41 +1140,8 @@ export function InsightsDiagnosticsTab({
                                 navigateTo('discovery')
                               }}
                             >
-                              Discovery
+                              Tune in Discovery
                             </Button>
-                            <BranchActionButton
-                              branchId={branch.branch_id}
-                              action="boost"
-                              label="Boost"
-                              onClick={onBranchAction}
-                              pending={branchActionPending}
-                              pendingVariables={branchActionVariables}
-                            />
-                            <BranchActionButton
-                              branchId={branch.branch_id}
-                              action="pin"
-                              label="Pin"
-                              onClick={onBranchAction}
-                              pending={branchActionPending}
-                              pendingVariables={branchActionVariables}
-                            />
-                            <BranchActionButton
-                              branchId={branch.branch_id}
-                              action="mute"
-                              label="Mute"
-                              onClick={onBranchAction}
-                              pending={branchActionPending}
-                              pendingVariables={branchActionVariables}
-                            />
-                            <BranchActionButton
-                              branchId={branch.branch_id}
-                              action="reset"
-                              label="Reset"
-                              variant="ghost"
-                              onClick={onBranchAction}
-                              pending={branchActionPending}
-                              pendingVariables={branchActionVariables}
-                            />
                           </div>
                         </div>
                       ))}

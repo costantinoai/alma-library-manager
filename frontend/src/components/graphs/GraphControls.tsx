@@ -1,4 +1,4 @@
-import { Search, RotateCw, Tag, SlidersHorizontal, Sparkles, Wand2, Cloud } from 'lucide-react'
+import { Search, RotateCw, Tag, SlidersHorizontal, Sparkles, Wand2, Cloud, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -558,26 +558,46 @@ export function GraphControls({
         </div>
 
         {physics && onPhysicsChange && (
-          <div className="rounded-sm border border-[var(--color-border)] bg-surface-2/90 p-3 shadow-sm">
-            <div className="mb-2 flex items-center justify-between gap-2">
+          // I-10: node POSITIONS are the embedding projection (distance ≈
+          // similarity) — physics/appearance knobs only relax spacing and resize
+          // dots, they never change the analysis. So they live COLLAPSED behind a
+          // disclosure (native <details> = keyboard + screen-reader accessible, no
+          // extra state) and are labelled "presentation only", instead of sitting
+          // open at eye level where they read as analytical tuning.
+          <details className="group rounded-sm border border-[var(--color-border)] bg-surface-2/90 p-3 shadow-sm">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-slate-500" />
                 <div>
-                  <p className="text-sm font-semibold text-alma-800">Physics</p>
-                  <p className="text-xs text-slate-500">Spacing + motion (small graphs) and node size.</p>
+                  <p className="text-sm font-semibold text-alma-800">Physics &amp; appearance</p>
+                  <p className="text-xs text-slate-500">
+                    Optional spacing, motion &amp; node-size controls — presentation only; they don't change the analysis.
+                  </p>
                 </div>
               </div>
-              {onResetPhysics && (
-                <Button variant="ghost" size="sm" onClick={onResetPhysics}>
-                  Reset
-                </Button>
-              )}
-            </div>
+              <div className="flex items-center gap-1">
+                {onResetPhysics && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      // Don't let the Reset click toggle the <summary> disclosure.
+                      e.preventDefault()
+                      e.stopPropagation()
+                      onResetPhysics()
+                    }}
+                  >
+                    Reset
+                  </Button>
+                )}
+                <ChevronDown className="h-4 w-4 text-slate-500 transition-transform group-open:rotate-180" />
+              </div>
+            </summary>
             {/* Spacing/motion sliders relax the layout on SMALL graphs (the library)
                 — large graphs stay pinned to the embedding layout for performance.
                 Edge layers never feed these forces, so the geometry stays stable
                 when you toggle edges. */}
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <RangeControl label="Repulsion" value={physics.repulsion} min={-200} max={0} step={5} onChange={(value) => onPhysicsChange({ repulsion: value })} hint="How strongly nodes push each other apart — more negative spreads the map out. (Small graphs only.)" />
               <RangeControl label="Link Distance" value={physics.linkDistance} min={20} max={220} step={5} onChange={(value) => onPhysicsChange({ linkDistance: value })} hint="Resting length of an edge — higher pushes connected nodes farther apart. (Small graphs only.)" />
               <RangeControl label="Link Attraction" value={physics.linkStrength} min={0} max={2} step={0.05} onChange={(value) => onPhysicsChange({ linkStrength: value })} hint="How hard edges pull their endpoints together — higher = tighter clusters. (Small graphs only.)" />
@@ -586,7 +606,7 @@ export function GraphControls({
               <RangeControl label="Node Scale" value={physics.nodeScale} min={0.6} max={2.5} step={0.05} onChange={(value) => onPhysicsChange({ nodeScale: value })} hint="Multiplier on every node's size — purely visual." />
               <RangeControl label="Base Size" value={physics.baseSize} min={2} max={20} step={0.5} onChange={(value) => onPhysicsChange({ baseSize: value })} hint="The base radius all node sizes scale from — purely visual." />
             </div>
-          </div>
+          </details>
         )}
       </div>
 

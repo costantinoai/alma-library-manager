@@ -475,6 +475,8 @@ export type InsightsDrilldownFilter =
   | 'country'
   | 'year'
   | 'source'
+  // Whole-library list behind the overview summary tiles (filter_value ignored).
+  | 'all'
 
 export interface InsightsPapersResponse {
   filter_type: string
@@ -1873,6 +1875,8 @@ export interface InsightsData {
     total_topics: number
     total_institutions: number
     avg_citations_per_paper: number
+    /** Outlier-robust companion to the mean (a few mega-cited papers skew the mean). */
+    median_citations_per_paper: number
     avg_papers_per_author: number
   }
   publications_by_year: Array<{
@@ -2875,13 +2879,6 @@ export function listAuthorsNeedsAttention(
 
 export function clearDiscoverySimilarityCache(): Promise<{ success: boolean; deleted: number; operation?: Record<string, unknown> }> {
   return api.post('/discovery/similarity-cache/clear')
-}
-
-export function applyInsightsBranchAction(body: {
-  branch_id: string
-  action: 'pin' | 'boost' | 'mute' | 'reset' | 'cool'
-}): Promise<{ branch_id: string; action: string; matched_lenses: number; updated_lenses: string[] }> {
-  return api.post('/insights/discovery/branch-action', body)
 }
 
 export interface ActivityOperationResponse {

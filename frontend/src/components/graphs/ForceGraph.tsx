@@ -610,10 +610,42 @@ export function ForceGraph({
   // zoom affordance. The Fit button always re-frames; the AUTO fit on engine-stop
   // only fires when the graph identity (autoFitKey: view/scope) changes, so a
   // slider tweak that refetches data does NOT yank your pan/zoom back to fit.
+  //
+  // Fit to the DENSE CORE, not the full extent. Density clustering legitimately
+  // retains far-flung outliers (Unclustered papers, lone authors); the library's
+  // own zoomToFit frames the whole bounding box, so a couple of outliers shrink
+  // the body of the map to an unreadable speck. We frame the central mass
+  // (per-axis 5th–95th percentile) via zoomToFit's nodeFilter arg — the core
+  // fills the canvas while outliers stay in the scene, reachable by pan/zoom-out.
   const handleZoomToFit = useCallback(() => {
-    const g = fgRef.current as { zoomToFit?: (ms?: number, px?: number) => void } | null
-    g?.zoomToFit?.(400, 48)
-  }, [])
+    const g = fgRef.current as {
+      zoomToFit?: (ms?: number, px?: number, nodeFilter?: (n: RenderedNode) => boolean) => void
+    } | null
+    if (!g?.zoomToFit) return
+    const nodes = graphData.nodes
+    // Too few nodes to trim meaningfully — frame everything.
+    if (nodes.length < 12) {
+      g.zoomToFit(400, 48)
+      return
+    }
+    const quantile = (sorted: number[], p: number) =>
+      sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(p * (sorted.length - 1))))]
+    const xs = nodes.map((n) => n.x).sort((a, b) => a - b)
+    const ys = nodes.map((n) => n.y).sort((a, b) => a - b)
+    const x0 = quantile(xs, 0.05)
+    const x1 = quantile(xs, 0.95)
+    const y0 = quantile(ys, 0.05)
+    const y1 = quantile(ys, 0.95)
+    // Small pad so points sitting exactly on the percentile edge aren't clipped.
+    const padX = (x1 - x0) * 0.05 || 1
+    const padY = (y1 - y0) * 0.05 || 1
+    g.zoomToFit(
+      400,
+      48,
+      (n: RenderedNode) =>
+        n.x >= x0 - padX && n.x <= x1 + padX && n.y >= y0 - padY && n.y <= y1 + padY,
+    )
+  }, [graphData])
   const lastFitKeyRef = useRef<string | undefined>(undefined)
   const handleEngineStop = useCallback(() => {
     if (autoFitKey === lastFitKeyRef.current) return // same view → keep the user's framing

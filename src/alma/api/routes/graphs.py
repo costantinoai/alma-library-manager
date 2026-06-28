@@ -1149,6 +1149,14 @@ OUTLIER_COLOR = "#94A3B8"  # slate-400: the same neutral used for "no cluster"
 # of being jittered into whichever centroid happens to be least-far (I-6/I-7).
 _INCREMENTAL_MIN_COSINE = 0.10
 
+# Cluster-stability (mean pairwise ARI across UMAP seeds) re-fits UMAP+HDBSCAN
+# ``n_seeds`` (5) extra times. That's cheap for a personal library but multiplies
+# the corpus clustering cost ~5× (the corpus build the team optimised to ~16s),
+# so we only measure stability when the scope is small enough to afford it. Larger
+# scopes report stability as n/a (honest: not measured) rather than paying for it
+# on every rebuild.
+_STABILITY_MAX_NODES = 2000
+
 
 def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     provider = "none"
@@ -2001,11 +2009,13 @@ def _build_embedding_paper_map(
         shared_knn = accel.shared_cosine_knn(embeddings)
 
         # Stability re-fits UMAP several times, so only pay for it on the
-        # persisting REBUILD path — never on a synchronous custom-options GET.
+        # persisting REBUILD path (never a synchronous custom-options GET) AND only
+        # when the scope is small enough to afford the ~5× clustering cost
+        # (_STABILITY_MAX_NODES) — corpus rebuilds skip it and report n/a.
         # `cluster_resolution` (default 1.0) is the user-facing detail knob.
         clustering = cluster_publications(
             embeddings,
-            compute_stability=persist,
+            compute_stability=persist and len(embeddings) <= _STABILITY_MAX_NODES,
             resolution=float(opts.get("cluster_resolution", 1.0) or 1.0),
             precomputed_knn=shared_knn,
         )

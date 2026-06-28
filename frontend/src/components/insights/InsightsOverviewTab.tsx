@@ -37,12 +37,16 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Progress } from '@/components/ui/progress'
-import { Toggle } from '@/components/ui/toggle'
 import { ActionCardHeader, MetricTile, SectionHeader } from '@/components/shared'
 import {
   InsightsPaperDrilldown,
   type DrilldownTarget,
 } from '@/components/insights/InsightsPaperDrilldown'
+import {
+  PAPERS_AVG_CIT_SERIES,
+  SeriesToggleGroup,
+  useSeriesVisibility,
+} from '@/components/insights/ChartSeriesToggle'
 import { formatNumber, truncate } from '@/lib/utils'
 
 interface Palette {
@@ -97,9 +101,12 @@ export function InsightsOverviewTab({
     library,
   } = data
 
-  const [showJournalPapers, setShowJournalPapers] = useState(true)
-  const [showJournalAvgCitations, setShowJournalAvgCitations] = useState(true)
-  // I-19: paper-list drilldown opened from a chart bar (null = closed).
+  // I-18: charts that overlay a count + a per-paper average (Publications
+  // Timeline, Top Journals) let the reader view volume and impact independently
+  // via the SHARED toggle primitive (keeps at least one series on).
+  const timeline = useSeriesVisibility(['papers', 'avg_citations'])
+  const journals = useSeriesVisibility(['papers', 'avg_citations'])
+  // I-19: paper-list drilldown opened from a chart bar or summary tile (null = closed).
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
 
   // One helper so every bar drills through the SAME shared route/dialog. recharts
@@ -118,23 +125,12 @@ export function InsightsOverviewTab({
 
   const visibleJournalMax = useMemo(() => {
     const values: number[] = []
-    if (showJournalPapers) values.push(...top_journals.map((j) => Number(j.count) || 0))
-    if (showJournalAvgCitations)
+    if (journals.visible.papers) values.push(...top_journals.map((j) => Number(j.count) || 0))
+    if (journals.visible.avg_citations)
       values.push(...top_journals.map((j) => Number(j.avg_citations) || 0))
     if (values.length === 0) return 1
     return Math.max(...values, 1)
-  }, [top_journals, showJournalPapers, showJournalAvgCitations])
-
-  const toggleJournalSeries = (series: 'papers' | 'avg_citations') => {
-    if (series === 'papers') {
-      // Keep at least one series visible so the chart stays meaningful.
-      if (showJournalPapers && !showJournalAvgCitations) return
-      setShowJournalPapers((v) => !v)
-    } else {
-      if (showJournalAvgCitations && !showJournalPapers) return
-      setShowJournalAvgCitations((v) => !v)
-    }
-  }
+  }, [top_journals, journals.visible])
 
   return (
     <div className="space-y-6">
@@ -142,23 +138,29 @@ export function InsightsOverviewTab({
           all-time aggregate. State it once so no number is read as corpus-wide. */}
       <p className="text-xs text-slate-400">
         All figures cover your <span className="font-medium text-slate-500">saved Library</span> (all-time).
-        Click a topic, journal, institution, country, or year to see the papers behind it.
+        Click any summary tile to list the library, or a chart bar to see the papers behind it.
       </p>
 
       {/* ── Summary Cards ── */}
+      {/* Every summary number is computed over the same saved-Library population,
+          so each tile drills through to that library via the shared `all`
+          drilldown (closes the I-19 per-tile remainder). The Publications tile
+          leads with the outlier-robust MEDIAN citations, mean second (I-18). */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
         <MetricTile
           label="Publications"
           value={summary.total_publications}
           icon={BookOpen}
           iconColor={colors.blue}
-          hint={`avg ${summary.avg_citations_per_paper} cit/paper`}
+          hint={`median ${summary.median_citations_per_paper} · mean ${summary.avg_citations_per_paper} cit/paper`}
+          onClick={() => openDrilldown('all', 'all', 'All library papers')}
         />
         <MetricTile
           label="Citations"
           value={summary.total_citations}
           icon={Quote}
           iconColor={colors.amber}
+          onClick={() => openDrilldown('all', 'all', 'Library papers by citations')}
         />
         <MetricTile
           label="Authors"
@@ -166,24 +168,42 @@ export function InsightsOverviewTab({
           icon={Users}
           iconColor={colors.green}
           hint={`avg ${summary.avg_papers_per_author} papers/author`}
+          onClick={() => openDrilldown('all', 'all', 'All library papers')}
         />
         <MetricTile
           label="Countries"
           value={summary.total_countries}
           icon={Globe}
           iconColor={colors.purple}
+          onClick={() => openDrilldown('all', 'all', 'All library papers')}
         />
         <MetricTile
           label="Topics"
           value={summary.total_topics}
           icon={Tag}
           iconColor={colors.cyan}
+          onClick={() => openDrilldown('all', 'all', 'All library papers')}
         />
       </div>
 
       {/* ── Publications Timeline ── */}
+      {/* I-18: papers (volume) and avg-citations (impact) are incompatible units;
+          the shared toggle lets each be read on its own axis instead of forcing
+          a dual-axis read. Avg-citations is mechanically lower for recent years,
+          so it's NOT the default emphasis — both start on, reader can isolate. */}
       <Card>
-        <SectionHeader icon={BarChart3} accent="text-alma-700" title="Publications Timeline" />
+        <ActionCardHeader
+          icon={BarChart3}
+          accent="text-alma-700"
+          title="Publications Timeline"
+          action={
+            <SeriesToggleGroup
+              specs={PAPERS_AVG_CIT_SERIES}
+              visible={timeline.visible}
+              onToggle={timeline.toggle}
+            />
+          }
+        />
         <CardContent>
           {publications_by_year.length === 0 ? (
             <EmptyChart message="No publication year data available" />
@@ -193,29 +213,35 @@ export function InsightsOverviewTab({
                 <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                 <XAxis dataKey="year" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                 <YAxis yAxisId="left" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
+                {timeline.visible.avg_citations && (
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
+                )}
                 <Tooltip {...tooltipStyle} />
                 <Legend />
-                <Bar
-                  yAxisId="left"
-                  dataKey="count"
-                  name="Papers"
-                  fill={colors.blue}
-                  radius={[2, 2, 0, 0]}
-                  cursor="pointer"
-                  onClick={(d: { year?: number | string }) =>
-                    openDrilldown('year', d?.year, `Papers from ${d?.year}`)
-                  }
-                />
-                <Line
-                  yAxisId="right"
-                  type="monotone"
-                  dataKey="avg_citations"
-                  name="Avg Citations"
-                  stroke={colors.amber}
-                  strokeWidth={2}
-                  dot={false}
-                />
+                {timeline.visible.papers && (
+                  <Bar
+                    yAxisId="left"
+                    dataKey="count"
+                    name="Papers"
+                    fill={colors.blue}
+                    radius={[2, 2, 0, 0]}
+                    cursor="pointer"
+                    onClick={(d: { year?: number | string }) =>
+                      openDrilldown('year', d?.year, `Papers from ${d?.year}`)
+                    }
+                  />
+                )}
+                {timeline.visible.avg_citations && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="avg_citations"
+                    name="Avg Citations"
+                    stroke={colors.amber}
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           )}
@@ -267,7 +293,16 @@ export function InsightsOverviewTab({
                   <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                   <YAxis dataKey="term" type="category" width={140} tick={{ fontSize: 11, fill: '#152642' }} stroke="#D9CBAF" />
-                  <Tooltip {...tooltipStyle} />
+                  {/* Topic names are long and the axis truncates them; the tooltip
+                      restores the FULL name on hover (mirrors the Institutions chart). */}
+                  <Tooltip
+                    {...tooltipStyle}
+                    formatter={(value: number) => [value, 'Papers']}
+                    labelFormatter={(label: string) => {
+                      const t = top_topics.find((x) => truncate(x.term, 25) === label)
+                      return t ? t.term : label
+                    }}
+                  />
                   <Bar
                     dataKey="count"
                     name="Papers"
@@ -293,28 +328,11 @@ export function InsightsOverviewTab({
             accent="text-alma-700"
             title="Top Journals"
             action={
-              <div className="flex items-center gap-2">
-                <Toggle
-                  pressed={showJournalPapers}
-                  onPressedChange={() => toggleJournalSeries('papers')}
-                  size="sm"
-                  variant="outline"
-                  title="Toggle papers series"
-                  className="data-[state=on]:border-alma-700 data-[state=on]:bg-alma-100 data-[state=on]:text-alma-800"
-                >
-                  Papers
-                </Toggle>
-                <Toggle
-                  pressed={showJournalAvgCitations}
-                  onPressedChange={() => toggleJournalSeries('avg_citations')}
-                  size="sm"
-                  variant="outline"
-                  title="Toggle average citations series"
-                  className="data-[state=on]:border-gold-300 data-[state=on]:bg-gold-100 data-[state=on]:text-gold-700"
-                >
-                  Avg Citations
-                </Toggle>
-              </div>
+              <SeriesToggleGroup
+                specs={PAPERS_AVG_CIT_SERIES}
+                visible={journals.visible}
+                onToggle={journals.toggle}
+              />
             }
           />
           <CardContent>
@@ -338,7 +356,7 @@ export function InsightsOverviewTab({
                     name="Papers"
                     fill={colors.blue}
                     radius={[0, 2, 2, 0]}
-                    hide={!showJournalPapers}
+                    hide={!journals.visible.papers}
                     cursor="pointer"
                     onClick={(d: { drillValue?: string }) =>
                       openDrilldown('journal', d?.drillValue, `Papers in journal: ${d?.drillValue}`)
@@ -349,7 +367,7 @@ export function InsightsOverviewTab({
                     name="Avg Citations"
                     fill={colors.amber}
                     radius={[0, 2, 2, 0]}
-                    hide={!showJournalAvgCitations}
+                    hide={!journals.visible.avg_citations}
                   />
                 </BarChart>
               </ResponsiveContainer>

@@ -2,6 +2,7 @@
 
 import logging
 import sqlite3
+import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -1655,6 +1656,17 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
         "where": "COALESCE(NULLIF(TRIM(r.source_api), ''), NULLIF(TRIM(r.source_type), ''), 'unknown') = ?",
         "coerce": str,
     },
+    # Whole-library drilldown — the population behind every summary tile. The 5
+    # overview tiles (Publications / Citations / Authors / Countries / Topics) all
+    # describe the SAME saved-Library set, so each drills through to it. Carries no
+    # bind param (``noparam``); the standard cited_by_count-DESC ordering also makes
+    # this the natural "papers by citation" view the Citations tile implies.
+    "all": {
+        "join": "",
+        "where": "p.status = 'library'",
+        "coerce": str,
+        "noparam": True,
+    },
 }
 
 
@@ -1668,8 +1680,8 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
     ),
 )
 def get_insights_papers(
-    filter_type: str = Query(..., description="cluster | topic | journal | institution | country | year | source"),
-    filter_value: str = Query(..., description="the figure's value (cluster id, topic name, …)"),
+    filter_type: str = Query(..., description="cluster | topic | journal | institution | country | year | source | all"),
+    filter_value: str = Query(..., description="the figure's value (cluster id, topic name, …); ignored for 'all'"),
     scope: str = Query("library", description="library | corpus — only affects cluster"),
     limit: int = Query(30, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -1703,7 +1715,8 @@ def get_insights_papers(
             raise HTTPException(status_code=422, detail=f"Invalid filter_value for {ft}")
         join = spec["join"]
         where = spec["where"]
-        params = [value]
+        # `all` (and any future bind-free filter) selects the whole scope with no `?`.
+        params = [] if spec.get("noparam") else [value]
 
     try:
         # DISTINCT p.* collapses the row fan-out a topic/institution/source JOIN
@@ -1835,6 +1848,19 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         total_pubs = row["total"]
         total_citations = row["citations"] or 0
 
+        # Median citations/paper. The mean (avg_citations_per_paper) is dominated
+        # by a few mega-cited classics — one 100k-citation paper lifts an 87-paper
+        # library's mean by ~1.1k — so it misreads the typical paper. The median is
+        # the honest "typical paper" figure; we surface both. Library-scoped, same
+        # population; ~dozens of rows so an in-Python median is trivially cheap.
+        cite_values = [
+            int(r["c"] or 0)
+            for r in db.execute(
+                "SELECT COALESCE(cited_by_count, 0) AS c FROM papers WHERE status = 'library'"
+            ).fetchall()
+        ]
+        median_citations = statistics.median(cite_values) if cite_values else 0
+
         # Distinct materialized `authors` rows with ≥1 Library paper.
         # Same join shape as the `authors` list below (authors ⋈
         # publication_authors ⋈ papers) so `summary.total_authors` equals
@@ -1920,6 +1946,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "total_topics": total_topics,
             "total_institutions": total_institutions,
             "avg_citations_per_paper": round(total_citations / total_pubs, 1) if total_pubs else 0.0,
+            "median_citations_per_paper": round(median_citations, 1),
             "avg_papers_per_author": round(author_paper_links / total_authors, 1) if total_authors else 0.0,
         }
 

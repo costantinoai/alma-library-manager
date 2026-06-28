@@ -586,7 +586,11 @@ export function GraphPanel() {
                 <Diagnostic
                   label="Stability"
                   value={clustering.stability != null ? clustering.stability.toFixed(2) : 'n/a'}
-                  hint="repeatability across re-projections (mean ARI)"
+                  hint={
+                    clustering.stability != null
+                      ? 'repeatability across re-projections (mean ARI; 1 = identical clusters every time)'
+                      : 'measured only on a full Rebuild, and for libraries small enough to afford it — large corpora show n/a'
+                  }
                 />
                 <Diagnostic
                   label="Method"
