@@ -43,6 +43,7 @@ from alma.discovery.scoring import (
     score_candidate,
 )
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -81,9 +82,10 @@ def get_library_papers(conn: sqlite3.Connection) -> List[dict]:
     """Fetch all papers with status='library' (saved papers)."""
     try:
         rows = conn.execute(
-            """SELECT id, title, abstract, url, doi, authors, journal, year
+            f"""SELECT id, title, abstract, url, doi, authors, journal, year
                FROM papers
                WHERE status = 'library'
+                 AND {standalone_paper_sql("papers")}
                ORDER BY added_at DESC"""
         ).fetchall()
         return [dict(r) for r in rows]
@@ -99,9 +101,10 @@ def get_rated_publications(conn: sqlite3.Connection) -> Tuple[List[dict], List[d
 
     try:
         rows = conn.execute(
-            """SELECT id, title, abstract, url, doi, authors, journal, year, rating
+            f"""SELECT id, title, abstract, url, doi, authors, journal, year, rating
                FROM papers
-               WHERE rating > 0"""
+               WHERE rating > 0
+                 AND {standalone_paper_sql("papers")}"""
         ).fetchall()
         for r in rows:
             d = dict(r)

@@ -9,6 +9,8 @@ shipping everywhere.
 
 from __future__ import annotations
 
+from alma.core.components import not_component_sql
+
 
 def paper_date_sort_expr(alias: str = "", *, added_at_fallback: bool = False) -> str:
     """SQL expression that orders papers by publication date with a year fallback.
@@ -56,4 +58,32 @@ def canonical_paper_filter(alias: str = "p", *, leading_and: bool = False) -> st
     ``" AND "`` for appending onto an existing ``WHERE``.
     """
     clause = f"COALESCE({alias}.canonical_paper_id, '') = ''"
+    return f" AND {clause}" if leading_and else clause
+
+
+def standalone_paper_sql(alias: str = "p", *, leading_and: bool = False) -> str:
+    """SQL predicate selecting FIRST-CLASS papers — rows that are neither a
+    dedup twin nor a part-of component.
+
+    A row is *subordinate* (an inert appendix, not a paper to embed / count /
+    graph / let influence taste) when EITHER:
+      - ``canonical_paper_id`` points at another row — a preprint↔journal dedup
+        twin merged upward (``alma.application.preprint_dedup``); or
+      - ``component_type`` is set — a figure / supplementary / dataset /
+        peer-review part-of (``alma.core.components``).
+
+    This is the SINGLE read-gate for every surface that must see only real
+    papers: embedding-candidate selection, health/coverage counts, graph node
+    sets, cluster centroids, the discovery taste-centroid, and the feedback
+    signal corpus. It composes ``canonical_paper_filter`` + ``not_component_sql``
+    so the two-column check is defined once and never hand-rolled inline.
+
+    Per the Health H-1 rule (see ``canonical_paper_filter``), a metric that uses
+    this predicate must use it for its numerator, denominator, fingerprint, AND
+    affected-items drilldown together, or the headline counts won't reconcile.
+
+    ``alias`` is the ``papers`` table alias; ``leading_and=True`` prepends
+    ``" AND "`` for appending onto an existing ``WHERE``.
+    """
+    clause = f"{canonical_paper_filter(alias)} AND {not_component_sql(alias)}"
     return f" AND {clause}" if leading_and else clause

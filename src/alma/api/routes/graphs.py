@@ -29,6 +29,7 @@ from alma.ai.graph_versions import (
 from alma.config import get_db_path
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -917,6 +918,7 @@ def _collect_author_cluster_context(
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
             WHERE lower(pa.openalex_id) IN ({placeholders}){scope_filter}
+              AND {standalone_paper_sql('p')}
             GROUP BY p.id
             ORDER BY cby DESC, pdate DESC
             LIMIT ?
@@ -1710,19 +1712,31 @@ def _load_embeddings(
 
     active_model = get_active_embedding_model(conn)
     try:
+        # A subordinate row (dedup twin / part-of component) is never a graph
+        # node — it must not be a point, cluster member, centroid input, or edge
+        # endpoint. Both scopes join papers and apply the shared standalone gate;
+        # the corpus query in particular MUST join (it used to read
+        # publication_embeddings directly, so a leftover component vector leaked
+        # straight into the map).
         if scope == "library":
             rows = conn.execute(
-                """
+                f"""
                 SELECT pe.paper_id, pe.embedding
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
                 WHERE pe.model = ? AND p.status = 'library'
+                  AND {standalone_paper_sql('p')}
                 """,
                 (active_model,),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT paper_id, embedding FROM publication_embeddings WHERE model = ?",
+                f"""
+                SELECT pe.paper_id, pe.embedding
+                FROM publication_embeddings pe
+                JOIN papers p ON p.id = pe.paper_id
+                WHERE pe.model = ? AND {standalone_paper_sql('p')}
+                """,
                 (active_model,),
             ).fetchall()
     except sqlite3.OperationalError:

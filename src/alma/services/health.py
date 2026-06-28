@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Tuple
 
 from alma.application import materialized_views as mv
-from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -520,7 +520,7 @@ def embedding_coverage(
             SELECT COUNT(*) AS c
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
-            WHERE pe.model = ? AND {canonical_paper_filter('p')}
+            WHERE pe.model = ? AND {standalone_paper_sql('p')}
             """,
             (model,),
         ).fetchone()
@@ -532,7 +532,7 @@ def embedding_coverage(
         error = "embedding count failed"
     try:
         pub = conn.execute(
-            f"SELECT COUNT(*) AS c FROM papers p WHERE {canonical_paper_filter('p')}"
+            f"SELECT COUNT(*) AS c FROM papers p WHERE {standalone_paper_sql('p')}"
         ).fetchone()
         pub_count = int((pub["c"] if pub else 0) or 0)
     except Exception as exc:  # noqa: BLE001
@@ -850,20 +850,22 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # *assessment logic* changes (the data fingerprint can't see code changes — e.g.
 # adding actions to a dimension). Bump it when assess_corpus' output shape /
 # dimensions / actions change.
-# H-1: the paper count AND the embedding count are both over the CANONICAL
+# H-1: the paper count AND the embedding count are both over the STANDALONE
 # universe (the helper), matching embedding_coverage's numerator/denominator —
 # the fingerprint used to mix canonical papers with ALL embedding rows, so an
-# alias gaining/losing a vector wouldn't invalidate the snapshot. v4→v5 forces
-# one rebuild so the corrected coverage lands.
+# alias gaining/losing a vector wouldn't invalidate the snapshot. v4→v5 forced
+# one rebuild for the canonical-only fix; v9→v10 forces another now that the
+# universe also excludes part-of components (standalone_paper_sql), so the
+# component-corrected coverage lands.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v9',
-      (SELECT COUNT(*) FROM papers p WHERE {canonical_paper_filter('p')}),
+      'health-logic-v10',
+      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),
       (SELECT COALESCE(MAX(updated_at),'') FROM paper_enrichment_status),
       (SELECT COUNT(*) FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE {canonical_paper_filter('p')}),
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM publication_embedding_fetch_status),
       (SELECT COALESCE(MAX(value),'') FROM discovery_settings WHERE key LIKE '%embedding_model%')
 """
@@ -1270,7 +1272,15 @@ def dimension_items(
 
     pred = _DIMENSION_PREDICATES.get(key)
     if pred is not None:
-        sql = f"SELECT {_ITEM_COLUMNS}, '' AS extra FROM papers p WHERE {pred} {order} LIMIT ? OFFSET ?"
+        # Every metadata-gap / local-computable count excludes subordinate rows
+        # (build_enrichment_status + _count_local_specter2_candidates both use
+        # standalone_paper_sql), so the drilldown must too or it won't reconcile
+        # with the headline count (H-1). One injection here gates every simple
+        # predicate at once.
+        sql = (
+            f"SELECT {_ITEM_COLUMNS}, '' AS extra FROM papers p "
+            f"WHERE {standalone_paper_sql('p')} AND {pred} {order} LIMIT ? OFFSET ?"
+        )
         params: tuple[Any, ...] = (limit, offset)
     elif key == "embeddings.s2_vector_missing":
         sql = f"""
@@ -1283,6 +1293,7 @@ def dimension_items(
                 COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') <> ''
                 OR COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
             )
+            AND {standalone_paper_sql('p')}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = '{_SPECTER2_MODEL}'
@@ -1300,12 +1311,12 @@ def dimension_items(
             model = get_active_embedding_model(conn)
         except Exception:
             model = _SPECTER2_MODEL
-        # Same CANONICAL universe + model as embedding_coverage()'s denominator,
-        # so this affected-items list == (canonical total − covered) (H-1).
+        # Same STANDALONE universe + model as embedding_coverage()'s denominator,
+        # so this affected-items list == (standalone total − covered) (H-1).
         sql = f"""
             SELECT {_ITEM_COLUMNS}, '' AS extra
             FROM papers p
-            WHERE {canonical_paper_filter('p')}
+            WHERE {standalone_paper_sql('p')}
               AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?

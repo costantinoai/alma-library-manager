@@ -336,11 +336,16 @@ def merge_preprint_into_canonical(
             unique_cols=unique_cols,
         )
 
-    # 2. Also migrate feedback_events — its column is `paper_id` but
-    #    unique constraint is on event id, so a bare UPDATE is safe.
+    # 2. Also migrate feedback_events so the preprint's likes/dismisses move to
+    #    the canonical paper instead of being orphaned on a hidden row. The table
+    #    is keyed by (entity_type, entity_id) — NOT a `paper_id` column — so the
+    #    pre-fix `SET paper_id = ?` updated a non-existent column and the bare
+    #    `except OperationalError` swallowed "no such column" (preference silently
+    #    lost on every merge). entity_id isn't unique, so a bare UPDATE is safe.
     try:
         conn.execute(
-            "UPDATE feedback_events SET paper_id = ? WHERE paper_id = ?",
+            "UPDATE feedback_events SET entity_id = ? "
+            "WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
             (canonical_id, preprint_id),
         )
     except sqlite3.OperationalError:

@@ -832,6 +832,23 @@ def get_paper_details(
         (paper_id,),
     ).fetchall()
     paper["components"] = [dict(r) for r in component_rows]
+
+    # Preprint version(s) of this paper: the preprint↔journal dedup twin merged
+    # upward into this row (alma.application.preprint_dedup stamps the preprint
+    # with canonical_paper_id = this paper). It's hidden everywhere else (the
+    # standalone gate), but surfaced HERE so the user can see + open the
+    # preprint that was absorbed into the published version. Distinct from
+    # `components` (part-of) — a preprint is the SAME work at an earlier stage.
+    preprint_rows = db.execute(
+        """
+        SELECT id, title, doi, url, year, preprint_source
+        FROM papers
+        WHERE canonical_paper_id = ?
+        ORDER BY COALESCE(year, 0) DESC, doi ASC
+        """,
+        (paper_id,),
+    ).fetchall()
+    paper["preprint_versions"] = [dict(r) for r in preprint_rows]
     return paper
 
 

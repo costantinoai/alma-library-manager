@@ -9,6 +9,7 @@ from typing import Callable
 
 from alma.ai.embedding_sources import source_for_provider_name
 from alma.core.db_write import write_section
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,10 @@ def run_embedding_computation(
             if is_local_specter2
             else ""
         )
+        # Never embed a subordinate row: a dedup twin (preprint merged upward)
+        # or a part-of component (figure / SI / dataset / peer-review) is an
+        # inert appendix, not a paper to vectorize. One gate, every scope.
+        standalone_filter = "AND " + standalone_paper_sql("p")
         target_ids = normalize_id_list(target_paper_ids)
         target_clause = ""
         if target_ids:
@@ -155,6 +160,7 @@ def run_embedding_computation(
                 LEFT JOIN publication_embeddings pe
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
+                {standalone_filter}
                 {local_specter2_text_filter}
                 {target_clause}
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
@@ -177,6 +183,7 @@ def run_embedding_computation(
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                {standalone_filter}
                 {local_specter2_text_filter}
                 {target_clause}
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
@@ -190,6 +197,7 @@ def run_embedding_computation(
                 SELECT p.id, p.title, p.abstract
                 FROM papers p
                 WHERE 1 = 1
+                {standalone_filter}
                 {local_specter2_text_filter}
                 {target_clause}
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
@@ -205,6 +213,7 @@ def run_embedding_computation(
                 LEFT JOIN publication_embeddings pe
                   ON pe.paper_id = p.id AND pe.model = ?
                 WHERE pe.paper_id IS NULL
+                {standalone_filter}
                 {local_specter2_text_filter}
                 {target_clause}
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC

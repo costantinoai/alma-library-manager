@@ -47,6 +47,7 @@ import uuid
 from typing import Any, Callable, Optional
 
 from alma.core.job_envelope import target_scoped_operation_key
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,7 @@ def _count_s2_fetch_terminal(conn: sqlite3.Connection) -> int:
 
         model = S2_SPECTER2_MODEL
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS c
             FROM papers p
             JOIN publication_embedding_fetch_status fs
@@ -110,6 +111,7 @@ def _count_s2_fetch_terminal(conn: sqlite3.Connection) -> int:
                   AND pe.model = ?
                   AND pe.source = 'semantic_scholar'
             )
+            AND {standalone_paper_sql("p")}
             """,
             (model, model),
         ).fetchone()
@@ -153,6 +155,7 @@ def _count_s2_fetch_candidates(
                 COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
             )
+            AND {standalone_paper_sql("p")}
             {target_clause}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
@@ -195,6 +198,7 @@ def _count_local_specter2_candidates(
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?
             )
+            AND {standalone_paper_sql("p")}
             {target_clause}
             AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
             AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''

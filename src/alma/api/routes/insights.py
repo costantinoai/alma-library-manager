@@ -19,6 +19,7 @@ from alma.api.helpers import (
 )
 from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.core.db_write import run_write_unit
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.application import materialized_views as mv
 from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 from alma.application.followed_authors import get_followed_author_backfill_status
@@ -1039,7 +1040,12 @@ def _build_ai_snapshot(
     total_papers = 0
     if table_exists(db, "papers"):
         try:
-            row = db.execute("SELECT COUNT(*) AS c FROM papers").fetchone()
+            # Standalone universe only: a dedup twin / part-of component is not a
+            # paper to embed, so it must be out of BOTH the total and the coverage
+            # numerator below or the AI snapshot's coverage % won't reconcile.
+            row = db.execute(
+                f"SELECT COUNT(*) AS c FROM papers p WHERE {standalone_paper_sql('p')}"
+            ).fetchone()
             total_papers = int((row["c"] if row else 0) or 0)
         except sqlite3.OperationalError:
             total_papers = 0
@@ -1048,7 +1054,7 @@ def _build_ai_snapshot(
     if total_papers > 0 and table_exists(db, "publication_embeddings"):
         try:
             row = db.execute(
-                """
+                f"""
                 SELECT
                     SUM(CASE WHEN active_pe.paper_id IS NULL THEN 1 ELSE 0 END) AS missing_embeddings,
                     SUM(
@@ -1065,6 +1071,7 @@ def _build_ai_snapshot(
                 FROM papers p
                 LEFT JOIN publication_embeddings active_pe
                   ON active_pe.paper_id = p.id AND active_pe.model = ?
+                WHERE {standalone_paper_sql('p')}
                 """,
                 (summary["embedding_model"], summary["embedding_model"]),
             ).fetchone()

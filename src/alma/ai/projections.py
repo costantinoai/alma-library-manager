@@ -11,6 +11,7 @@ import numpy as np
 
 from alma.ai.embedding_graph import CouplingSpec, build_embedding_graph, build_typed_edges
 from alma.core.scope import Scope
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,7 @@ def build_coauthor_network(
             JOIN papers p ON p.id = pa.paper_id
             LEFT JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
             WHERE pa.openalex_id <> ''{status_filter}
+              AND {standalone_paper_sql('p')}
             GROUP BY pa.openalex_id,
                      a.name,
                      a.affiliation,
@@ -399,6 +401,7 @@ def build_coauthor_network(
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
             WHERE pa.openalex_id IN ({placeholders}){text_status_filter}
+              AND {standalone_paper_sql('p')}
               AND TRIM(COALESCE(p.title, '')) <> ''
             """,
             author_ids,
@@ -446,6 +449,7 @@ def build_coauthor_network(
             f"""SELECT pa.openalex_id AS aid, pa.paper_id AS pid
                 FROM publication_authors pa JOIN papers p ON p.id = pa.paper_id
                 WHERE pa.openalex_id IN ({placeholders}){scope_filter}
+                  AND {standalone_paper_sql('p')}
                   AND TRIM(COALESCE(pa.openalex_id, '')) <> ''""",
             author_ids,
         ).fetchall():
@@ -609,6 +613,7 @@ def _author_referenced_works(
             JOIN papers p ON p.id = r.paper_id
             JOIN publication_authors pa ON pa.paper_id = r.paper_id
             WHERE pa.openalex_id IN ({placeholders}){status_filter}
+              AND {standalone_paper_sql('p')}
               AND TRIM(COALESCE(r.referenced_work_id, '')) <> ''
             """,
             author_ids,
@@ -654,8 +659,10 @@ def _author_mean_embeddings(
             SELECT pa.openalex_id AS author_id, pe.embedding
             FROM publication_embeddings pe
             JOIN publication_authors pa ON pa.paper_id = pe.paper_id
+            JOIN papers p ON p.id = pe.paper_id
             WHERE pa.openalex_id IN ({placeholders})
               AND pe.model = ?
+              AND {standalone_paper_sql('p')}
             """,
             list(author_ids) + [active_model],
         ).fetchall()

@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from alma.core.scoring_math import clamp as _clamp
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.application.signal_projection import load_projected_paper_signals
 
 logger = logging.getLogger(__name__)
@@ -442,11 +443,12 @@ def library_centroid(
         return None, 0
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT pe.embedding AS embedding
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
             WHERE p.status = 'library' AND pe.model = ?
+              AND {standalone_paper_sql('p')}
             LIMIT 1000
             """,
             (model,),

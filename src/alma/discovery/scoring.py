@@ -32,6 +32,7 @@ from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
     log_prevalence_weights,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
 from alma.application.author_signal import build_discovery_author_affinity
@@ -290,7 +291,7 @@ def compute_preference_profile(
         # `idx_publication_authors_openalex_norm` and turned this query into a
         # 12s+ table scan on every Discovery / Find&add request.
         bg_topic_rows = conn.execute(
-            """
+            f"""
             SELECT COALESCE(t.canonical_name, pt.term, '') AS term, COUNT(DISTINCT pt.paper_id) AS papers
             FROM papers p
             JOIN publication_topics pt ON pt.paper_id = p.id
@@ -299,6 +300,7 @@ def compute_preference_profile(
             JOIN followed_authors fa ON fa.author_id = a.id
             LEFT JOIN topics t ON t.topic_id = pt.topic_id
             WHERE p.status NOT IN ('library', 'dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(pt.term), '') <> ''
             GROUP BY COALESCE(t.canonical_name, pt.term, '')
             ORDER BY papers DESC, term ASC
@@ -316,13 +318,14 @@ def compute_preference_profile(
 
     try:
         bg_venue_rows = conn.execute(
-            """
+            f"""
             SELECT p.journal, COUNT(DISTINCT p.id) AS papers
             FROM papers p
             JOIN publication_authors pa ON pa.paper_id = p.id
             JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
             JOIN followed_authors fa ON fa.author_id = a.id
             WHERE p.status NOT IN ('library', 'dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal)), p.journal
             ORDER BY papers DESC, p.journal ASC
@@ -418,9 +421,11 @@ def _incorporate_feedback(
 
     try:
         rows = conn.execute(
-            """SELECT r.paper_id, r.user_action
+            f"""SELECT r.paper_id, r.user_action
                FROM recommendations r
-               WHERE r.user_action IN ('save', 'like', 'dismiss', 'liked', 'dismissed')"""
+               JOIN papers p ON p.id = r.paper_id
+               WHERE r.user_action IN ('save', 'like', 'dismiss', 'liked', 'dismissed')
+                 AND {standalone_paper_sql('p')}"""
         ).fetchall()
     except sqlite3.OperationalError:
         logger.warning("recommendations table not available for feedback incorporation")

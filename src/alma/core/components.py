@@ -192,8 +192,11 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
 
     For every paper: (1) classify it (set ``component_type`` /
     ``parent_paper_id`` when still NULL — never churns an already-set value),
-    and (2) HTML-clean a legacy title that predates the write-layer
-    ``clean_display_text``. Idempotent and safe to re-run.
+    (2) HTML-clean a legacy title that predates the write-layer
+    ``clean_display_text``, and (3) enforce the inert-appendix invariant on the
+    data itself — purge any vector / graph-cluster row belonging to a now-
+    subordinate paper (a component just classified here, or a dedup twin merged
+    earlier). Idempotent and safe to re-run.
 
     Caller owns the transaction — wrap in ``run_write_unit`` / ``write_section``
     (no commit here). Returns counts for logging/verification.
@@ -242,4 +245,41 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             params.append(row["id"])
             conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
 
-    return {"scanned": len(rows), "classified": classified, "linked": linked, "cleaned": cleaned}
+    # Enforce "a subordinate row carries no vector and no graph-cluster row" on
+    # the data itself. The read-gates (standalone_paper_sql) already exclude
+    # these rows everywhere downstream; this is the durable cleanup of any
+    # embedding / cluster computed BEFORE the row became subordinate (a freshly
+    # classified component, or a preprint whose vector was merged up to its
+    # canonical twin). Lazy import — sql_helpers imports not_component_sql from
+    # THIS module, so a top-level import would be a cycle.
+    from alma.core.sql_helpers import standalone_paper_sql
+
+    subordinate_ids_sql = f"SELECT id FROM papers p WHERE NOT ({standalone_paper_sql('p')})"
+    purged_vectors = purged_clusters = 0
+    try:
+        purged_vectors = max(
+            0,
+            conn.execute(
+                f"DELETE FROM publication_embeddings WHERE paper_id IN ({subordinate_ids_sql})"
+            ).rowcount,
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        purged_clusters = max(
+            0,
+            conn.execute(
+                f"DELETE FROM publication_clusters WHERE paper_id IN ({subordinate_ids_sql})"
+            ).rowcount,
+        )
+    except sqlite3.OperationalError:
+        pass  # publication_clusters may be absent on a minimal DB
+
+    return {
+        "scanned": len(rows),
+        "classified": classified,
+        "linked": linked,
+        "cleaned": cleaned,
+        "purged_vectors": purged_vectors,
+        "purged_clusters": purged_clusters,
+    }

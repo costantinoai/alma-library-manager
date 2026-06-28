@@ -697,3 +697,82 @@ def deduplicate_database(
         operation_key=operation_key,
         message="Deduplication queued",
     )
+
+
+@router.post(
+    "/backfill-components",
+    summary="Reconcile paper components (figures / SI / datasets / preprints)",
+    description=(
+        "Classify existing rows into the part-of model (figures / supplementary "
+        "/ datasets / peer-review), link them to their parent paper, and purge "
+        "any vector / graph-cluster row from a subordinate paper so it stays an "
+        "inert appendix. Runs as a background job."
+    ),
+)
+def backfill_components_route(
+    user: dict = Depends(get_current_user),
+):
+    """Schedule a background one-time component reconcile (see alma.core.components)."""
+    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+
+    operation_key = "library.backfill_components"
+    existing = find_active_job(operation_key)
+    if existing:
+        return activity_envelope(
+            str(existing.get("job_id") or ""),
+            status="already_running",
+            operation_key=operation_key,
+            message="Component reconcile already running",
+        )
+
+    job_id = f"backfill_components_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="user",
+        started_at=datetime.utcnow().isoformat(),
+        message="Reconciling paper components",
+    )
+
+    def _runner():
+        from alma.api.scheduler import set_job_status
+        from alma.core.components import backfill_components
+
+        try:
+            conn = open_db_connection()
+            try:
+                # backfill_components is caller-owns-transaction (no internal
+                # commit), so the background writer gates it in one write_section
+                # — BEGIN IMMEDIATE → classify/link/clean/purge → commit.
+                with write_section(conn, label="library.backfill_components"):
+                    summary = backfill_components(conn)
+            finally:
+                conn.close()
+            set_job_status(
+                job_id,
+                status="completed",
+                finished_at=datetime.utcnow().isoformat(),
+                message=(
+                    f"Component reconcile complete: {summary.get('classified', 0)} classified, "
+                    f"{summary.get('linked', 0)} linked, {summary.get('purged_vectors', 0)} vectors purged"
+                ),
+                result=summary,
+            )
+        except Exception as exc:
+            logger.exception("Component reconcile job %s failed: %s", job_id, exc)
+            set_job_status(
+                job_id,
+                status="failed",
+                finished_at=datetime.utcnow().isoformat(),
+                message="Component reconcile failed",
+                error=str(exc),
+            )
+
+    schedule_immediate(job_id, _runner)
+    return activity_envelope(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        message="Component reconcile queued",
+    )

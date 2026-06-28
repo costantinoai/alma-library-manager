@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from alma.core.scoring_math import age_decay, clamp as _clamp, days_since as _days_since
+from alma.core.sql_helpers import standalone_paper_sql
 
 
 _POSITIVE_ACTIONS = {
@@ -160,6 +161,31 @@ def compute_paper_signal_map(
         half_life_days=half_life_days,
         max_age_days=max_age_days,
     )
+
+    # Preference belongs to first-class papers only. A subordinate row (a dedup
+    # twin whose feedback was migrated to its canonical paper on merge, or a
+    # part-of component that's never a paper to prefer) must contribute ZERO
+    # signal. One gate over the accumulated ids covers all three sources above —
+    # defense in depth against an event/rating/rec that lingered on a row which
+    # was later classified/merged.
+    if paper_events:
+        ids = list(paper_events.keys())
+        placeholders = ",".join("?" * len(ids))
+        try:
+            standalone_ids = {
+                str(row[0])
+                for row in db.execute(
+                    f"SELECT id FROM papers p WHERE id IN ({placeholders}) "
+                    f"AND {standalone_paper_sql('p')}",
+                    ids,
+                ).fetchall()
+            }
+            paper_events = defaultdict(
+                float, {k: v for k, v in paper_events.items() if k in standalone_ids}
+            )
+        except sqlite3.OperationalError:
+            pass
+
     return paper_events
 
 
