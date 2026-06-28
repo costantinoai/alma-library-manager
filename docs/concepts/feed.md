@@ -150,7 +150,9 @@ parameter set.
   your monitors found. If you want "papers like the ones I've saved",
   use [Discovery](discovery.md).
 * It is **not** a search interface. To search, use the global search
-  box (top of the app) or query the Library / Corpus Explorer.
+  box (top of the app) — a result jumps straight to its item, opened on
+  its owner page (paper or collection/topic in Library, author in
+  Authors) — or query the Library / Corpus Explorer.
 * It is **not** infinite. The bound is a **60-day time window** by
   publication date — not a 60-item cap. The inbox keeps it scannable;
   to see items older than 60 days, use Library (saved) or Discovery

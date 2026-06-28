@@ -48,7 +48,10 @@ explaining that component:
 - **Degraded** — the issues, each with the same **one-click remediation** as
   before (refresh a monitor, repair or backfill an author, re-enable a source,
   refresh stale embeddings / clear the similarity cache, re-run an alert, test a
-  plugin), plus a jump to the component's owner page.
+  plugin), plus a jump to the component's owner page. The strip is fed from a
+  stale-while-revalidate snapshot, so a listed issue can occasionally be one that
+  was already resolved; remediating such a phantom (its target returns 404)
+  quietly clears it from the strip rather than failing.
 
 This consolidates what used to be three overlapping surfaces (a scoreboard of
 counts, a subsystem list, and a separate "degraded right now" list) into one
