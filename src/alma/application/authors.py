@@ -24,6 +24,7 @@ from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
 )
+from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
     log_prevalence_weights,
@@ -1900,21 +1901,14 @@ def _candidate_projection_keywords(db: sqlite3.Connection, openalex_id: str, *, 
         ).fetchall()
     except sqlite3.OperationalError:
         return []
+    # Dedupe (order-preserving) + early-limit wrapper around the shared parser
+    # (alma.core.keywords.parse_keywords). The parse logic is no longer duplicated
+    # here; only the dedupe/limit accumulation across up to 50 rows lives here.
     seen: list[str] = []
     for row in rows:
         raw = row["keywords"] if isinstance(row, sqlite3.Row) else row[0]
-        values: list[object]
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
-        except json.JSONDecodeError:
-            parsed = raw
-        if isinstance(parsed, list):
-            values = parsed
-        else:
-            values = re.split(r"[,;]", str(parsed or ""))
-        for value in values:
-            keyword = str(value or "").strip().lower()
-            if keyword and keyword not in seen:
+        for keyword in parse_keywords(raw):
+            if keyword not in seen:
                 seen.append(keyword)
             if len(seen) >= limit:
                 return seen

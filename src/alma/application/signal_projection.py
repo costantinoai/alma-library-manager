@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import age_decay, clamp as _clamp, days_since as _days_since
 from alma.core.sql_helpers import standalone_paper_sql
 
@@ -932,19 +933,10 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _parse_keywords(raw: Any) -> list[str]:
-    value = _coerce_value(raw)
-    if isinstance(value, list):
-        items = value
-    elif isinstance(value, str):
-        items = value.replace(";", ",").split(",")
-    else:
-        items = []
-    out: list[str] = []
-    for item in items:
-        text = str(item or "").strip().lower()
-        if text:
-            out.append(text)
-    return out
+    # Thin shim over the shared, single-source-of-truth parser
+    # (alma.core.keywords.parse_keywords). Kept as a local name so the two call
+    # sites read unchanged; the parsing logic itself is no longer duplicated here.
+    return parse_keywords(raw)
 
 
 def _add(target: dict[str, float], key: str, value: float) -> None:

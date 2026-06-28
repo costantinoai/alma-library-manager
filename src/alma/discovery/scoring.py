@@ -32,6 +32,7 @@ from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
     log_prevalence_weights,
 )
+from alma.core.keywords import parse_keywords
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
@@ -1120,11 +1121,9 @@ def _candidate_author_ids(candidate: dict) -> list[str]:
 
 
 def _candidate_keywords(candidate: dict) -> list[str]:
-    raw = candidate.get("keywords") or candidate.get("tags") or []
-    if isinstance(raw, list):
-        values = raw
-    elif isinstance(raw, str):
-        values = re.split(r"[,;]", raw)
-    else:
-        values = []
-    return [str(value or "").strip().lower() for value in values if str(value or "").strip()]
+    # Keep the keyword|tags fallback selection here; delegate the actual parsing to
+    # the shared single-source parser (alma.core.keywords.parse_keywords). Real
+    # discovery candidates carry Python lists of strings, on which parse_keywords is
+    # identical to the previous inline split; the only added capability is correctly
+    # decoding a JSON-*string* candidate (characterized in tests).
+    return parse_keywords(candidate.get("keywords") or candidate.get("tags") or [])
