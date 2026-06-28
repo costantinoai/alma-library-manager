@@ -513,6 +513,45 @@ export function runMaintenanceOperation(
   )
 }
 
+/** One pending author merge pair (the review queue the scan records). */
+export interface MergeCandidate {
+  id: string
+  primary_author_id: string
+  primary_name: string
+  primary_oid: string | null
+  alt_author_id: string
+  alt_name: string
+  alt_openalex_id: string | null
+  shared_orcid: string | null
+  papers_estimate: number
+  /** How it was flagged: 'orcid' (authoritative) or 'name' (heuristic). */
+  source: 'orcid' | 'name' | string
+  /** Name-match strength when source==='name'. */
+  confidence: 'high' | 'medium' | 'low' | null
+  discovered_at: string | null
+}
+
+/** The exact "who would be merged" list for the Merge duplicate authors review. */
+export function listMergeCandidates(limit = 200): Promise<{ candidates: MergeCandidate[] }> {
+  return api.get<{ candidates: MergeCandidate[] }>(`/authors/merge-candidates?limit=${limit}`)
+}
+
+/** Permanently reject one merge suggestion — the pair is never resurfaced. */
+export function rejectMergeCandidate(id: string): Promise<{ success: boolean }> {
+  return api.post<{ success: boolean }>(
+    `/authors/merge-candidates/${encodeURIComponent(id)}/reject`,
+    {},
+  )
+}
+
+/** Apply one merge suggestion (the per-row ✓). */
+export function mergeOneCandidate(id: string): Promise<{ success: boolean; papers_reassigned?: number }> {
+  return api.post<{ success: boolean; papers_reassigned?: number }>(
+    `/authors/merge-candidates/${encodeURIComponent(id)}/merge`,
+    {},
+  )
+}
+
 /** Recompute just the pending count + ETA for chosen params (e.g. a new scope). */
 export function estimateMaintenanceOperation(
   key: string,
@@ -599,6 +638,13 @@ export interface AuthorSuggestionSignal {
   subject?: string | null
 }
 
+/** The followed author a suggestion is a likely name-duplicate of. */
+export interface AuthorMergeMatch {
+  author_id: string
+  name: string
+  confidence: 'high' | 'medium' | 'low' | string
+}
+
 export interface AuthorSuggestion {
   key: string
   name: string
@@ -607,6 +653,9 @@ export interface AuthorSuggestion {
   openalex_id?: string | null
   existing_author_id?: string | null
   known_author_type?: string | null
+  /** Set when this suggestion's name matches an author you already follow — the
+   *  UI offers "merge into them" instead of "follow as new". */
+  duplicate_of?: AuthorMergeMatch | null
   shared_paper_count: number
   shared_followed_count: number
   local_paper_count: number
@@ -1049,6 +1098,24 @@ export function rejectAuthorSuggestion(
     openalex_id: openalexId,
     suggestion_bucket: suggestionBucket ?? null,
   })
+}
+
+/** Import a `duplicate_of` suggestion into the followed author it matches (fold
+ *  the external profile in, instead of following it as a new person). */
+export function mergeSuggestionInto(
+  openalexId: string,
+  primaryAuthorId: string,
+): Promise<{ success: boolean; papers_reassigned?: number }> {
+  return api.post('/authors/suggestions/merge-into', {
+    openalex_id: openalexId,
+    primary_author_id: primaryAuthorId,
+  })
+}
+
+/** Mark a flagged duplicate suggestion as NOT a duplicate — it returns to the
+ *  normal "follow a new author" rail instead of being suppressed. */
+export function markSuggestionNotDuplicate(openalexId: string): Promise<void> {
+  return api.post<void>('/authors/suggestions/not-duplicate', { openalex_id: openalexId })
 }
 
 /** Soft-remove an author (status='removed', D3) — reversible; the row +

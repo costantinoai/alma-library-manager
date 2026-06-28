@@ -12,8 +12,8 @@
  * user can never apply a stale plan, and the UI never hard-codes or bypasses the
  * backend confirmation.
  */
-import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Check, X } from 'lucide-react'
 
 import {
   Dialog,
@@ -24,13 +24,29 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
 import { AsyncButton } from '@/components/settings/primitives'
 import { EtaHint } from '@/components/shared/EtaHint'
 import {
   estimateMaintenanceOperation,
+  listMergeCandidates,
+  mergeOneCandidate,
+  rejectMergeCandidate,
+  type MergeCandidate,
   type MaintenanceOperation,
   type MaintenanceRunRequest,
 } from '@/api/client'
+
+/** Source/confidence badge so the user knows how much to trust each pair:
+ *  ORCID is authoritative; a name match is a heuristic to review (the weaker the
+ *  confidence, the quieter the badge). */
+function sourceBadge(c: MergeCandidate): { tone: StatusBadgeTone; label: string } {
+  if (c.source === 'orcid') return { tone: 'info', label: 'ORCID' }
+  const tone: BadgeTone = c.confidence === 'high' ? 'info' : c.confidence === 'medium' ? 'warning' : 'neutral'
+  return { tone, label: `Name · ${c.confidence ?? 'low'}` }
+}
+
+const MERGE_OP_KEY = 'dedup_orcid_merge'
 
 interface RepairConfirmDialogProps {
   op: MaintenanceOperation
@@ -76,6 +92,39 @@ export function RepairConfirmDialog({
   const token = plan?.confirmation_token ?? null
   const fingerprint = plan?.plan_fingerprint ?? null
 
+  // The merge op is "apply what the scan already found", so the review shows the
+  // EXACT pairs (who → who, source/confidence, papers reassigned) — the user's
+  // "who would be merged" — from the persisted queue (no network re-scan). Each
+  // row can be merged or REJECTED individually; a rejection is permanent (the
+  // pair is never resurfaced). Only this op has a candidate list.
+  const queryClient = useQueryClient()
+  const isMergeOp = op.key === MERGE_OP_KEY
+  const candidatesQuery = useQuery({
+    queryKey: ['merge-candidates'],
+    queryFn: () => listMergeCandidates(),
+    enabled: open && isMergeOp,
+    staleTime: 0,
+  })
+  const candidates = candidatesQuery.data?.candidates ?? []
+
+  // After a per-row action the count + queue + apply-plan token must refresh.
+  const refreshAfterAction = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['merge-candidates'] }),
+      queryClient.invalidateQueries({ queryKey: ['health'] }),
+    ])
+  const rejectMutation = useMutation({
+    mutationFn: (id: string) => rejectMergeCandidate(id),
+    onSuccess: refreshAfterAction,
+  })
+  const mergeMutation = useMutation({
+    mutationFn: (id: string) => mergeOneCandidate(id),
+    onSuccess: refreshAfterAction,
+  })
+  const rowBusy = (id: string) =>
+    (rejectMutation.isPending && rejectMutation.variables === id) ||
+    (mergeMutation.isPending && mergeMutation.variables === id)
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-surface-1">
@@ -106,9 +155,79 @@ export function RepairConfirmDialog({
           {plan?.eta ? <EtaHint eta={plan.eta} /> : null}
         </div>
 
+        {/* Merge review: the exact pairs (primary ← duplicate · source/confidence ·
+            papers reassigned). Merge or REJECT each individually; reject is
+            permanent. "Merge all" in the footer applies whatever remains. */}
+        {isMergeOp ? (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              {candidates.length > 0 ? `Pending merges (${candidates.length})` : 'Pending merges'}
+            </p>
+            {candidatesQuery.isLoading ? (
+              <p className="text-sm text-slate-500">Loading the merge list…</p>
+            ) : candidates.length === 0 ? (
+              <p className="text-sm text-slate-500">No pending merges — run a scan first.</p>
+            ) : (
+              <ul className="max-h-72 space-y-0.5 overflow-y-auto rounded-sm border border-[var(--color-border)] bg-surface-2 p-2">
+                {candidates.map((c) => {
+                  const badge = sourceBadge(c)
+                  const busy = rowBusy(c.id)
+                  return (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-sm"
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <StatusBadge tone={badge.tone} size="sm" className="shrink-0">
+                          {badge.label}
+                        </StatusBadge>
+                        <span className="min-w-0 truncate">
+                          <span className="font-medium text-alma-800">{c.primary_name}</span>
+                          <span className="px-1 text-slate-400" aria-label="merges in">←</span>
+                          <span className="text-slate-600">{c.alt_name}</span>
+                        </span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1">
+                        <span className="px-1 text-xs text-slate-500">
+                          {c.papers_estimate} paper{c.papers_estimate === 1 ? '' : 's'}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Merge ${c.alt_name} into ${c.primary_name}`}
+                          title="Merge this pair"
+                          disabled={busy}
+                          className="text-success-700 hover:bg-success-700/10"
+                          onClick={() => mergeMutation.mutate(c.id)}
+                        >
+                          <Check className="h-4 w-4" aria-hidden />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Reject — ${c.primary_name} and ${c.alt_name} are not the same person`}
+                          title="Not the same person — reject permanently"
+                          disabled={busy}
+                          className="text-critical-700 hover:bg-critical-700/10"
+                          onClick={() => rejectMutation.mutate(c.id)}
+                        >
+                          <X className="h-4 w-4" aria-hidden />
+                        </Button>
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            <p className="text-xs text-slate-400">
+              ✓ merge · ✕ reject (permanent — a rejected pair is never suggested again).
+            </p>
+          </div>
+        ) : null}
+
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {isMergeOp ? 'Done' : 'Cancel'}
           </Button>
           <AsyncButton
             variant="outline"
@@ -125,7 +244,7 @@ export function RepairConfirmDialog({
               })
             }
           >
-            Confirm &amp; run
+            {isMergeOp ? 'Merge all remaining' : 'Confirm & run'}
           </AsyncButton>
         </DialogFooter>
       </DialogContent>

@@ -8,12 +8,16 @@ import {
   getApiErrorMessage,
   isRetryableApiError,
   listAuthorSuggestions,
+  markSuggestionNotDuplicate,
+  mergeSuggestionInto,
   refreshAuthorSuggestionNetwork,
   rejectAuthorSuggestion,
   retryDelayMs,
   trackFollowedAuthorSuggestion,
   type AuthorSuggestion,
 } from '@/api/client'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { GitMerge, X } from 'lucide-react'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -244,6 +248,64 @@ export function SuggestedAuthorsRail({
     },
   })
 
+  // Import a duplicate suggestion into the followed author it matches. Optimistic
+  // removal (same acted-on machinery as dismiss) + invalidate so the followed
+  // author's papers/centroid refresh.
+  const mergeMutation = useMutation({
+    mutationFn: (s: AuthorSuggestion) =>
+      mergeSuggestionInto(s.openalex_id ?? '', s.duplicate_of?.author_id ?? ''),
+    retry: (failureCount, err) => isRetryableApiError(err) && failureCount < 3,
+    retryDelay: retryDelayMs,
+    onMutate: async (s) => {
+      const openalexId = s.openalex_id ?? ''
+      markActed(openalexId)
+      await queryClient.cancelQueries({ queryKey: ['author-suggestions', FETCH_COUNT] })
+      const prev = queryClient.getQueryData<AuthorSuggestion[]>(['author-suggestions', FETCH_COUNT])
+      queryClient.setQueryData<AuthorSuggestion[]>(
+        ['author-suggestions', FETCH_COUNT],
+        (old) => (old ?? []).filter((x) => x.openalex_id !== openalexId),
+      )
+      return { prev }
+    },
+    onSuccess: (_res, s) => {
+      toast({ title: 'Merged', description: `${s.name} imported into ${s.duplicate_of?.name}.` })
+    },
+    onError: (err, s, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['author-suggestions', FETCH_COUNT], ctx.prev)
+      unmarkActed(s.openalex_id)
+      errorToast(`Could not merge ${s.name}`, getApiErrorMessage(err))
+    },
+    onSettled: () => {
+      void invalidateQueries(queryClient, ['authors'], ['library-followed-authors'], ['author-suggestions'])
+    },
+  })
+
+  // "Not a duplicate" — the user says this flagged suggestion is a DIFFERENT
+  // person, so clear its `duplicate_of` (optimistically, so it hops to the follow
+  // cards immediately) and persist the verdict so it's never re-flagged. NOT a
+  // dismissal — the author stays suggestable.
+  const notDuplicateMutation = useMutation({
+    mutationFn: (s: AuthorSuggestion) => markSuggestionNotDuplicate(s.openalex_id ?? ''),
+    retry: (failureCount, err) => isRetryableApiError(err) && failureCount < 3,
+    retryDelay: retryDelayMs,
+    onMutate: async (s) => {
+      await queryClient.cancelQueries({ queryKey: ['author-suggestions', FETCH_COUNT] })
+      const prev = queryClient.getQueryData<AuthorSuggestion[]>(['author-suggestions', FETCH_COUNT])
+      queryClient.setQueryData<AuthorSuggestion[]>(
+        ['author-suggestions', FETCH_COUNT],
+        (old) => (old ?? []).map((x) => (x.openalex_id === s.openalex_id ? { ...x, duplicate_of: null } : x)),
+      )
+      return { prev }
+    },
+    onError: (err, s, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['author-suggestions', FETCH_COUNT], ctx.prev)
+      errorToast(`Could not update ${s.name}`, getApiErrorMessage(err))
+    },
+    onSettled: () => {
+      void invalidateQueries(queryClient, ['author-suggestions'])
+    },
+  })
+
   const followMutation = useMutation({
     mutationFn: async (intent: FollowIntent) => {
       // ONE canonical call: the follow endpoint resolves/creates the author
@@ -344,16 +406,29 @@ export function SuggestedAuthorsRail({
     }
   }, [replayFollow])
 
-  const filtered = useMemo(() => {
-    // Filter through the acted-on set FIRST so an acted-on row never
-    // reserves a visible slot (fewer cards would render than expected).
-    const all = suggestionsQuery.data ?? []
-    if (actedOn.size === 0) return all
-    return all.filter((s) => {
+  const notActedOn = useCallback(
+    (s: AuthorSuggestion) => {
       const oid = (s.openalex_id || '').trim().toLowerCase()
-      return oid && !actedOn.has(oid)
-    })
-  }, [suggestionsQuery.data, actedOn])
+      return !oid || !actedOn.has(oid)
+    },
+    [actedOn],
+  )
+
+  const filtered = useMemo(() => {
+    // The "follow a new author" rail shows only GENUINELY NEW names — a
+    // suggestion that name-matches someone you already follow (`duplicate_of`)
+    // is routed to the "Possible duplicates" section below instead. Acted-on
+    // rows are filtered FIRST so they never reserve a visible slot.
+    const all = suggestionsQuery.data ?? []
+    return all.filter((s) => !s.duplicate_of && notActedOn(s))
+  }, [suggestionsQuery.data, notActedOn])
+
+  // Suggestions that are likely the SAME person you already track — offered for
+  // merge/import, not as a new follow.
+  const duplicateSuggestions = useMemo(
+    () => (suggestionsQuery.data ?? []).filter((s) => !!s.duplicate_of && notActedOn(s)),
+    [suggestionsQuery.data, notActedOn],
+  )
 
   // Caps are whole rows of the measured grid: collapsed = `collapsedRows`
   // rows, expanded = up to EXPANDED_ROWS (bounded by what we fetched).
@@ -368,7 +443,8 @@ export function SuggestedAuthorsRail({
 
   const isLoading = suggestionsQuery.isLoading
   const hasError = suggestionsQuery.isError
-  const empty = !isLoading && !hasError && visible.length === 0
+  const empty =
+    !isLoading && !hasError && visible.length === 0 && duplicateSuggestions.length === 0
 
   return (
     <section ref={sectionRef} className="space-y-3">
@@ -466,6 +542,73 @@ export function SuggestedAuthorsRail({
               </>
             )}
           </Button>
+        </div>
+      ) : null}
+
+      {/* Possible duplicates — a suggested profile that name-matches someone you
+          already follow. Offered for MERGE (fold it into the existing author),
+          not as a new follow. ✕ dismisses it like any suggestion. */}
+      {duplicateSuggestions.length > 0 ? (
+        <div className="space-y-1.5 rounded-sm border border-edge-2 bg-surface-2 p-3">
+          <div className="flex items-center gap-2">
+            <GitMerge className="h-4 w-4 text-alma-600" aria-hidden />
+            <h3 className="text-xs font-semibold text-alma-800">
+              Possible duplicates of authors you follow ({duplicateSuggestions.length})
+            </h3>
+            <span className="text-xs text-slate-500">Merge to fold them in — not a new follow.</span>
+          </div>
+          <ul className="space-y-0.5">
+            {duplicateSuggestions.map((s) => {
+              const busy =
+                (mergeMutation.isPending && mergeMutation.variables?.openalex_id === s.openalex_id) ||
+                (notDuplicateMutation.isPending &&
+                  notDuplicateMutation.variables?.openalex_id === s.openalex_id)
+              return (
+                <li
+                  key={s.openalex_id || s.key}
+                  className="flex items-center justify-between gap-3 rounded-sm px-2 py-1.5 text-sm"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <StatusBadge
+                      tone={s.duplicate_of?.confidence === 'high' ? 'info' : 'warning'}
+                      size="sm"
+                      className="shrink-0"
+                    >
+                      {s.duplicate_of?.confidence ?? 'match'}
+                    </StatusBadge>
+                    <span className="min-w-0 truncate">
+                      <span className="text-slate-600">{s.name}</span>
+                      <span className="px-1 text-slate-400">→</span>
+                      <span className="font-medium text-alma-800">{s.duplicate_of?.name}</span>
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || !s.openalex_id}
+                      className="h-7 gap-1 border-alma-200 text-alma-700 hover:bg-alma-50"
+                      onClick={() => mergeMutation.mutate(s)}
+                    >
+                      <GitMerge className="h-3.5 w-3.5" aria-hidden />
+                      Merge into {s.duplicate_of?.name?.split(' ').slice(-1)[0]}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      title="Different person — show as a new author to follow"
+                      disabled={busy}
+                      className="h-7 gap-1 text-slate-600 hover:bg-surface-3"
+                      onClick={() => notDuplicateMutation.mutate(s)}
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                      Not a duplicate
+                    </Button>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
         </div>
       ) : null}
     </section>
