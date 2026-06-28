@@ -35,6 +35,13 @@ metadata, citations, topics, institutions, and the works graph.
   only fetch the fields we use. The select list lives in
   `alma/openalex/client.py::_WORKS_SELECT_FIELDS`. Adding a
   downstream consumer of a new field requires updating the select.
+* **Bulk-by-ID batching**: the corpus rehydrator fetches metadata for
+  many papers in one call via `filter=openalex_id:W1|W2|…` — up to
+  **100 IDs per filter** (the documented OR ceiling) with `per-page=100`,
+  splitting on HTTP 400/414 if a URL ever runs long. Far cheaper than
+  singleton GETs (and credits) at backlog scale. The client uses
+  **thread-local sessions** so the rehydration pipeline can fan these
+  out concurrently.
 * **Rate limits**: ALMa tracks every response's `x-ratelimit-*`
   headers and exposes them at **Settings → External APIs → OpenAlex
   usage**. If you see "no calls yet", you haven't hit the API yet —
@@ -69,6 +76,9 @@ recommendations, author recommendations, related papers.
   the multi-minute Discovery graph-lane stalls. With a key you get a
   dedicated ~1 RPS.
 * **`/paper/batch` contract**:
+  * **Batch size**: up to **500 lookup IDs per call** (the documented
+    max). ALMa chunks at **250 papers** — at ≤2 IDs per paper (S2 ID +
+    DOI) that's ≤500 IDs, the most work per call against the 1 RPS limit.
   * Results preserve the **request order** by lookup id (DOI / S2
     ID / OpenAlex ID).
   * Compacting the response shifts good papers onto bad IDs and
@@ -111,6 +121,15 @@ recommendations, author recommendations, related papers.
   budget cap: 50 calls (`TITLE_RESCUE_PER_RUN_BUDGET` in
   `services/s2_vectors.py`). The first 429 short-circuits the rest of
   the batch's rescue.
+* **Identity resolution (OpenAlex-first)**: the *Resolve missing
+  identity* sweep (`services/title_resolution.py`) handles title-only
+  papers with no usable identifier. It tries OpenAlex `/works?search`
+  first (the larger, cheaper, higher-throughput pool) and only falls
+  back to S2 `/paper/search` (1 RPS) when OpenAlex misses — so an
+  OpenAlex-cold corpus can't blow the S2 quota. An accepted OpenAlex
+  match fills the **full work from that same search response** (no
+  second fetch), while the S2 fallback captures the SPECTER2 vector it
+  carries. Same Jaccard 0.92 / |Δyear|≤1 contract as the rescue above.
 * **DOI hygiene** (`core.utils.canonical_lookup_doi`): DOIs sent to
   S2 are lowercased, URL-decoded, and stripped of trailing publisher
   fragments (`/pdf`, `/full`, `/abstract`, `/epdf`, `/meta`). The

@@ -297,7 +297,7 @@ See [Background jobs](../operations/background-jobs.md).
 SQLite allows **one writer at a time** (readers run concurrently under
 WAL). ALMa is a single backend process where foreground HTTP requests and
 background jobs share that one writer, so a burst of work can collide as
-`database is locked` if left unmanaged. Four mechanisms prevent it:
+`database is locked` if left unmanaged. Five mechanisms prevent it:
 
 * **One connection contract** — `alma.api.deps.open_db_connection` is the
   single factory. Every connection sets `journal_mode=WAL`,
@@ -332,6 +332,16 @@ background jobs share that one writer, so a burst of work can collide as
   busy_timeout + the worker cap instead. Giving them the same retry would
   require making each action one transaction first (defer the inner
   commits) — a refactor, not a drop-in.
+* **Fetch/write decoupling for network sweeps** — per-item network jobs
+  (identity resolution, abstract recovery) run through
+  `core.fetch_pipeline.run_fetch_write_pipeline`: a bounded concurrent pool
+  does the network (no DB access; clamped to the job's `fanout_budget`) and a
+  single writer thread batches the `write_section` flushes. This makes the
+  "never hold the writer across a network call" rule **structural** — the
+  writer gate is taken only for the brief, batched local write, never while a
+  remote round-trip is in flight — and turns a ~1-paper/s serial loop into a
+  concurrent one. The writer stays on the job thread, so cancellation (which
+  hard-kills that thread) and the single-writer invariant are preserved.
 
 The activity/log connection (`scheduler._activity_conn`) intentionally uses
 a shorter `busy_timeout` (5 s) — status writes are best-effort and must stay
