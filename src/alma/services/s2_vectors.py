@@ -30,6 +30,7 @@ from typing import Callable
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     canonical_lookup_doi,
     normalize_doi,
@@ -78,6 +79,14 @@ def _lookup_ids_for_values(semantic_scholar_id: str, doi: str) -> list[str]:
     Malformed DOIs (failing `validate_doi_shape`) are intentionally
     dropped here — the caller marks them `bad_local_doi` instead of
     emitting a guaranteed-to-fail HTTP request.
+
+    Both ids are emitted when present (s2_id AND DOI) ON PURPOSE — this is
+    the lessons rule "try every identifier already known for a paper". S2
+    paper ids are not stable (papers get merged and re-id'd upstream), so the
+    DOI is the fallback that resolves a paper whose stored s2_id has gone
+    stale. Sending both slightly lowers batch density (the same paper can come
+    back twice, deduped response-side), but that robustness is worth more than
+    the density — so task 11 deliberately did NOT trim the DOI here (B4).
     """
     out: list[str] = []
     s2_id = str(semantic_scholar_id or "").strip()
@@ -362,6 +371,7 @@ def run_s2_vector_backfill(
                 COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
             )
+            AND {standalone_paper_sql("p")}
             {target_clause}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe

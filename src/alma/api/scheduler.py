@@ -994,6 +994,20 @@ def setup_scheduler() -> None:
         }
     logger.info("Registered hydration_drain job (interval=%dm)", drain_interval_minutes)
 
+    # Resume self-rescheduling sweeps that the previous process orphaned
+    # mid-run (the reaper above cancelled them but cannot re-arm their
+    # continuation). Runs last, with the scheduler already started, so
+    # `schedule_immediate` works. Orphan-only + idempotent; never breaks
+    # startup. See `services.maintenance.resume_orphaned_sweeps` + tasks/11 A2.
+    try:
+        from alma.services.maintenance import resume_orphaned_sweeps
+
+        resumed = resume_orphaned_sweeps()
+        if resumed:
+            logger.warning("Resumed %d orphaned self-rescheduling sweep(s)", resumed)
+    except Exception as exc:
+        logger.warning("Orphaned-sweep resume skipped: %s", exc)
+
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""

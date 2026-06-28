@@ -18,6 +18,8 @@ from typing import Any, Callable
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
+from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     normalize_id_list,
     normalize_doi,
@@ -59,6 +61,14 @@ RETRYABLE_STATUS = "retryable_error"
 # expire — otherwise local SPECTER2 stays starved of input text forever.
 UNCHANGED_RETRY_AFTER = timedelta(days=30)
 _AUTO_PAPER_INSERT_HYDRATION_LIMIT = 25
+
+# Phase-3 abstract recovery fan-out. The `publisher` / `unpaywall` source
+# clients cap their own concurrency (max_concurrency=1, polite), so the real
+# HTTP parallelism stays low regardless of this number — its value is the
+# fetch/write DECOUPLING (writer off the network path + batched) plus the small
+# overlap between a paper's Unpaywall lookup and another's landing-page fetch.
+_ABSTRACT_FETCH_WORKERS = 6
+_ABSTRACT_WRITE_BATCH = 25
 
 
 def _json(value: Any) -> str:
@@ -482,7 +492,11 @@ def _run_s2_batched_phase(
         str(row["id"]): _lookup_ids_for_row(row) for row in rows
     }
 
-    chunk_size = 100
+    # S2 `/paper/batch` accepts up to 500 ids/call; at ≤2 lookup ids per paper
+    # (s2_id + DOI), 250 papers fits under that ceiling in ONE call. Matches the
+    # sibling `run_s2_vector_backfill` chunk and cuts this phase's S2 calls (the
+    # 1 RPS bottleneck) ~2.5× vs the old 100. See `tasks/11` B3.
+    chunk_size = 250
     processed = 0
     for start in range(0, len(rows), chunk_size):
         if is_cancellation_requested(job_id):
@@ -1050,33 +1064,61 @@ def _run_abstract_recovery_phase(
         step="abstract_recovery_prepare",
         data={"papers": len(paper_ids)},
     )
-    for idx, paper_id in enumerate(paper_ids, start=1):
-        if is_cancellation_requested(job_id):
-            break
-        row = _read_hydration_row(conn, paper_id)
-        if row is None or _abstract_present(row):
-            continue
-        # _hydrate_via_abstract_recovery does its network probe OUTSIDE the gate
-        # and commits its own gated write_section, so the writer lock is never
-        # held across this paper's (or the next paper's) remote fetch.
-        status, filled = _hydrate_via_abstract_recovery(conn, paper_id, row)
-        summary["attempted"] += 1
-        summary[status] += 1
-        if "abstract" in filled:
-            summary["abstract_filled"] += 1
-        if idx % 20 == 0 or idx == len(paper_ids):
-            set_job_status(
-                job_id,
-                status="running",
-                processed=base_processed,
-                total=base_total,
-                message=(
-                    f"Abstract recovery: {idx}/{len(paper_ids)} checked, "
-                    f"{int(summary['abstract_filled'])} abstracts filled"
-                ),
-            )
-    # No final commit: each paper's writes were committed inside its own
-    # _hydrate_via_abstract_recovery write_section.
+
+    # Read the candidate rows up front (local reads) so the fetch workers do
+    # network ONLY. Skip any that already gained an abstract since selection.
+    rows = [
+        row
+        for pid in paper_ids
+        if (row := _read_hydration_row(conn, pid)) is not None and not _abstract_present(row)
+    ]
+    if not rows:
+        add_job_log(
+            job_id,
+            "Phase 3 abstract recovery complete",
+            step="abstract_recovery_done",
+            data=dict(summary),
+        )
+        return summary
+
+    # Decoupled fetch/write: concurrent OA/landing-page probes feed a single
+    # batched writer. The `publisher`/`unpaywall` source clients keep the HTTP
+    # itself polite (their own concurrency caps), so the win here is the writer
+    # being off the network path + batched, not raw parallelism. See tasks/11.
+    def _write(batch: list) -> None:
+        with write_section(conn, label="abstract recovery batch"):
+            for r in batch:
+                summary["attempted"] += 1
+                if isinstance(r, FetchError):
+                    # Transient fetch failure → no ledger row, retried next run.
+                    summary["error"] += 1
+                    continue
+                status, filled = _apply_abstract_recovery(conn, r)
+                summary[status] += 1
+                if "abstract" in filled:
+                    summary["abstract_filled"] += 1
+
+    def _progress(done: int, total_now: int) -> None:
+        set_job_status(
+            job_id,
+            status="running",
+            processed=base_processed,
+            total=base_total,
+            message=(
+                f"Abstract recovery: {done}/{total_now} checked, "
+                f"{int(summary['abstract_filled'])} abstracts filled"
+            ),
+        )
+
+    run_fetch_write_pipeline(
+        rows,
+        fetch_one=_fetch_abstract_recovery,
+        write_batch=_write,
+        fetch_workers=_ABSTRACT_FETCH_WORKERS,
+        batch_size=_ABSTRACT_WRITE_BATCH,
+        is_cancelled=lambda: is_cancellation_requested(job_id),
+        on_progress=_progress,
+    )
     add_job_log(
         job_id,
         "Phase 3 abstract recovery complete",
@@ -1100,7 +1142,7 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
         (OPENALEX_SOURCE, METADATA_PURPOSE),
     ).fetchall()
     missing = conn.execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS total,
             SUM(CASE WHEN COALESCE(NULLIF(TRIM(openalex_id), ''), '') != '' THEN 1 ELSE 0 END) AS with_openalex_id,
@@ -1123,7 +1165,7 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
                       AND NOT EXISTS (SELECT 1 FROM publication_references pr WHERE pr.paper_id = papers.id)
                      THEN 1 ELSE 0 END) AS missing_references
         FROM papers
-        WHERE COALESCE(canonical_paper_id, '') = ''
+        WHERE {standalone_paper_sql("papers")}
         """
     ).fetchone()
     retry_waiting = conn.execute(
@@ -1147,7 +1189,7 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
     # FIXABLE remainder, so the card's pending agrees with its gap. Same field
     # predicates as `missing` above, restricted to already-enriched papers.
     exhausted = conn.execute(
-        """
+        f"""
         SELECT
             SUM(CASE WHEN COALESCE(NULLIF(TRIM(doi), ''), '') = '' THEN 1 ELSE 0 END) AS doi,
             SUM(CASE WHEN COALESCE(NULLIF(TRIM(abstract), ''), '') = '' THEN 1 ELSE 0 END) AS abstract,
@@ -1158,7 +1200,7 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
             SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM publication_topics pt WHERE pt.paper_id = papers.id)
                      THEN 1 ELSE 0 END) AS topics
         FROM papers
-        WHERE COALESCE(canonical_paper_id, '') = ''
+        WHERE {standalone_paper_sql("papers")}
           AND COALESCE(NULLIF(TRIM(openalex_id), ''), '') != ''
           AND EXISTS (
               SELECT 1 FROM paper_enrichment_status es
@@ -1341,15 +1383,27 @@ def _run_title_resolution_phase(
     add_job_log: Callable[..., None],
     is_cancellation_requested: Callable[[str], bool],
 ) -> dict[str, int]:
-    """Bulk identifier resolution for title-only papers.
+    """Bulk identifier resolution for title-only papers (Phase 0).
 
-    Runs `_resolve_identifiers_via_title` per candidate. Commits per
-    paper so a long phase doesn't hold the writer lock (per
-    `lessons.md`: "Bulk background jobs must commit per unit of work";
-    "Background jobs must release the writer lock before every remote
-    call"). Returns a small summary the parent runner attaches to its
-    own job result.
+    Decoupled fetch/write via the shared pipeline + the SAME per-paper helpers
+    the standalone "Resolve missing identity" sweep uses
+    (`title_resolution._fetch_one_title` / `_write_title_results`), so the
+    OpenAlex/S2 title search runs CONCURRENTLY (network-only fetch pool) and the
+    single writer batches its `write_section` flushes — one title-resolution
+    engine across both ops (DRY; tasks/11 B5). Every outcome is stamped in the
+    `title_resolution` ledger, so a stale title leaves the pool. Returns a small
+    summary the parent runner attaches to its own job result.
     """
+    from alma.discovery import semantic_scholar
+    from alma.services.title_resolution import (
+        _FETCH_WORKERS,
+        _S2FallbackGate,
+        _WRITE_BATCH_SIZE,
+        S2_FALLBACK_PER_RUN_BUDGET,
+        _fetch_one_title,
+        _write_title_results,
+    )
+
     candidates = _select_title_resolution_candidates(
         conn, limit=limit, target_paper_ids=target_paper_ids
     )
@@ -1364,29 +1418,33 @@ def _run_title_resolution_phase(
         data={"candidates": len(candidates)},
     )
 
-    for idx, row in enumerate(candidates, start=1):
-        if is_cancellation_requested(job_id):
-            break
-        try:
-            status, filled = _resolve_identifiers_via_title(
-                conn, str(row["id"]), row
-            )
-        except Exception as exc:
-            logger.warning(
-                "title-resolution phase failed for %s: %s", row["id"], exc
-            )
-            continue
-        summary["attempted"] += 1
-        if filled:
-            summary["resolved"] += 1
-        # No commit here: _resolve_identifiers_via_title gates its own writes
-        # (id fills + ledger) in write_section, with all network outside.
+    model = semantic_scholar.S2_SPECTER2_MODEL
+    counters: dict[str, int] = {
+        "resolved_via_openalex": 0,
+        "resolved_via_s2": 0,
+        "vectors_captured": 0,
+        "no_match": 0,
+        "errors": 0,
+    }
+    s2_gate = _S2FallbackGate(S2_FALLBACK_PER_RUN_BUDGET)
+    result = run_fetch_write_pipeline(
+        candidates,
+        fetch_one=lambda row: _fetch_one_title(row, s2_gate=s2_gate),
+        write_batch=lambda batch: _write_title_results(
+            conn, batch, model=model, counters=counters
+        ),
+        fetch_workers=_FETCH_WORKERS,
+        batch_size=_WRITE_BATCH_SIZE,
+        is_cancelled=lambda: is_cancellation_requested(job_id),
+    )
+    summary["attempted"] = result.processed
+    summary["resolved"] = counters["resolved_via_openalex"] + counters["resolved_via_s2"]
 
     add_job_log(
         job_id,
         "Phase 0 title-resolution complete",
         step="title_resolution_done",
-        data=dict(summary),
+        data={**summary, **counters},
     )
     return summary
 
@@ -1408,7 +1466,12 @@ def run_corpus_metadata_rehydration(
     if limit is not None:
         limit = max(1, min(int(limit), 100_000))
     target_ids = normalize_id_list(target_paper_ids)
-    batch_size = 50
+    # OpenAlex `/works?filter=openalex_id:a|b|...` ORs up to 100 values per
+    # filter (and `per-page` max is 100), so 100 ids/call is the documented
+    # ceiling — half the calls (and, under the api-key credit model, half the
+    # credits) of the old 50. `_fetch_openalex_chunk` splits on 400/414 if a URL
+    # ever runs long, so 100 is safe. See `tasks/11` B2.
+    batch_size = 100
     retry_after = timedelta(hours=6)
     summary: Counter[str] = Counter()
     field_counts: Counter[str] = Counter()
@@ -1496,7 +1559,7 @@ def run_corpus_metadata_rehydration(
             "target_paper_ids": target_ids,
             "estimated_remote_calls": {
                 "openalex": (total + batch_size - 1) // batch_size,
-                "semantic_scholar": (len(s2_preflight_rows) + 99) // 100,
+                "semantic_scholar": (len(s2_preflight_rows) + 249) // 250,
                 "crossref": 1 if crossref_preflight_ids else 0,
                 "abstract_recovery": len(abstract_preflight_ids),
             },
@@ -2243,26 +2306,20 @@ def _resolve_identifiers_via_title(
             best_oa_score = score
 
     if best_oa is not None:
-        from alma.core.paper_updates import fill_only_update_paper
-        from alma.core.utils import canonical_lookup_doi as _canonical
+        # Reuse the standalone sweep's OpenAlex-match writer: fill id+doi AND
+        # merge the FULL metadata the search already returned (B1 — so Phase 1
+        # does NOT re-fetch the same work), stamping the OpenAlex enrichment
+        # ledger `enriched`. One shared apply helper across both title resolvers
+        # (DRY — tasks/11 B1/B5).
+        from alma.services.title_resolution import _apply_openalex_title_match
 
-        oa_id_raw = str(best_oa.get("id") or "").strip()
-        oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
-        new_doi = _canonical(str(best_oa.get("doi") or "")) or ""
-        # OpenAlex search (network) is done — gate the short id fill. In this
+        # OpenAlex search (network) is done — gate the fill+merge. In this
         # branch S2 is then skipped (the row now has an identifier), so no
         # network follows this write.
         with write_section(conn, label="title-resolution oa fill"):
-            changed = fill_only_update_paper(
-                conn,
-                paper_id,
-                fill_fields={
-                    **({"openalex_id": oa_id} if oa_id else {}),
-                    **({"doi": new_doi} if new_doi else {}),
-                },
-            )
-        for field in changed:
-            if field in ("openalex_id", "doi"):
+            oa_fields = _apply_openalex_title_match(conn, paper_id, best_oa)
+        for field in oa_fields:
+            if field not in fields_filled:
                 fields_filled.append(field)
         matched_via = f"oa_search:{best_oa_score:.2f}"
 
@@ -2540,23 +2597,18 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
     return (status_value, fields_filled)
 
 
-def _hydrate_via_abstract_recovery(
-    conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row
-) -> tuple[str, list[str]]:
-    """Recover an abstract from public OA / publisher metadata.
+def _fetch_abstract_recovery(row: sqlite3.Row) -> dict:
+    """FETCH (worker): probe OA / landing-page metadata for an abstract.
 
-    Safe default only: fetch known landing pages, parse standard
-    metadata tags, and ask Unpaywall for OA locations when the app has
-    a contact email. Scholar, Sci-Hub, and PDF parsing remain policy /
-    dependency decisions outside this default path.
+    NETWORK ONLY — Unpaywall (for OA locations) + the candidate landing
+    pages. Returns the recovered abstract + reason + ledger lookup_key for
+    the writer; never touches the DB. The `publisher` / `unpaywall` source
+    clients enforce their own (polite) concurrency, so fanning this out stays
+    polite regardless of the fetch-pool width.
     """
-
-    from alma.core.paper_updates import fill_only_update_paper
     from alma.core.utils import canonical_lookup_doi
 
-    if _abstract_present(row):
-        return ("skipped", [])
-
+    paper_id = str(row["id"])
     urls: list[str] = []
     for field in ("oa_url", "url"):
         value = str(row[field] or "").strip()
@@ -2570,9 +2622,6 @@ def _hydrate_via_abstract_recovery(
                 urls.append(value)
 
     lookup_key = "|".join(urls[:3]) or (f"doi:{doi}" if doi else "")
-
-    # Network phase — probe candidate landing pages for an abstract. NO DB
-    # writes here, so the writer lock is never held across these HTTP fetches.
     abstract = ""
     reason = "no_candidate_urls"
     for url in urls:
@@ -2586,35 +2635,70 @@ def _hydrate_via_abstract_recovery(
         reason = "html_meta_abstract"
         break
 
-    # Write phase — one gated window (BEGIN IMMEDIATE + writer gate) with the
-    # network already done. The caller no longer commits per paper.
+    return {
+        "paper_id": paper_id,
+        "abstract": abstract,
+        "reason": reason,
+        "lookup_key": lookup_key,
+    }
+
+
+def _apply_abstract_recovery(conn: sqlite3.Connection, result: dict) -> tuple[str, list[str]]:
+    """WRITE: fill the recovered abstract + stamp the abstract_recovery ledger.
+
+    Caller OWNS the transaction (no `write_section` here) — the single-paper
+    path wraps one call, the bulk pipeline wraps a whole batch. NO network.
+    Returns ``(status, fields_filled)``.
+    """
+    from alma.core.paper_updates import fill_only_update_paper
+
+    paper_id = str(result["paper_id"])
+    abstract = str(result.get("abstract") or "")
+    reason = str(result.get("reason") or "")
+    lookup_key = str(result.get("lookup_key") or "")
+
     fields_filled: list[str] = []
-    retry: timedelta | None
-    with write_section(conn, label="abstract recovery"):
-        if abstract:
-            fields_filled = fill_only_update_paper(
-                conn,
-                paper_id,
-                fill_fields={"abstract": abstract},
-            )
-        if fields_filled:
-            status_value = "enriched"
-            retry = None
-        else:
-            status_value = "unchanged"
-            retry = UNCHANGED_RETRY_AFTER
-        _write_ledger(
-            conn,
-            paper_id=paper_id,
-            source=ABSTRACT_RECOVERY_SOURCE,
-            lookup_key=lookup_key,
-            status=status_value,
-            reason=reason,
-            fields_filled=fields_filled,
-            fields_key="abstract_recovery_html_meta_v1",
-            retry_after=retry,
+    if abstract:
+        fields_filled = fill_only_update_paper(
+            conn, paper_id, fill_fields={"abstract": abstract}
         )
+    if fields_filled:
+        status_value = "enriched"
+        retry: timedelta | None = None
+    else:
+        status_value = "unchanged"
+        retry = UNCHANGED_RETRY_AFTER
+    _write_ledger(
+        conn,
+        paper_id=paper_id,
+        source=ABSTRACT_RECOVERY_SOURCE,
+        lookup_key=lookup_key,
+        status=status_value,
+        reason=reason,
+        fields_filled=fields_filled,
+        fields_key="abstract_recovery_html_meta_v1",
+        retry_after=retry,
+    )
     return (status_value, fields_filled)
+
+
+def _hydrate_via_abstract_recovery(
+    conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row
+) -> tuple[str, list[str]]:
+    """Recover an abstract from public OA / publisher metadata (single paper).
+
+    Safe default only: fetch known landing pages, parse standard metadata
+    tags, and ask Unpaywall for OA locations when the app has a contact email.
+    Scholar, Sci-Hub, and PDF parsing remain policy / dependency decisions
+    outside this default path. Network OUTSIDE the gate, one gated write — the
+    bulk Phase-3 path reuses the same `_fetch_abstract_recovery` /
+    `_apply_abstract_recovery` halves through the fetch pipeline (DRY).
+    """
+    if _abstract_present(row):
+        return ("skipped", [])
+    result = _fetch_abstract_recovery(row)  # network OUTSIDE the gate
+    with write_section(conn, label="abstract recovery"):
+        return _apply_abstract_recovery(conn, result)
 
 
 def hydrate_paper_metadata(

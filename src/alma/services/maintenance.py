@@ -1978,3 +1978,107 @@ def maintenance_repair_periodic() -> None:
             conn.close()
         except Exception:
             pass
+
+
+# Self-rescheduling sweeps whose backlog the user opted into draining by
+# starting them, and whose runners are idempotent + ledger-gated — so it is
+# safe to auto-resume them after an orphaned restart. NOT the destructive /
+# apply ops (the `task.destructive` guard below is the structural belt).
+_RESUMABLE_OPERATION_KEYS = frozenset({
+    "ai.title_resolution_sweep",
+    "papers.rehydrate_metadata:openalex:metadata",
+    "ai.backfill_s2_vectors",
+})
+
+# The exact message `scheduler.reap_orphan_jobs` stamps. Keying resume on this
+# marker means a USER cancel (which writes a different message) is never
+# auto-resumed.
+_ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
+
+# Cap the per-restart resume session budget so a single orphaned run can't
+# re-launch an unbounded drain; the runner's per-run cap + continuation-depth
+# cap bound it further, and the next restart resumes any remainder.
+_RESUME_SESSION_CAP = 5000
+
+
+def resume_orphaned_sweeps() -> int:
+    """Re-launch self-rescheduling sweeps that a restart orphaned mid-run.
+
+    The orphan reaper (`scheduler.reap_orphan_jobs`) cancels stale `running`
+    rows but cannot reschedule, and the sweeps only re-arm their continuation
+    at end-of-run — so a mid-run death silently halts a user-initiated backlog
+    (e.g. a 2500-cap title-resolution run that drained 394 then stopped). This
+    runs ONCE at startup, AFTER reaping, and for each resumable operation_key
+    that was just orphaned AND still has eligible work AND has no active job,
+    schedules ONE continuation under ``trigger_source='auto:resume'``.
+
+    Orphan-only (keyed on the reaper's marker, so a user Cancel never resumes),
+    idempotent (``_schedule_task`` dedupes on operation_key via
+    ``schedule_with_envelope`` + the `find_active_job` guard), and REGISTRY-
+    driven (one source of truth for runner + pending count). See `tasks/11` A2.
+    Returns the number of sweeps resumed.
+    """
+    if str(os.getenv(ENV_DISABLE, "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return 0
+
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import find_active_job
+
+    resumed = 0
+    conn = open_db_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT operation_key
+            FROM operation_status
+            WHERE status = 'cancelled'
+              AND message = ?
+              AND COALESCE(operation_key, '') != ''
+            """,
+            (_ORPHAN_REAP_MESSAGE,),
+        ).fetchall()
+        orphaned = {str(r["operation_key"]) for r in rows} & _RESUMABLE_OPERATION_KEYS
+        if not orphaned:
+            return 0
+
+        payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+        by_opkey = {t.operation_key: t for t in REGISTRY.values()}
+        for opkey in orphaned:
+            task = by_opkey.get(opkey)
+            if task is None or task.destructive:
+                continue
+            if find_active_job(opkey):
+                continue  # already running (sibling worker / fresh user click)
+            try:
+                pending = int(task_pending_count(conn, task, payload) or 0)
+            except Exception:
+                pending = 0
+            if pending <= 0:
+                continue  # the orphan already finished its work — nothing to drain
+            # Generous session budget so the continuation chain actually drains
+            # the backlog (a small per-tick limit would stop after one chunk).
+            session_limit = max(1, min(pending, _RESUME_SESSION_CAP))
+            job_id = _schedule_task(
+                conn,
+                task,
+                limit=session_limit,
+                trigger_source="auto:resume",
+                queued_message=f"Resuming orphaned {task.label} ({pending} pending)",
+                log_message=f"Auto-resume of orphaned {task.label} after restart",
+                health_payload=payload,
+            )
+            if job_id:
+                resumed += 1
+                logger.warning(
+                    "auto-resume: re-launched orphaned %s (job=%s, pending=%d, budget=%d)",
+                    task.key, job_id, pending, session_limit,
+                )
+        return resumed
+    except Exception:
+        logger.exception("resume_orphaned_sweeps failed")
+        return resumed
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass

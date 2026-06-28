@@ -127,8 +127,14 @@ class OpenAlexClient:
         self._api_key = _resolve_api_key() if api_key is _UNSET else api_key
         self._mailto = mailto or get_openalex_email()
 
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "ALMa/2.0"})
+        # Per-thread sessions so the client is safe to call from a concurrent
+        # fetch pool (`core.fetch_pipeline`). A shared `requests.Session` is not
+        # guaranteed thread-safe; a thread-local one keeps connection pooling
+        # while removing the hazard — same pattern as `SourceHttpClient`.
+        self._local = threading.local()
+        # Guards the rate-limit / usage counters below against lost updates when
+        # several fetch workers update them concurrently.
+        self._stats_lock = threading.Lock()
 
         # Rate-limit bookkeeping
         self._rate_limit: Optional[int] = None  # X-RateLimit-Limit
@@ -150,6 +156,20 @@ class OpenAlexClient:
         self._op_cache: Optional[Dict[str, tuple[int, Dict[str, str], bytes, str, str, Optional[str]]]] = None
         self._op_negative_cache: Optional[set[str]] = None
         self._op_stats: Optional[OperationStats] = None
+
+    def _session(self) -> requests.Session:
+        """Return this thread's `requests.Session` (lazily created).
+
+        Thread-local so concurrent fetch-pool workers never share one
+        Session; each carries the same ``User-Agent`` and reuses its own
+        connection pool.
+        """
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update({"User-Agent": "ALMa/2.0"})
+            self._local.session = session
+        return session
 
     # ------------------------------------------------------------------
     # Operation-scoped cache
@@ -330,7 +350,7 @@ class OpenAlexClient:
             # Direct request — bypass cache so we always get live values.
             url = f"{BASE_URL}/rate-limit"
             merged = self._inject_auth(None)
-            resp = self._session.get(url, params=merged, timeout=timeout)
+            resp = self._session().get(url, params=merged, timeout=timeout)
             self._update_rate_limits(resp)
             if resp.status_code != 200:
                 return None
@@ -365,7 +385,7 @@ class OpenAlexClient:
         try:
             url = f"{BASE_URL}/rate-limit"
             merged = self._inject_auth(None)
-            resp = self._session.get(url, params=merged, timeout=timeout)
+            resp = self._session().get(url, params=merged, timeout=timeout)
             self._update_rate_limits(resp)
         except Exception as exc:
             return {
@@ -444,7 +464,7 @@ class OpenAlexClient:
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                resp = self._session.get(url, params=params, timeout=timeout)
+                resp = self._session().get(url, params=params, timeout=timeout)
                 self._update_rate_limits(resp)
                 last_resp = resp
 
@@ -647,24 +667,27 @@ class OpenAlexClient:
         used_str = headers.get("X-RateLimit-Credits-Used")
         reset_str = headers.get("X-RateLimit-Reset")
 
-        if limit_str is not None:
-            try:
-                self._rate_limit = int(limit_str)
-            except ValueError:
-                pass
-        if remaining_str is not None:
-            try:
-                self._rate_remaining = int(remaining_str)
-            except ValueError:
-                pass
-        # X-RateLimit-Credits-Used is the cost of *this* request (0 or 1),
-        # not cumulative.  Derive cumulative used from limit - remaining.
-        if self._rate_limit is not None and self._rate_remaining is not None:
-            self._credits_used = self._rate_limit - self._rate_remaining
-        if reset_str is not None:
-            self._rate_reset = reset_str
+        # Lock the counter/field block so concurrent fetch workers don't lose
+        # updates (these counters back the usage snapshot in Settings/Activity).
+        with self._stats_lock:
+            if limit_str is not None:
+                try:
+                    self._rate_limit = int(limit_str)
+                except ValueError:
+                    pass
+            if remaining_str is not None:
+                try:
+                    self._rate_remaining = int(remaining_str)
+                except ValueError:
+                    pass
+            # X-RateLimit-Credits-Used is the cost of *this* request (0 or 1),
+            # not cumulative.  Derive cumulative used from limit - remaining.
+            if self._rate_limit is not None and self._rate_remaining is not None:
+                self._credits_used = self._rate_limit - self._rate_remaining
+            if reset_str is not None:
+                self._rate_reset = reset_str
 
-        self._request_count += 1
+            self._request_count += 1
 
         # Warn when remaining credits are low
         if (
