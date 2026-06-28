@@ -1775,6 +1775,75 @@ class RejectSuggestionRequest(BaseModel):
     )
 
 
+class MergeSuggestionRequest(BaseModel):
+    openalex_id: str
+    primary_author_id: str
+
+
+@router.post(
+    "/suggestions/merge-into",
+    summary="Import a duplicate suggestion into the followed author it matches",
+    description=(
+        "For a suggestion flagged `duplicate_of` an existing followed author: fold "
+        "the suggested external OpenAlex profile into that author (reassign its "
+        "papers, record its id as an alias) instead of following it as a new "
+        "person. Foreground write via run_write_unit."
+    ),
+)
+def merge_suggestion_into_endpoint(
+    req: MergeSuggestionRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import import_suggested_author
+    from alma.core.db_write import run_write_unit
+
+    result = run_write_unit(
+        db,
+        lambda: import_suggested_author(db, req.primary_author_id, req.openalex_id),
+        label="import_suggested_author",
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=f"Merge failed: {result.get('reason')}")
+    return result
+
+
+class NotDuplicateRequest(BaseModel):
+    openalex_id: str
+
+
+@router.post(
+    "/suggestions/not-duplicate",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Mark a flagged duplicate suggestion as NOT a duplicate",
+    description=(
+        "The user says a suggestion flagged `duplicate_of` is actually a different "
+        "person. Records the OpenAlex id so it's no longer flagged — it returns to "
+        "the normal 'follow a new author' rail instead of being suppressed. "
+        "Foreground write via run_write_unit."
+    ),
+)
+def mark_suggestion_not_duplicate_endpoint(
+    req: NotDuplicateRequest,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.core.db_write import run_write_unit
+
+    oid = (req.openalex_id or "").strip().lower()
+    if not oid:
+        raise HTTPException(status_code=400, detail="openalex_id required")
+
+    def _persist() -> None:
+        db.execute(
+            "INSERT OR IGNORE INTO author_suggestion_not_duplicate (openalex_id, created_at) "
+            "VALUES (?, datetime('now'))",
+            (oid,),
+        )
+
+    run_write_unit(db, _persist, label="suggestion_not_duplicate")
+
+
 @router.post(
     "/suggestions/reject",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -3314,6 +3383,78 @@ def discover_author_aliases(
     summary["primary_author_id"] = author_id
     summary["primary_display_name"] = str(row["name"] or "")
     return summary
+
+
+@router.get(
+    "/merge-candidates",
+    summary="List pending author merge candidates (the review queue)",
+    description=(
+        "The duplicate author pairs the scan recorded and that haven't been merged "
+        "yet — each with both names, its `source` ('orcid'/'name') + `confidence`, "
+        "and the number of papers the merge would reassign. Drives the Merge card's "
+        "review dialog. Defined before /{author_id} so the static path isn't shadowed."
+    ),
+)
+def list_merge_candidates_endpoint(
+    limit: int = Query(200, ge=1, le=1000),
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.application.author_merge import list_merge_candidates
+
+    return {"candidates": list_merge_candidates(db, limit=limit)}
+
+
+@router.post(
+    "/merge-candidates/{candidate_id}/reject",
+    summary="Reject one merge suggestion (permanent — never resurfaced)",
+    description=(
+        "The user says 'these two are NOT the same person'. Records a permanent "
+        "rejection of the unordered author pair and drops the candidate, so every "
+        "future scan skips it. Foreground write through the request's gated "
+        "connection (run_write_unit)."
+    ),
+)
+def reject_merge_candidate_endpoint(
+    candidate_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.core.db_write import run_write_unit
+    from alma.application.author_merge import reject_merge_candidate
+
+    result = run_write_unit(
+        db, lambda: reject_merge_candidate(db, candidate_id), label="reject_merge_candidate"
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail="Merge candidate not found")
+    return result
+
+
+@router.post(
+    "/merge-candidates/{candidate_id}/merge",
+    summary="Apply one merge suggestion (the per-row ✓ Merge)",
+    description=(
+        "Merge this candidate's alt → primary (richer/followed profile wins, the "
+        "other's papers reassigned) and consume the candidate. Destructive, not "
+        "reversed automatically. Foreground write through the request's gated "
+        "connection (run_write_unit)."
+    ),
+)
+def merge_one_candidate_endpoint(
+    candidate_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    from alma.core.db_write import run_write_unit
+    from alma.application.author_merge import merge_one_candidate
+
+    result = run_write_unit(
+        db, lambda: merge_one_candidate(db, candidate_id), label="merge_one_candidate"
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail="Merge candidate not found")
+    return result
 
 
 @router.get(
@@ -5013,16 +5154,16 @@ def accept_author_unidentified(
 
 @router.post(
     "/dedup-by-orcid",
-    summary="Dedup followed authors by ORCID (auto-merge + alias record)",
+    summary="Scan followed authors for ORCID duplicates (record candidates)",
     description=(
-        "Manual sweep that walks every followed author with an "
+        "Manual NON-destructive scan that walks every followed author with an "
         "OpenAlex ID, calls /authors?filter=orcid:X to discover every "
         "split profile sharing the same ORCID, then for each alias: "
-        "(a) auto-merges if another currently-followed author already "
-        "holds that openalex_id (richer-profile-wins), or (b) records "
-        "it in `author_alt_identifiers` so the suggestion rail filters "
-        "it out. Activity-enveloped — runs in the background and the "
-        "Activity panel shows per-author progress."
+        "(a) if it is another local author row, RECORDS the mergeable pair in "
+        "`author_merge_candidates` for review (apply via the Merge card), or "
+        "(b) records it in `author_alt_identifiers` so the suggestion rail "
+        "filters it out. Never merges. Activity-enveloped — runs in the "
+        "background and the Activity panel shows per-author progress."
     ),
 )
 def dedup_authors_by_orcid_endpoint(
@@ -5037,13 +5178,13 @@ def dedup_authors_by_orcid_endpoint(
         schedule_immediate,
         set_job_status,
     )
-    from alma.application.author_merge import dedup_followed_authors_by_orcid
+    from alma.application.author_merge import scan_duplicate_candidates
 
     if not background:
         try:
-            return dedup_followed_authors_by_orcid(db, limit=_FULL_SWEEP_BUDGET)
+            return scan_duplicate_candidates(db, limit=_FULL_SWEEP_BUDGET)
         except Exception as e:
-            raise_internal("Author ORCID dedup sweep failed", e)
+            raise_internal("Author ORCID dedup scan failed", e)
 
     operation_key = "authors.dedup_by_orcid"
     existing = find_active_job(operation_key)
@@ -5069,7 +5210,7 @@ def dedup_authors_by_orcid_endpoint(
     def _runner() -> dict:
         conn = open_db_connection()
         try:
-            return dedup_followed_authors_by_orcid(conn, limit=_FULL_SWEEP_BUDGET, job_id=job_id)
+            return scan_duplicate_candidates(conn, limit=_FULL_SWEEP_BUDGET, job_id=job_id)
         finally:
             conn.close()
 

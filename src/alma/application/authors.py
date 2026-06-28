@@ -3342,7 +3342,67 @@ def list_author_suggestions(
     # buckets are full of novel candidates. Reserve slots proportional
     # to the ratio of each bucket's declared weight, guaranteeing that
     # every populated bucket contributes at least one suggestion.
-    return _diversify_final(suggestions, limit=limit, weights=bucket_weights)
+    final = _diversify_final(suggestions, limit=limit, weights=bucket_weights)
+    _annotate_duplicate_suggestions(db, final)
+    return final
+
+
+def _annotate_duplicate_suggestions(db: sqlite3.Connection, suggestions: list[dict]) -> None:
+    """Tag any suggestion whose NAME matches a followed author with ``duplicate_of``
+    (read-only — this is a GET path). Such a candidate is almost certainly an
+    author you already track, surfaced under a split/variant OpenAlex profile, so
+    the UI routes it to a "merge into your existing author" action instead of the
+    "follow a new author" rail. Surname-blocked against the (small) followed set."""
+    from alma.core.author_names import name_match_confidence, parse_person_name
+
+    try:
+        rows = db.execute(
+            """
+            SELECT a.id AS author_id, a.name, a.openalex_id
+            FROM followed_authors fa JOIN authors a ON a.id = fa.author_id
+            WHERE COALESCE(a.status, 'active') = 'active' AND TRIM(COALESCE(a.name, '')) <> ''
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    # OpenAlex ids the user marked "not a duplicate" — never re-flag them, so they
+    # stay in the normal follow rail.
+    try:
+        not_dup = {
+            str(r[0]).strip().lower()
+            for r in db.execute("SELECT openalex_id FROM author_suggestion_not_duplicate").fetchall()
+            if r[0]
+        }
+    except sqlite3.OperationalError:
+        not_dup = set()
+    blocks: dict[str, list[dict]] = {}
+    for r in rows:
+        parsed = parse_person_name(str(r["name"] or ""))
+        if parsed is None or not parsed.surname:
+            continue
+        blocks.setdefault(parsed.surname, []).append(
+            {"author_id": str(r["author_id"]), "name": str(r["name"] or ""),
+             "openalex_id": str(r["openalex_id"] or "").strip().lower()}
+        )
+
+    for s in suggestions:
+        s["duplicate_of"] = None
+        cand_oid = str(s.get("openalex_id") or "").strip().lower()
+        if cand_oid and cand_oid in not_dup:
+            continue  # user said "not a duplicate" — leave it as a normal follow
+        parsed = parse_person_name(str(s.get("name") or ""))
+        if parsed is None or not parsed.surname:
+            continue
+        best = None
+        for followed in blocks.get(parsed.surname, []):
+            # Skip the same OpenAlex profile (already filtered, but be safe).
+            if cand_oid and cand_oid == followed["openalex_id"]:
+                continue
+            conf = name_match_confidence(s["name"], followed["name"])
+            if conf and best is None:
+                best = {"author_id": followed["author_id"], "name": followed["name"], "confidence": conf}
+        if best is not None:
+            s["duplicate_of"] = best
 
 
 def _diversify_final(

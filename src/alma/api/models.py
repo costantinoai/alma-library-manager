@@ -133,6 +133,14 @@ class AuthorSuggestionSignal(BaseModel):
     subject: Optional[str] = None
 
 
+class AuthorMergeMatch(BaseModel):
+    """The followed author a suggestion is a likely name-duplicate of."""
+
+    author_id: str
+    name: str
+    confidence: str  # 'high' | 'medium' | 'low'
+
+
 class AuthorSuggestionResponse(BaseModel):
     """Suggested collaborator or adjacent author to monitor."""
 
@@ -143,6 +151,10 @@ class AuthorSuggestionResponse(BaseModel):
     openalex_id: Optional[str] = None
     existing_author_id: Optional[str] = None
     known_author_type: Optional[str] = None
+    # Set when this suggestion's NAME matches an author you already follow — the UI
+    # offers "merge into <them>" instead of "follow as new". Null = a genuinely new
+    # name.
+    duplicate_of: Optional[AuthorMergeMatch] = None
     shared_paper_count: int = 0
     shared_followed_count: int = 0
     local_paper_count: int = 0
