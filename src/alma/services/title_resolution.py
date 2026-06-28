@@ -22,14 +22,18 @@ lack a usable identity (no ``semantic_scholar_id`` and no DOI) or
 carry a terminal ``unmatched`` / ``bad_local_doi`` fetch_status row
 for the active SPECTER2 model.
 
-Decoupled fetch/write (tasks/11): the per-paper loop runs through
-``core.fetch_pipeline.run_fetch_write_pipeline`` — a bounded CONCURRENT
-fetch pool (OpenAlex/S2 title search, network-only, rate-limited at the
-source client) feeding a SINGLE writer (this thread) that batches its
-``write_section`` flushes. Fetch and write are independent channels, so
-the writer gate is never held across a network call and a 500-paper run
-finishes in ~minutes (concurrency) instead of ~20 (the old 1-paper/s
-serial interleave that got runs orphaned by a uvicorn ``--reload``).
+Decoupled multi-source fetch/write (tasks/11 + tasks/38): the per-paper
+loop runs through ``core.fetch_pipeline.run_staged_fetch_pipeline`` as TWO
+**independent** source stages — an OpenAlex stage (own pool, ~10 RPS) whose
+MISSES flow into an S2 fallback stage (own pool, 1 RPS) — both feeding a
+SINGLE writer (this thread) that batches its ``write_section`` flushes.
+Because the stages run concurrently, item A's S2 fallback fetch happens
+while item B's OpenAlex fetch is still in flight, and an OpenAlex 429 never
+stalls the S2 stage or the writer (task 38). Fetch and write stay
+independent channels, so the writer gate is never held across a network
+call and a 500-paper run finishes in ~minutes (concurrency) instead of ~20
+(the old 1-paper/s serial interleave that got runs orphaned by a uvicorn
+``--reload``).
 
 Every attempt is stamped in the ``paper_enrichment_status`` ledger
 (``title_resolution`` source): resolved → identifiers; genuine no-match →
@@ -66,7 +70,13 @@ from typing import Any, Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
-from alma.core.fetch_pipeline import FetchError, make_deadline, run_fetch_write_pipeline
+from alma.core.fetch_pipeline import (
+    FetchError,
+    FetchStage,
+    PipelineResult,
+    make_deadline,
+    run_staged_fetch_pipeline,
+)
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import canonical_lookup_doi, utcnow_iso as _utcnow_iso
 from alma.discovery import semantic_scholar
@@ -85,12 +95,22 @@ _METADATA_PURPOSE = "metadata"
 # worst case so a uvicorn `--reload` can only ever orphan ≤ this much work
 # (the continuation/resume then drains the rest). See `tasks/11`.
 _PER_RUN_SECONDS = 75.0
+# This sweep's canonical operation key (job-policy namespace `ai`). Used by the
+# task-37 background-yield gate to exclude this op's own row from the
+# "another operation is active?" check.
+_TITLE_SWEEP_OPERATION_KEY = "ai.title_resolution_sweep"
 # Fetch-pool width requested for the OpenAlex title search. Clamped down to
 # the running job's `fanout_budget` by `bounded_thread_pool` (default 4 for the
 # `ai` maintenance namespace) — enough to turn a ~1 paper/s serial run into a
 # ~4-5× faster one while staying under the declared maintenance ceiling. The
 # S2 fallback self-serialises to 1 RPS via its source-client policy regardless.
 _FETCH_WORKERS = 8
+# Worker width for the independent S2 fallback stage. S2 ``/paper/search`` is
+# 1 RPS even with a key (the source client self-serialises), and the per-run
+# `_S2FallbackGate` caps total S2 calls — so a couple of workers is plenty to
+# keep the fallback queue draining concurrently with the OpenAlex stage without
+# any benefit from going wider.
+_S2_FETCH_WORKERS = 2
 # Writer flush size: how many fetched results the single writer batches into
 # one `write_section` (one BEGIN IMMEDIATE → commit) before yielding.
 _WRITE_BATCH_SIZE = 50
@@ -449,12 +469,20 @@ def _fetch_s2_title_match(
     return best, score, False
 
 
-def _fetch_one_title(row: sqlite3.Row, *, s2_gate: _S2FallbackGate) -> dict:
-    """FETCH stage (worker thread): resolve one paper's identity via title.
+# ----------------------------------------------------------------------
+# Two INDEPENDENT source stages (tasks/38). The OpenAlex stage churns the
+# backlog at the polite pool's ~10 RPS; its MISSES flow into the S2 fallback
+# stage, which drains them at S2's 1 RPS — concurrently. So an OpenAlex 429
+# never stalls the S2 stage or the writer (and vice versa). Both are
+# NETWORK-ONLY workers; the single writer applies their results.
+# ----------------------------------------------------------------------
 
-    OpenAlex first (largest, cheapest pool), S2 fallback only when OpenAlex
-    misses AND the run's S2 budget allows. NETWORK ONLY — returns a plain
-    result dict the writer applies; never touches the DB.
+
+def _fetch_openalex_stage(row: sqlite3.Row) -> dict:
+    """STAGE 0 (worker): OpenAlex ``/works?search`` for one paper's identity.
+
+    Returns a result dict the writer applies (on a hit) or the miss router
+    advances to the S2 stage (on a miss). NETWORK ONLY — never touches the DB.
     """
     paper_id = str(row["id"])
     title = str(row["title"] or "").strip()
@@ -467,18 +495,102 @@ def _fetch_one_title(row: sqlite3.Row, *, s2_gate: _S2FallbackGate) -> dict:
     if best_oa is not None:
         return {**base, "source": "openalex", "resolved": True,
                 "work": best_oa, "score": round(oa_score, 4)}
-
-    if s2_gate.acquire():
-        best_s2, s2_score, rate_limited = _fetch_s2_title_match(title, local_year)
-        if rate_limited:
-            s2_gate.block()
-            return {**base, "source": "s2", "resolved": False, "reason": "rate_limited"}
-        if best_s2 is not None:
-            return {**base, "source": "s2", "resolved": True,
-                    "candidate": best_s2, "score": round(s2_score, 4)}
-        return {**base, "source": "s2", "resolved": False, "reason": "s2_no_match"}
-
     return {**base, "source": "openalex", "resolved": False, "reason": "openalex_no_match"}
+
+
+def _advance_after_openalex(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
+    """Miss router for the OpenAlex stage: hand the row to the S2 fallback
+    stage ONLY on a genuine OpenAlex miss. An OpenAlex hit (or an empty-title
+    terminal) goes straight to the writer. (``FetchError`` is routed to the
+    writer by the pipeline itself — a network error is not a content miss.)"""
+    if result.get("resolved") or result.get("reason") == "empty_title":
+        return None
+    return row
+
+
+def _fetch_s2_stage(row: sqlite3.Row, *, s2_gate: _S2FallbackGate) -> dict:
+    """STAGE 1 (worker): S2 ``/paper/search`` fallback for an OpenAlex miss.
+
+    Guarded by the per-run ``_S2FallbackGate`` (S2's 1 RPS reality) — when the
+    budget is spent or a 429 has tripped, returns a terminal OpenAlex no-match
+    without an S2 call. Every outcome here is terminal (last stage) → writer.
+    NETWORK ONLY — never touches the DB.
+    """
+    paper_id = str(row["id"])
+    title = str(row["title"] or "").strip()
+    base: dict = {"paper_id": paper_id, "title": title, "row": row}
+    local_year = _local_year(row)
+
+    if not s2_gate.acquire():
+        # No S2 budget left this run → terminal OpenAlex no-match (S2 not tried).
+        return {**base, "source": "openalex", "resolved": False, "reason": "openalex_no_match"}
+
+    best_s2, s2_score, rate_limited = _fetch_s2_title_match(title, local_year)
+    if rate_limited:
+        s2_gate.block()
+        return {**base, "source": "s2", "resolved": False, "reason": "rate_limited"}
+    if best_s2 is not None:
+        return {**base, "source": "s2", "resolved": True,
+                "candidate": best_s2, "score": round(s2_score, 4)}
+    return {**base, "source": "s2", "resolved": False, "reason": "s2_no_match"}
+
+
+def build_title_resolution_stages(s2_gate: _S2FallbackGate) -> list[FetchStage]:
+    """The two independent source stages for title resolution (tasks/38).
+
+    Shared by the standalone "Resolve missing identity" sweep AND the
+    corpus-rehydrate Phase-0 twin, so the two resolvers stay unified on ONE
+    staged-pipeline wiring. Background-ops governance (task 37 pause + credit
+    reserve) composes through the runner's ``is_cancelled`` callback
+    (``scheduler.make_background_cancel_check``), not per-stage gating — so the
+    stages stay source-pure here.
+    """
+    return [
+        FetchStage(
+            name="openalex_title",
+            fetch_one=_fetch_openalex_stage,
+            advance_on=_advance_after_openalex,
+            workers=_FETCH_WORKERS,
+            thread_name_prefix="alma-title-oa",
+        ),
+        FetchStage(
+            name="s2_title",
+            fetch_one=lambda row: _fetch_s2_stage(row, s2_gate=s2_gate),
+            workers=_S2_FETCH_WORKERS,
+            thread_name_prefix="alma-title-s2",
+        ),
+    ]
+
+
+def run_title_resolution_pipeline(
+    rows: list,
+    *,
+    conn: sqlite3.Connection,
+    model: str,
+    counters: dict[str, int],
+    s2_gate: _S2FallbackGate,
+    is_cancelled: Callable[[], bool],
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    deadline: Optional[float] = None,
+) -> PipelineResult:
+    """Run the staged OpenAlex→S2 title-resolution pipeline over ``rows``.
+
+    ONE definition of the resolver wiring (stages + writer), shared by the
+    standalone sweep and corpus-rehydrate Phase 0 — so a fix to the
+    decoupling lands in both. The writer (``_write_title_results``) runs on
+    THIS (caller) thread and owns every DB write.
+    """
+    return run_staged_fetch_pipeline(
+        rows,
+        stages=build_title_resolution_stages(s2_gate),
+        write_batch=lambda batch: _write_title_results(
+            conn, batch, model=model, counters=counters
+        ),
+        batch_size=_WRITE_BATCH_SIZE,
+        deadline=deadline,
+        is_cancelled=is_cancelled,
+        on_progress=on_progress,
+    )
 
 
 def _apply_openalex_title_match(
@@ -704,14 +816,15 @@ def run_title_resolution_sweep(
             },
         )
 
-        # Decouple the FETCH channel (concurrent OpenAlex/S2 title search,
-        # rate-limited at the source client) from the WRITE channel (this
-        # thread, batched). Fetchers are network-only; the single writer below
-        # owns every DB write — so the writer gate is held only for short,
-        # batched windows and NEVER across a network call. A wall-clock deadline
-        # caps the run so a uvicorn restart can orphan at most ~_PER_RUN_SECONDS
-        # of work; the continuation/resume drains the rest. See
-        # `core.fetch_pipeline` + `tasks/11`.
+        # Decouple the FETCH side (TWO independent source stages — OpenAlex,
+        # then S2 fallback for its misses — each at its own rate, running
+        # concurrently) from the WRITE channel (this thread, batched). Fetchers
+        # are network-only; the single writer below owns every DB write — so the
+        # writer gate is held only for short, batched windows and NEVER across a
+        # network call, and an OpenAlex 429 can't stall the S2 stage or the
+        # writer. A wall-clock deadline caps the run so a uvicorn restart can
+        # orphan at most ~_PER_RUN_SECONDS of work; the continuation/resume
+        # drains the rest. See `core.fetch_pipeline` + `tasks/38` (+ `tasks/11`).
         counters: dict[str, int] = {
             "resolved_via_openalex": 0,
             "resolved_via_s2": 0,
@@ -720,6 +833,29 @@ def run_title_resolution_sweep(
             "errors": 0,
         }
         s2_gate = _S2FallbackGate(S2_FALLBACK_PER_RUN_BUDGET)
+
+        # Background governance (task 37 A/C): a BACKGROUND sweep yields the
+        # moment the user does anything (pause) or the OpenAlex quota nears the
+        # user reserve (credit_limit). ONE central tripwire feeds is_cancelled;
+        # `yield_sink` captures the reason so we stamp the graceful, RETRYABLE
+        # outcome below and skip the continuation (the idle healer re-drains it).
+        # A user-triggered run never yields (background_yield_reason no-ops).
+        from alma.api.scheduler import (
+            BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+            get_job_trigger_source,
+            make_background_cancel_check,
+        )
+
+        trigger_source = get_job_trigger_source(job_id)
+        yield_sink: dict[str, str] = {}
+        _is_cancelled = make_background_cancel_check(
+            conn,
+            job_id,
+            _TITLE_SWEEP_OPERATION_KEY,
+            is_cancellation_requested,
+            trigger_source=trigger_source,
+            sink=yield_sink,
+        )
 
         def _progress(done: int, total_now: int) -> None:
             # Runs on THIS (writer) thread, between batched write_sections, so
@@ -737,16 +873,14 @@ def run_title_resolution_sweep(
                 ),
             )
 
-        pipeline_result = run_fetch_write_pipeline(
+        pipeline_result = run_title_resolution_pipeline(
             rows,
-            fetch_one=lambda row: _fetch_one_title(row, s2_gate=s2_gate),
-            write_batch=lambda batch: _write_title_results(
-                conn, batch, model=model, counters=counters
-            ),
-            fetch_workers=_FETCH_WORKERS,
-            batch_size=_WRITE_BATCH_SIZE,
+            conn=conn,
+            model=model,
+            counters=counters,
+            s2_gate=s2_gate,
             deadline=make_deadline(_PER_RUN_SECONDS),
-            is_cancelled=lambda: is_cancellation_requested(job_id),
+            is_cancelled=_is_cancelled,
             on_progress=_progress,
         )
 
@@ -757,8 +891,42 @@ def run_title_resolution_sweep(
         s2_fallback_calls = s2_gate.calls
         s2_rate_limited = s2_gate.blocked
 
-        # Cancelled mid-pipeline: report and stop (do NOT reschedule).
+        # Stopped mid-pipeline (do NOT reschedule a continuation either way):
         if pipeline_result.cancelled:
+            if yield_sink:
+                # Graceful BACKGROUND yield — pause (user active) or credit_limit
+                # (quota near the reserve). RETRYABLE: unprocessed papers stay
+                # eligible and the idle healer re-drains them. We stamp 'completed'
+                # (this run finished gracefully) and carry `abort_reason` +, for a
+                # credit stop, the live remaining credits so the Health card can
+                # report "last operation aborted due to credit limit (N left)".
+                reason = yield_sink.get("reason", "")
+                message = yield_sink.get("message", "Background sweep yielded")
+                result_payload: dict = {
+                    "success": True,
+                    "yielded": True,
+                    "abort_reason": reason,
+                    "processed": processed,
+                    "resolved_via_openalex": resolved_via_openalex,
+                    "resolved_via_s2_fallback": resolved_via_s2,
+                }
+                if reason == _BG_CREDIT_LIMIT:
+                    from alma.core.http_sources import provider_remaining_credits
+
+                    result_payload["openalex_credits_remaining"] = provider_remaining_credits(
+                        "openalex"
+                    )
+                set_job_status(
+                    job_id,
+                    status="completed",
+                    processed=processed,
+                    total=total,
+                    message=message,
+                    finished_at=datetime.utcnow().isoformat(),
+                    result=result_payload,
+                )
+                add_job_log(job_id, message, step=reason or "background_yield", data=result_payload)
+                return
             set_job_status(
                 job_id,
                 status="cancelled",
@@ -834,7 +1002,7 @@ def run_title_resolution_sweep(
             new_job_id = f"title_resolution_{uuid4().hex[:8]}"
             status_kwargs = {
                 "status": "queued",
-                "operation_key": "ai.title_resolution_sweep",
+                "operation_key": _TITLE_SWEEP_OPERATION_KEY,
                 "trigger_source": parent_source,
                 "message": (
                     f"Title resolution continuation queued "

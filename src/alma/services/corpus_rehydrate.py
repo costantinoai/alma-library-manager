@@ -1385,23 +1385,20 @@ def _run_title_resolution_phase(
 ) -> dict[str, int]:
     """Bulk identifier resolution for title-only papers (Phase 0).
 
-    Decoupled fetch/write via the shared pipeline + the SAME per-paper helpers
-    the standalone "Resolve missing identity" sweep uses
-    (`title_resolution._fetch_one_title` / `_write_title_results`), so the
-    OpenAlex/S2 title search runs CONCURRENTLY (network-only fetch pool) and the
-    single writer batches its `write_section` flushes — one title-resolution
-    engine across both ops (DRY; tasks/11 B5). Every outcome is stamped in the
-    `title_resolution` ledger, so a stale title leaves the pool. Returns a small
-    summary the parent runner attaches to its own job result.
+    Decoupled fetch/write via the SAME staged title-resolution pipeline the
+    standalone "Resolve missing identity" sweep uses
+    (`title_resolution.run_title_resolution_pipeline`), so OpenAlex and the S2
+    fallback run as two INDEPENDENT concurrent source stages and the single
+    writer batches its `write_section` flushes — one title-resolution engine
+    across both ops (DRY; tasks/11 B5 + tasks/38). Every outcome is stamped in
+    the `title_resolution` ledger, so a stale title leaves the pool. Returns a
+    small summary the parent runner attaches to its own job result.
     """
     from alma.discovery import semantic_scholar
     from alma.services.title_resolution import (
-        _FETCH_WORKERS,
-        _S2FallbackGate,
-        _WRITE_BATCH_SIZE,
         S2_FALLBACK_PER_RUN_BUDGET,
-        _fetch_one_title,
-        _write_title_results,
+        _S2FallbackGate,
+        run_title_resolution_pipeline,
     )
 
     candidates = _select_title_resolution_candidates(
@@ -1427,14 +1424,12 @@ def _run_title_resolution_phase(
         "errors": 0,
     }
     s2_gate = _S2FallbackGate(S2_FALLBACK_PER_RUN_BUDGET)
-    result = run_fetch_write_pipeline(
+    result = run_title_resolution_pipeline(
         candidates,
-        fetch_one=lambda row: _fetch_one_title(row, s2_gate=s2_gate),
-        write_batch=lambda batch: _write_title_results(
-            conn, batch, model=model, counters=counters
-        ),
-        fetch_workers=_FETCH_WORKERS,
-        batch_size=_WRITE_BATCH_SIZE,
+        conn=conn,
+        model=model,
+        counters=counters,
+        s2_gate=s2_gate,
         is_cancelled=lambda: is_cancellation_requested(job_id),
     )
     summary["attempted"] = result.processed
@@ -1498,6 +1493,35 @@ def run_corpus_metadata_rehydration(
 
     try:
         _ensure_enrichment_status_table(conn)
+
+        # Background governance (task 37 A/C): wrap the injected cancel probe ONCE
+        # with the shared, throttled background-yield tripwire, so every phase
+        # guard + pipeline `is_cancelled` below honours "yield to the user" (pause)
+        # and the OpenAlex credit reserve (credit_limit) with NO per-phase edits.
+        # The factory's callable is no-arg; this one-arg adapter keeps the phases'
+        # `is_cancellation_requested(job_id)` call sites unchanged. A user-triggered
+        # run is unaffected (the tripwire no-ops on trigger_source='user'); the
+        # reason is captured in `_yield_sink` for the result + chain-skip below.
+        from alma.api.scheduler import (
+            BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+            get_job_status as _get_job_status,
+            get_job_trigger_source as _get_trigger_source,
+            make_background_cancel_check,
+        )
+
+        _yield_sink: dict[str, str] = {}
+        _self_op_key = str((_get_job_status(job_id) or {}).get("operation_key") or "")
+        _bg_check = make_background_cancel_check(
+            conn,
+            job_id,
+            _self_op_key,
+            is_cancellation_requested,
+            trigger_source=_get_trigger_source(job_id),
+            sink=_yield_sink,
+        )
+
+        def is_cancellation_requested(_jid: str) -> bool:  # noqa: F811 - intentional wrap
+            return _bg_check()
 
         # Phase 0: identifier resolution for title-only papers. Runs
         # FIRST because a successful resolution lands an openalex_id /
@@ -1872,6 +1896,18 @@ def run_corpus_metadata_rehydration(
                 f"OA/landing abstracts_filled={int(abstract_recovery_summary.get('abstract_filled', 0))}"
             ),
         }
+        # task 37 A/C: a BACKGROUND run that yielded mid-sweep (pause or
+        # credit_limit) carries the reason + (for a credit stop) the live remaining
+        # credits, so the Health card can report "last operation aborted due to
+        # credit limit (N left)". The unprocessed work stays retryable — the idle
+        # healer re-drains it — and the post-hydration chain is skipped below.
+        if _yield_sink:
+            result["abort_reason"] = _yield_sink.get("reason", "")
+            result["message"] = _yield_sink.get("message", result["message"])
+            if _yield_sink.get("reason") == _BG_CREDIT_LIMIT:
+                from alma.core.http_sources import provider_remaining_credits
+
+                result["openalex_credits_remaining"] = provider_remaining_credits("openalex")
         set_job_status(
             job_id,
             status="completed",
@@ -1895,12 +1931,17 @@ def run_corpus_metadata_rehydration(
             from alma.services.embedding_chain import schedule_post_hydration_chain
 
             trigger_source = get_job_trigger_source(job_id) or ""
-            if trigger_source == "user":
+            if trigger_source == "user" or _yield_sink:
+                # Skip the chain on a user-triggered run (button = "do exactly the
+                # label") OR a background yield (task 37: we stopped early to give
+                # the user the writer / quota — don't immediately fan out S2; the
+                # idle healer resumes the whole sweep when the app is idle again).
                 add_job_log(
                     job_id,
-                    "Skipped post-hydration chain: user-triggered run",
+                    "Skipped post-hydration chain"
+                    + (" (background yield)" if _yield_sink else ": user-triggered run"),
                     step="chain_post_hydration_skipped",
-                    data={"trigger_source": trigger_source},
+                    data={"trigger_source": trigger_source, "abort_reason": _yield_sink.get("reason", "")},
                 )
             else:
                 chain = schedule_post_hydration_chain(

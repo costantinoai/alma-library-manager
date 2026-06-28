@@ -201,42 +201,29 @@ def policy_for(operation_key: str) -> JobPolicy | None:
     return JOB_POLICIES.get(namespace)
 
 
-def reserved_user_capacity(total_workers: int) -> int:
-    """Workers reserved for USER_PRODUCT work so maintenance can't consume the
-    whole pool (§7 "reserve capacity for explicit user/product work"). At least
-    one, and never the whole pool."""
-    return max(1, min(total_workers - 1, total_workers // 3))
+def admit_maintenance(active_total: int, *, app_idle: bool) -> tuple[bool, str]:
+    """Whether a BACKGROUND health/maintenance job may START now (task 37 A).
 
+    Background work yields to the user ENTIRELY — two rules, in order:
 
-def admit_maintenance(
-    active_namespaces: set[str], active_total: int, total_workers: int
-) -> tuple[bool, str]:
-    """Decide whether a maintenance job may START now, given the live job mix.
+    1. **No competition** — never start while ANY operation is active (user OR
+       another background job). A background sweep must not contend with the user
+       for the single SQLite writer or the external-API budget. This is strictly
+       stronger than the pre-37 serialized-lane + reserved-capacity policy (which
+       only constrained the mix *once* other jobs were already running), so those
+       rules are subsumed and gone.
+    2. **Idle** — only once the app has been idle for the idle window (`app_idle`,
+       computed by the caller from `core.user_activity`).
 
-    The two §7 admission rules, as one pure (testable) function over the catalog
-    + live counts:
-
-    1. **Serialized maintenance lane** — at most one maintenance-class job in
-       flight, so the repair DAG never races itself for the writer/sources.
-    2. **Reserved user capacity** — starting maintenance must still leave
-       `reserved_user_capacity` free worker slots for explicit user/product work,
-       so a backlog drain can't starve a user's click.
-
-    Returns ``(admit, reason)``; the reason is logged when deferred.
+    Pure + testable: the live active-job count and idle flag are supplied by the
+    caller (`scheduler.may_background_run`). Returns ``(admit, reason)``; the
+    reason is logged when deferred and surfaced in Activity.
     """
-    if any(ns in MAINTENANCE_NAMESPACES for ns in active_namespaces):
-        return (False, "maintenance lane busy (serialized — one maintenance job at a time)")
-    reserved = reserved_user_capacity(total_workers)
-    free_after_start = int(total_workers) - int(active_total) - 1
-    if free_after_start < reserved:
-        return (False, f"reserving {reserved} worker slot(s) for user/product work")
+    if int(active_total) > 0:
+        return (False, "another operation is active")
+    if not app_idle:
+        return (False, "app not idle yet")
     return (True, "admitted")
-
-
-# Convenience views used by admission logic + tests.
-MAINTENANCE_NAMESPACES: frozenset[str] = frozenset(
-    ns for ns, p in JOB_POLICIES.items() if p.job_class == JobClass.MAINTENANCE
-)
 DESTRUCTIVE_NAMESPACES: frozenset[str] = frozenset(
     ns for ns, p in JOB_POLICIES.items() if p.destructive
 )

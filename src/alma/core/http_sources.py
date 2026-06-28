@@ -628,6 +628,45 @@ def openalex_usage_snapshot() -> dict[str, Any]:
         }
 
 
+# --- Background-op credit reservation (task 37 B) -----------------------------
+# A BACKGROUND op must always leave at least this many provider calls for the
+# user's own manual operations — it must never consume the whole daily quota.
+# The reserve applies ONLY to sources that expose a finite remaining quota
+# (OpenAlex today, via the live `X-RateLimit-Remaining` header). Rate-only
+# sources (S2, Crossref) have no daily pool to reserve from and are governed by
+# their per-second politeness + the idle-gate instead. The reserve is a soft
+# floor FOR the user: it gates background ops only — a manual user op may use the
+# full remaining quota down to the provider's real limit.
+RESERVED_USER_CALLS = 200
+
+
+def provider_remaining_credits(source: str) -> int | None:
+    """Live remaining daily quota for *source*, or None when it exposes none.
+
+    OpenAlex reports `X-RateLimit-Remaining` on every response (its daily budget);
+    we read the client's cached value. None means "unknown / no finite pool" —
+    callers treat that as "no reserve to enforce" (before the first call we also
+    don't yet know the remaining, so we don't block).
+    """
+    if str(source or "").strip().lower() != "openalex":
+        return None
+    remaining = openalex_usage_snapshot().get("credits_remaining")
+    return int(remaining) if isinstance(remaining, int) else None
+
+
+def provider_budget_ok(source: str, *, reserve: int = RESERVED_USER_CALLS) -> bool:
+    """True when a BACKGROUND op may still call *source* and leave `reserve`
+    calls for the user (task 37 B).
+
+    Sources with no finite remaining-quota signal always pass — they're paced by
+    per-second politeness + the idle-gate, not a daily reserve.
+    """
+    remaining = provider_remaining_credits(source)
+    if remaining is None:
+        return True
+    return remaining - int(reserve) > 0
+
+
 def openalex_usage_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     """Compute OpenAlex usage deltas for one operation."""
     before_calls = int(before.get("request_count") or 0)

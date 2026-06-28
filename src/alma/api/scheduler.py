@@ -30,6 +30,7 @@ import sqlite3
 import threading
 import uuid
 import collections
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -673,12 +674,16 @@ def _register_interval_job(
 # Scheduler lifecycle
 # ---------------------------------------------------------------------------
 
-def active_job_namespaces(conn: sqlite3.Connection) -> tuple[set[str], int]:
+def active_job_namespaces(
+    conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
+) -> tuple[set[str], int]:
     """(distinct operation-key namespaces, total count) of currently-active jobs.
 
     The live input to `job_policy.admit_maintenance` — read-only over
     `operation_status`. The namespace is the first dotted/colon segment of the
-    operation key (the same identity the policy catalog is keyed by)."""
+    operation key (the same identity the policy catalog is keyed by).
+    `exclude_operation_key` drops the caller's OWN op from the count so a running
+    background sweep re-checking the gate doesn't count itself as "another op"."""
     try:
         rows = conn.execute(
             "SELECT operation_key FROM operation_status "
@@ -686,20 +691,146 @@ def active_job_namespaces(conn: sqlite3.Connection) -> tuple[set[str], int]:
         ).fetchall()
     except sqlite3.OperationalError:
         return set(), 0
+    exclude = str(exclude_operation_key or "")
     namespaces: set[str] = set()
     total = 0
     for row in rows:
         key = str((row["operation_key"] if isinstance(row, sqlite3.Row) else row[0]) or "")
-        if not key:
+        if not key or (exclude and key == exclude):
             continue
         total += 1
         namespaces.add(key.split(".", 1)[0].split(":", 1)[0])
     return namespaces, total
 
 
-def scheduler_worker_capacity() -> int:
-    """Public accessor for the configured worker-pool size (admission input)."""
-    return _scheduler_max_workers()
+def may_background_run(
+    conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
+) -> tuple[bool, str]:
+    """The single live gate for "may a BACKGROUND health/maintenance op run NOW?"
+    (task 37 A).
+
+    Composes the live active-job count (excluding the caller's own op) with the
+    in-memory idle clock, then defers to the pure `admit_maintenance` policy.
+    Used at BOTH ends of a background op's life: the idle-maintenance healer checks
+    it before STARTING a sweep, and a running sweep re-checks it at each
+    continuation boundary so it gracefully yields the moment the user does anything
+    (pull-based pause — no per-route signalling needed). Returns ``(ok, reason)``.
+    """
+    from alma.core.job_policy import admit_maintenance
+    from alma.core.user_activity import app_is_idle
+    from alma.services.background_settings import get_idle_wait_seconds
+
+    _, active_total = active_job_namespaces(
+        conn, exclude_operation_key=exclude_operation_key
+    )
+    return admit_maintenance(
+        active_total, app_idle=app_is_idle(get_idle_wait_seconds(conn))
+    )
+
+
+# Graceful-stop reasons a BACKGROUND sweep stamps when it yields mid-run (task 37
+# A/C). BOTH are RETRYABLE: the op's unprocessed work stays in the eligibility
+# pool and the idle-maintenance healer re-drains it once the app is idle again —
+# never a terminal no-match. (Per the lessons rule "upstream rate limits are
+# retryable states, not no-match evidence".)
+BG_PAUSED_FOR_USER = "paused_for_user"
+BG_CREDIT_LIMIT = "credit_limit"
+
+
+def is_background_trigger(trigger_source: Optional[str]) -> bool:
+    """A background trigger is anything not explicitly user-initiated.
+
+    Only background ops yield to the user / honour the credit reserve; a manual
+    user op runs to completion and may use the full remaining provider quota.
+    """
+    return str(trigger_source or "").strip().lower() != "user"
+
+
+def background_yield_reason(
+    conn: sqlite3.Connection,
+    operation_key: str,
+    *,
+    trigger_source: Optional[str],
+    budget_source: str = "openalex",
+) -> Optional[tuple[str, str]]:
+    """Should a running BACKGROUND sweep stop NOW, and why? (task 37 A pause + C abort).
+
+    Returns ``None`` to keep going, else ``(reason_code, human_message)``:
+    - ``BG_PAUSED_FOR_USER`` — another operation is active or the user is active
+      (app not idle): the sweep yields so it never competes with the user.
+    - ``BG_CREDIT_LIMIT`` — the provider's live remaining quota is at/below the
+      user reserve: the sweep stops before eating into the user's headroom.
+
+    Both leave pending work retryable. A user-initiated run (``trigger_source ==
+    'user'``) never yields — checked first, so this is a cheap no-op there. The
+    single tripwire a sweep feeds into its ``is_cancelled`` callback (so "start"
+    via `may_background_run` and "keep going" use identical rules).
+    """
+    if not is_background_trigger(trigger_source):
+        return None
+    ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+    if not ok:
+        return (BG_PAUSED_FOR_USER, f"Paused for user activity ({reason}); will resume when idle")
+    from alma.core.http_sources import provider_budget_ok
+    from alma.services.background_settings import get_reserved_api_calls
+
+    reserve = get_reserved_api_calls(conn)
+    if not provider_budget_ok(budget_source, reserve=reserve):
+        return (
+            BG_CREDIT_LIMIT,
+            f"Stopped: {budget_source} quota near its limit "
+            f"(reserving {reserve} calls for your manual operations)",
+        )
+    return None
+
+
+def make_background_cancel_check(
+    conn: sqlite3.Connection,
+    job_id: str,
+    operation_key: str,
+    original: Callable[[str], bool],
+    *,
+    trigger_source: Optional[str],
+    sink: dict,
+    budget_source: str = "openalex",
+    min_interval_s: float = 2.0,
+) -> Callable[[], bool]:
+    """Build the ``is_cancelled`` callable a BACKGROUND sweep feeds its pipeline
+    (task 37 A/C) — the ONE shared seam both the title-resolution and
+    corpus-rehydrate runners use, so the pause/credit-limit behaviour is DRY.
+
+    Combines the user-cancel probe (``original`` — checked EVERY call, immediate)
+    with the background-yield tripwire (`background_yield_reason`), the latter
+    THROTTLED to at most once per ``min_interval_s`` because it touches the DB
+    (a small `operation_status` read) + the provider budget, and a pipeline probes
+    is_cancelled on a tight loop. On a yield it records ``(reason, message)`` into
+    ``sink`` and stays sticky-True so the sweep tears down promptly. A
+    user-triggered run never yields (`background_yield_reason` no-ops on it), so
+    this degrades to a plain cancel probe there.
+    """
+    state = {"last": 0.0, "yielding": False}
+
+    def _check() -> bool:
+        try:
+            if original(job_id):
+                return True
+        except Exception:  # a cancel probe must never crash the sweep
+            pass
+        if state["yielding"]:
+            return True
+        now = time.monotonic()
+        if now - state["last"] >= float(min_interval_s):
+            state["last"] = now
+            info = background_yield_reason(
+                conn, operation_key, trigger_source=trigger_source, budget_source=budget_source
+            )
+            if info is not None:
+                sink["reason"], sink["message"] = info
+                state["yielding"] = True
+                return True
+        return False
+
+    return _check
 
 
 def _scheduler_max_workers() -> int:

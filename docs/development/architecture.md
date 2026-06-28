@@ -334,14 +334,26 @@ background jobs share that one writer, so a burst of work can collide as
   commits) — a refactor, not a drop-in.
 * **Fetch/write decoupling for network sweeps** — per-item network jobs
   (identity resolution, abstract recovery) run through
-  `core.fetch_pipeline.run_fetch_write_pipeline`: a bounded concurrent pool
-  does the network (no DB access; clamped to the job's `fanout_budget`) and a
-  single writer thread batches the `write_section` flushes. This makes the
-  "never hold the writer across a network call" rule **structural** — the
-  writer gate is taken only for the brief, batched local write, never while a
-  remote round-trip is in flight — and turns a ~1-paper/s serial loop into a
-  concurrent one. The writer stays on the job thread, so cancellation (which
-  hard-kills that thread) and the single-writer invariant are preserved.
+  `core.fetch_pipeline`: bounded concurrent fetch pools do the network (no DB
+  access; clamped to the job's `fanout_budget`) and a single writer thread
+  batches the `write_section` flushes. This makes the "never hold the writer
+  across a network call" rule **structural** — the writer gate is taken only
+  for the brief, batched local write, never while a remote round-trip is in
+  flight — and turns a ~1-paper/s serial loop into a concurrent one. The
+  writer stays on the job thread, so cancellation (which hard-kills that
+  thread) and the single-writer invariant are preserved.
+  * **Decoupled multi-source stages** (`run_staged_fetch_pipeline`) generalize
+    this from one fetch-fn to **N independent source stages** wired as a small
+    DAG: each stage runs its **own** rate-limited pool, and one stage's misses
+    feed the next stage's input (the fallback queue). Title resolution is
+    OpenAlex (own pool @ ~10 RPS) → its misses → an S2 fallback stage (own pool
+    @ 1 RPS), both draining into the single writer **concurrently** — so an
+    OpenAlex 429 never stalls the S2 stage or the writer. `run_fetch_write_pipeline`
+    is now the single-stage special case (a thin wrapper), so the one-source
+    callers read unchanged. Each `FetchStage` carries an optional `budget_ok`
+    /`on_budget_block` seam so a provider-quota reserve (background-ops
+    governance) can close a stage and stamp its work retryable rather than
+    burning quota.
 
 The activity/log connection (`scheduler._activity_conn`) intentionally uses
 a shorter `busy_timeout` (5 s) — status writes are best-effort and must stay

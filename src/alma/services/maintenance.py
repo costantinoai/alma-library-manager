@@ -1590,6 +1590,58 @@ def estimate_task(
     }
 
 
+def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Live external-API budget + last credit-limit abort, for the Health card
+    (task 37 B/C).
+
+    - ``openalex_credits_remaining`` — the live `X-RateLimit-Remaining` (None
+      until the first call this process). ``reserved_user_calls`` is the floor a
+      BACKGROUND op leaves for the user.
+    - ``last_credit_abort`` — the most recent background op that stopped because
+      the quota neared the reserve (its result carried ``abort_reason ==
+      'credit_limit'``), with the remaining-credit snapshot at abort time, so the
+      card can say "last operation aborted due to credit limit (N left)".
+    """
+    import json
+
+    from alma.core.http_sources import provider_remaining_credits
+    from alma.services.background_settings import get_reserved_api_calls
+
+    last_abort: Optional[dict[str, Any]] = None
+    try:
+        rows = conn.execute(
+            """
+            SELECT job_id, operation_key, message, finished_at, updated_at, result_json
+            FROM operation_status
+            WHERE result_json IS NOT NULL AND result_json LIKE '%abort_reason%'
+            ORDER BY COALESCE(finished_at, updated_at, '') DESC
+            LIMIT 20
+            """
+        ).fetchall()
+        for row in rows:
+            try:
+                result = json.loads(row["result_json"] or "{}")
+            except Exception:
+                continue
+            if result.get("abort_reason") == "credit_limit":
+                last_abort = {
+                    "job_id": row["job_id"],
+                    "operation_key": row["operation_key"],
+                    "message": row["message"],
+                    "finished_at": row["finished_at"] or row["updated_at"],
+                    "openalex_credits_remaining": result.get("openalex_credits_remaining"),
+                }
+                break
+    except sqlite3.OperationalError:
+        last_abort = None
+
+    return {
+        "openalex_credits_remaining": provider_remaining_credits("openalex"),
+        "reserved_user_calls": get_reserved_api_calls(conn),
+        "last_credit_abort": last_abort,
+    }
+
+
 def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
     """Backend-owned order, stage grouping, readiness, and operation state."""
     payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
@@ -1653,6 +1705,8 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
         "recommended_next": recommended,
         "stages": stages,
         "operations": operations,
+        # Task 37 B/C: live API budget + last credit-limit abort for the Health card.
+        "api_budget": background_api_budget(conn),
     }
 
 
@@ -1935,17 +1989,15 @@ def maintenance_repair_periodic() -> None:
             logger.info("idle maintenance: nothing enabled with pending work")
             return
 
-        # Global admission (Checkpoint E): the typed job-policy catalog decides
-        # whether a maintenance job may START now — (1) the maintenance lane is
-        # SERIALIZED across EVERY maintenance namespace (not just the registry
-        # tasks: a live embeddings/materialize/graphs job also holds the lane),
-        # and (2) capacity is RESERVED for user/product work. One source of truth
-        # for "may this background job run", shared with the rest of the system.
-        from alma.api.scheduler import active_job_namespaces, scheduler_worker_capacity
-        from alma.core.job_policy import admit_maintenance
+        # Global admission (task 37 A): the single live gate decides whether a
+        # background health op may START now — NO other operation active AND the
+        # app idle for the idle window. Background work yields to the user
+        # entirely; one source of truth (`may_background_run`) shared with the
+        # per-sweep continuation check so "start" and "keep going" use identical
+        # rules.
+        from alma.api.scheduler import may_background_run
 
-        active_ns, active_total = active_job_namespaces(conn)
-        admitted, reason = admit_maintenance(active_ns, active_total, scheduler_worker_capacity())
+        admitted, reason = may_background_run(conn)
         if not admitted:
             logger.info("idle maintenance: deferring tick — %s", reason)
             return
