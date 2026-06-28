@@ -42,6 +42,11 @@ import uuid
 from datetime import datetime
 from typing import Iterable, Mapping, Optional
 
+from alma.core.author_names import (
+    affiliations_corroborate,
+    name_match_confidence,
+    parse_person_name,
+)
 from alma.core.db_write import run_after_gate_release, write_section
 from alma.core.utils import normalize_orcid
 
@@ -843,8 +848,8 @@ def discover_aliases_via_orcid(
         discovered yet"; the helper does not raise).
       - The ORCID is uniquely held by the primary.
     """
-    from alma.openalex.client import _session
     from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
+    from alma.openalex.http import get_client
 
     primary_oid = (primary_openalex_id or "").strip()
     if not primary_oid:
@@ -852,12 +857,18 @@ def discover_aliases_via_orcid(
     primary_oid_norm = _norm_oaid(primary_oid) or primary_oid
 
     try:
-        session = _session(mailto)
+        # All OpenAlex HTTP goes through the shared client singleton (API-key
+        # auth, rate-limit tracking, retries) — the same path every other client
+        # helper uses. The legacy module-level `_session(mailto)` was removed;
+        # importing it here was a dead reference that made EVERY ORCID discovery
+        # raise ImportError, silently zeroing the whole dedup sweep. `mailto`
+        # stays on the signature for callers; the polite pool is the client's job.
+        client = get_client()
         orcid_bare = normalize_orcid(known_orcid or "") or ""
         if not orcid_bare:
             # Step 1 — fetch the primary's ORCID.
-            primary_resp = session.get(
-                f"https://api.openalex.org/authors/{primary_oid_norm}",
+            primary_resp = client.get(
+                f"/authors/{primary_oid_norm}",
                 params={"select": "id,display_name,orcid"},
                 timeout=20,
             )
@@ -888,8 +899,8 @@ def discover_aliases_via_orcid(
 
         # Step 2 — query all OpenAlex authors with the same ORCID.
         per_page = max(1, min(int(limit or 10), 25))
-        resp = session.get(
-            "https://api.openalex.org/authors",
+        resp = client.get(
+            "/authors",
             params={
                 "filter": f"orcid:{orcid_bare}",
                 "per-page": per_page,
@@ -1023,69 +1034,280 @@ def record_orcid_aliases(
     return discovery
 
 
+# How long an ORCID sweep result stays "fresh" before the author re-arms as
+# pending. The sweep depends on OpenAlex author disambiguation, which keeps
+# splitting/merging profiles over time, so a once-swept author should be
+# re-checked periodically — but NOT every page load (that was the old bug: the
+# count never dropped). 30 days is a maintenance-freshness cadence, not a
+# correctness deadline. Compared against ``orcid_swept_at`` via SQLite
+# ``datetime('now', …)`` so storage + comparison share one format (see
+# ``_stamp_orcid_swept``).
+ORCID_RESWEEP_WINDOW = "-30 days"
+
+# The ONE predicate for "this followed author still needs an ORCID sweep" —
+# never scanned, or last scanned longer ago than the re-sweep window. Used
+# identically by the Health pending count (`count_dedup_orcid_candidates`) and
+# the sweep's own target selection, so the card's number == what a run scans ==
+# what a dry-run previews. ``a`` must be aliased to the ``authors`` row; the
+# caller binds ``ORCID_RESWEEP_WINDOW`` as the single ``?`` parameter.
+_SWEEP_PENDING_SQL = (
+    "(a.orcid_swept_at IS NULL OR a.orcid_swept_at < datetime('now', ?))"
+)
+
+
 def count_dedup_orcid_candidates(db: sqlite3.Connection) -> int:
-    """Followed authors with an OpenAlex id — the set the ORCID dedup sweep walks
-    (one OpenAlex ``filter=orcid:`` lookup each). Drives the Health card's pending
-    count + ETA."""
+    """Followed authors still PENDING an ORCID sweep — never scanned, or stale
+    past the re-sweep window. Drives the Health card's pending count + ETA.
+
+    This is deliberately NOT "every followed author with an OpenAlex id" (the set
+    the sweep *walks*): that number equals the whole followed list and is
+    invariant under the operation, so the card was stuck showing "all authors"
+    forever. Counting the unswept remainder instead means a full run drives it to
+    zero, and newly-followed or stale authors re-arm it — the honest "remaining
+    work" signal a repair card promises (see migration 24 / ``orcid_swept_at``)."""
     try:
         row = db.execute(
-            """
+            f"""
             SELECT COUNT(DISTINCT fa.author_id) AS c
             FROM followed_authors fa
             JOIN authors a ON a.id = fa.author_id
             WHERE COALESCE(a.status, 'active') = 'active'
               AND COALESCE(NULLIF(TRIM(a.openalex_id), ''), '') <> ''
-            """
+              AND {_SWEEP_PENDING_SQL}
+            """,
+            (ORCID_RESWEEP_WINDOW,),
         ).fetchone()
         return int((row["c"] if row else 0) or 0)
     except sqlite3.OperationalError:
         return 0
 
 
-def dedup_followed_authors_by_orcid(
+def _papers_for_oid(db: sqlite3.Connection, openalex_id: Optional[str]) -> int:
+    """Read-only count of authorship rows for an OpenAlex id — the papers a merge
+    would reassign. 0 when the row has no usable openalex_id."""
+    oid = (openalex_id or "").strip()
+    if not oid:
+        return 0
+    return int(
+        (db.execute(
+            "SELECT COUNT(*) AS n FROM publication_authors WHERE lower(openalex_id) = lower(?)",
+            (oid,),
+        ).fetchone() or {"n": 0})["n"] or 0
+    )
+
+
+def _pick_primary(a: dict, b: dict) -> tuple[dict, dict]:
+    """The ONE primary picker, shared by every detector: a deliberately-followed
+    author is never subordinated to a background row; else the richer profile
+    (works_count) wins; lex tie-break on author_id so (primary, alt) is the SAME
+    regardless of which side we discovered from (→ UNIQUE makes re-scans
+    idempotent)."""
+    if a["is_followed"] and not b["is_followed"]:
+        return a, b
+    if b["is_followed"] and not a["is_followed"]:
+        return b, a
+    if (b["works_count"], b["author_id"]) > (a["works_count"], a["author_id"]):
+        return b, a
+    return a, b
+
+
+def _is_auto_mergeable(source: str, confidence: Optional[str], primary: dict, alt: dict) -> bool:
+    """Confidence policy for AUTOMATIC resolution (D-decision 2026-06-28):
+      - ORCID is authoritative → always auto-merge;
+      - a name·high match (same full name, modulo case/diacritics) auto-merges ONLY
+        when the two ALSO share a discriminating affiliation token — so two
+        different "John Smith" at unknown/different institutions are NOT silently
+        merged;
+      - everything else (uncorroborated high, medium, low) waits for human review.
+    """
+    if source == "orcid":
+        return True
+    if source == "name" and confidence == "high":
+        return affiliations_corroborate(primary.get("affiliation"), alt.get("affiliation"))
+    return False
+
+
+def _consider_merge_pair(
+    db: sqlite3.Connection,
+    anchor: dict,
+    other: dict,
+    *,
+    source: str,
+    confidence: Optional[str],
+    shared_orcid: Optional[str],
+    dry_run: bool,
+    summary: dict,
+    merged_away: set[str],
+    job_id: Optional[str] = None,
+) -> None:
+    """Shared pair → resolution path for BOTH detectors (ORCID + name): pick the
+    primary/alt, skip self / already-merged-away / any user-REJECTED pair (never
+    resurface), then EITHER auto-merge high-confidence pairs (``_is_auto_mergeable``)
+    or record the rest as a candidate for manual review. Each write is its own
+    gated section (background scan); the sample carries source/confidence."""
+    if anchor["author_id"] == other["author_id"]:
+        return
+    # A side merged away earlier in THIS scan is gone — skip stale pairs.
+    if anchor["author_id"] in merged_away or other["author_id"] in merged_away:
+        return
+    primary, alt = _pick_primary(anchor, other)
+    if is_pair_rejected(db, primary["author_id"], alt["author_id"]):
+        return
+    papers_estimate = _papers_for_oid(db, alt["openalex_id"])
+
+    if _is_auto_mergeable(source, confidence, primary, alt):
+        if not dry_run:
+            try:
+                with write_section(db, label="author_dedup_auto_merge"):
+                    merge_author_profiles(
+                        db, primary["author_id"], [alt["author_id"]], job_id=job_id
+                    )
+            except Exception as exc:  # pragma: no cover — best-effort
+                logger.warning(
+                    "Auto-merge failed for %s ← %s: %s",
+                    primary["author_id"], alt["author_id"], exc,
+                )
+                summary["errors"] += 1
+                return
+        merged_away.add(alt["author_id"])
+        summary["auto_merged"] += 1
+        if len(summary["sample"]) < 25:
+            summary["sample"].append(
+                {
+                    "action": "auto_merge",
+                    "source": source,
+                    "confidence": confidence,
+                    "primary_id": primary["author_id"],
+                    "primary_name": primary["name"],
+                    "alt_id": alt["author_id"],
+                    "alt_name": alt["name"],
+                    "papers_reassigned": papers_estimate,
+                }
+            )
+        return
+
+    # Manual review path — record the candidate.
+    if dry_run:
+        recorded = db.execute(
+            "SELECT 1 FROM author_merge_candidates "
+            "WHERE primary_author_id = ? AND alt_author_id = ? LIMIT 1",
+            (primary["author_id"], alt["author_id"]),
+        ).fetchone() is None
+    else:
+        with write_section(db, label="author_dedup_record_candidate"):
+            recorded = _record_merge_candidate(
+                db,
+                primary["author_id"],
+                alt["author_id"],
+                alt_openalex_id=alt["openalex_id"],
+                shared_orcid=shared_orcid,
+                papers_estimate=papers_estimate,
+                source=source,
+                confidence=confidence,
+            )
+    if recorded:
+        summary["candidates_found"] += 1
+        summary[f"{source}_pairs"] = int(summary.get(f"{source}_pairs", 0)) + 1
+    if len(summary["sample"]) < 25:
+        summary["sample"].append(
+            {
+                "action": "candidate",
+                "source": source,
+                "confidence": confidence,
+                "primary_id": primary["author_id"],
+                "primary_name": primary["name"],
+                "alt_id": alt["author_id"],
+                "alt_name": alt["name"],
+                "alt_oid": alt["openalex_id"],
+                "papers_estimate": papers_estimate,
+            }
+        )
+
+
+def _detect_name_match_candidates(
+    db: sqlite3.Connection,
+    active_authors: list[dict],
+    *,
+    dry_run: bool,
+    summary: dict,
+    merged_away: Optional[set[str]] = None,
+    job_id: Optional[str] = None,
+) -> None:
+    """Network-free pass: flag pairs of authors with compatible names (same
+    surname, given names that line up allowing initials — "E. van Hove" ≈ "Emily
+    van Hove"). Anchored on FOLLOWED authors (so we surface duplicates of the
+    identities the user actually tracks, not noise among background co-authors).
+    Surname-blocked so it stays cheap on a large corpus. Shares ``_consider_merge_pair``
+    with the ORCID detector, so the picker / rejected-skip / auto-vs-manual split
+    are identical."""
+    if merged_away is None:
+        merged_away = set()
+    blocks: dict[str, list[dict]] = {}
+    for entry in active_authors:
+        parsed = parse_person_name(entry["name"])
+        if parsed is None or not parsed.surname:
+            continue
+        blocks.setdefault(parsed.surname, []).append(entry)
+
+    for anchor in active_authors:
+        if not anchor["is_followed"] or anchor["author_id"] in merged_away:
+            continue
+        parsed = parse_person_name(anchor["name"])
+        if parsed is None or not parsed.surname:
+            continue
+        for other in blocks.get(parsed.surname, []):
+            if other["author_id"] == anchor["author_id"]:
+                continue
+            confidence = name_match_confidence(anchor["name"], other["name"])
+            if not confidence:
+                continue
+            _consider_merge_pair(
+                db, anchor, other,
+                source="name", confidence=confidence, shared_orcid=None,
+                dry_run=dry_run, summary=summary, merged_away=merged_away, job_id=job_id,
+            )
+
+
+def scan_duplicate_candidates(
     db: sqlite3.Connection,
     *,
     mailto: Optional[str] = None,
     sleep_between_calls: float = 0.05,
     limit: int,
     job_id: Optional[str] = None,
+    dry_run: bool = False,
 ) -> dict:
-    """Sweep every followed author for ORCID-based split profiles.
+    """SCAN followed authors for duplicate profiles and RECORD what to merge.
 
-    For each followed author with an OpenAlex ID:
-      1. Call OpenAlex `/authors/{id}` → `/authors?filter=orcid:X` to
-         discover every other profile sharing the same ORCID.
-      2. For each alias openalex_id:
-         a. If another currently-followed author already holds that
-            openalex_id, AUTO-MERGE the two. Primary = the one with
-            more works_count (richer profile). Tie-break: lex order
-            on author_id.
-         b. Else, record the alias in `author_alt_identifiers` so
-            the suggestion rail filters it out.
+    Non-destructive discovery — it never merges. The user reviews + applies the
+    recorded pairs via ``apply_merge_candidates`` / the per-candidate
+    routes. Two detectors feed the same ``author_merge_candidates`` queue (both
+    via ``_consider_merge_pair``, so the primary-picker, rejected-skip and
+    recording are identical):
 
-    Returns a summary suitable for the Activity envelope:
-      {
-        "success": True,
-        "scanned": int,
-        "merged": int,
-        "aliases_recorded": int,
-        "errors": int,
-        "skipped_no_orcid": int,
-        "sample": [
-            {"action": "merge", "primary_id": ..., "primary_oid": ...,
-             "alt_id": ..., "alt_oid": ..., "papers_reassigned": ...},
-            {"action": "alias", "primary_id": ..., "alt_oid": ...},
-        ][:25],
-        "message": str,
-      }
+      1. **ORCID** (authoritative, network) — for each followed author PENDING a
+         check (never swept / stale past ``ORCID_RESWEEP_WINDOW`` — the set
+         ``count_dedup_orcid_candidates`` reports as scan coverage), ask OpenAlex
+         for profiles sharing the ORCID; a sharing LOCAL row → candidate
+         (source='orcid'); an external profile → ``author_alt_identifiers`` alias.
+         Then stamp ``orcid_swept_at`` so coverage drops.
+      2. **Name/initials** (heuristic, local) — ``_detect_name_match_candidates``
+         flags compatible names ("E. van Hove" ≈ "Emily van Hove",
+         source='name', confidence high/medium/low). Runs every scan over all
+         followed authors (cheap, no swept gating).
 
-    The destructive step (`merge_author_profiles`) runs on the SAME `db`
-    connection so the whole sweep stays in the operation's audit trail. Each
-    merge / alias write is committed in its OWN gated ``write_section``, while
-    the ORCID/OpenAlex discovery for the next target runs OUTSIDE every section
-    — so the writer lock is never held across a network call (write
-    discipline). Idempotent: a re-run skips already-merged rows and
-    ``INSERT OR IGNORE`` makes alias records safe.
+    HIGH-confidence pairs are AUTO-RESOLVED here (``_is_auto_mergeable``): an
+    ORCID match (authoritative) or a name·high match whose two rows ALSO share an
+    affiliation. Everything less certain (uncorroborated name·high, name·medium,
+    name·low) is recorded for MANUAL review — that's what the merge card counts.
+
+    Any pair the user permanently REJECTED is skipped by both detectors and never
+    resurfaced. Network I/O stays OUTSIDE every ``write_section``; each merge /
+    record / swept stamp is its own gated write. ``dry_run=True`` discovers but
+    writes NOTHING — for tests. Returns a summary for the Activity envelope:
+      {"success", "dry_run", "scanned", "auto_merged", "candidates_found",
+       "orcid_pairs", "name_pairs", "aliases_recorded", "errors",
+       "skipped_no_orcid", "sample"[:25], "message"}.
     """
     ensure_alt_identifiers_table(db)
 
@@ -1098,55 +1320,82 @@ def dedup_followed_authors_by_orcid(
     # the background author's `publication_authors` rows would stay
     # attributed to a different openalex_id and the followed primary's
     # centroid would miss those papers.
+    # `sweep_pending` is computed in SQL (via `_SWEEP_PENDING_SQL`) so the
+    # never-swept/stale decision uses the same `datetime('now', …)` comparison
+    # the count does — never a Python isoformat-vs-SQLite string compare. The
+    # full `by_oid` map still spans EVERY active author (followed + background)
+    # so an ORCID-discovered alias that exists locally as a non-followed row
+    # still folds into its followed primary; only the scan TARGETS are filtered
+    # to the pending set.
+    # Load EVERY active author once (followed + background). `active_authors`
+    # feeds the name detector (which must see no-openalex_id rows too); `by_oid`
+    # is the subset with an openalex_id that the ORCID detector keys on so a
+    # discovered alias mapping to a local background row folds into its followed
+    # primary. `sweep_pending` is computed in SQL via `_SWEEP_PENDING_SQL` so the
+    # never-swept/stale test uses the same `datetime('now', …)` comparison the
+    # count does (never a Python isoformat-vs-SQLite string compare).
     all_rows = db.execute(
-        """
+        f"""
         SELECT
             a.id AS author_id,
             a.openalex_id,
             a.name,
+            COALESCE(a.affiliation, '') AS affiliation,
             COALESCE(a.works_count, 0) AS works_count,
-            CASE WHEN fa.author_id IS NOT NULL THEN 1 ELSE 0 END AS is_followed
+            CASE WHEN fa.author_id IS NOT NULL THEN 1 ELSE 0 END AS is_followed,
+            CASE WHEN {_SWEEP_PENDING_SQL} THEN 1 ELSE 0 END AS sweep_pending
         FROM authors a
         LEFT JOIN followed_authors fa ON fa.author_id = a.id
-        WHERE COALESCE(a.openalex_id, '') <> ''
-          AND COALESCE(a.status, 'active') = 'active'
-        """
+        WHERE COALESCE(a.status, 'active') = 'active'
+        """,
+        (ORCID_RESWEEP_WINDOW,),
     ).fetchall()
 
     by_oid: dict[str, dict] = {}
+    active_authors: list[dict] = []
     followed_rows: list[dict] = []
     for r in all_rows:
-        oid = str(r["openalex_id"]).strip().lower()
-        if not oid:
-            continue
         entry = {
             "author_id": str(r["author_id"]),
-            "openalex_id": str(r["openalex_id"]),
+            "openalex_id": str(r["openalex_id"] or ""),
             "name": str(r["name"] or ""),
+            "affiliation": str(r["affiliation"] or ""),
             "works_count": int(r["works_count"] or 0),
             "is_followed": bool(r["is_followed"]),
+            "sweep_pending": bool(r["sweep_pending"]),
         }
-        by_oid[oid] = entry
+        active_authors.append(entry)
+        oid = entry["openalex_id"].strip().lower()
+        if oid:
+            by_oid[oid] = entry
         if entry["is_followed"]:
             followed_rows.append(entry)
 
     summary = {
         "success": True,
+        "dry_run": bool(dry_run),
         "scanned": 0,
-        "merged": 0,
+        "auto_merged": 0,
+        "candidates_found": 0,
+        "orcid_pairs": 0,
+        "name_pairs": 0,
         "aliases_recorded": 0,
         "errors": 0,
         "skipped_no_orcid": 0,
         "sample": [],
         "message": "",
     }
+    # author_ids merged away earlier in THIS scan — so a later pair touching one
+    # is skipped (the row is gone). Shared across both detectors.
+    merged_away: set[str] = set()
 
-    # Iterate followed authors only (we never want to "discover
-    # aliases" starting from a random co-author background row — that
-    # would be expensive and surface clusters the user never asked
-    # to track). The merge cascade still folds in non-followed locals
-    # found via the ORCID lookup.
-    initial_targets = list(followed_rows)
+    # Iterate followed authors that are PENDING a scan only — never swept or
+    # stale (`sweep_pending`, computed in SQL above). This is the same set the
+    # scan-coverage count reports, so a run clears exactly the pending backlog
+    # and the coverage count falls to zero. (We never start discovery from a
+    # random co-author background row; a discovered alias that maps to a
+    # non-followed local row is still recorded as a candidate against it.)
+    initial_targets = [e for e in followed_rows if e["sweep_pending"]]
     import time
 
     # Total budget (REQUIRED, explicit): bound the number of ORCID/OpenAlex
@@ -1157,11 +1406,6 @@ def dedup_followed_authors_by_orcid(
     cap = max(1, int(limit))
 
     for target in initial_targets:
-        # Short-circuit if the target was already merged AWAY in a
-        # previous iteration of this sweep.
-        if target["openalex_id"].lower() not in by_oid:
-            continue
-
         if summary["scanned"] >= cap:
             break
 
@@ -1171,14 +1415,21 @@ def dedup_followed_authors_by_orcid(
                 target["openalex_id"], mailto=mailto,
             )
         except Exception as exc:  # pragma: no cover — best-effort
+            # A network/lookup FAILURE is the only case we leave unstamped, so the
+            # author is retried next run (don't `continue` past the stamp for the
+            # success cases below).
             logger.warning("ORCID discovery failed for %s: %s", target["author_id"], exc)
             summary["errors"] += 1
             continue
-        if not discovery.get("orcid"):
+        shared_orcid = discovery.get("orcid")
+        # A successful scan that finds no ORCID is still a completed scan — it gets
+        # stamped (below) so we don't re-walk it every run; only the alias-matching
+        # work is skipped.
+        aliases = (discovery.get("aliases") or []) if shared_orcid else []
+        if not shared_orcid:
             summary["skipped_no_orcid"] += 1
-            continue
 
-        for alias in discovery.get("aliases") or []:
+        for alias in aliases:
             alt_oid = str(alias.get("openalex_id") or "").strip()
             if not alt_oid:
                 continue
@@ -1186,106 +1437,400 @@ def dedup_followed_authors_by_orcid(
 
             existing_local = by_oid.get(alt_oid_key)
             if existing_local and existing_local["author_id"] != target["author_id"]:
-                # Same human, multiple local rows — auto-merge.
-                # Primary picker:
-                #   * If only one is followed, the followed one wins
-                #     unconditionally — we never subordinate a
-                #     deliberately-followed author to a random
-                #     background co-author row.
-                #   * Else (both followed, or both background) →
-                #     richer profile (works_count) wins; tie-break
-                #     by lex order on author_id so results are stable.
-                a = target
-                b = existing_local
-                if a["is_followed"] and not b["is_followed"]:
-                    primary, alt = a, b
-                elif b["is_followed"] and not a["is_followed"]:
-                    primary, alt = b, a
-                elif (b["works_count"], b["author_id"]) > (a["works_count"], a["author_id"]):
-                    primary, alt = b, a
-                else:
-                    primary, alt = a, b
-                try:
-                    # ORCID discovery already happened above (outside any
-                    # section); commit this merge in its own gated section so
-                    # the writer is released before the next target's network
-                    # call. A failure rolls back only this merge.
-                    with write_section(db, label="author_dedup_merge"):
-                        merge_result = merge_author_profiles(
-                            db, primary["author_id"], [alt["author_id"]],
-                            job_id=job_id,
-                        )
-                except Exception as exc:  # pragma: no cover
-                    logger.warning(
-                        "Auto-merge failed for %s ← %s: %s",
-                        primary["author_id"], alt["author_id"], exc,
-                    )
-                    summary["errors"] += 1
-                    continue
-                summary["merged"] += 1
-                if len(summary["sample"]) < 25:
-                    summary["sample"].append(
-                        {
-                            "action": "merge",
-                            "primary_id": primary["author_id"],
-                            "primary_oid": primary["openalex_id"],
-                            "primary_name": primary["name"],
-                            "alt_id": alt["author_id"],
-                            "alt_oid": alt["openalex_id"],
-                            "papers_reassigned": int(merge_result.get("papers_reassigned") or 0),
-                            "papers_dropped_as_dup": int(merge_result.get("papers_dropped_as_dup") or 0),
-                        }
-                    )
-                # Drop the merged-away author from the live map so
-                # the next outer-loop iteration skips it cleanly.
-                by_oid.pop(alt["openalex_id"].lower(), None)
-                # If the *target* was the one that got merged away,
-                # bail out of the alias loop for this iteration.
-                if alt["author_id"] == target["author_id"]:
-                    break
+                # Same human, two local rows — a mergeable pair. Record it through
+                # the shared path (picker / rejected-skip / record identical to
+                # the name detector).
+                _consider_merge_pair(
+                    db, target, existing_local,
+                    source="orcid", confidence=None, shared_orcid=shared_orcid,
+                    dry_run=dry_run, summary=summary, merged_away=merged_away, job_id=job_id,
+                )
             else:
-                # Not currently followed — record as a known alias of
-                # the target so the suggestion rail filters it out
-                # forever (UNIQUE constraint makes this idempotent).
+                # Not a local author row — record as a known external alias of
+                # the target so the suggestion rail filters it out forever
+                # (UNIQUE constraint makes this idempotent).
                 local_row = db.execute(
                     "SELECT id FROM authors WHERE lower(openalex_id) = lower(?) LIMIT 1",
                     (alt_oid,),
                 ).fetchone()
                 local_alt_id = str(local_row["id"]) if local_row else None
-                # One alias writer, committed in its own gated section.
-                with write_section(db, label="author_dedup_alias"):
-                    inserted = record_author_alias(
-                        db,
-                        target["author_id"],
-                        alt_oid,
-                        alt_author_id=local_alt_id,
-                        source="orcid_sweep",
-                    )
+                if dry_run:
+                    already = db.execute(
+                        "SELECT 1 FROM author_alt_identifiers "
+                        "WHERE primary_author_id = ? AND lower(alt_openalex_id) = lower(?) "
+                        "LIMIT 1",
+                        (target["author_id"], alt_oid),
+                    ).fetchone()
+                    inserted = already is None
+                else:
+                    with write_section(db, label="author_dedup_alias"):
+                        inserted = record_author_alias(
+                            db,
+                            target["author_id"],
+                            alt_oid,
+                            alt_author_id=local_alt_id,
+                            source="orcid_sweep",
+                        )
                 if inserted:
                     summary["aliases_recorded"] += 1
-                    if len(summary["sample"]) < 25:
-                        summary["sample"].append(
-                            {
-                                "action": "alias",
-                                "primary_id": target["author_id"],
-                                "primary_oid": target["openalex_id"],
-                                "primary_name": target["name"],
-                                "alt_oid": alt_oid,
-                            }
-                        )
+
+        # Stamp this target as freshly scanned so the scan-coverage count drops
+        # (real runs only — dry-run writes nothing). Stored via SQLite
+        # `datetime('now')` so storage + `_SWEEP_PENDING_SQL` share one format.
+        # Own gated section: the writer is released before the next target's
+        # network call (write discipline).
+        if not dry_run:
+            with write_section(db, label="author_dedup_swept"):
+                db.execute(
+                    "UPDATE authors SET orcid_swept_at = datetime('now') WHERE id = ?",
+                    (target["author_id"],),
+                )
 
         if sleep_between_calls > 0:
             time.sleep(sleep_between_calls)
 
-    # No final commit: every merge/alias was committed in its own
-    # write_section above (network stayed outside each section).
-    summary["message"] = (
-        f"Author dedup sweep: {summary['merged']} merged, "
-        f"{summary['aliases_recorded']} aliases recorded across "
-        f"{summary['scanned']} authors "
-        f"({summary['skipped_no_orcid']} had no ORCID, "
-        f"{summary['errors']} errored)"
+    # Name/initials pass — local, network-free, over ALL followed authors (not
+    # just the ORCID-pending ones), so it runs even when coverage is already 0.
+    _detect_name_match_candidates(
+        db, active_authors, dry_run=dry_run, summary=summary,
+        merged_away=merged_away, job_id=job_id,
     )
+
+    # No final commit: every auto-merge/candidate/alias/swept write was its own
+    # gated write_section above (network stayed outside each section).
+    auto = summary["auto_merged"]
+    pairs = summary["candidates_found"]
+    summary["message"] = (
+        f"Duplicate scan: auto-merged {auto} high-confidence; "
+        f"{pairs} pair{'' if pairs == 1 else 's'} need review "
+        f"({summary['orcid_pairs']} ORCID, {summary['name_pairs']} name)"
+        f"{' (preview)' if dry_run else ''}; {summary['aliases_recorded']} aliases "
+        f"across {summary['scanned']} authors scanned "
+        f"({summary['skipped_no_orcid']} had no ORCID, {summary['errors']} errored)"
+    )
+    return summary
+
+
+# Detection-source strength, so a stronger signal upgrades a weaker one on the
+# same pair (ORCID always beats a name guess; high name beats low) and a weaker
+# re-find never downgrades. Bigger = stronger.
+_SOURCE_RANK = {
+    ("orcid", None): 100,
+    ("name", "high"): 3,
+    ("name", "medium"): 2,
+    ("name", "low"): 1,
+}
+
+
+def _candidate_rank(source: Optional[str], confidence: Optional[str]) -> int:
+    if source == "orcid":
+        return 100
+    return _SOURCE_RANK.get((source or "name", confidence), 1)
+
+
+def _record_merge_candidate(
+    db: sqlite3.Connection,
+    primary_author_id: str,
+    alt_author_id: str,
+    *,
+    alt_openalex_id: Optional[str],
+    shared_orcid: Optional[str],
+    papers_estimate: int,
+    source: str,
+    confidence: Optional[str] = None,
+) -> bool:
+    """UPSERT one pending merge pair into ``author_merge_candidates``.
+
+    Returns True when the pair is NEW (so the scan counts it as a fresh find),
+    False when it already existed (we refresh its estimate/timestamp, and upgrade
+    its ``source``/``confidence`` only if this find is STRONGER — ORCID beats a
+    name guess — but never double-count and never downgrade). UNIQUE(primary, alt)
+    + the canonical primary-picker make a re-scan idempotent. Caller holds the
+    writer gate."""
+    existing = db.execute(
+        "SELECT id, source, confidence FROM author_merge_candidates "
+        "WHERE primary_author_id = ? AND alt_author_id = ?",
+        (primary_author_id, alt_author_id),
+    ).fetchone()
+    if existing:
+        keep_source, keep_conf = str(existing["source"] or "name"), existing["confidence"]
+        if _candidate_rank(source, confidence) > _candidate_rank(keep_source, keep_conf):
+            keep_source, keep_conf = source, confidence
+        db.execute(
+            "UPDATE author_merge_candidates SET alt_openalex_id = ?, shared_orcid = ?, "
+            "papers_estimate = ?, source = ?, confidence = ?, discovered_at = datetime('now') "
+            "WHERE id = ?",
+            (alt_openalex_id, shared_orcid, int(papers_estimate), keep_source, keep_conf, str(existing["id"])),
+        )
+        return False
+    db.execute(
+        "INSERT INTO author_merge_candidates "
+        "(id, primary_author_id, alt_author_id, alt_openalex_id, shared_orcid, "
+        " papers_estimate, source, confidence, discovered_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        (
+            uuid.uuid4().hex,
+            primary_author_id,
+            alt_author_id,
+            alt_openalex_id,
+            shared_orcid,
+            int(papers_estimate),
+            source,
+            confidence,
+        ),
+    )
+    return True
+
+
+def _pair(author_id_a: str, author_id_b: str) -> tuple[str, str]:
+    """Canonical (lo, hi) ordering so a rejected/known pair is direction-free."""
+    return (author_id_a, author_id_b) if author_id_a <= author_id_b else (author_id_b, author_id_a)
+
+
+def is_pair_rejected(db: sqlite3.Connection, author_id_a: str, author_id_b: str) -> bool:
+    """Did the user permanently reject merging these two? Every detector checks
+    this before proposing, so a rejected pair is never resurfaced."""
+    lo, hi = _pair(author_id_a, author_id_b)
+    try:
+        row = db.execute(
+            "SELECT 1 FROM author_merge_rejections WHERE author_id_lo = ? AND author_id_hi = ? LIMIT 1",
+            (lo, hi),
+        ).fetchone()
+        return row is not None
+    except sqlite3.OperationalError:
+        return False
+
+
+def record_merge_rejection(
+    db: sqlite3.Connection,
+    author_id_a: str,
+    author_id_b: str,
+    *,
+    source: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Persist a permanent "these two are NOT the same person" verdict. Idempotent
+    (UNIQUE on the canonical pair). Caller holds the writer gate."""
+    lo, hi = _pair(author_id_a, author_id_b)
+    db.execute(
+        "INSERT OR IGNORE INTO author_merge_rejections "
+        "(id, author_id_lo, author_id_hi, source, reason, rejected_at) "
+        "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+        (uuid.uuid4().hex, lo, hi, source, reason),
+    )
+
+
+def reject_merge_candidate(db: sqlite3.Connection, candidate_id: str) -> dict:
+    """Reject one pending candidate: record the permanent rejection AND drop the
+    candidate row so it leaves the queue and is never re-proposed.
+
+    RAW writes — the caller owns the gated write window (``run_write_unit`` in the
+    foreground reject route), matching ``merge_author_profiles``'s contract."""
+    row = db.execute(
+        "SELECT primary_author_id, alt_author_id, source FROM author_merge_candidates WHERE id = ?",
+        (candidate_id,),
+    ).fetchone()
+    if not row:
+        return {"success": False, "reason": "not_found"}
+    record_merge_rejection(
+        db,
+        str(row["primary_author_id"]),
+        str(row["alt_author_id"]),
+        source=str(row["source"] or ""),
+        reason="user_rejected",
+    )
+    db.execute("DELETE FROM author_merge_candidates WHERE id = ?", (candidate_id,))
+    return {"success": True, "rejected_pair": [row["primary_author_id"], row["alt_author_id"]]}
+
+
+def import_suggested_author(
+    db: sqlite3.Connection, primary_author_id: str, suggested_openalex_id: str
+) -> dict:
+    """Fold an EXTERNAL suggested author (an OpenAlex id from the suggestion rail,
+    no local row required) into an existing followed author — the "merge into your
+    existing author" action for a name-duplicate suggestion. Reassigns the
+    suggested profile's papers to the primary and records its OpenAlex id as an
+    alias so it stops being re-suggested. RAW — caller owns the gated window
+    (``run_write_unit`` in the foreground route)."""
+    oid = (suggested_openalex_id or "").strip()
+    if not oid:
+        return {"success": False, "reason": "missing_openalex_id"}
+    primary = db.execute(
+        "SELECT 1 FROM authors WHERE id = ? AND COALESCE(status,'active')='active' LIMIT 1",
+        (primary_author_id,),
+    ).fetchone()
+    if not primary:
+        return {"success": False, "reason": "primary_not_found"}
+    result = merge_author_profiles(db, primary_author_id, [], alt_openalex_ids=[oid])
+    record_author_alias(db, primary_author_id, oid, source="suggestion_import")
+    return {
+        "success": True,
+        "primary_author_id": primary_author_id,
+        "papers_reassigned": int(result.get("papers_reassigned") or 0),
+    }
+
+
+def merge_one_candidate(db: sqlite3.Connection, candidate_id: str) -> dict:
+    """Apply ONE pending candidate from the review dialog (the per-row ✓ Merge).
+
+    RAW writes — the caller owns the gated window (``run_write_unit`` in the
+    foreground route). Reuses ``_apply_one_candidate`` (shared with the bulk
+    apply) and prunes any pair this merge made stale."""
+    cand = db.execute(
+        "SELECT id, primary_author_id, alt_author_id FROM author_merge_candidates WHERE id = ?",
+        (candidate_id,),
+    ).fetchone()
+    if not cand:
+        return {"success": False, "reason": "not_found"}
+    result = _apply_one_candidate(db, cand)
+    prune_stale_merge_candidates(db)
+    return {
+        "success": True,
+        "primary_author_id": cand["primary_author_id"],
+        "papers_reassigned": int(result.get("papers_reassigned") or 0),
+    }
+
+
+# One predicate for "this candidate is still actionable" — both sides are still
+# active author rows (a row removed by an earlier merge makes the pair stale).
+_CANDIDATE_ACTIVE_SQL = (
+    "COALESCE(p.status, 'active') = 'active' AND COALESCE(a.status, 'active') = 'active'"
+)
+
+
+def count_merge_candidates(db: sqlite3.Connection) -> int:
+    """Number of pending merge pairs (any source) whose BOTH rows are still active
+    — the truthful "N duplicate profiles to merge" the Health merge card shows.
+    Zero until a scan finds duplicates; back to zero once they're applied (never
+    the whole author list)."""
+    try:
+        row = db.execute(
+            f"""
+            SELECT COUNT(*) AS c
+            FROM author_merge_candidates c
+            JOIN authors p ON p.id = c.primary_author_id
+            JOIN authors a ON a.id = c.alt_author_id
+            WHERE {_CANDIDATE_ACTIVE_SQL}
+            """
+        ).fetchone()
+        return int((row["c"] if row else 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
+def list_merge_candidates(
+    db: sqlite3.Connection, *, limit: int = 200
+) -> list[dict]:
+    """The pending merge pairs, joined to author names + paper impact, for the
+    review dialog. Each carries its `source` ('orcid'/'name') + `confidence` so
+    the UI badges how much to trust it. ORCID first, then by paper impact, so the
+    authoritative + consequential merges lead and weak name guesses sink."""
+    try:
+        rows = db.execute(
+            f"""
+            SELECT
+                c.id,
+                c.primary_author_id, p.name AS primary_name, p.openalex_id AS primary_oid,
+                c.alt_author_id, a.name AS alt_name, c.alt_openalex_id,
+                c.shared_orcid, COALESCE(c.papers_estimate, 0) AS papers_estimate,
+                COALESCE(c.source, 'orcid') AS source, c.confidence,
+                c.discovered_at
+            FROM author_merge_candidates c
+            JOIN authors p ON p.id = c.primary_author_id
+            JOIN authors a ON a.id = c.alt_author_id
+            WHERE {_CANDIDATE_ACTIVE_SQL}
+            ORDER BY (CASE WHEN COALESCE(c.source,'orcid') = 'orcid' THEN 0 ELSE 1 END),
+                     c.papers_estimate DESC, c.discovered_at DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.OperationalError:
+        return []
+
+
+def _apply_one_candidate(
+    db: sqlite3.Connection, cand: Mapping, *, job_id: Optional[str] = None
+) -> dict:
+    """Merge a candidate's alt → primary and consume the candidate row.
+
+    RAW — the caller owns the write window (``write_section`` in the background
+    bulk apply, ``run_write_unit`` in the foreground per-candidate route). Returns
+    the ``merge_author_profiles`` result."""
+    result = merge_author_profiles(
+        db, str(cand["primary_author_id"]), [str(cand["alt_author_id"])], job_id=job_id
+    )
+    db.execute("DELETE FROM author_merge_candidates WHERE id = ?", (str(cand["id"]),))
+    return result
+
+
+def prune_stale_merge_candidates(db: sqlite3.Connection) -> None:
+    """Drop candidates whose primary OR alt a prior merge soft-removed — keeps the
+    count honest without a re-scan. RAW; caller owns the write window."""
+    db.execute(
+        """
+        DELETE FROM author_merge_candidates
+        WHERE primary_author_id IN (SELECT id FROM authors WHERE status = 'removed')
+           OR alt_author_id IN (SELECT id FROM authors WHERE status = 'removed')
+        """
+    )
+
+
+def apply_merge_candidates(
+    db: sqlite3.Connection,
+    *,
+    limit: int,
+    candidate_ids: Optional[Iterable[str]] = None,
+    job_id: Optional[str] = None,
+) -> dict:
+    """Apply pending merge candidates — the DESTRUCTIVE half (any source), gated
+    behind the Health review dialog. For each candidate (both rows still active)
+    merge ``alt`` → ``primary`` and consume the row via ``_apply_one_candidate``;
+    a stale pair is pruned, not merged. Each merge is its own gated
+    ``write_section`` (background); idempotent on re-run."""
+    summary = {
+        "success": True,
+        "merged": 0,
+        "skipped": 0,
+        "errors": 0,
+        "sample": [],
+        "message": "",
+    }
+    candidates = list_merge_candidates(db, limit=max(1, int(limit)))
+    if candidate_ids is not None:
+        wanted = {str(cid) for cid in candidate_ids}
+        candidates = [c for c in candidates if str(c["id"]) in wanted]
+
+    for cand in candidates:
+        try:
+            with write_section(db, label="author_merge_apply"):
+                merge_result = _apply_one_candidate(db, cand, job_id=job_id)
+        except Exception as exc:  # pragma: no cover — best-effort
+            logger.warning("Apply merge candidate %s failed: %s", cand["id"], exc)
+            summary["errors"] += 1
+            continue
+        summary["merged"] += 1
+        if len(summary["sample"]) < 25:
+            summary["sample"].append(
+                {
+                    "primary_id": cand["primary_author_id"],
+                    "primary_name": cand["primary_name"],
+                    "alt_id": cand["alt_author_id"],
+                    "alt_name": cand["alt_name"],
+                    "papers_reassigned": int(merge_result.get("papers_reassigned") or 0),
+                }
+            )
+
+    with write_section(db, label="author_merge_prune_stale"):
+        prune_stale_merge_candidates(db)
+
+    merged_n = summary["merged"]
+    errored_n = summary["errors"]
+    msg = f"Applied {merged_n} author merge{'' if merged_n == 1 else 's'}"
+    if errored_n:
+        msg += f", {errored_n} errored"
+    summary["message"] = msg
     return summary
 
 

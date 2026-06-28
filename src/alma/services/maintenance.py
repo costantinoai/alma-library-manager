@@ -218,12 +218,22 @@ def _run_gc_orphan_authors(job_id: str, cap: int, target_paper_ids=None, params=
 
 
 def _run_dedup_orcid(job_id: str, cap: int, target_paper_ids=None, params=None):
-    from alma.application.author_merge import dedup_followed_authors_by_orcid
+    from alma.application.author_merge import scan_duplicate_candidates
 
-    # cap = the run's total budget (was previously ignored — the sweep scanned
-    # every followed author, one ORCID network call each).
+    # SCAN (non-destructive): discover ORCID split-profiles and RECORD mergeable
+    # pairs for review — never merges. cap = the run's total budget (one ORCID
+    # network call per pending followed author).
     with _maintenance_conn() as conn:
-        return dedup_followed_authors_by_orcid(conn, limit=cap, job_id=job_id)
+        return scan_duplicate_candidates(conn, limit=cap, job_id=job_id)
+
+
+def _run_apply_orcid_merges(job_id: str, cap: int, target_paper_ids=None, params=None):
+    from alma.application.author_merge import apply_merge_candidates
+
+    # APPLY (destructive): merge the pending candidates the scan recorded, up to
+    # the run budget. Gated behind the Health review dialog's confirmation token.
+    with _maintenance_conn() as conn:
+        return apply_merge_candidates(conn, limit=cap, job_id=job_id)
 
 
 def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, params=None):
@@ -468,9 +478,17 @@ def _count_gc_orphans(conn: sqlite3.Connection, params=None) -> int:
 
 
 def _count_dedup_orcid(conn: sqlite3.Connection, params=None) -> int:
+    """Scan coverage: followed authors not yet checked for ORCID duplicates."""
     from alma.application.author_merge import count_dedup_orcid_candidates
 
     return count_dedup_orcid_candidates(conn)
+
+
+def _count_merge_candidates(conn: sqlite3.Connection, params=None) -> int:
+    """The truthful "N duplicate profiles to merge" — pending recorded pairs."""
+    from alma.application.author_merge import count_merge_candidates
+
+    return count_merge_candidates(conn)
 
 
 def _count_preprint_twins(conn: sqlite3.Connection, params=None) -> int:
@@ -744,19 +762,18 @@ REGISTRY: dict[str, MaintenanceTask] = {
         ),
         MaintenanceTask(
             key="dedup_orcid",
-            label="Dedup authors by ORCID",
+            label="Scan authors for duplicates",
             description=(
-                "Walk followed authors, find OpenAlex profiles sharing the same ORCID, "
-                "and auto-merge (richer-profile-wins) or record an alias so duplicates "
-                "stop resurfacing in suggestions."
+                "Find duplicate author profiles two ways: by shared ORCID "
+                "(authoritative, via OpenAlex) and by a name/initials match "
+                "(“E. van Hove” ≈ “Emily van Hove”). High-confidence pairs "
+                "(ORCID, or same full name + shared affiliation) are AUTO-MERGED; "
+                "less certain pairs are recorded for review on the Merge card. The "
+                "count is ORCID-scan coverage (authors not yet checked)."
             ),
-            # No health dimension. This op CREATES merges (it can even leave a
-            # `merge_conflicts` behind when a merge keeps a conflicting hard id);
-            # it does not RESOLVE them — that's a human decision on the Authors
-            # page (resolve_conflict). Mapping it to `merge_conflicts` both
-            # mis-claimed the repair AND collapsed the op into "All clear" whenever
-            # the conflict count was 0, hiding its real pending dedup work. Its
-            # pending count (ORCID-dedup candidates) now stands on its own.
+            # Non-destructive DISCOVERY half. Its count is scan coverage (followed
+            # authors not yet checked); the merges it finds are counted + applied
+            # by the separate `dedup_orcid_merge` op below. No health dimension.
             health_dimensions=(),
             candidate_path="",
             operation_key="authors.dedup_by_orcid",
@@ -770,13 +787,43 @@ REGISTRY: dict[str, MaintenanceTask] = {
             supports_targets=False,
             prerequisites=("author_metadata",),
             unlocks=("author_works",),
-            manual_gate=True,
             count_fn=_count_dedup_orcid,
             default_manual_limit=100,
             max_manual_limit=500,
             default_auto_daily_cap=100,
             auto_chunk_size=25,
             sources=(SOURCE_OPENALEX,),
+        ),
+        MaintenanceTask(
+            key="dedup_orcid_merge",
+            label="Merge duplicate authors",
+            description=(
+                "Merge the duplicate author profiles the scan found — by ORCID or by "
+                "name (richer/followed profile wins, the other's papers are reassigned). "
+                "Review the exact list (each tagged ORCID or name·confidence) and reject "
+                "any wrong ones before confirming — this is destructive and is never "
+                "reversed automatically."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="authors.merge_orcid_duplicates",
+            job_id_prefix="maint_merge_orcid",
+            cost=COST_CHEAP,
+            runner=_run_apply_orcid_merges,
+            stage=MaintenanceStage.AUTHOR_CANONICALIZATION,
+            order=21,
+            unit=MaintenanceUnit.AUTHOR,
+            target_kind=TargetKind.AUTHOR,
+            supports_targets=False,
+            # No prerequisite on the scan: this op's count IS the recorded
+            # candidates, so it must stay runnable whenever any exist — even if
+            # other authors are still unscanned (which would otherwise block it).
+            manual_gate=True,
+            count_fn=_count_merge_candidates,
+            default_manual_limit=100,
+            max_manual_limit=500,
+            default_auto_daily_cap=100,
+            auto_chunk_size=25,
             destructive=True,
         ),
         MaintenanceTask(
