@@ -218,6 +218,15 @@ async def log_requests(request: Request, call_next):
     start_time = time.time()
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
 
+    # Idle-gating clock (task 37 A): stamp the in-memory "last user activity" time
+    # for any user-initiated request, skipping background status polls (e.g. the
+    # app-wide GET /activity poll). In-memory only — never a DB write, so this is
+    # safe on a GET. Background health/maintenance ops defer until this goes idle.
+    from alma.core.user_activity import is_user_activity_path, touch_user_activity
+
+    if is_user_activity_path(request.url.path):
+        touch_user_activity()
+
     # Process request
     response = await call_next(request)
 

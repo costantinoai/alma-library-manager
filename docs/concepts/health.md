@@ -127,12 +127,22 @@ nothing a dimension surfaces is hidden just because there's no operation for it.
 
 The same operations can run unattended: the **idle healer** repairs the corpus
 in the background — but only the tasks you opt in, never beyond their daily cap,
-one task per tick, worst-severity first. Every tick passes the **typed job-policy
-admission check**: the maintenance lane is serialized (one maintenance job at a
-time, across *all* maintenance namespaces) and worker capacity is reserved for
-user/product work, so a backlog drain never starves a click. It is **off by
-default end to end**; `ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch
-(see [Background jobs](../operations/background-jobs.md)).
+one task per tick, worst-severity first. Background work **yields to you entirely**
+(task 37): a sweep only *starts* when **no other operation is running** and the app
+has been **idle for 3 minutes** (no user request — the activity clock is in-memory,
+so it never writes on a read), and a sweep already running **pauses the moment you
+do anything** (open a page, save, or start an operation manually). A paused or
+quota-stopped sweep leaves its remaining work queued and the idle healer resumes it
+once you're idle again. Background sweeps that call an external provider also
+**reserve 200 API calls for your manual work** — they stop before consuming
+OpenAlex's daily quota past that floor and report it on the page (the **OpenAlex API
+budget** tile shows the live remaining count, and a notice when the last background
+run stopped to protect your reserve). Your own manual operations are never paused
+and may use the full remaining quota. Both knobs — the idle-wait and the reserve —
+are adjustable in **Settings → Data & system → Background operations**. The healer is
+**off by default end to end**;
+`ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch (see
+[Background jobs](../operations/background-jobs.md)).
 
 ## How fresh is this?
 

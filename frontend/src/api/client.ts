@@ -415,6 +415,20 @@ export interface HealthOperationsResponse {
   // verbatim with their labels — no hard-coded task-key grouping/order.
   stages: Array<{ key: string; label: string; order: number; operation_keys: string[] }>
   operations: MaintenanceOperation[]
+  // Task 37 B/C: live external-API budget + the last credit-limit abort (if any),
+  // so the Health card can show remaining OpenAlex credits and report a
+  // background sweep that stopped to preserve the user's reserve.
+  api_budget?: {
+    openalex_credits_remaining: number | null
+    reserved_user_calls: number
+    last_credit_abort: {
+      job_id: string
+      operation_key: string | null
+      message: string | null
+      finished_at: string | null
+      openalex_credits_remaining: number | null
+    } | null
+  }
 }
 
 export interface RunMaintenanceResponse {
@@ -3859,6 +3873,20 @@ export function getFeedSettings(): Promise<FeedSettings> {
 
 export function updateFeedSettings(body: FeedSettings): Promise<FeedSettings> {
   return api.put<FeedSettings>('/feed/settings', body)
+}
+
+/** Background-ops governance knobs (task 37): GET/PUT /health/governance. */
+export interface GovernanceSettings {
+  idle_wait_minutes: number
+  reserved_api_calls: number
+}
+
+export function getGovernanceSettings(): Promise<GovernanceSettings> {
+  return api.get<GovernanceSettings>('/health/governance')
+}
+
+export function updateGovernanceSettings(body: GovernanceSettings): Promise<GovernanceSettings> {
+  return api.put<GovernanceSettings>('/health/governance', body)
 }
 
 export interface FeedStatusResponse {

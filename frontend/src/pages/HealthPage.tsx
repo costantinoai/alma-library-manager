@@ -37,6 +37,7 @@ import { HealthVitals } from '@/components/health/HealthVitals'
 import { RepairGroup } from '@/components/health/RepairGroup'
 import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
 import { SystemStatusCards } from '@/components/health/SystemStatusCards'
+import { ApiBudgetCard } from '@/components/health/ApiBudgetCard'
 import { SectionLabel } from '@/components/health/SectionLabel'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -318,6 +319,10 @@ export function HealthPage() {
           <SectionLabel>System status</SectionLabel>
           <div className="mt-2">
             <SystemStatusCards />
+          </div>
+          {/* External-API budget + last credit-limit abort (task 37 B/C). */}
+          <div className="mt-3">
+            <ApiBudgetCard budget={operationsQuery.data?.api_budget} />
           </div>
         </div>
       </section>

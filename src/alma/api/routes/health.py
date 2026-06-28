@@ -26,8 +26,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.db_write import run_write_unit
 from alma.services import health as health_service
 from alma.services import maintenance
+from alma.services.background_settings import (
+    DEFAULT_IDLE_WAIT_MINUTES,
+    DEFAULT_RESERVED_API_CALLS,
+    IDLE_WAIT_MINUTES_KEY,
+    RESERVED_API_CALLS_KEY,
+    get_idle_wait_minutes,
+    get_reserved_api_calls,
+)
 from alma.services.maintenance_contracts import (
     MaintenanceRunSpec,
     MaintenanceTrigger,
@@ -73,6 +82,65 @@ def get_operations(
     _user: dict = Depends(get_current_user),
 ):
     return maintenance.list_operations(db)
+
+
+class GovernanceSettings(BaseModel):
+    """Background-ops governance knobs (task 37) — Settings → Data & system.
+
+    KV-backed in the shared `discovery_settings` store; the shipped constants are
+    the defaults. The gate reads `idle_wait_minutes`; the per-sweep reserve + the
+    Health budget read `reserved_api_calls`.
+    """
+
+    idle_wait_minutes: int = Field(
+        DEFAULT_IDLE_WAIT_MINUTES,
+        ge=0,
+        le=120,
+        description="Minutes the app must be idle (no user request) before a background sweep may run. 0 = run as soon as nothing else is active.",
+    )
+    reserved_api_calls: int = Field(
+        DEFAULT_RESERVED_API_CALLS,
+        ge=0,
+        le=100_000,
+        description="External-API calls (OpenAlex daily quota) a background sweep always leaves for your manual operations.",
+    )
+
+
+@router.get(
+    "/governance",
+    response_model=GovernanceSettings,
+    summary="Background-ops governance knobs (idle-wait + API reserve)",
+)
+def get_governance_settings(
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    return GovernanceSettings(
+        idle_wait_minutes=get_idle_wait_minutes(db),
+        reserved_api_calls=get_reserved_api_calls(db),
+    )
+
+
+@router.put(
+    "/governance",
+    response_model=GovernanceSettings,
+    summary="Update background-ops governance knobs",
+)
+def update_governance_settings(
+    body: GovernanceSettings,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    """Persist the two knobs (one gated write unit; SQLite write discipline). The
+    gate reads them live per check, so no restart/reschedule is needed."""
+    from alma.application.discovery import lens_crud
+
+    def _apply() -> None:
+        lens_crud.upsert_setting(db, IDLE_WAIT_MINUTES_KEY, str(body.idle_wait_minutes))
+        lens_crud.upsert_setting(db, RESERVED_API_CALLS_KEY, str(body.reserved_api_calls))
+
+    run_write_unit(db, _apply, label="background_governance_update")
+    return body
 
 
 @router.get(

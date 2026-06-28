@@ -10,6 +10,7 @@ import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BackendCard } from '@/components/settings/BackendCard'
+import { BackgroundOpsCard } from '@/components/settings/BackgroundOpsCard'
 import { ExternalApisCard } from '@/components/settings/ExternalApisCard'
 import { IdentifierResolutionCard } from '@/components/settings/IdentifierResolutionCard'
 import { ChannelsCard } from '@/components/settings/ChannelsCard'
@@ -58,6 +59,7 @@ type AnchorId =
   | 'feed-monitors'
   | 'feed-auto-refresh'
   | 'ai-config'
+  | 'background-ops'
   | 'data-management'
   | 'library-management'
   | 'corpus-explorer'
@@ -85,6 +87,7 @@ const TOC: TocEntry[] = [
   { id: 'feed-monitors', label: 'Feed monitor terms', section: 'intelligence' },
   { id: 'feed-auto-refresh', label: 'Feed auto-refresh', section: 'intelligence' },
   { id: 'ai-config', label: 'AI provider', section: 'intelligence' },
+  { id: 'background-ops', label: 'Background operations', section: 'system' },
   { id: 'data-management', label: 'Data management', section: 'system' },
   { id: 'library-management', label: 'Library maintenance', section: 'system' },
   { id: 'corpus-explorer', label: 'Corpus explorer', section: 'system' },
@@ -327,6 +330,7 @@ export function SettingsPage() {
                 configuration.
               </p>
             </SettingsCard>
+            <Anchor id="background-ops"><BackgroundOpsCard /></Anchor>
             <SettingsCard
               icon={Sparkles}
               title="First-run setup"
