@@ -4,6 +4,7 @@ import {
   Archive,
   Database,
   HardDrive,
+  Layers,
   Loader2,
   RotateCcw,
   ShieldAlert,
@@ -179,6 +180,21 @@ export function LibraryManagementCard() {
     onError: () => errorToast('Error', 'Failed to start deduplication.'),
   })
 
+  // Reconcile existing rows into the part-of model: classify figures / SI /
+  // datasets / preprints, link them to their parent, and purge any vector /
+  // cluster row from a subordinate paper (alma.core.components.backfill_components).
+  const backfillComponentsMutation = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>('/library-mgmt/backfill-components'),
+    onSuccess: (data) => {
+      toast({
+        title: 'Component reconcile started',
+        description: `Job ${data.job_id} is now visible in Activity.`,
+      })
+      void invalidateQueries(queryClient, ['activity-operations'])
+    },
+    onError: () => errorToast('Error', 'Failed to start component reconcile.'),
+  })
+
   const [importDialogOpen, setImportDialogOpen] = useState(false)
 
   const handleImportComplete = useCallback(() => {
@@ -256,6 +272,14 @@ export function LibraryManagementCard() {
                 onClick={() => deduplicateMutation.mutate()}
               >
                 Deduplicate Database
+              </AsyncButton>
+              <AsyncButton
+                variant="outline"
+                icon={<Layers className="h-4 w-4" />}
+                pending={backfillComponentsMutation.isPending}
+                onClick={() => backfillComponentsMutation.mutate()}
+              >
+                Reconcile Components
               </AsyncButton>
             </div>
 

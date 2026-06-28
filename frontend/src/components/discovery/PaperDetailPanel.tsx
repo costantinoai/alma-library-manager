@@ -6,6 +6,7 @@ import {
   Edit3,
   ExternalLink,
   FileText,
+  GitBranch,
   Image as ImageIcon,
   Loader2,
   MessageSquare,
@@ -51,6 +52,7 @@ import {
   updateReadingStatus,
   updateSavedPaper,
   type PaperComponent,
+  type PreprintVersion,
   type Publication,
   type RelatedWork,
 } from '@/api/client'
@@ -78,6 +80,7 @@ interface PaperDetails extends Publication {
   is_retracted?: boolean
   referenced_works_count?: number
   components?: PaperComponent[] | null
+  preprint_versions?: PreprintVersion[] | null
 }
 
 // Render order + presentation for the "Related items" section. Each group is
@@ -188,6 +191,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
   const topics = (details?.topics ?? []).filter((t) => t && t.term)
   const keywords = Array.isArray(p?.keywords) ? (p?.keywords as string[]).filter(Boolean) : []
   const components = (details?.components ?? []).filter((c) => c && c.id)
+  const preprintVersions = (details?.preprint_versions ?? []).filter((p) => p && p.id)
   const isLibraryPaper = p?.status === 'library'
   const hasUnsavedNotes = (p?.notes ?? '') !== notesDraft
 
@@ -589,6 +593,49 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     )
                   })}
                 </div>
+              </section>
+            )}
+
+            {/* Preprint version(s) — the preprint twin absorbed into this
+                published paper (alma.application.preprint_dedup). Hidden
+                everywhere else; surfaced here so the absorbed preprint stays
+                visible + openable under its published parent. Distinct from
+                "Related items" (part-of): a preprint is the same work earlier. */}
+            {preprintVersions.length > 0 && (
+              <section>
+                <EyebrowLabel tone="muted" className="mb-1">
+                  {preprintVersions.length > 1 ? 'Preprint versions' : 'Preprint version'}
+                </EyebrowLabel>
+                <ul className="space-y-1 text-xs">
+                  {preprintVersions.map((pre) => {
+                    const label = pre.title || pre.doi || 'Untitled preprint'
+                    const source = (pre.preprint_source || '').trim()
+                    return (
+                      <li key={pre.id} className="flex items-start gap-1.5">
+                        <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+                        <span className="min-w-0">
+                          {pre.url ? (
+                            <a
+                              href={pre.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-alma-700 hover:text-alma-800 hover:underline"
+                            >
+                              {label}
+                            </a>
+                          ) : (
+                            <span className="text-slate-600">{label}</span>
+                          )}
+                          {source && (
+                            <StatusBadge tone="neutral" size="sm" className="ml-1.5 align-middle">
+                              {source}
+                            </StatusBadge>
+                          )}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
               </section>
             )}
 

@@ -801,6 +801,20 @@ export interface PaperComponent {
   work_type?: string | null
 }
 
+/** A preprint↔journal dedup twin absorbed into this published paper (the
+ *  preprint stamped with `canonical_paper_id` = this paper). Returned by
+ *  `GET /papers/{id}/details` as `preprint_versions`; hidden everywhere else
+ *  and surfaced inside the parent's popup. Distinct from `PaperComponent`
+ *  (part-of): a preprint is the SAME work at an earlier stage. */
+export interface PreprintVersion {
+  id: string
+  title?: string | null
+  doi?: string | null
+  url?: string | null
+  year?: number | null
+  preprint_source?: string | null
+}
+
 export interface Stats {
   total_authors: number
   total_publications: number
