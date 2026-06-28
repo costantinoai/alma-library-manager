@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -31,7 +31,13 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { ConfirmDialog } from './ConfirmDialog'
 
-export function TopicsTab() {
+interface TopicsTabProps {
+  /** Deep-link target (global search → `#/library?topic=<term>`): filter the
+   *  topics view to this term on arrival so the searched item is surfaced. */
+  initialTopic?: string | null
+}
+
+export function TopicsTab({ initialTopic = null }: TopicsTabProps = {}) {
   const [createOpen, setCreateOpen] = useState(false)
   const [aliasOpen, setAliasOpen] = useState(false)
   const [renameTopic, setRenameTopic] = useState<string | null>(null)
@@ -40,7 +46,13 @@ export function TopicsTab() {
   const [deleteAlias, setDeleteAlias] = useState<string | null>(null)
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set())
   const [expandedFields, setExpandedFields] = useState<Set<string>>(new Set())
-  const [hierarchyFilter, setHierarchyFilter] = useState<string | null>(null)
+  const [hierarchyFilter, setHierarchyFilter] = useState<string | null>(initialTopic)
+
+  // Filter to the deep-linked topic when the param arrives or changes (global
+  // search → ?topic=). User-driven filtering afterwards still owns the state.
+  useEffect(() => {
+    if (initialTopic) setHierarchyFilter(initialTopic)
+  }, [initialTopic])
 
   const [newTopicName, setNewTopicName] = useState('')
   const [aliasName, setAliasName] = useState('')

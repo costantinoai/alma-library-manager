@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   FolderOpen,
@@ -36,11 +36,23 @@ import { type CollectionItemData, PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ColorPicker } from './ColorPicker'
 
-export function CollectionsTab() {
+interface CollectionsTabProps {
+  /** Deep-link target (global search → `#/library?collection=<id>`): expand
+   *  this collection on arrival so the searched item is "open". */
+  initialCollectionId?: string | null
+}
+
+export function CollectionsTab({ initialCollectionId = null }: CollectionsTabProps = {}) {
   const [createOpen, setCreateOpen] = useState(false)
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(initialCollectionId)
+
+  // Expand the deep-linked collection when the param arrives or changes. User
+  // toggles afterwards still own `expandedId` (this only fires on prop change).
+  useEffect(() => {
+    if (initialCollectionId) setExpandedId(initialCollectionId)
+  }, [initialCollectionId])
 
   // Form state
   const [formName, setFormName] = useState('')

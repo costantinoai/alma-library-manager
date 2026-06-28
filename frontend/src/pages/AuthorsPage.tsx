@@ -31,7 +31,7 @@ import {
   useAuthorAttentionRouter,
 } from '@/components/authors/AuthorsNeedsAttentionSection'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { useHashRoute } from '@/lib/hashRoute'
+import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { cn } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
@@ -188,6 +188,27 @@ export function AuthorsPage() {
     setDetailOpen(true)
   }
 
+  // Deep-link landing from the global command-palette search. An author result
+  // routes here as `#/authors?author=<authors.id>` (api/routes/search.py). The
+  // page previously only read `?focus`, so the param was ignored and clicking an
+  // author in search did nothing. Once the author list has loaded, open the
+  // shared detail dialog for that id. The ref guards against reopening after the
+  // user closes the dialog; a NEW id — or the same id re-arriving after the
+  // param is cleared on close — re-triggers.
+  const requestedAuthorId = route.params.get('author')
+  const handledAuthorParamRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!requestedAuthorId) {
+      handledAuthorParamRef.current = null
+      return
+    }
+    if (handledAuthorParamRef.current === requestedAuthorId) return
+    const author = authorsById.get(requestedAuthorId)
+    if (!author) return // list still loading, or unknown id — retry when authors arrive
+    handledAuthorParamRef.current = requestedAuthorId
+    openDetail(author)
+  }, [requestedAuthorId, authorsById])
+
   // Single shared router for the needs-attention sub-dialogs. The
   // section's row buttons AND each followed-author card's warning
   // triangle dispatch through `router.openForRow`, so dialog state
@@ -330,7 +351,17 @@ export function AuthorsPage() {
         open={detailOpen}
         onOpenChange={(next) => {
           setDetailOpen(next)
-          if (!next) setSelectedSuggestion(null)
+          if (!next) {
+            setSelectedSuggestion(null)
+            // Drop the ?author deep-link param on close so the SAME author can
+            // be reopened from search later (a repeat click re-sets the param,
+            // which the effect above then acts on). Other params are preserved.
+            if (route.params.get('author')) {
+              const nextParams = new URLSearchParams(route.params)
+              nextParams.delete('author')
+              window.location.hash = buildHashRoute('authors', Object.fromEntries(nextParams))
+            }
+          }
         }}
         onDeleted={() => {
           void invalidateQueries(queryClient, ['authors'], ['library-followed-authors'])

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Heart,
@@ -9,7 +9,7 @@ import {
   UploadCloud,
 } from 'lucide-react'
 
-import { getLibraryWorkflowSummary, type Publication, updateReadingStatus } from '@/api/client'
+import { getLibraryWorkflowSummary, getPaperById, type Publication, updateReadingStatus } from '@/api/client'
 import { PaperCard } from '@/components/shared'
 import { PageTour, LIBRARY_TOUR } from '@/components/onboarding'
 import { PaperDetailPanel } from '@/components/discovery'
@@ -108,14 +108,60 @@ export function LibraryPage() {
   const route = useHashRoute()
   const queryClient = useQueryClient()
   const routeTab = route.params.get('tab')?.trim() as TabId | undefined
-  const [activeTab, setActiveTab] = useState<TabId>(VALID_TABS.has(routeTab ?? DEFAULT_TAB) ? (routeTab ?? DEFAULT_TAB) : DEFAULT_TAB)
+
+  // Deep links from the global command-palette search land here as
+  // `#/library?paper=<id>` / `?collection=<id>` / `?topic=<term>` (see
+  // api/routes/search.py). A collection/topic deep-link implies its owning tab,
+  // so we derive the effective tab from those params before falling back to ?tab.
+  const deepLinkPaperId = route.params.get('paper')?.trim() || null
+  const deepLinkCollectionId = route.params.get('collection')?.trim() || null
+  const deepLinkTopic = route.params.get('topic')?.trim() || null
+  const effectiveTab: TabId | undefined = deepLinkCollectionId
+    ? 'collections'
+    : deepLinkTopic
+      ? 'topics'
+      : routeTab
+
+  const [activeTab, setActiveTab] = useState<TabId>(VALID_TABS.has(effectiveTab ?? DEFAULT_TAB) ? (effectiveTab ?? DEFAULT_TAB) : DEFAULT_TAB)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
 
   useEffect(() => {
-    const nextTab = VALID_TABS.has(routeTab ?? DEFAULT_TAB) ? (routeTab ?? DEFAULT_TAB) : DEFAULT_TAB
+    const nextTab = VALID_TABS.has(effectiveTab ?? DEFAULT_TAB) ? (effectiveTab ?? DEFAULT_TAB) : DEFAULT_TAB
     setActiveTab(nextTab)
-  }, [routeTab])
+  }, [effectiveTab])
+
+  // Open the deep-linked paper in the shared detail panel once it hydrates.
+  // The ref guards against reopening after close; a NEW id re-triggers (and the
+  // same id re-opens after the param is cleared on close, mirroring Authors).
+  const deepLinkPaperQuery = useQuery({
+    queryKey: ['library-deeplink-paper', deepLinkPaperId],
+    queryFn: () => getPaperById(deepLinkPaperId!),
+    enabled: !!deepLinkPaperId,
+    staleTime: 30_000,
+  })
+  const handledPaperParamRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!deepLinkPaperId) {
+      handledPaperParamRef.current = null
+      return
+    }
+    if (handledPaperParamRef.current === deepLinkPaperId) return
+    const pub = deepLinkPaperQuery.data
+    if (!pub) return // still fetching, or not found — wait
+    handledPaperParamRef.current = deepLinkPaperId
+    setSelectedPaper(pub)
+    setDetailOpen(true)
+  }, [deepLinkPaperId, deepLinkPaperQuery.data])
+
+  // Drop a deep-link param from the URL while preserving the rest, so the same
+  // item can be reopened from search after the user closes its view.
+  const clearDeepLinkParam = (key: string) => {
+    if (!route.params.get(key)) return
+    const nextParams = new URLSearchParams(route.params)
+    nextParams.delete(key)
+    window.location.hash = buildHashRoute('library', Object.fromEntries(nextParams))
+  }
 
   const workflowQuery = useQuery({
     queryKey: ['library-workflow-summary'],
@@ -292,12 +338,20 @@ export function LibraryPage() {
         />
       )}
       {activeTab === 'reading' && <ReadingListTab />}
-      {activeTab === 'collections' && <CollectionsTab />}
+      {activeTab === 'collections' && <CollectionsTab initialCollectionId={deepLinkCollectionId} />}
       {activeTab === 'tags' && <TagsTab />}
-      {activeTab === 'topics' && <TopicsTab />}
+      {activeTab === 'topics' && <TopicsTab initialTopic={deepLinkTopic} />}
       {activeTab === 'imports' && <ImportsTab />}
 
-      <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
+      <PaperDetailPanel
+        paper={selectedPaper}
+        open={detailOpen}
+        onOpenChange={(next) => {
+          setDetailOpen(next)
+          // Clear ?paper on close so re-clicking the same paper in search reopens it.
+          if (!next) clearDeepLinkParam('paper')
+        }}
+      />
     </div>
   )
 }

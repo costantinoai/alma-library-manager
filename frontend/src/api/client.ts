@@ -1443,6 +1443,16 @@ export function queueAuthorHistoryBackfill(authorId: string): Promise<{ status?:
   return api.post(`/authors/${encodeURIComponent(authorId)}/history-backfill`)
 }
 
+/**
+ * Hydrate a single paper by id. Used by deep links (e.g. global search →
+ * `#/library?paper=<id>`) where the caller only has the id and needs a full
+ * `Publication` to open `PaperDetailPanel`. Hits the same `/papers/{id}/details`
+ * the panel itself reads (the response is a superset of `Publication`).
+ */
+export function getPaperById(paperId: string): Promise<Publication> {
+  return api.get<Publication>(`/papers/${encodeURIComponent(paperId)}/details`)
+}
+
 export function listPapers(params?: {
   scope?: 'all' | 'library' | 'background' | 'followed_corpus'
   status?: 'tracked' | 'library' | 'dismissed' | 'removed'
