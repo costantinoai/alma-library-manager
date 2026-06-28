@@ -11,7 +11,7 @@
  * at-a-glance severity strip; everything actionable lives in these cards.
  *
  * Status + count come from each subsystem's diagnostics section (so we keep the
- * 429/​rate-limit source signal, degraded-monitor counts, etc.); the actionable
+ * 429/rate-limit source signal, degraded-monitor counts, etc.); the actionable
  * remediation targets come from `operational.states`. No charts here —
  * subsystem trends live in Insights → Activity.
  */
@@ -36,9 +36,11 @@ import {
 import { motion, useReducedMotion } from 'framer-motion'
 
 import {
+  ApiError,
   api,
   clearDiscoverySimilarityCache,
   evaluateAlert,
+  getApiErrorMessage,
   getDiscoverySettings,
   queueAuthorHistoryBackfill,
   refreshFeedMonitor,
@@ -228,6 +230,27 @@ export function SystemStatusCards() {
     )
   }
 
+  // A remediation target lifted from the diagnostics snapshot can be a PHANTOM:
+  // that snapshot is a stale-while-revalidate cache, so a monitor/author it still
+  // lists may already be gone (author unfollowed, or the cache predates a
+  // cleanup). The backend answers 404. Clicking "fix" on a phantom then dead-ended
+  // on a scary "…failed" toast while the row sat there. So treat a 404 as "already
+  // gone": close the popup, re-pull diagnostics (which kicks the SWR rebuild that
+  // drops the phantom), and say so plainly. Returns true when it handled a 404 so
+  // the caller skips its generic error toast.
+  const handlePhantomTarget = (err: unknown, noun: string): boolean => {
+    if (err instanceof ApiError && err.status === 404) {
+      invalidateOperational()
+      setOpenComp(null)
+      toast({
+        title: `${noun} no longer exists`,
+        description: 'It was already gone — cleared from health.',
+      })
+      return true
+    }
+    return false
+  }
+
   // ── Remediation mutations (carried over from the old OperationalStatusCard).
   const computeStaleEmbeddingsMutation = useMutation({
     mutationFn: () => api.post('/ai/compute-embeddings?scope=stale'),
@@ -251,7 +274,9 @@ export function SystemStatusCards() {
       invalidateOperational(['authors'])
       toast({ title: 'Author repair queued', description: 'Track progress in Activity.' })
     },
-    onError: () => errorToast('Author repair failed'),
+    onError: (err) => {
+      if (!handlePhantomTarget(err, 'Author')) errorToast('Author repair failed', getApiErrorMessage(err))
+    },
   })
   const historyBackfillMutation = useMutation({
     mutationFn: (authorId: string) => queueAuthorHistoryBackfill(authorId),
@@ -262,7 +287,9 @@ export function SystemStatusCards() {
         description: result?.job_id ? `Job ${result.job_id} queued.` : 'Queued.',
       })
     },
-    onError: () => errorToast('Historical backfill failed'),
+    onError: (err) => {
+      if (!handlePhantomTarget(err, 'Author')) errorToast('Historical backfill failed', getApiErrorMessage(err))
+    },
   })
   const refreshMonitorMutation = useMutation({
     mutationFn: (monitorId: string) => refreshFeedMonitor(monitorId),
@@ -270,7 +297,9 @@ export function SystemStatusCards() {
       invalidateOperational(['feed-monitors'], ['feed-inbox'])
       toast({ title: 'Monitor refresh queued', description: 'Running in Activity.' })
     },
-    onError: () => errorToast('Monitor refresh failed'),
+    onError: (err) => {
+      if (!handlePhantomTarget(err, 'Monitor')) errorToast('Monitor refresh failed', getApiErrorMessage(err))
+    },
   })
   const enableSourceMutation = useMutation({
     mutationFn: async (sourceName: string) => {
