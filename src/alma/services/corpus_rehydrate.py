@@ -2598,13 +2598,18 @@ def _hydrate_via_crossref(conn: sqlite3.Connection, paper_id: str, row: sqlite3.
 
 
 def _fetch_abstract_recovery(row: sqlite3.Row) -> dict:
-    """FETCH (worker): probe OA / landing-page metadata for an abstract.
+    """FETCH (worker): recover an abstract for a paper that has none.
 
-    NETWORK ONLY — Unpaywall (for OA locations) + the candidate landing
-    pages. Returns the recovered abstract + reason + ledger lookup_key for
-    the writer; never touches the DB. The `publisher` / `unpaywall` source
-    clients enforce their own (polite) concurrency, so fanning this out stays
-    polite regardless of the fetch-pool width.
+    NETWORK ONLY — never touches the DB. Two channels, highest-precision
+    first:
+      1. **Preprint twin** (`preprint_abstract`): the arXiv / bioRxiv
+         structured APIs serve the abstract unconditionally and clean.
+      2. **Landing-page scrape**: Unpaywall OA locations + the candidate
+         landing pages' `<meta>` tags.
+    Returns the recovered abstract + reason + ledger lookup_key for the
+    writer. The `arxiv` / `biorxiv` / `publisher` / `unpaywall` source clients
+    enforce their own (polite) concurrency, so fanning this out stays polite
+    regardless of the fetch-pool width.
     """
     from alma.core.utils import canonical_lookup_doi
 
@@ -2622,6 +2627,31 @@ def _fetch_abstract_recovery(row: sqlite3.Row) -> dict:
                 urls.append(value)
 
     lookup_key = "|".join(urls[:3]) or (f"doi:{doi}" if doi else "")
+
+    # Channel 1 — structured preprint-twin recovery (arXiv / bioRxiv).
+    # Preprint servers expose clean abstracts with no paywall, so this
+    # outranks landing-page scraping. Returns "" → fall through to channel 2.
+    from alma.services.preprint_abstract import recover_preprint_abstract
+
+    try:
+        year_val = int(row["year"]) if row["year"] is not None else None
+    except (TypeError, ValueError):
+        year_val = None
+    twin_abstract, twin_reason = recover_preprint_abstract(
+        title=str(row["title"] or ""),
+        year=year_val,
+        doi=doi,
+        urls=urls,
+    )
+    if twin_abstract:
+        return {
+            "paper_id": paper_id,
+            "abstract": twin_abstract,
+            "reason": twin_reason,
+            "lookup_key": lookup_key,
+        }
+
+    # Channel 2 — landing-page <meta>-tag scrape (oa_url / url / Unpaywall).
     abstract = ""
     reason = "no_candidate_urls"
     for url in urls:
@@ -2676,7 +2706,7 @@ def _apply_abstract_recovery(conn: sqlite3.Connection, result: dict) -> tuple[st
         status=status_value,
         reason=reason,
         fields_filled=fields_filled,
-        fields_key="abstract_recovery_html_meta_v1",
+        fields_key="abstract_recovery_v2",
         retry_after=retry,
     )
     return (status_value, fields_filled)

@@ -170,6 +170,16 @@ metadata fallback when OpenAlex doesn't have a paper.
   per `(server, interval)` for 300s so every keyword monitor/lane in
   one refresh shares a single network pull, then filters and re-ranks
   locally per query (`discovery/biorxiv.py`).
+* **Abstract recovery** (task 05): both servers' **structured APIs**
+  also back-fill a *missing* abstract on a paywalled paper that has an
+  arXiv/bioRxiv preprint twin — arXiv's Atom `summary` (by id, or a
+  title-field `ti:"…"` search) and bioRxiv's
+  `/details/{server}/{doi}` `abstract`. This runs ahead of any
+  landing-page HTML scrape (cleaner, paywall-free), is fill-only, and
+  stamps a per-source ledger reason
+  (`services/preprint_abstract.py`). bioRxiv is direct-DOI/URL only —
+  it has no keyword endpoint, so the title-search fallback is
+  arXiv-specific.
 
 These are read-only fall-through paths. Each has its own DOI
 prefix that triggers the

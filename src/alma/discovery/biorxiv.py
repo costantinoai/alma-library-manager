@@ -173,6 +173,44 @@ def _lookup_published_record(preprint_doi: str, *, server: str) -> dict[str, str
     return {}
 
 
+def fetch_abstract_by_doi(doi: str, *, server: Optional[str] = None) -> str:
+    """Return the abstract for a known bioRxiv/medRxiv preprint DOI.
+
+    The structured-API recovery path for task 05: when a paywalled paper's
+    OA mirror is a `10.1101/*` preprint, bioRxiv's `/details` endpoint serves
+    the abstract unconditionally (no paywall, no HTML scraping). When *server*
+    is unknown both share the `10.1101` registrant, so we try `biorxiv` then
+    `medrxiv`. A DOI can carry several versions; we take the latest non-empty
+    abstract. Returns "" when the DOI is unknown or carries no abstract.
+    """
+    normalized = normalize_doi(doi)
+    if not normalized:
+        return ""
+    servers = [server] if server else ["biorxiv", "medrxiv"]
+    for srv in servers:
+        try:
+            resp = get_source_http_client("biorxiv").get(
+                f"/details/{srv}/{normalized}/na/json",
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                continue
+            entries = (resp.json() or {}).get("collection") or []
+        except Exception as exc:
+            logger.debug("bioRxiv details lookup failed for %s: %s", normalized, exc)
+            continue
+        abstract = ""
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            candidate = str(entry.get("abstract") or "").strip()
+            if candidate:
+                abstract = candidate  # keep the latest version's abstract
+        if abstract:
+            return abstract
+    return ""
+
+
 def reconcile_published_versions(
     candidates: list[dict],
     *,
