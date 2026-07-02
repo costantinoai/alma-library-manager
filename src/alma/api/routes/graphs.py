@@ -720,8 +720,16 @@ def _cluster_label_refresh_impl(
         entry["synthetic_key"]: entry["joined_text"] or "(empty)"
         for entry in refresh_entries
     }
+    background_df, background_n = _load_cluster_term_background(conn)
     tfidf_labels = (
-        label_clusters_tfidf(synthetic_clusters, cluster_texts) if synthetic_clusters else []
+        label_clusters_tfidf(
+            synthetic_clusters,
+            cluster_texts,
+            background_doc_freq=background_df,
+            background_doc_count=background_n,
+        )
+        if synthetic_clusters
+        else []
     )
 
     for entry, tfidf_label in zip(refresh_entries, tfidf_labels):
@@ -1159,6 +1167,14 @@ _INCREMENTAL_MIN_COSINE = 0.10
 # on every rebuild.
 _STABILITY_MAX_NODES = 2000
 
+# In-process, read-only cache for corpus-background cluster-term IDF. The key
+# carries the DB path + corpus count/watermark + labelling version, so labels
+# refresh when either the corpus text or the scorer logic changes without adding
+# a database table or a write-on-GET side effect.
+_CLUSTER_TERM_BACKGROUND_CACHE: dict[
+    tuple[str, int, str, int, str], tuple[dict[str, int], int]
+] = {}
+
 
 def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     provider = "none"
@@ -1203,6 +1219,103 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
     }
 
 
+def _connection_cache_identity(conn: sqlite3.Connection) -> str:
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        path = str(row["file"] if isinstance(row, sqlite3.Row) else row[2] or "")
+        return path or f"memory:{id(conn)}"
+    except Exception:
+        return f"connection:{id(conn)}"
+
+
+def _load_cluster_term_background(
+    conn: sqlite3.Connection,
+    *,
+    max_features: int = 4000,
+) -> tuple[dict[str, int], int]:
+    """Return corpus-wide paper DF for the same terms the cluster labeller uses.
+
+    The background is always the whole standalone corpus, even for a Library map:
+    cluster TF/prevalence stay scoped to the rendered cluster, while IDF answers
+    "is this phrase distinctive against everything ALMa knows about?"
+    """
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n, COALESCE(MAX(COALESCE(p.updated_at, p.created_at, '')), '') AS watermark
+            FROM papers p
+            WHERE {standalone_paper_sql('p')}
+            """
+        ).fetchone()
+        corpus_n = int(row["n"] if isinstance(row, sqlite3.Row) else row[0] or 0)
+        watermark = str(row["watermark"] if isinstance(row, sqlite3.Row) else row[1] or "")
+    except sqlite3.OperationalError:
+        return {}, 0
+    if corpus_n <= 0:
+        return {}, 0
+
+    cache_key = (
+        _connection_cache_identity(conn),
+        corpus_n,
+        watermark,
+        int(max_features),
+        LABELLING_VERSION,
+    )
+    cached = _CLUSTER_TERM_BACKGROUND_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT COALESCE(p.title, '') AS title, COALESCE(p.abstract, '') AS abstract
+            FROM papers p
+            WHERE {standalone_paper_sql('p')}
+              AND (
+                COALESCE(TRIM(p.title), '') <> ''
+                OR COALESCE(TRIM(p.abstract), '') <> ''
+              )
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}, 0
+    docs = [
+        f"{row['title'] if isinstance(row, sqlite3.Row) else row[0]}. "
+        f"{row['abstract'] if isinstance(row, sqlite3.Row) else row[1]}".strip()
+        for row in rows
+    ]
+    docs = [doc for doc in docs if doc.strip()]
+    if not docs:
+        return {}, 0
+
+    try:
+        from sklearn.feature_extraction.text import CountVectorizer
+        from alma.ai.clustering import _build_label_stop_words
+
+        vectorizer = CountVectorizer(
+            stop_words=_build_label_stop_words(),
+            ngram_range=(1, 2),
+            min_df=1,
+            max_df=1.0,
+            token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z]+\b",
+            lowercase=True,
+            max_features=max_features,
+        )
+        counts = vectorizer.fit_transform(docs)
+    except ValueError:
+        return {}, 0
+
+    binary = counts.copy()
+    binary.data = np.ones_like(binary.data)
+    df = np.asarray(binary.sum(axis=0)).ravel()
+    feature_names = vectorizer.get_feature_names_out()
+    result = ({str(term): int(df[idx]) for idx, term in enumerate(feature_names)}, len(docs))
+    if len(_CLUSTER_TERM_BACKGROUND_CACHE) > 8:
+        _CLUSTER_TERM_BACKGROUND_CACHE.clear()
+    _CLUSTER_TERM_BACKGROUND_CACHE[cache_key] = result
+    return result
+
+
 def _build_text_paper_map(
     conn: sqlite3.Connection,
     *,
@@ -1232,23 +1345,32 @@ def _build_text_paper_map(
     from alma.ai.clustering import _silhouette_optimal_k, label_clusters_tfidf, Cluster
     from alma.ai.projections import project_embeddings as _project_embeddings
     from sklearn.cluster import MiniBatchKMeans
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    # Standalone gate (43.5): mirror `_load_embeddings` — exclude component rows
+    # (figures / SI / datasets) and merged-away preprint twins (which KEEP
+    # status='library' per preprint_dedup). This text-fallback path is the
+    # DEFAULT MV build whenever <5 active-model embeddings exist (the no-AI
+    # default), so without the gate those subordinate rows render as graph
+    # nodes — including duplicate Library nodes.
     if scope == "library":
         rows = conn.execute(
-            """
+            f"""
             SELECT id, title, abstract, year, journal, cited_by_count, rating,
                    publication_date, authors
-            FROM papers
+            FROM papers p
             WHERE status = 'library'
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(cited_by_count, 0) DESC,
                      COALESCE(publication_date, '') DESC
             """
         ).fetchall()
     else:
         rows = conn.execute(
-            """
+            f"""
             SELECT id, title, abstract, year, journal, cited_by_count, rating,
                    publication_date, authors
-            FROM papers
+            FROM papers p
+            WHERE {standalone_paper_sql('p')}
             ORDER BY COALESCE(cited_by_count, 0) DESC,
                      COALESCE(publication_date, '') DESC
             """
@@ -1346,9 +1468,12 @@ def _build_text_paper_map(
                 )
                 for old in sorted_old_cids
             ]
+            background_df, background_n = _load_cluster_term_background(conn)
             label_strings = label_clusters_tfidf(
                 synthetic_clusters,
                 {pid: docs[i] for i, pid in enumerate(paper_ids)},
+                background_doc_freq=background_df,
+                background_doc_count=background_n,
             )
             for c, lbl in zip(synthetic_clusters, label_strings):
                 cluster_labels_by_cid[int(c.cluster_id)] = lbl
@@ -1616,11 +1741,18 @@ def _build_cluster_info(
     cached_labels: dict[str, dict[str, object]] | None = None,
     cluster_texts: dict[str, str] | None = None,
     vectors_by_id: dict[str, Any] | None = None,
+    background_doc_freq: dict[str, int] | None = None,
+    background_doc_count: int | None = None,
 ) -> list[dict[str, Any]]:
     labels = labels_by_cluster or {}
     word_clouds: dict[int, list[dict[str, Any]]] = {}
     if cluster_texts:
-        word_clouds = _build_word_clouds_for_clusters(cluster_members, cluster_texts)
+        word_clouds = _build_word_clouds_for_clusters(
+            cluster_members,
+            cluster_texts,
+            background_doc_freq=background_doc_freq,
+            background_doc_count=background_doc_count,
+        )
     details = []
     for cid, members in sorted(cluster_members.items(), key=lambda kv: kv[0]):
         detail = _build_cluster_detail(
@@ -1668,6 +1800,8 @@ def _build_word_clouds_for_clusters(
     cluster_texts: dict[str, str],
     *,
     top_n: int = 10,
+    background_doc_freq: dict[str, int] | None = None,
+    background_doc_count: int | None = None,
 ) -> dict[int, list[dict[str, Any]]]:
     """Per-cluster word clouds via the shared prevalence-weighted c-TF-IDF.
 
@@ -1686,7 +1820,13 @@ def _build_word_clouds_for_clusters(
         cid: [cluster_texts.get(paper_id, "") for paper_id in cluster_members[cid]]
         for cid in sorted_cids
     }
-    scored = score_cluster_terms(member_texts, ngram_range=(1, 2), top_k=top_n)
+    scored = score_cluster_terms(
+        member_texts,
+        ngram_range=(1, 2),
+        top_k=top_n,
+        background_doc_freq=background_doc_freq,
+        background_doc_count=background_doc_count,
+    )
     return {
         cid: [{"term": term, "weight": round(weight, 4)} for term, weight in ranked[:top_n]]
         for cid, ranked in scored.items()
@@ -1859,6 +1999,8 @@ def _build_embedding_paper_map(
                 "authors": "",
                 "publication_date": None,
             }
+
+    background_df, background_n = _load_cluster_term_background(conn)
 
     # Read embedding freshness and previously materialized layout rows.
     embedding_created_at: dict[str, str] = {}
@@ -2035,7 +2177,12 @@ def _build_embedding_paper_map(
         )
         clusters = clustering.clusters
         node_probabilities = clustering.probabilities
-        labels = label_clusters_tfidf(clusters, texts)
+        labels = label_clusters_tfidf(
+            clusters,
+            texts,
+            background_doc_freq=background_df,
+            background_doc_count=background_n,
+        )
         for cluster, label in zip(clusters, labels):
             cluster.label = label
             labels_by_cluster[int(cluster.cluster_id)] = str(label or "")
@@ -2073,7 +2220,12 @@ def _build_embedding_paper_map(
             for cid, members in sorted(cluster_members.items(), key=lambda kv: kv[0])
             if cid >= 0  # never TF-IDF-label the Unclustered group — it has no topic
         ]
-        generated_labels = label_clusters_tfidf(synthetic_clusters, texts)
+        generated_labels = label_clusters_tfidf(
+            synthetic_clusters,
+            texts,
+            background_doc_freq=background_df,
+            background_doc_count=background_n,
+        )
         for cluster, label in zip(synthetic_clusters, generated_labels):
             labels_by_cluster[int(cluster.cluster_id)] = str(label or labels_by_cluster.get(int(cluster.cluster_id), ""))
         # The outlier group always carries the fixed Unclustered label.
@@ -2293,6 +2445,8 @@ def _build_embedding_paper_map(
         cluster_texts=texts,
         # I-13: medoid/diverse representative selection runs on these vectors.
         vectors_by_id=vectors_by_id,
+        background_doc_freq=background_df,
+        background_doc_count=background_n,
     )
 
     # Unified clustering diagnostics (I-4/I-6) for the method/uncertainty panel.
