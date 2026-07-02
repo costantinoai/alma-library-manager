@@ -64,17 +64,21 @@ services:
     restart: unless-stopped
 
     # -------------------------------------------------------------------------
-    # Run as container UID 0. In ROOTLESS Docker (the default on Docker
-    # Desktop and most modern installs) this remaps to the host user that
-    # started the daemon, so bind-mounted files keep their host ownership
-    # and `.env` / `settings.json` stay readable.
-    # In ROOTFUL Docker the same line means "real root inside the
-    # container". The hardening below (no-new-privileges, cap_drop ALL,
-    # read_only fs, tmpfs, localhost-only port) keeps the blast radius
-    # small, but rootful users may prefer to chown bind-mount targets to a
-    # non-root UID and override this line accordingly.
+    # Match the image's native non-root app user. Named volumes are initialised
+    # from the image's /app/data and /app/config directories, which are writable
+    # by UID/GID 10001. Keeping compose on the same UID prevents SQLite sidecar
+    # drift (scholar.db-wal / scholar.db-shm owned by a previous runtime user)
+    # across image upgrades and rootless/rootful Docker variants.
+    #
+    # UPGRADING AN EXISTING DEPLOYMENT (was previously run as root / 0:0):
+    #   volumes populated under the old UID are root-owned, so this non-root
+    #   process can't open the DB ("unable to open database file"). Fix ownership
+    #   ONCE, then start normally:
+    #       docker compose run --user 0 --rm alma chown -R 10001:10001 /data /config
+    #   (See docs/operations/docker-volume-ownership.md — deliberately a loud,
+    #   documented migration, not a silent auto-chown entrypoint.)
     # -------------------------------------------------------------------------
-    user: "0:0"
+    user: "10001:10001"
 
     security_opt:
       - no-new-privileges:true
