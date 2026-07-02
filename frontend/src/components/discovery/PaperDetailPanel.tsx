@@ -44,6 +44,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { Textarea } from '@/components/ui/textarea'
 import {
   api,
+  detachPaper,
   getDerivativeWorks,
   getPriorWorks,
   onlineImportSave,
@@ -261,6 +262,30 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
       onOpenChange(false)
     },
     onError: () => errorToast('Error', 'Could not remove paper.'),
+  })
+
+  // "Not a duplicate" / "Not a child": promote a merged twin / component back to
+  // a standalone paper. Refetches THIS (parent) paper's details so the list it
+  // was removed from updates in place, and invalidates the Library/corpus views
+  // where the now-standalone paper reappears.
+  const detachMutation = useMutation({
+    mutationFn: (childId: string) => detachPaper(childId),
+    onSuccess: (result) => {
+      if (p?.id) {
+        api
+          .get<PaperDetails>(`/papers/${encodeURIComponent(p.id)}/details`)
+          .then((data) => setDetails(data))
+          .catch(() => {})
+      }
+      invalidateQueries(queryClient, ['papers'], ['library-saved'], ['library-workflow'], ['library-info'])
+      toast({
+        title: result.was_component ? 'Detached' : 'Split out',
+        description: result.was_component
+          ? 'Promoted to a standalone paper.'
+          : 'No longer marked as a duplicate — it is its own paper now.',
+      })
+    },
+    onError: () => errorToast('Error', 'Could not detach the paper.'),
   })
 
   const refetchMutation = useMutation({
@@ -571,20 +596,30 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                           {items.map((c) => {
                             const label = c.title || c.doi || 'Untitled item'
                             return (
-                              <li key={c.id}>
+                              <li key={c.id} className="flex items-start justify-between gap-2">
                                 {c.url ? (
                                   <a
                                     href={c.url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="inline-flex items-start gap-1 text-alma-700 hover:text-alma-800 hover:underline"
+                                    className="inline-flex min-w-0 items-start gap-1 text-alma-700 hover:text-alma-800 hover:underline"
                                   >
                                     <ExternalLink className="mt-0.5 h-3 w-3 shrink-0" />
-                                    <span>{label}</span>
+                                    <span className="truncate">{label}</span>
                                   </a>
                                 ) : (
-                                  <span className="text-slate-600">{label}</span>
+                                  <span className="min-w-0 truncate text-slate-600">{label}</span>
                                 )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                                  disabled={detachMutation.isPending}
+                                  onClick={() => detachMutation.mutate(c.id)}
+                                  title="This is not a part of this paper — make it a standalone paper"
+                                >
+                                  Not a child
+                                </Button>
                               </li>
                             )
                           })}
@@ -611,27 +646,39 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                     const label = pre.title || pre.doi || 'Untitled preprint'
                     const source = (pre.preprint_source || '').trim()
                     return (
-                      <li key={pre.id} className="flex items-start gap-1.5">
-                        <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
-                        <span className="min-w-0">
-                          {pre.url ? (
-                            <a
-                              href={pre.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-alma-700 hover:text-alma-800 hover:underline"
-                            >
-                              {label}
-                            </a>
-                          ) : (
-                            <span className="text-slate-600">{label}</span>
-                          )}
-                          {source && (
-                            <StatusBadge tone="neutral" size="sm" className="ml-1.5 align-middle">
-                              {source}
-                            </StatusBadge>
-                          )}
+                      <li key={pre.id} className="flex items-start justify-between gap-2">
+                        <span className="flex min-w-0 items-start gap-1.5">
+                          <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+                          <span className="min-w-0">
+                            {pre.url ? (
+                              <a
+                                href={pre.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-alma-700 hover:text-alma-800 hover:underline"
+                              >
+                                {label}
+                              </a>
+                            ) : (
+                              <span className="text-slate-600">{label}</span>
+                            )}
+                            {source && (
+                              <StatusBadge tone="neutral" size="sm" className="ml-1.5 align-middle">
+                                {source}
+                              </StatusBadge>
+                            )}
+                          </span>
                         </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 shrink-0 px-1.5 text-[11px] text-slate-500"
+                          disabled={detachMutation.isPending}
+                          onClick={() => detachMutation.mutate(pre.id)}
+                          title="This is a different paper, not a duplicate — split it back out as its own item"
+                        >
+                          Not a duplicate
+                        </Button>
                       </li>
                     )
                   })}

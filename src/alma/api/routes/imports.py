@@ -29,7 +29,9 @@ from alma.api.models import (
     ZoteroImportRequest,
 )
 from alma.application import imports as imports_app
+from alma.application import library as library_app
 from alma.application import import_preflight
+from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.library.importer import (
     ImportResult,
@@ -75,6 +77,11 @@ class ImportPreflightResponse(BaseModel):
     dedup: dict
     likely_source_calls: dict
     eta: dict
+
+
+class ConfirmStagedImportResponse(BaseModel):
+    status: str
+    paper_id: str
 
 
 # Phase C — online source search import.
@@ -212,6 +219,7 @@ def _run_import_sync(
             message=message,
             result={
                 "imported": payload.get("imported", 0),
+                "staged": payload.get("staged", 0),
                 "skipped": payload.get("skipped", 0),
                 "failed": payload.get("failed", 0),
                 "total": payload.get("total", 0),
@@ -293,20 +301,22 @@ def _queue_import_background(
             payload = result.to_dict()
             total = int(payload.get("total") or 0)
             imported = int(payload.get("imported") or 0)
+            staged = int(payload.get("staged") or 0)
             skipped = int(payload.get("skipped") or 0)
             failed = int(payload.get("failed") or 0)
             errors = list(payload.get("errors") or [])
             summary = {
                 "total": total,
                 "imported": imported,
+                "staged": staged,
                 "skipped": skipped,
                 "failed": failed,
                 "errors": errors[:20],
                 "error_count": len(errors),
             }
-            final_status = "noop" if (imported == 0 and failed == 0 and total == 0) else "completed"
+            final_status = "noop" if (imported == 0 and staged == 0 and failed == 0 and total == 0) else "completed"
             final_message = (
-                f"Import finished: imported {imported}, skipped {skipped}, "
+                f"Import finished: imported {imported}, staged {staged}, skipped {skipped}, "
                 f"failed {failed} of {total} entries"
             )
             add_job_log(job_id, final_message, step="summary", data=summary)
@@ -422,6 +432,7 @@ async def preflight_zotero_rdf_file_endpoint(
         parsed.records,
         source="zotero_rdf",
         errors=parsed.errors,
+        parse_duplicates=parsed.parse_duplicates,
     )
 
 
@@ -633,25 +644,6 @@ def import_zotero_endpoint(
     )
 
 
-@router.get(
-    "/import/zotero/collections",
-    response_model=List[ZoteroCollectionResponse],
-    summary="List Zotero collections",
-)
-def list_zotero_collections_get_endpoint(
-    library_id: str = Query(..., description="Zotero user/group library ID"),
-    api_key: Optional[str] = Query(None, description="Zotero API key"),
-    library_type: str = Query("user", description="Zotero library type: user or group"),
-):
-    """Backward-compatible GET wrapper for listing Zotero collections."""
-    resolved_api_key = _resolve_zotero_api_key(api_key)
-    return _fetch_zotero_collections_safe(
-        library_id,
-        resolved_api_key,
-        library_type,
-    )
-
-
 @router.post(
     "/import/zotero/collections",
     response_model=List[ZoteroCollectionResponse],
@@ -660,7 +652,14 @@ def list_zotero_collections_get_endpoint(
 def list_zotero_collections_post_endpoint(
     req: ZoteroCollectionsRequest,
 ):
-    """Fetch Zotero collections via POST to avoid API key in query strings."""
+    """Fetch Zotero collections via POST to avoid API key in query strings.
+
+    POST-only by design (43.3): the deleted GET wrapper took the API key as a
+    query parameter and PERSISTED it via `_resolve_zotero_api_key` → `set_secret`
+    — a secret written from a URL on a read verb. The frontend only ever called
+    this POST; persisting the key belongs to the request body, not a query
+    string.
+    """
     api_key = _resolve_zotero_api_key(req.api_key)
     return _fetch_zotero_collections_safe(
         req.library_id,
@@ -816,6 +815,84 @@ def list_unresolved_imported_publications(
 
 
 @router.post(
+    "/import/staged/{paper_id}/confirm",
+    response_model=ConfirmStagedImportResponse,
+    summary="Save a staged low-confidence import to Library",
+)
+def confirm_staged_import(
+    paper_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Promote a reviewed low-confidence import through the Library write path."""
+    target_id = (paper_id or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="paper_id is required")
+
+    def _persist() -> str:
+        row = db.execute(
+            """
+            SELECT id, status, COALESCE(added_from, '') AS added_from, COALESCE(notes, '') AS notes
+            FROM papers
+            WHERE id = ?
+            """,
+            (target_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Imported paper not found")
+
+        imported = row["added_from"] == "import" or str(row["notes"] or "").startswith("Imported from ")
+        if not imported:
+            raise HTTPException(status_code=400, detail="Only imported papers can be confirmed")
+
+        if str(row["status"] or "").strip().lower() == library_app.LIBRARY_STATUS:
+            return "already_saved"
+
+        save_id, duplicate_ignored = library_app.resolve_library_save_target(db, target_id)
+        if duplicate_ignored:
+            library_app.sync_surface_resolution(
+                db,
+                target_id,
+                action="save",
+                source_surface="import",
+            )
+            library_app.sync_surface_resolution(
+                db,
+                save_id,
+                action="save",
+                source_surface="import",
+            )
+            return "duplicate_ignored"
+
+        ok = library_app.add_to_library(
+            db,
+            save_id,
+            rating=library_app.DEFAULT_LIBRARY_RATING,
+            notes=None,
+            added_from="import",
+            override_added_from=True,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Imported paper not found")
+
+        library_app.sync_surface_resolution(
+            db,
+            save_id,
+            action="save",
+            source_surface="import",
+        )
+        return "saved"
+
+    status_value = run_write_unit(db, _persist, label="import_confirm_staged")
+    paper_id_value = (
+        library_app.find_library_duplicate_for_paper(db, target_id)
+        if status_value == "duplicate_ignored"
+        else target_id
+    )
+    return {"status": status_value, "paper_id": paper_id_value or target_id}
+
+
+@router.post(
     "/import/resolve-openalex",
     summary="Resolve selected or unresolved publications via OpenAlex",
 )
@@ -848,28 +925,11 @@ def resolve_imported_publications_openalex(
             return out
 
         if req.unresolved_only:
+            # 40.6: source ids from the ONE resolution-queue predicate instead of
+            # a hand-rolled copy that omitted the canonical-merged filter (which
+            # made resolve-all waste OpenAlex calls re-resolving deduped twins).
             lim = max(1, min(int(req.limit or 1000), 10000))
-            rows = conn.execute(
-                """
-                SELECT id
-                FROM papers
-                WHERE (
-                    COALESCE(added_from, '') = 'import'
-                    OR COALESCE(notes, '') LIKE 'Imported from %'
-                )
-                  AND COALESCE(openalex_resolution_status, '') IN (
-                    '',
-                    'pending',
-                    'unresolved',
-                    'pending_enrichment',
-                    'not_openalex_resolved'
-                  )
-                ORDER BY COALESCE(openalex_resolution_updated_at, fetched_at, '') DESC
-                LIMIT ?
-                """,
-                (lim,),
-            ).fetchall()
-            return [r["id"] for r in rows]
+            return imports_app.resolution_queue_ids(conn, unresolved_only=True, limit=lim)
 
         lim = max(1, min(int(req.limit or 1000), 10000))
         rows = conn.execute(

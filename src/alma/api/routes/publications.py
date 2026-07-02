@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from alma.api.deps import get_db, get_current_user
 from alma.api.helpers import raise_internal, row_to_paper_response
-from alma.core.sql_helpers import paper_date_sort_expr
+from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
 from alma.api.models import PaperResponse, ErrorResponse
 from alma.application import library as library_app
 from alma.application import authors as authors_app
@@ -105,7 +105,7 @@ def query_publications(
         # duplicate cards in the /papers listing.
         query_parts = [
             "SELECT p.* FROM papers p "
-            "WHERE COALESCE(p.canonical_paper_id, '') = ''"
+            f"WHERE {canonical_paper_filter('p')}"
         ]
         params = []
 
@@ -850,6 +850,33 @@ def get_paper_details(
     ).fetchall()
     paper["preprint_versions"] = [dict(r) for r in preprint_rows]
     return paper
+
+
+@router.post(
+    "/{paper_id}/detach",
+    summary="Promote a merged duplicate / component back to a standalone paper",
+    description=(
+        "Clears the structural links (canonical_paper_id for a dedup/import "
+        "duplicate twin; parent_paper_id + component_type for a part-of "
+        "component) so the row becomes a first-class paper again. Backs the "
+        "\"Not a duplicate\" / \"Not a child\" actions in the paper detail popup."
+    ),
+)
+def detach_paper(
+    paper_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    # Single gated write unit — the detach is one idempotent UPDATE. 404 is
+    # control flow (missing row) and propagates without retry.
+    result = run_write_unit(
+        db,
+        lambda: library_app.detach_paper_from_parent(db, paper_id),
+        label="detach_paper",
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    return result
 
 
 _NETWORK_CACHE_TTL_HOURS = 24

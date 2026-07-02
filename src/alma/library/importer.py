@@ -13,17 +13,23 @@ import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
+from difflib import SequenceMatcher
 from typing import Any, Dict, List, Optional
 
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     clean_display_text,
     generate_paper_id,
+    normalize_text,
     normalize_doi as _normalize_doi_core,
     resolve_existing_paper_id,
+    strong_identifiers_conflict,
 )
 
 logger = logging.getLogger(__name__)
+
+LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD = 0.70
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -35,8 +41,10 @@ class ImportResult:
 
     total: int = 0          # Total items found in source
     imported: int = 0       # Successfully imported
+    staged: int = 0         # Held for explicit review before Library save
     skipped: int = 0        # Skipped (duplicates)
     failed: int = 0         # Failed to import
+    parse_duplicates: int = 0  # Canonical-identity collapses dropped in parsing
     errors: List[str] = field(default_factory=list)   # Error messages
     items: List[dict] = field(default_factory=list)    # Imported items
 
@@ -44,8 +52,10 @@ class ImportResult:
         return {
             "total": self.total,
             "imported": self.imported,
+            "staged": self.staged,
             "skipped": self.skipped,
             "failed": self.failed,
+            "parse_duplicates": self.parse_duplicates,
             "errors": self.errors,
             "items": self.items,
         }
@@ -98,6 +108,7 @@ _LATEX_CHARS: List[tuple[str, str]] = [
     # Common symbols
     ('\\&', '&'), ('\\%', '%'), ('\\$', '$'),
     ('\\#', '#'), ('\\_', '_'),
+    ('\\textbar', '|'),
     # Dashes
     ('---', '\u2014'), ('--', '\u2013'),
     # Quotes
@@ -252,60 +263,51 @@ def import_bibtex(
     if collection_name:
         collection_id = _find_or_create_collection(conn, collection_name)
 
-    imported_refs: list[str] = []
+    postprocess_refs: list[str] = []
+
+    # Pre-pass (NO write gate): normalize entries and pre-compute fuzzy-title
+    # matches. The O(pool·items) dedup scan is read-only + CPU and must run
+    # before we hold the writer gate (40.4; write rule 2: gather then write).
+    prepared: list[tuple[dict, dict]] = []  # (entry, norm)
+    for entry in entries:
+        try:
+            norm = _normalize_bibtex_entry(entry)
+        except Exception as exc:
+            result.failed += 1
+            result.errors.append(f"Failed to import '{entry.get('key', 'unknown')}': {exc}")
+            continue
+        if not norm["title"]:
+            result.failed += 1
+            result.errors.append(f"Entry missing title: {entry.get('key', '?')}")
+            continue
+        prepared.append((entry, norm))
+    fuzzy_matches = _precompute_fuzzy_matches(conn, [n for _, n in prepared])
 
     # BibTeX was parsed locally above (no network) — the insert loop is the
     # write window; gate it (BEGIN IMMEDIATE + writer gate) instead of a raw
     # end-of-loop commit.
     with write_section(conn, label="import bibtex"):
-        for entry in entries:
+        for (entry, norm), fuzzy in zip(prepared, fuzzy_matches):
             try:
-                norm = _normalize_bibtex_entry(entry)
                 title = norm["title"]
-                if not title:
-                    result.failed += 1
-                    result.errors.append(f"Entry missing title: {entry.get('key', '?')}")
-                    continue
-
                 notes = f"Imported from BibTeX ({norm['entry_type']})"
 
-                # Duplicate check by progressively weaker keys: DOI -> OpenAlex ID
-                # -> exact title -> (year, normalised_title). If a tracked row
-                # already exists, promote that canonical row into Library instead
-                # of silently skipping the user import.
-                existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
-                if existing_id:
-                    paper_id, promoted = _promote_existing_import_target(
-                        conn,
-                        existing_id,
-                        added_from="import",
-                    )
-                    if promoted:
-                        imported_refs.append(paper_id)
-                        result.imported += 1
-                        result.items.append({"paper_id": paper_id, **norm})
-                    else:
-                        result.skipped += 1
-                else:
-                    paper_id = _create_library_paper(
-                        conn,
-                        title=title,
-                        authors=norm["authors"],
-                        doi=norm["doi"],
-                        author_id="import",
-                        notes=notes,
-                        rating=3,
-                        year=norm["year"],
-                        journal=norm["journal"],
-                        abstract=norm["abstract"],
-                        url=norm["url"],
-                    )
-                    imported_refs.append(paper_id)
-                    result.imported += 1
-                    result.items.append({"paper_id": paper_id, **norm})
+                paper_id, outcome = _import_or_stage_paper(
+                    conn,
+                    title=title,
+                    authors=norm["authors"],
+                    doi=norm["doi"],
+                    notes=notes,
+                    year=norm["year"],
+                    journal=norm["journal"],
+                    abstract=norm["abstract"],
+                    url=norm["url"],
+                    fuzzy_match=fuzzy,
+                )
+                _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
 
                 # Add to collection
-                if collection_id:
+                if collection_id and outcome != "staged":
                     _add_to_collection(
                         conn,
                         collection_id,
@@ -313,12 +315,13 @@ def import_bibtex(
                     )
 
                 # Import BibTeX keywords as local tags.
-                for tag_name in norm.get("keywords", []):
-                    _find_or_create_tag_and_assign(
-                        conn,
-                        tag_name,
-                        paper_id,
-                    )
+                if outcome != "staged":
+                    for tag_name in norm.get("keywords", []):
+                        _find_or_create_tag_and_assign(
+                            conn,
+                            tag_name,
+                            paper_id,
+                        )
 
             except Exception as exc:
                 result.failed += 1
@@ -329,7 +332,7 @@ def import_bibtex(
     _resolve_imported_authors_inline(conn)
 
     # Trigger background enrichment for newly imported publications
-    _trigger_background_enrichment(result, imported_refs)
+    _trigger_background_enrichment(result, postprocess_refs)
 
     return result
 
@@ -565,22 +568,32 @@ def import_zotero(
         zotero_collections_meta
     )
 
-    imported_refs: list[str] = []
+    postprocess_refs: list[str] = []
+
+    # Pre-pass (NO write gate): normalize items and pre-compute fuzzy-title
+    # matches before we hold the writer gate (40.4; gather then write).
+    prepared: list[tuple[dict, dict]] = []  # (item, norm)
+    for item in items:
+        try:
+            norm = _normalize_zotero_item(item)
+        except Exception as exc:
+            result.failed += 1
+            result.errors.append(f"Failed to import Zotero item '{item.get('key', '?')}': {exc}")
+            continue
+        if not norm["title"]:
+            result.failed += 1
+            result.errors.append(f"Zotero item missing title (key={item.get('key', '?')})")
+            continue
+        prepared.append((item, norm))
+    fuzzy_matches = _precompute_fuzzy_matches(conn, [n for _, n in prepared])
 
     # Zotero items were fetched above (network); the insert loop is local —
     # gate it (BEGIN IMMEDIATE + writer gate) instead of a raw end-of-loop
     # commit.
     with write_section(conn, label="import zotero"):
-        for item in items:
+        for (item, norm), fuzzy in zip(prepared, fuzzy_matches):
             try:
-                norm = _normalize_zotero_item(item)
                 title = norm["title"]
-                if not title:
-                    result.failed += 1
-                    result.errors.append(
-                        f"Zotero item missing title (key={item.get('key', '?')})"
-                    )
-                    continue
 
                 # Resolve membership keys to full "Parent / Child" paths. Drop any
                 # blanks (orphan keys whose collection metadata wasn't returned).
@@ -603,41 +616,22 @@ def import_zotero(
 
                 notes = f"Imported from Zotero ({norm['item_type']}){tag_info}{coll_info}"
 
-                # Duplicate check. Existing tracked rows should be promoted into the
-                # saved Library instead of being left as non-library duplicates.
-                existing_id = _find_existing_paper(conn, norm["doi"], "", title, norm.get("year"))
-                if existing_id:
-                    paper_id, promoted = _promote_existing_import_target(
-                        conn,
-                        existing_id,
-                        added_from="import",
-                    )
-                    if promoted:
-                        imported_refs.append(paper_id)
-                        result.imported += 1
-                        result.items.append({"paper_id": paper_id, **norm})
-                    else:
-                        result.skipped += 1
-                else:
-                    paper_id = _create_library_paper(
-                        conn,
-                        title=title,
-                        authors=norm["authors"],
-                        doi=norm["doi"],
-                        author_id="import",
-                        notes=notes.strip(),
-                        rating=3,
-                        year=norm["year"],
-                        journal=norm["journal"],
-                        abstract=norm["abstract"],
-                        url=norm["url"],
-                    )
-                    imported_refs.append(paper_id)
-                    result.imported += 1
-                    result.items.append({"paper_id": paper_id, **norm})
+                paper_id, outcome = _import_or_stage_paper(
+                    conn,
+                    title=title,
+                    authors=norm["authors"],
+                    doi=norm["doi"],
+                    notes=notes.strip(),
+                    year=norm["year"],
+                    journal=norm["journal"],
+                    abstract=norm["abstract"],
+                    url=norm["url"],
+                    fuzzy_match=fuzzy,
+                )
+                _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
 
                 # Add to local collection
-                if local_collection_id:
+                if local_collection_id and outcome != "staged":
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -647,23 +641,25 @@ def import_zotero(
                 # Create local collections mirroring Zotero collections. Names
                 # carry the full "Parent / Child" path so the Zotero hierarchy is
                 # preserved (ALMa's collections.name is flat + UNIQUE).
-                for coll_path in resolved_paths:
-                    mirror_coll_id = _find_or_create_collection(
-                        conn, coll_path, color="#8B5CF6"
-                    )
-                    _add_to_collection(
-                        conn,
-                        mirror_coll_id,
-                        paper_id,
-                    )
+                if outcome != "staged":
+                    for coll_path in resolved_paths:
+                        mirror_coll_id = _find_or_create_collection(
+                            conn, coll_path, color="#8B5CF6"
+                        )
+                        _add_to_collection(
+                            conn,
+                            mirror_coll_id,
+                            paper_id,
+                        )
 
                 # Import Zotero tags as local tags
-                for tag_name in norm.get("zotero_tags", []):
-                    _find_or_create_tag_and_assign(
-                        conn,
-                        tag_name,
-                        paper_id,
-                    )
+                if outcome != "staged":
+                    for tag_name in norm.get("zotero_tags", []):
+                        _find_or_create_tag_and_assign(
+                            conn,
+                            tag_name,
+                            paper_id,
+                        )
 
             except Exception as exc:
                 result.failed += 1
@@ -675,7 +671,7 @@ def import_zotero(
     _resolve_imported_authors_inline(conn)
 
     # Trigger background enrichment for newly imported publications
-    _trigger_background_enrichment(result, imported_refs)
+    _trigger_background_enrichment(result, postprocess_refs)
 
     return result
 
@@ -722,6 +718,318 @@ def _strip_ns(tag: str) -> str:
 _RDF_NS = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
 _RDF_ABOUT = f"{_RDF_NS}about"
 _RDF_RESOURCE = f"{_RDF_NS}resource"
+_DOI_IN_TEXT_RE = re.compile(r"(10\.\d{3,9}/[^\s\"']+)", flags=re.IGNORECASE)
+
+_ZOTERO_RDF_SKIP_TAGS = {
+    "attachment",
+    "collection",
+    "journal",
+    "li",
+    "memo",
+    "seq",
+}
+_ZOTERO_RDF_BIBLIO_TAGS = {
+    "article",
+    "book",
+    "booksection",
+    "chapter",
+    "document",
+    "proceedings",
+    "report",
+    "thesis",
+}
+_ZOTERO_RDF_SKIP_ITEM_TYPES = {
+    "annotation",
+    "attachment",
+    "note",
+}
+
+
+def _rdf_child_text(node: ET.Element, local_name: str) -> str:
+    for child in list(node):
+        if _strip_ns(child.tag).lower() == local_name.lower():
+            return (child.text or "").strip()
+    return ""
+
+
+def _rdf_child_texts(node: ET.Element, local_names: set[str]) -> list[str]:
+    names = {n.lower() for n in local_names}
+    values: list[str] = []
+    for child in list(node):
+        if _strip_ns(child.tag).lower() in names and (child.text or "").strip():
+            values.append((child.text or "").strip())
+    return values
+
+
+def _rdf_descendant_texts(node: ET.Element, local_names: set[str]) -> list[str]:
+    names = {n.lower() for n in local_names}
+    values: list[str] = []
+    for child in node.iter():
+        if child is node:
+            continue
+        if _strip_ns(child.tag).lower() in names and (child.text or "").strip():
+            values.append((child.text or "").strip())
+    return values
+
+
+def _rdf_all_texts(node: ET.Element) -> list[str]:
+    values: list[str] = []
+    for child in node.iter():
+        text = (child.text or "").strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _doi_from_text(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    raw_l = raw.lower()
+
+    if _rdf_is_http_url(raw):
+        if "doi.org/" in raw_l:
+            doi_match = _DOI_IN_TEXT_RE.search(raw)
+            if doi_match:
+                return _normalize_doi_value(doi_match.group(1).rstrip(".,;"))
+        if "arxiv.org" in raw_l:
+            match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", raw, flags=re.IGNORECASE)
+            if match:
+                return _normalize_doi_value(f"10.48550/arXiv.{match.group(1)}")
+        if "biorxiv.org" in raw_l or "medrxiv.org" in raw_l:
+            match = re.search(r"(10\.1101/[^\s/\"'<>]+)", raw, flags=re.IGNORECASE)
+            if match:
+                return _normalize_doi_value(match.group(1))
+        return ""
+
+    doi_match = _DOI_IN_TEXT_RE.search(raw)
+    if doi_match:
+        return _normalize_doi_value(doi_match.group(1).rstrip(".,;"))
+
+    if "arxiv" in raw_l:
+        match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", raw, flags=re.IGNORECASE)
+        if match:
+            return _normalize_doi_value(f"10.48550/arXiv.{match.group(1)}")
+    if "10.1101/" in raw_l:
+        match = re.search(r"(10\.1101/[^\s/\"'<>]+)", raw, flags=re.IGNORECASE)
+        if match:
+            return _normalize_doi_value(match.group(1))
+    return ""
+
+
+def _rdf_is_http_url(value: str) -> bool:
+    return value.lower().startswith(("http://", "https://"))
+
+
+def _rdf_identifier_metadata(node: ET.Element) -> tuple[str, str]:
+    """Return ``(doi, url)`` from Zotero RDF identifier-like fields."""
+    doi_candidates: list[tuple[int, str]] = []
+    url = ""
+
+    def _ranked_doi(value: str) -> None:
+        doi_value = _doi_from_text(value)
+        if not doi_value:
+            return
+        value_l = value.lower()
+        rank = 0
+        if _rdf_is_http_url(value) and "doi.org/" not in value_l:
+            rank = 1
+        doi_candidates.append((rank, doi_value))
+
+    for child in list(node):
+        ctag = _strip_ns(child.tag).lower()
+        if ctag in {"identifier", "doi"}:
+            candidates = [child.attrib.get(_RDF_RESOURCE, "").strip()]
+            candidates.extend(_rdf_all_texts(child))
+            for value in candidates:
+                if not value:
+                    continue
+                _ranked_doi(value)
+                if not url and _rdf_is_http_url(value):
+                    url = value
+        elif ctag in {"uri", "homepage"}:
+            value = (child.attrib.get(_RDF_RESOURCE) or child.text or "").strip()
+            if value and not url and _rdf_is_http_url(value):
+                url = value
+            if value:
+                _ranked_doi(value)
+
+    about = node.attrib.get(_RDF_ABOUT, "").strip()
+    if about:
+        if not url and _rdf_is_http_url(about):
+            url = about
+        _ranked_doi(about)
+    doi = sorted(doi_candidates, key=lambda item: item[0])[0][1] if doi_candidates else ""
+    return doi, url
+
+
+def _rdf_person_name(person: ET.Element) -> str:
+    surname = ""
+    given = ""
+    display = ""
+    for child in person.iter():
+        if child is person:
+            continue
+        ctag = _strip_ns(child.tag).lower()
+        ctext = (child.text or "").strip()
+        if not ctext:
+            continue
+        if ctag in {"surname", "familyname", "family-name", "family", "lastname"} and not surname:
+            surname = ctext
+        elif ctag in {"givenname", "given-name", "given", "firstname"} and not given:
+            given = ctext
+        elif ctag == "name" and not display:
+            display = ctext
+    if surname:
+        return clean_display_text(f"{surname}, {given}".strip().rstrip(","))
+    return clean_display_text(display)
+
+
+def _rdf_author_names(node: ET.Element) -> list[str]:
+    authors: list[str] = []
+    seen: set[str] = set()
+
+    def _append(name: str) -> None:
+        cleaned = clean_display_text((name or "").strip())
+        if cleaned and cleaned not in seen:
+            authors.append(cleaned)
+            seen.add(cleaned)
+
+    for child in list(node):
+        ctag = _strip_ns(child.tag).lower()
+        if ctag in {"creator", "author"} and (child.text or "").strip():
+            _append(child.text or "")
+        if ctag in {"authors", "creator", "contributor"}:
+            for person in child.iter():
+                if _strip_ns(person.tag).lower() == "person":
+                    _append(_rdf_person_name(person))
+
+    return authors
+
+
+def _is_zotero_rdf_bibliographic_node(node: ET.Element) -> bool:
+    tag = _strip_ns(node.tag).lower()
+    item_type = _rdf_child_text(node, "itemType").strip().lower()
+    if tag in _ZOTERO_RDF_SKIP_TAGS or item_type in _ZOTERO_RDF_SKIP_ITEM_TYPES:
+        return False
+    # Zotero API imports every non-attachment/non-note item. RDF exports put
+    # some valid items in generic rdf:Description nodes, so itemType is the
+    # canonical signal when present.
+    if item_type:
+        return True
+    return tag in _ZOTERO_RDF_BIBLIO_TAGS
+
+
+# Top-level Zotero RDF resources that act as an item's *container* (venue) when
+# referenced via ``dcterms:isPartOf`` — a journal for articles, a book/
+# proceedings for chapters. Kept broader than the item-skip set so a book that
+# other items are part of can be recognised as their container (40.1).
+_ZOTERO_RDF_CONTAINER_TAGS = {"journal", "book", "periodical", "proceedings"}
+
+
+def _zotero_rdf_container_map(root: ET.Element) -> dict[str, dict[str, str]]:
+    """Map top-level container resources referenced by dcterms:isPartOf.
+
+    Zotero RDF stores a paper's venue as a separate top-level resource
+    (``bib:Journal`` for an article, ``bib:Book``/``bib:Proceedings`` for a
+    chapter) that items point at via ``dcterms:isPartOf rdf:resource="<uri>"``.
+    A container may legitimately carry a DOI; whether an item may *inherit* that
+    DOI is decided later by how many items share the container (40.1), not here.
+    """
+    containers: dict[str, dict[str, str]] = {}
+    for node in root:
+        tag = _strip_ns(node.tag).lower()
+        if tag not in _ZOTERO_RDF_CONTAINER_TAGS:
+            continue
+        about = node.attrib.get(_RDF_ABOUT, "").strip()
+        if not about:
+            continue
+        doi, url = _rdf_identifier_metadata(node)
+        containers[about] = {
+            "title": _rdf_child_text(node, "title"),
+            "doi": doi,
+            "url": url,
+        }
+    return containers
+
+
+def _rdf_ispartof_container_refs(node: ET.Element) -> list[str]:
+    """Return the container URIs a bibliographic node references via
+    ``dcterms:isPartOf rdf:resource``.
+
+    Used to count how many items share each container so a shared container's
+    DOI is never inherited (40.1) — inheriting it would stamp the same DOI on
+    every sibling chapter and collapse them under the ``doi:`` dedup key.
+    """
+    refs: list[str] = []
+    for child in list(node):
+        if _strip_ns(child.tag).lower() != "ispartof":
+            continue
+        ref = child.attrib.get(_RDF_RESOURCE, "").strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _rdf_ispartof_metadata(
+    node: ET.Element,
+    containers_by_uri: dict[str, dict[str, str]],
+    container_ref_counts: Optional[dict[str, int]] = None,
+) -> tuple[str, str, str]:
+    """Return ``(journal_or_container, doi, url)`` from dcterms:isPartOf.
+
+    A referenced container's DOI is inherited as the item's own DOI ONLY when
+    that container is referenced by exactly one bibliographic item in the file
+    (40.1). A container shared by multiple items (one book with several
+    chapters, one journal issue with several articles) still contributes its
+    title/url as venue metadata but NEVER its DOI — otherwise every sharing item
+    inherits the same DOI and the ``doi:`` dedup key silently collapses them
+    into one, dropping the rest. Nested (inline) containers are inherently
+    unique to the item and are always inherited.
+    """
+    counts = container_ref_counts or {}
+    journal = ""
+    doi = ""
+    url = ""
+    for child in list(node):
+        ctag = _strip_ns(child.tag).lower()
+        if ctag not in {"ispartof", "publicationtitle", "journal", "container"}:
+            continue
+        if (child.text or "").strip() and not journal:
+            journal = (child.text or "").strip()
+
+        ref = child.attrib.get(_RDF_RESOURCE, "").strip()
+        if ref and ref in containers_by_uri:
+            container = containers_by_uri[ref]
+            journal = journal or container.get("title", "")
+            url = url or container.get("url", "")
+            # Only a uniquely-referenced container may lend its DOI to the item.
+            if not doi and counts.get(ref, 0) <= 1:
+                doi = container.get("doi", "")
+            continue
+
+        title_candidates = _rdf_descendant_texts(child, {"title"})
+        if title_candidates and not journal:
+            journal = title_candidates[0]
+        child_doi, child_url = _rdf_identifier_metadata(child)
+        doi = doi or child_doi
+        url = url or child_url
+        for container_node in child.iter():
+            if container_node is child:
+                continue
+            if _strip_ns(container_node.tag).lower() not in {
+                "book",
+                "journal",
+                "periodical",
+                "proceedings",
+            }:
+                continue
+            if not journal:
+                journal = _rdf_child_text(container_node, "title")
+            container_doi, container_url = _rdf_identifier_metadata(container_node)
+            doi = doi or container_doi
+            url = url or container_url
+    return journal.strip(), _normalize_doi_value(doi), url.strip()
 
 
 def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dict[str, list[str]]]:
@@ -799,35 +1107,66 @@ def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dic
     return path_by_key, paths_by_item
 
 
-def _parse_zotero_rdf(xml_content: str) -> list[dict]:
+def _parse_zotero_rdf(xml_content: str) -> tuple[list[dict], int]:
     """Parse a Zotero RDF export into normalized import records.
 
     The parser is intentionally tolerant across RDF variants and relies on
     common Dublin Core / Biblio fields. ``<z:Collection>`` nodes are parsed
     separately to attach each item's collection memberships (as resolved
     "Parent / Child" path strings) to the returned records.
+
+    Returns ``(items, parse_duplicates)`` where ``parse_duplicates`` counts the
+    canonical-identity collapses dropped during dedup — surfaced so silent data
+    loss can never hide behind a smaller count (40.1; "No silent failures").
     """
     root = ET.fromstring(xml_content)
     _, paths_by_item = _parse_zotero_rdf_collections(root)
+    containers_by_uri = _zotero_rdf_container_map(root)
+
+    # Count how many bibliographic items reference each container. A container
+    # referenced by an item is a venue/parent (not an import candidate itself),
+    # and a container shared by more than one item must not lend its DOI (40.1).
+    container_ref_counts: dict[str, int] = {}
+    for node in root:
+        if not _is_zotero_rdf_bibliographic_node(node):
+            continue
+        for ref in _rdf_ispartof_container_refs(node):
+            if ref in containers_by_uri:
+                container_ref_counts[ref] = container_ref_counts.get(ref, 0) + 1
+    referenced_container_uris = {u for u, c in container_ref_counts.items() if c > 0}
+
     items: list[dict] = []
 
-    for node in root.iter():
-        # Skip collection nodes outright -- they are taxonomy, not papers.
-        # Without this, a collection's <dc:title> child was previously
-        # captured as if it were a paper title and produced ghost rows.
-        if _strip_ns(node.tag).lower() == "collection":
+    for node in root:
+        # Zotero RDF mixes bibliographic items with attachment nodes, notes,
+        # collection taxonomy, and journal/container resources. Only the
+        # top-level bibliographic items should become import candidates.
+        if not _is_zotero_rdf_bibliographic_node(node):
             continue
 
-        # Most non-item nodes are skipped early; items generally contain title.
+        # A book/proceedings other items are part of is their container, not its
+        # own paper — surfaced as venue metadata on the children, skipped here.
+        about_uri = node.attrib.get(_RDF_ABOUT, "").strip()
+        if about_uri and about_uri in referenced_container_uris:
+            continue
+
         title = ""
-        authors: list[str] = []
         year: Optional[int] = None
         journal = ""
-        doi = ""
-        url = ""
         abstract = ""
         keywords: list[str] = []
         item_type = _strip_ns(node.tag)
+        zotero_item_type = _rdf_child_text(node, "itemType").strip()
+        doi, url = _rdf_identifier_metadata(node)
+        authors = _rdf_author_names(node)
+        partof_journal, partof_doi, partof_url = _rdf_ispartof_metadata(
+            node,
+            containers_by_uri,
+            container_ref_counts,
+        )
+        journal = partof_journal
+        doi = doi or partof_doi
+        url = url or partof_url
 
         for child in list(node):
             ctag = _strip_ns(child.tag).lower()
@@ -835,8 +1174,6 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
 
             if ctag == "title" and ctext:
                 title = ctext
-            elif ctag == "creator" and ctext:
-                authors.append(ctext)
             elif ctag in {"date", "issued", "created"} and ctext and year is None:
                 match = re.search(r"(\d{4})", ctext)
                 if match:
@@ -844,28 +1181,14 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
             elif ctag in {"ispartof", "publicationtitle", "journal", "container"} and ctext and not journal:
                 journal = ctext
             elif ctag in {"identifier", "doi"} and ctext:
-                ctext_l = ctext.lower()
-                if "doi" in ctext_l and not doi:
-                    # Zotero RDF encodes DOIs as "DOI 10.xxx" or "DOI: 10.xxx"
-                    # (sometimes with a URL prefix). Extract the bare DOI so the
-                    # stored value matches every other import path.
-                    doi_match = re.search(r"(10\.\d{3,}/[^\s\"'<>]+)", ctext)
-                    if doi_match:
-                        doi = _normalize_doi_value(doi_match.group(1))
-                    else:
-                        doi = _normalize_doi_value(ctext)
-                elif "arxiv" in ctext_l and not doi:
-                    m = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", ctext, flags=re.IGNORECASE)
-                    if m:
-                        doi = _normalize_doi_value(f"10.48550/arXiv.{m.group(1)}")
-                elif "10.1101/" in ctext_l and not doi:
-                    m = re.search(r"(10\.1101/[^\s/\"'<>]+)", ctext, flags=re.IGNORECASE)
-                    if m:
-                        doi = _normalize_doi_value(m.group(1))
-                elif ctext_l.startswith("http") and not url:
+                if not doi:
+                    doi = _doi_from_text(ctext)
+                if ctext.lower().startswith("http") and not url:
                     url = ctext
             elif ctag in {"uri", "homepage", "link"} and not url:
-                url = (child.attrib.get(_RDF_RESOURCE) or ctext or "").strip()
+                candidate_url = (child.attrib.get(_RDF_RESOURCE) or ctext or "").strip()
+                if _rdf_is_http_url(candidate_url):
+                    url = candidate_url
             elif ctag in {"description", "abstract", "abstractnote"} and ctext and not abstract:
                 abstract = ctext
             elif ctag in {"subject", "keyword"} and ctext:
@@ -874,20 +1197,8 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
         if not title:
             continue
 
-        # Filter obvious collection/container resources from RDF dumps.
-        if item_type.lower() in {"description", "seq", "li"}:
-            continue
-
         if not doi and url:
-            url_l = url.lower()
-            if "arxiv.org" in url_l:
-                m = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", url, flags=re.IGNORECASE)
-                if m:
-                    doi = _normalize_doi_value(f"10.48550/arXiv.{m.group(1)}")
-            elif "biorxiv.org" in url_l:
-                m = re.search(r"(10\.1101/[^\s/\"'<>]+)", url, flags=re.IGNORECASE)
-                if m:
-                    doi = _normalize_doi_value(m.group(1))
+            doi = _doi_from_text(url)
 
         # Resolve this item's collection memberships from the URI map built
         # at the top of the function. Items without an rdf:about (rare) get
@@ -904,21 +1215,27 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
             "url": url.strip(),
             "abstract": abstract.strip(),
             "keywords": keywords,
-            "item_type": item_type,
+            "item_type": zotero_item_type or item_type,
             "zotero_collections": zotero_collections,
         })
 
-    # Deduplicate by title (RDF can contain resource aliases). When two
-    # nodes alias the same paper, merge their zotero_collections so we
-    # don't drop membership info on whichever node happens to be second.
+    # Deduplicate by canonical identity (RDF can contain resource aliases).
+    # DOI-backed records with the same title but different DOIs are distinct
+    # works/releases and must not be collapsed. Each real collapse is counted so
+    # the caller can surface it — silent parse-time loss is the defect (40.1).
     deduped: dict[str, dict] = {}
+    parse_duplicates = 0
     for item in items:
-        key = item["title"].strip().lower()
+        doi_key = _normalize_doi_value(item.get("doi"))
+        title_key = normalize_text(item.get("title", ""))
+        year_key = item.get("year") if item.get("year") is not None else ""
+        key = f"doi:{doi_key.lower()}" if doi_key else f"title:{year_key}:{title_key}"
         if not key:
             continue
         if key not in deduped:
             deduped[key] = item
             continue
+        parse_duplicates += 1
         existing_paths = deduped[key].get("zotero_collections") or []
         seen = set(existing_paths)
         for path in item.get("zotero_collections") or []:
@@ -926,7 +1243,7 @@ def _parse_zotero_rdf(xml_content: str) -> list[dict]:
                 existing_paths.append(path)
                 seen.add(path)
         deduped[key]["zotero_collections"] = existing_paths
-    return list(deduped.values())
+    return list(deduped.values()), parse_duplicates
 
 
 def import_zotero_rdf(
@@ -937,12 +1254,13 @@ def import_zotero_rdf(
     """Import papers from a Zotero RDF export file content."""
     result = ImportResult()
     try:
-        items = _parse_zotero_rdf(rdf_content)
+        items, parse_duplicates = _parse_zotero_rdf(rdf_content)
     except Exception as exc:
         result.errors.append(f"Zotero RDF parse error: {exc}")
         return result
 
     result.total = len(items)
+    result.parse_duplicates = parse_duplicates
     if not items:
         return result
 
@@ -950,47 +1268,34 @@ def import_zotero_rdf(
     if collection_name:
         local_collection_id = _find_or_create_collection(conn, collection_name)
 
-    imported_refs: list[str] = []
+    postprocess_refs: list[str] = []
+
+    # Items are already normalized dicts; pre-compute fuzzy-title matches BEFORE
+    # the write gate (40.4). No DOI/OpenAlex-id items get a match; the rest None.
+    fuzzy_matches = _precompute_fuzzy_matches(conn, items)
 
     # RDF was parsed locally above (no network); gate the insert loop instead
     # of a raw end-of-loop commit.
     with write_section(conn, label="import zotero rdf"):
-        for item in items:
+        for item, fuzzy in zip(items, fuzzy_matches):
             try:
                 title = item["title"]
                 notes = f"Imported from Zotero RDF ({item.get('item_type', 'item')})"
-                existing_id = _find_existing_paper(conn, item.get("doi", ""), "", title, item.get("year"))
-                if existing_id:
-                    paper_id, promoted = _promote_existing_import_target(
-                        conn,
-                        existing_id,
-                        added_from="import",
-                    )
-                    if promoted:
-                        imported_refs.append(paper_id)
-                        result.imported += 1
-                        result.items.append({"paper_id": paper_id, **item})
-                    else:
-                        result.skipped += 1
-                else:
-                    paper_id = _create_library_paper(
-                        conn,
-                        title=title,
-                        authors=item.get("authors", ""),
-                        doi=item.get("doi", ""),
-                        author_id="import",
-                        notes=notes,
-                        rating=3,
-                        year=item.get("year"),
-                        journal=item.get("journal"),
-                        abstract=item.get("abstract"),
-                        url=item.get("url"),
-                    )
-                    imported_refs.append(paper_id)
-                    result.imported += 1
-                    result.items.append({"paper_id": paper_id, **item})
+                paper_id, outcome = _import_or_stage_paper(
+                    conn,
+                    title=title,
+                    authors=item.get("authors", ""),
+                    doi=item.get("doi", ""),
+                    notes=notes,
+                    year=item.get("year"),
+                    journal=item.get("journal"),
+                    abstract=item.get("abstract"),
+                    url=item.get("url"),
+                    fuzzy_match=fuzzy,
+                )
+                _record_import_outcome(result, postprocess_refs, paper_id, outcome, item)
 
-                if local_collection_id:
+                if local_collection_id and outcome != "staged":
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -1004,30 +1309,32 @@ def import_zotero_rdf(
                 # The single paper_id is reused, so a paper in N Zotero
                 # collections produces 1 papers row + N collection_items rows
                 # (never N papers rows).
-                for coll_path in item.get("zotero_collections") or []:
-                    if not coll_path:
-                        continue
-                    mirror_coll_id = _find_or_create_collection(
-                        conn, coll_path, color="#8B5CF6"
-                    )
-                    _add_to_collection(
-                        conn,
-                        mirror_coll_id,
-                        paper_id,
-                    )
+                if outcome != "staged":
+                    for coll_path in item.get("zotero_collections") or []:
+                        if not coll_path:
+                            continue
+                        mirror_coll_id = _find_or_create_collection(
+                            conn, coll_path, color="#8B5CF6"
+                        )
+                        _add_to_collection(
+                            conn,
+                            mirror_coll_id,
+                            paper_id,
+                        )
 
-                for tag_name in item.get("keywords", []):
-                    _find_or_create_tag_and_assign(
-                        conn,
-                        tag_name,
-                        paper_id,
-                    )
+                if outcome != "staged":
+                    for tag_name in item.get("keywords", []):
+                        _find_or_create_tag_and_assign(
+                            conn,
+                            tag_name,
+                            paper_id,
+                        )
             except Exception as exc:
                 result.failed += 1
                 result.errors.append(f"Failed to import RDF item '{item.get('title', '?')}': {exc}")
 
     _resolve_imported_authors_inline(conn)
-    _trigger_background_enrichment(result, imported_refs)
+    _trigger_background_enrichment(result, postprocess_refs)
     return result
 
 
@@ -1090,13 +1397,471 @@ def _find_existing_paper(
         return hit
 
     if year is None and title:
-        row = conn.execute(
-            "SELECT id FROM papers WHERE LOWER(title) = LOWER(?)", (title,)
-        ).fetchone()
-        if row:
-            return row["id"] if isinstance(row, sqlite3.Row) else row[0]
+        # Year-less exact-title fallback. It must obey the SAME conflicting-
+        # strong-identifier guard as resolve_existing_paper_id's title/year
+        # branch (40.3): an import with DOI X must never merge into a same-title
+        # row carrying a different DOI Y. Subordinate (dedup-twin) rows are
+        # excluded from matching but followed up to their canonical paper.
+        rows = conn.execute(
+            """
+            SELECT id, doi, openalex_id, COALESCE(canonical_paper_id, '') AS canonical_paper_id
+            FROM papers
+            WHERE LOWER(title) = LOWER(?)
+            """,
+            (title,),
+        ).fetchall()
+        for row in rows:
+            if strong_identifiers_conflict(
+                incoming_doi=doi,
+                incoming_openalex_id=openalex_id,
+                candidate_doi=row["doi"],
+                candidate_openalex_id=row["openalex_id"],
+            ):
+                continue
+            canonical = str(row["canonical_paper_id"] or "").strip()
+            return canonical or (row["id"] if isinstance(row, sqlite3.Row) else row[0])
 
     return None
+
+
+@dataclass
+class _FuzzyTitleMatch:
+    """Closest existing standalone paper to a title-only import candidate."""
+
+    confidence: float = 0.0
+    paper_id: Optional[str] = None
+
+
+def _best_fuzzy_title_match(
+    conn: sqlite3.Connection,
+    title: str,
+    year: Optional[int] = None,
+) -> _FuzzyTitleMatch:
+    """Return the closest existing REAL paper by fuzzy title, with its id (40.4).
+
+    The candidate pool is gated to savable, first-class rows only:
+      - standalone (``standalone_paper_sql`` — no canonical/component twin), so a
+        merged-away duplicate can't be the match;
+      - ``status`` in ``library``/``tracked`` — never a removed/dismissed row;
+      - NOT an unconfirmed staged import — junk from a prior bad import can't
+        push a new junk title over the threshold.
+    A stable ``ORDER BY`` under the ``LIMIT`` makes it deterministic past 5k
+    papers. This is read-only + CPU, so it is meant to run in a PRE-PASS before
+    the import write gate, never inside it (write rule 2: gather then write).
+    """
+    title_norm = normalize_text(title)
+    if not title_norm:
+        return _FuzzyTitleMatch()
+
+    params: list[Any] = []
+    year_clause = ""
+    if year is not None:
+        year_clause = "AND (p.year IS NULL OR ABS(p.year - ?) <= 1)"
+        params.append(year)
+
+    rows = conn.execute(
+        f"""
+        SELECT p.id, p.title
+        FROM papers p
+        WHERE COALESCE(TRIM(p.title), '') <> ''
+          AND {standalone_paper_sql("p")}
+          AND LOWER(COALESCE(p.status, '')) IN ('library', 'tracked')
+          AND NOT {unconfirmed_staged_import_sql("p")}
+          {year_clause}
+        ORDER BY COALESCE(p.added_at, '') DESC, p.id
+        LIMIT 5000
+        """,
+        tuple(params),
+    ).fetchall()
+    best = _FuzzyTitleMatch()
+    for row in rows:
+        candidate = row["title"] if isinstance(row, sqlite3.Row) else row[1]
+        candidate_norm = normalize_text(str(candidate or ""))
+        if not candidate_norm:
+            continue
+        ratio = SequenceMatcher(None, title_norm, candidate_norm).ratio()
+        if ratio > best.confidence:
+            best = _FuzzyTitleMatch(
+                confidence=ratio,
+                paper_id=str(row["id"] if isinstance(row, sqlite3.Row) else row[0]),
+            )
+        if best.confidence >= 1.0:
+            break
+    return best
+
+
+def _precompute_fuzzy_matches(
+    conn: sqlite3.Connection,
+    records: List[dict],
+) -> List[Optional[_FuzzyTitleMatch]]:
+    """Fuzzy-match every title-only record BEFORE the gated write section (40.4).
+
+    The O(pool·items) ``SequenceMatcher`` scan is read-only + CPU; running it
+    while the import holds the writer gate stalls every other writer. Returns a
+    list aligned to ``records``; identified records (DOI or OpenAlex id) map to
+    ``None`` because their staging decision never needs a fuzzy score.
+    """
+    out: List[Optional[_FuzzyTitleMatch]] = []
+    for rec in records:
+        doi = _normalize_doi_value(rec.get("doi"))
+        openalex_id = str(rec.get("openalex_id") or "").strip()
+        title = str(rec.get("title") or "").strip()
+        if doi or openalex_id or not title:
+            out.append(None)
+            continue
+        out.append(_best_fuzzy_title_match(conn, title, rec.get("year")))
+    return out
+
+
+def _should_stage_import(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    doi: str,
+    openalex_id: str = "",
+    year: Optional[int] = None,
+    fuzzy_match: Optional[_FuzzyTitleMatch] = None,
+) -> tuple[bool, _FuzzyTitleMatch]:
+    """Decide whether a title-only import must be STAGED for review.
+
+    D4 default: identified imports (a DOI or OpenAlex id) always save directly
+    to Library. For a title-only import (no strong identifier) the fuzzy title
+    match decides (40.5, reverted):
+      - a CONFIDENT match (>= ``LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD`` to an
+        existing paper) is resolved as a DUPLICATE by the caller — linked under
+        that paper (hidden as a separate card) and reversible via the paper
+        popup's "Not a duplicate" action — so it is NOT staged;
+      - a weak / no match is STAGED for review (the reviewer decides).
+    ``fuzzy_match`` may be precomputed OUTSIDE the write gate (40.4); when absent
+    it is computed here (read-only).
+    """
+    if _normalize_doi_value(doi) or (openalex_id or "").strip():
+        return False, _FuzzyTitleMatch(confidence=1.0)
+    match = fuzzy_match if fuzzy_match is not None else _best_fuzzy_title_match(conn, title, year)
+    confident_duplicate = bool(match.paper_id) and match.confidence >= LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD
+    return (not confident_duplicate), match
+
+
+def _create_staged_import_paper(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    authors: str,
+    doi: str = "",
+    notes: Optional[str] = None,
+    year: Optional[int] = None,
+    journal: Optional[str] = None,
+    abstract: Optional[str] = None,
+    url: Optional[str] = None,
+    title_confidence: float = 0.0,
+    matched_paper_id: Optional[str] = None,
+) -> str:
+    paper_id = generate_paper_id()
+    now = datetime.utcnow().isoformat()
+    if matched_paper_id and title_confidence >= LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD:
+        # 40.5: a title-only import that fuzzy-matches an existing paper is held
+        # for review (never auto-saved beside its likely duplicate). Record the
+        # matched row id so the ImportsTab reviewer sees the candidate.
+        reason = f"near_duplicate_candidate:{matched_paper_id}"
+    else:
+        reason = (
+            "low_confidence_import_staged:"
+            f"no_doi_no_openalex_title_confidence_{title_confidence:.2f}_below_"
+            f"{LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD:.2f}"
+        )
+    # 44.7: route through the canonical dynamic-kwargs helper instead of a
+    # hand-rolled ~19-column INSERT. `added_at` stays unset (a staged import is
+    # NOT yet saved to Library) — create_paper doesn't default it, so it's NULL.
+    from alma.application import library as library_app
+
+    library_app.create_paper(
+        conn,
+        id=paper_id,
+        author_id="import",
+        title=title,
+        year=year,
+        abstract=abstract,
+        url=url,
+        doi=doi,
+        cited_by_count=0,
+        journal=journal,
+        authors=authors,
+        fetched_at=now,
+        status="tracked",
+        notes=notes,
+        rating=0,
+        added_from="import",
+        openalex_resolution_status="unresolved",
+        openalex_resolution_reason=reason,
+        openalex_resolution_updated_at=now,
+    )
+    # create_paper deliberately doesn't own the commit — keep this site's wrapper
+    # (no-ops inside the import loop's write_section; commits when standalone).
+    commit_unless_gated(conn, label="_create_staged_import_paper")
+    return paper_id
+
+
+def _existing_import_row(conn: sqlite3.Connection, paper_id: str) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT id, status, added_from, added_at, openalex_resolution_reason,
+               doi, openalex_id, authors, year, journal, abstract, url
+        FROM papers
+        WHERE id = ?
+        """,
+        (paper_id,),
+    ).fetchone()
+
+
+# Resolution-reason prefixes stamped on a staged (review-before-save) import.
+# `low_confidence_import_staged:` is the original narrow-threshold marker;
+# `near_duplicate_candidate:` is the 40.5 near-duplicate stage.
+_STAGED_IMPORT_REASON_PREFIXES = (
+    "low_confidence_import_staged:",
+    "near_duplicate_candidate:",
+)
+
+
+def unconfirmed_staged_import_sql(alias: str = "") -> str:
+    """SQL predicate: an import row still STAGED for review (not yet saved).
+
+    Mirrors ``_is_unconfirmed_staged_import`` for queue / pool queries (40.2,
+    40.4): imported provenance, not in Library, and either never stamped with an
+    ``added_at`` (staging inserts NULL) or still carrying a staging resolution
+    reason. This is the SINGLE source of truth for "row is staged" in SQL — the
+    import queue lists it and the fuzzy pool excludes it, so both agree.
+    ``alias`` is the papers-table alias ('' when selecting from unaliased
+    ``papers``).
+    """
+    p = f"{alias}." if alias else ""
+    like_clauses = " OR ".join(
+        f"COALESCE({p}openalex_resolution_reason, '') LIKE '{prefix}%'"
+        for prefix in _STAGED_IMPORT_REASON_PREFIXES
+    )
+    return f"""(
+        LOWER(COALESCE({p}status, '')) <> 'library'
+        AND LOWER(COALESCE({p}added_from, '')) = 'import'
+        AND (
+            COALESCE(TRIM({p}added_at), '') = ''
+            OR {like_clauses}
+        )
+    )"""
+
+
+def _is_unconfirmed_staged_import(row: sqlite3.Row) -> bool:
+    status = str(row["status"] or "").strip().lower()
+    added_from = str(row["added_from"] or "").strip().lower()
+    added_at = str(row["added_at"] or "").strip()
+    reason = str(row["openalex_resolution_reason"] or "").strip()
+    return (
+        status != "library"
+        and added_from == "import"
+        and (not added_at or reason.startswith(_STAGED_IMPORT_REASON_PREFIXES))
+    )
+
+
+def _merge_missing_import_metadata(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    *,
+    authors: str,
+    doi: str = "",
+    year: Optional[int] = None,
+    journal: Optional[str] = None,
+    abstract: Optional[str] = None,
+    url: Optional[str] = None,
+    openalex_id: str = "",
+) -> None:
+    """Fill blank metadata on an existing non-Library import target."""
+    row = _existing_import_row(conn, paper_id)
+    if not row:
+        return
+
+    updates: list[str] = []
+    params: list[Any] = []
+
+    def _fill(column: str, value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return
+        current = row[column]
+        if current is None or (isinstance(current, str) and not current.strip()):
+            updates.append(f"{column} = ?")
+            params.append(value)
+
+    _fill("authors", authors)
+    _fill("doi", _normalize_doi_value(doi))
+    _fill("openalex_id", openalex_id)
+    _fill("year", year)
+    _fill("journal", journal)
+    _fill("abstract", abstract)
+    _fill("url", url)
+
+    if not updates:
+        return
+    updates.append("updated_at = ?")
+    params.append(datetime.utcnow().isoformat())
+    conn.execute(
+        f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
+        (*params, paper_id),
+    )
+
+
+def _import_or_stage_paper(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    authors: str,
+    doi: str = "",
+    notes: Optional[str] = None,
+    rating: int = 3,
+    year: Optional[int] = None,
+    journal: Optional[str] = None,
+    abstract: Optional[str] = None,
+    url: Optional[str] = None,
+    openalex_id: str = "",
+    fuzzy_match: Optional[_FuzzyTitleMatch] = None,
+) -> tuple[str, str]:
+    """Apply D4 import semantics and return ``(paper_id, outcome)``.
+
+    Outcomes are ``imported`` (new Library row or promoted tracked row),
+    ``staged`` (low-confidence title-only row held for confirmation), and
+    ``skipped`` (already saved Library row).
+    """
+    existing_id = _find_existing_paper(conn, doi, openalex_id, title, year)
+    if existing_id:
+        existing_row = _existing_import_row(conn, existing_id)
+        incoming_identified = bool(_normalize_doi_value(doi) or (openalex_id or "").strip())
+        if existing_row and _is_unconfirmed_staged_import(existing_row) and not incoming_identified:
+            return existing_id, "skipped"
+        if existing_row and str(existing_row["status"] or "").strip().lower() != "library":
+            _merge_missing_import_metadata(
+                conn,
+                existing_id,
+                authors=authors,
+                doi=doi,
+                year=year,
+                journal=journal,
+                abstract=abstract,
+                url=url,
+                openalex_id=openalex_id,
+            )
+        paper_id, promoted = _promote_existing_import_target(
+            conn,
+            existing_id,
+            added_from="import",
+        )
+        return paper_id, "imported" if promoted else "skipped"
+
+    from alma.application import library as library_app
+
+    duplicate_id = library_app.find_library_duplicate_for_metadata(
+        conn,
+        title=title,
+        authors=authors,
+        year=year,
+        doi=doi,
+        openalex_id=openalex_id,
+    )
+    if duplicate_id:
+        return duplicate_id, "skipped"
+
+    should_stage, match = _should_stage_import(
+        conn,
+        title=title,
+        doi=doi,
+        openalex_id=openalex_id,
+        year=year,
+        fuzzy_match=fuzzy_match,
+    )
+    if should_stage:
+        paper_id = _create_staged_import_paper(
+            conn,
+            title=title,
+            authors=authors,
+            doi=doi,
+            notes=notes,
+            year=year,
+            journal=journal,
+            abstract=abstract,
+            url=url,
+            title_confidence=match.confidence,
+            matched_paper_id=match.paper_id,
+        )
+        return paper_id, "staged"
+
+    # A confident (>= threshold) title-only fuzzy match resolves as a DUPLICATE
+    # (40.5, reverted). Create the import row carrying its own metadata, link it
+    # UNDER the matched paper via canonical_paper_id (so it's hidden as a
+    # separate Library card but stays detachable via "Not a duplicate"), and
+    # promote the matched paper into Library — the user imported this work
+    # intending to save it. The twin is NOT postprocessed (see
+    # `_record_import_outcome`): enriching a title-only duplicate could hand it a
+    # DOI and split it back out by accident.
+    incoming_identified = bool(_normalize_doi_value(doi) or (openalex_id or "").strip())
+    if not incoming_identified and match.paper_id and match.confidence >= LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD:
+        twin_id = _create_library_paper(
+            conn,
+            title=title,
+            authors=authors,
+            doi=doi,
+            author_id="import",
+            notes=notes,
+            rating=rating,
+            year=year,
+            journal=journal,
+            abstract=abstract,
+            url=url,
+        )
+        library_app.mark_duplicate_paper_ignored(
+            conn,
+            twin_id,
+            match.paper_id,
+            reason=f"import_title_duplicate:{match.paper_id}",
+        )
+        _promote_existing_import_target(conn, match.paper_id, added_from="import")
+        return twin_id, "linked_duplicate"
+
+    paper_id = _create_library_paper(
+        conn,
+        title=title,
+        authors=authors,
+        doi=doi,
+        author_id="import",
+        notes=notes,
+        rating=rating,
+        year=year,
+        journal=journal,
+        abstract=abstract,
+        url=url,
+    )
+    return paper_id, "imported"
+
+
+def _record_import_outcome(
+    result: ImportResult,
+    postprocess_refs: list[str],
+    paper_id: str,
+    outcome: str,
+    item: dict,
+) -> None:
+    if outcome == "imported":
+        postprocess_refs.append(paper_id)
+        result.imported += 1
+    elif outcome == "linked_duplicate":
+        # Resolved as a duplicate of an existing paper (40.5): counted as
+        # imported, but the merged twin is deliberately NOT postprocessed —
+        # enriching a title-only duplicate could hand it a DOI and split it out.
+        result.imported += 1
+    elif outcome == "staged":
+        postprocess_refs.append(paper_id)
+        result.staged += 1
+    else:
+        result.skipped += 1
+    result.items.append({"paper_id": paper_id, "outcome": outcome, **item})
 
 
 def _create_library_paper(
@@ -1133,35 +1898,36 @@ def _create_library_paper(
     paper_id = generate_paper_id()
     now = datetime.utcnow().isoformat()
 
-    conn.execute(
-        """INSERT INTO papers
-           (id, author_id, title, year, abstract, url, doi,
-            cited_by_count, journal, authors, fetched_at, status, notes, rating,
-            added_at, added_from,
-            openalex_resolution_status, openalex_resolution_reason, openalex_resolution_updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'library', ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            paper_id,
-            author_id,
-            title,
-            year,
-            abstract,
-            url,
-            doi,
-            journal,
-            authors,
-            now,
-            notes,
-            rating,
-            now,
-            "import",
-            "pending_enrichment",
-            "imported_metadata_only",
-            now,
-        ),
+    # 44.7: route through the canonical dynamic-kwargs helper instead of a
+    # hand-rolled ~19-column INSERT. This site sets added_at=now (it IS a saved
+    # Library row) and status='library'.
+    from alma.application import library as library_app
+
+    library_app.create_paper(
+        conn,
+        id=paper_id,
+        author_id=author_id,
+        title=title,
+        year=year,
+        abstract=abstract,
+        url=url,
+        doi=doi,
+        cited_by_count=0,
+        journal=journal,
+        authors=authors,
+        fetched_at=now,
+        status="library",
+        notes=notes,
+        rating=rating,
+        added_at=now,
+        added_from="import",
+        openalex_resolution_status="pending_enrichment",
+        openalex_resolution_reason="imported_metadata_only",
+        openalex_resolution_updated_at=now,
     )
     # Caller-owns-transaction: inside the import loops' write_section this
     # no-ops (the loop owns the commit); standalone callers commit with retry.
+    # create_paper deliberately doesn't own the commit, so this wrapper stays.
     commit_unless_gated(conn, label="_create_library_paper")
 
     # Same chain hook the Library / Feed / Discovery insert sites use:
@@ -1208,15 +1974,19 @@ def _promote_existing_import_target(
     from alma.application import library as library_app
 
     current_rating = int((row["rating"] if isinstance(row, sqlite3.Row) else row[2]) or 0) or 3
+    save_id, duplicate_ignored = library_app.resolve_library_save_target(conn, paper_id)
+    if duplicate_ignored:
+        return save_id, False
+
     library_app.add_to_library(
         conn,
-        paper_id,
+        save_id,
         rating=current_rating,
         notes=None,
         added_from=added_from,
         override_added_from=True,
     )
-    return paper_id, True
+    return save_id, True
 
 
 def _add_to_collection(
@@ -1317,7 +2087,7 @@ def _trigger_background_enrichment(
     Only runs when the import actually added new papers.  Failures are
     logged but never propagated -- enrichment is a best-effort step.
     """
-    if result.imported <= 0:
+    if result.imported + result.staged <= 0:
         return
 
     def _read_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:

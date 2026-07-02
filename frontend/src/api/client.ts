@@ -79,11 +79,20 @@ function repairDeep(value: unknown): unknown {
   return value
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  })
+// `background: true` marks a timer-driven poll (not user presence). It sends
+// `X-Alma-Poll: 1` so the backend idle clock ignores the request (41.1) — an
+// open-but-untouched tab must not pin the app "active" and starve background
+// enrichment. User-initiated fetches (navigation, clicks, mutations) omit it.
+type RequestOptions = RequestInit & { background?: boolean }
+
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
+  const { background, headers: optHeaders, ...rest } = options ?? {}
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(optHeaders as Record<string, string> | undefined),
+  }
+  if (background) headers['X-Alma-Poll'] = '1'
+  const response = await fetch(`${BASE_URL}${path}`, { ...rest, headers })
   if (!response.ok) {
     const errorType = response.headers.get('content-type') || ''
     let message = response.statusText
@@ -117,7 +126,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   baseURL: BASE_URL,
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, opts?: { background?: boolean }) =>
+    request<T>(path, opts?.background ? { background: true } : undefined),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>
@@ -243,10 +253,14 @@ export interface HealthDimension {
   scope: 'corpus' | 'library' | string
   /** Subset of the gap that no op can fix (tried + terminal), or null if N/A. */
   exhausted: number | null
-  /** Measurement state (H-2 / H-7): 'measured' normally; 'error' when the
+  /** 41.3: subset of the gap that is enqueued-but-never-attempted background work
+   *  ("N queued — runs when idle"), or null if N/A. Doesn't count against severity. */
+  queued?: number | null
+  /** Measurement state (H-2 / H-7 / 41.3): 'measured' normally; 'error' when the
    *  assessor raised (count null); 'not_applicable' when the feature is off;
-   *  'insufficient_data' when the universe is empty (onboarding, NOT a failure). */
-  state?: 'measured' | 'error' | 'not_applicable' | 'insufficient_data'
+   *  'insufficient_data' when the universe is empty; 'queued' when the gap is
+   *  (nearly) all background work the pipeline simply hasn't reached yet. */
+  state?: 'measured' | 'error' | 'not_applicable' | 'insufficient_data' | 'queued'
 }
 
 /** Per-view freshness for the unified health snapshot (H-8): corpus and authors
@@ -422,6 +436,15 @@ export interface HealthOperationsResponse {
     openalex_credits_remaining: number | null
     reserved_user_calls: number
     last_credit_abort: {
+      job_id: string
+      operation_key: string | null
+      message: string | null
+      finished_at: string | null
+      openalex_credits_remaining: number | null
+    } | null
+    // 42.6: the most recent background op that yielded to user activity, so a
+    // paused system reads as "paused, resumes when idle", not dead.
+    last_pause?: {
       job_id: string
       operation_key: string | null
       message: string | null
@@ -1451,6 +1474,23 @@ export function queueAuthorHistoryBackfill(authorId: string): Promise<{ status?:
  */
 export function getPaperById(paperId: string): Promise<Publication> {
   return api.get<Publication>(`/papers/${encodeURIComponent(paperId)}/details`)
+}
+
+/** Result of promoting a merged duplicate / component back to standalone. */
+export interface DetachPaperResult {
+  detached: boolean
+  was_duplicate: boolean
+  was_component: boolean
+}
+
+/**
+ * Promote a merged duplicate / part-of component back to a standalone paper —
+ * the "Not a duplicate" / "Not a child" action in the paper detail popup. Clears
+ * canonical_paper_id (duplicate twin) and parent_paper_id + component_type
+ * (component) so the row is a first-class paper again.
+ */
+export function detachPaper(paperId: string): Promise<DetachPaperResult> {
+  return api.post<DetachPaperResult>(`/papers/${encodeURIComponent(paperId)}/detach`, {})
 }
 
 export function listPapers(params?: {
@@ -3197,6 +3237,7 @@ export interface GraphData {
 export interface ImportResult {
   total: number
   imported: number
+  staged: number
   skipped: number
   failed: number
   errors: string[]
@@ -3266,6 +3307,8 @@ export interface ZoteroCollection {
 export interface UnresolvedImportedPublication {
   id: string
   title: string
+  status?: string
+  added_from?: string
   doi?: string
   url?: string
   openalex_id?: string
@@ -3302,6 +3345,11 @@ export interface ResolveImportedOpenAlexResponse {
   total?: number
   message?: string
   summary?: Record<string, unknown>
+}
+
+export interface ConfirmStagedImportResponse {
+  status: string
+  paper_id: string
 }
 
 // ── Similarity types ──
@@ -3904,16 +3952,16 @@ export interface FeedStatusResponse {
   new_count?: number
 }
 
-export function getFeedStatus(): Promise<FeedStatusResponse> {
-  return api.get('/feed/status')
+export function getFeedStatus(opts?: { background?: boolean }): Promise<FeedStatusResponse> {
+  return api.get('/feed/status', opts)
 }
 
 export interface DiscoveryStatusResponse {
   last_refresh_at: string | null
 }
 
-export function getDiscoveryStatus(): Promise<DiscoveryStatusResponse> {
-  return api.get('/discovery/status')
+export function getDiscoveryStatus(opts?: { background?: boolean }): Promise<DiscoveryStatusResponse> {
+  return api.get('/discovery/status', opts)
 }
 
 export function listFeedMonitors(): Promise<FeedMonitor[]> {
@@ -4142,6 +4190,14 @@ export function listUnresolvedImportedPublications(limit = 200): Promise<Unresol
   return api.get<UnresolvedImportedListResponse>(`/library/import/unresolved?limit=${limit}`)
 }
 
+/** Save a reviewed low-confidence imported publication to Library. */
+export function confirmStagedImport(paperId: string): Promise<ConfirmStagedImportResponse> {
+  return api.post<ConfirmStagedImportResponse>(
+    `/library/import/staged/${encodeURIComponent(paperId)}/confirm`,
+    {},
+  )
+}
+
 /** Resolve unresolved imported publications via OpenAlex. */
 export function resolveImportedPublicationsOpenAlex(params?: {
   unresolved_only?: boolean
@@ -4285,8 +4341,8 @@ export interface BootstrapData {
   onboarding: { completed: boolean; has_owner: boolean }
 }
 
-export function getBootstrap(): Promise<BootstrapData> {
-  return api.get<BootstrapData>('/bootstrap')
+export function getBootstrap(opts?: { background?: boolean }): Promise<BootstrapData> {
+  return api.get<BootstrapData>('/bootstrap', opts)
 }
 
 // ── Onboarding (first-run flow) ──

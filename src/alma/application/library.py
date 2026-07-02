@@ -6,12 +6,14 @@ Routes are thin transport callers to these functions.
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from datetime import datetime
 from typing import Optional
 
-from alma.core.utils import normalize_doi, resolve_existing_paper_id
+from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +226,225 @@ def find_paper_by_title(db: sqlite3.Connection, title: str) -> Optional[dict]:
     """Find a paper by exact title match."""
     row = db.execute("SELECT * FROM papers WHERE title = ?", (title,)).fetchone()
     return dict(row) if row else None
+
+
+# Name connectives + particles that are NOT identifying — they recur across
+# unrelated author strings ("and", "the", and the nobiliary particles
+# "van/von/de/la…"), so counting them as overlap made "John Smith and Mary Jones"
+# match "Alice and Bob" on the literal word "and" (44.9). Compared post-
+# `normalize_title_key` (lowercased), so entries here are lowercase.
+_AUTHOR_STOPWORDS = frozenset(
+    {
+        "and", "the",
+        "van", "von", "der", "den", "de", "del", "della", "di", "da", "das", "dos",
+        "la", "le", "el", "les", "du", "ten", "ter", "af", "av",
+        "bin", "ibn", "al", "abu",
+        "jr", "sr",
+    }
+)
+
+
+def _author_tokens(authors: Optional[str]) -> set[str]:
+    text = str(authors or "").strip()
+    if not text:
+        return set()
+    return {
+        token
+        for token in (normalize_title_key(part) for part in re.findall(r"[A-Za-z][A-Za-z'\-]{2,}", text))
+        if len(token) >= 3 and token not in _AUTHOR_STOPWORDS
+    }
+
+
+def _authors_overlap(left: Optional[str], right: Optional[str]) -> bool:
+    """Do two author strings plausibly name a shared author?
+
+    Weak single-token matching (44.9) let a shared given name — or the literal
+    connective "and" in legacy strings — trigger a false duplicate. Require the
+    evidence to be either a surname-like shared token (len >= 4, so an initial
+    or a stray particle can't carry it alone) OR at least two shared tokens.
+    "E. van Hove" vs "Emily van Hove" matches on `hove`; "John Smith and Mary
+    Jones" vs "Alice and Bob" no longer matches on `and`.
+    """
+    shared = _author_tokens(left) & _author_tokens(right)
+    if not shared:
+        return False
+    surname_like = any(len(token) >= 4 for token in shared)
+    return surname_like or len(shared) >= 2
+
+
+def find_library_duplicate_for_metadata(
+    db: sqlite3.Connection,
+    *,
+    title: Optional[str],
+    authors: Optional[str] = None,
+    year: Optional[int] = None,
+    doi: Optional[str] = None,
+    openalex_id: Optional[str] = None,
+    exclude_id: Optional[str] = None,
+) -> Optional[str]:
+    """Return an existing saved Library row matching paper metadata.
+
+    The canonical identity check delegates to ``resolve_existing_paper_id``.
+    A conservative title-only fallback is allowed only when author tokens also
+    overlap, which catches staged imports without DOI/OpenAlex metadata while
+    avoiding broad title-only merges.
+    """
+    duplicate_id = resolve_existing_paper_id(
+        db,
+        openalex_id=openalex_id,
+        doi=doi,
+        title=title,
+        year=year,
+        exclude_id=exclude_id,
+        status=LIBRARY_STATUS,
+    )
+    if duplicate_id:
+        return duplicate_id
+
+    title_key = normalize_title_key(title)
+    if not title_key:
+        return None
+
+    exclude_clause = "AND id != ?" if exclude_id else ""
+    params: list[object] = [LIBRARY_STATUS]
+    if exclude_id:
+        params.append(exclude_id)
+    doi_norm = normalize_doi(doi)
+    openalex_norm = str(openalex_id or "").strip()
+    rows = db.execute(
+        f"""
+        SELECT id, title, year, authors, doi, openalex_id
+        FROM papers
+        WHERE status = ?
+          {exclude_clause}
+          AND {canonical_paper_filter('papers')}
+          AND COALESCE(TRIM(title), '') <> ''
+        LIMIT 5000
+        """,
+        tuple(params),
+    ).fetchall()
+    for row in rows:
+        if normalize_title_key(row["title"]) != title_key:
+            continue
+        row_year = row["year"]
+        if year is not None and row_year is not None and int(year) != int(row_year):
+            continue
+        row_openalex_id = str(row["openalex_id"] or "").strip()
+        if openalex_norm and row_openalex_id and row_openalex_id != openalex_norm:
+            continue
+        row_doi = normalize_doi(row["doi"])
+        if doi_norm and row_doi and row_doi.lower() != doi_norm.lower():
+            continue
+        if _authors_overlap(authors, row["authors"]):
+            return str(row["id"])
+    return None
+
+
+def find_library_duplicate_for_paper(db: sqlite3.Connection, paper_id: str) -> Optional[str]:
+    """Return an existing saved Library row that duplicates ``paper_id``."""
+    paper = get_paper(db, paper_id)
+    if not paper:
+        return None
+    return find_library_duplicate_for_metadata(
+        db,
+        title=paper.get("title"),
+        authors=paper.get("authors"),
+        year=paper.get("year"),
+        doi=paper.get("doi"),
+        openalex_id=paper.get("openalex_id"),
+        exclude_id=paper_id,
+    )
+
+
+def mark_duplicate_paper_ignored(
+    db: sqlite3.Connection,
+    paper_id: str,
+    canonical_id: str,
+    *,
+    reason: str,
+) -> bool:
+    """Stamp a duplicate row as canonicalized without deleting provenance."""
+    if not paper_id or not canonical_id or paper_id == canonical_id:
+        return False
+    now = datetime.utcnow().isoformat()
+    cursor = db.execute(
+        """
+        UPDATE papers
+        SET canonical_paper_id = ?,
+            openalex_resolution_reason = CASE
+                WHEN COALESCE(TRIM(openalex_resolution_reason), '') = '' THEN ?
+                ELSE openalex_resolution_reason
+            END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (canonical_id, reason, now, paper_id),
+    )
+    return cursor.rowcount > 0
+
+
+def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> Optional[dict]:
+    """Promote a merged duplicate / part-of component back to a standalone paper.
+
+    The single canonical "undo the subordination" op. A row is subordinate — and
+    therefore hidden by ``standalone_paper_sql`` — when EITHER:
+      * ``canonical_paper_id`` points at another row (a dedup / import-duplicate
+        twin, surfaced under the parent as a "duplicate"), or
+      * ``parent_paper_id`` / ``component_type`` is set (a part-of component:
+        figure / SI / dataset / peer-review, surfaced as a "child").
+
+    Clearing all three link columns in one place makes the row a first-class
+    paper again (the "Not a duplicate" / "Not a child" user action). Idempotent:
+    a row with no links returns ``detached=False``; a missing row returns
+    ``None`` so the caller can raise 404.
+    """
+    row = db.execute(
+        "SELECT canonical_paper_id, parent_paper_id, component_type FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    was_duplicate = bool(str(row["canonical_paper_id"] or "").strip())
+    was_component = bool(str(row["parent_paper_id"] or "").strip()) or bool(
+        str(row["component_type"] or "").strip()
+    )
+    if not (was_duplicate or was_component):
+        return {"detached": False, "was_duplicate": False, "was_component": False}
+    db.execute(
+        """
+        UPDATE papers
+        SET canonical_paper_id = NULL,
+            parent_paper_id = NULL,
+            component_type = NULL,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (datetime.utcnow().isoformat(), paper_id),
+    )
+    return {
+        "detached": True,
+        "was_duplicate": was_duplicate,
+        "was_component": was_component,
+    }
+
+
+def resolve_library_save_target(db: sqlite3.Connection, paper_id: str) -> tuple[str, bool]:
+    """Return the row that should receive a Library save.
+
+    If ``paper_id`` duplicates an already-saved Library row, the incoming row is
+    marked with ``canonical_paper_id`` and the existing Library row is returned.
+    The boolean is True when the incoming row was ignored as a duplicate.
+    """
+    duplicate_id = find_library_duplicate_for_paper(db, paper_id)
+    if not duplicate_id:
+        return paper_id, False
+    mark_duplicate_paper_ignored(
+        db,
+        paper_id,
+        duplicate_id,
+        reason=f"duplicate_library_save_ignored:{duplicate_id}",
+    )
+    return duplicate_id, True
 
 
 def create_paper(db: sqlite3.Connection, **kwargs) -> str:
