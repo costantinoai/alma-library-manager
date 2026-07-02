@@ -59,7 +59,7 @@ export function ImportDialog({ open, onOpenChange, onImportComplete }: ImportDia
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Import Papers</DialogTitle>
           <DialogDescription>
@@ -105,7 +105,6 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [mode, setMode] = useState<'file' | 'text'>('file')
   const [file, setFile] = useState<File | null>(null)
   const [text, setText] = useState('')
-  const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
   const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
@@ -169,8 +168,8 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
     setError(null)
     try {
       const res = mode === 'file' && file
-        ? await importBibtexFile(file, collectionName || undefined)
-        : await importBibtexText(text, collectionName || undefined)
+        ? await importBibtexFile(file)
+        : await importBibtexText(text)
       if (isImportQueued(res)) {
         setQueued(res)
         // Notify parent so it can refresh Library views when the background
@@ -178,7 +177,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
         onImportComplete?.()
       } else {
         setResult(res)
-        if (res.imported > 0) onImportComplete?.()
+        if (res.imported + res.staged > 0) onImportComplete?.()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed')
@@ -259,21 +258,6 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
         />
       )}
 
-      {/* Collection name */}
-      <div>
-        <label className="mb-1 block text-sm font-medium text-slate-700">
-          Collection name (optional)
-        </label>
-        <Input
-          value={collectionName}
-          onChange={(e) => setCollectionName(e.target.value)}
-          placeholder="e.g. My Papers"
-        />
-        <p className="mt-1 text-xs text-slate-400">
-          Imported papers will be added to this collection. Leave empty to skip.
-        </p>
-      </div>
-
       {preflight && <ImportPreflightDisplay preflight={preflight} />}
 
       {/* Error */}
@@ -320,7 +304,6 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [libraryType, setLibraryType] = useState<'user' | 'group'>('user')
   const [collections, setCollections] = useState<ZoteroCollection[] | null>(null)
   const [selectedCollectionKey, setSelectedCollectionKey] = useState<string | null>(null)
-  const [collectionName, setCollectionName] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
@@ -363,7 +346,6 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         api_key: apiKey.trim(),
         library_type: libraryType,
         collection_key: selectedCollectionKey,
-        collection_name: collectionName || undefined,
       }))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import review failed')
@@ -387,14 +369,13 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         api_key: apiKey.trim(),
         library_type: libraryType,
         collection_key: selectedCollectionKey,
-        collection_name: collectionName || undefined,
       })
       if (isImportQueued(res)) {
         setQueued(res)
         onImportComplete?.()
       } else {
         setResult(res)
-        if (res.imported > 0) onImportComplete?.()
+        if (res.imported + res.staged > 0) onImportComplete?.()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Zotero import failed')
@@ -528,23 +509,6 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         </div>
       )}
 
-      {/* Local collection name */}
-      {collections !== null && (
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">
-            Local collection name (optional)
-          </label>
-          <Input
-            value={collectionName}
-            onChange={(e) => {
-              setCollectionName(e.target.value)
-              setPreflight(null)
-            }}
-            placeholder="e.g. From Zotero"
-          />
-        </div>
-      )}
-
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
@@ -584,7 +548,6 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
 function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [file, setFile] = useState<File | null>(null)
-  const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
   const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
@@ -642,13 +605,13 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
     setQueued(null)
     setError(null)
     try {
-      const res = await importZoteroRdfFile(file as File, collectionName || undefined)
+      const res = await importZoteroRdfFile(file as File)
       if (isImportQueued(res)) {
         setQueued(res)
         onImportComplete?.()
       } else {
         setResult(res)
-        if (res.imported > 0) onImportComplete?.()
+        if (res.imported + res.staged > 0) onImportComplete?.()
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Zotero RDF import failed')
@@ -695,17 +658,6 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
           accept=".rdf,application/rdf+xml,text/xml,application/xml"
           className="hidden"
           onChange={handleFileSelect}
-        />
-      </div>
-
-      <div>
-        <label className="mb-1 block text-sm font-medium text-slate-700">
-          Collection name (optional)
-        </label>
-        <Input
-          value={collectionName}
-          onChange={(e) => setCollectionName(e.target.value)}
-          placeholder="e.g. From Zotero RDF"
         />
       </div>
 
@@ -818,10 +770,11 @@ function ImportResultDisplay({ result }: { result: ImportResult }) {
         <CheckCircle className="h-5 w-5 text-success-600" />
         <span className="font-medium text-alma-800">Import Complete</span>
       </div>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <StatBox label="Total" value={result.total} />
         <StatBox label="Imported" value={result.imported} color="green" />
-        <StatBox label="Skipped" value={result.skipped} color="yellow" />
+        <StatBox label="Staged" value={result.staged} color="yellow" />
+        <StatBox label="Skipped" value={result.skipped} />
         <StatBox label="Failed" value={result.failed} color="red" />
       </div>
       {result.errors.length > 0 && (

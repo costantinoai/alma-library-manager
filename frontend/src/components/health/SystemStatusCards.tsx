@@ -600,7 +600,7 @@ export function SystemStatusCards() {
       {/* Centered per-component detail — what's healthy / how it's configured,
           or the degraded issues + one-click remediation. One Dialog, no route. */}
       <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenComp(null)}>
-        <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto bg-surface-1">
+        <DialogContent className="max-w-lg bg-surface-1">
           {openComp ? (
             <>
               <DialogHeader>

@@ -56,6 +56,7 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
+import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
@@ -148,17 +149,6 @@ function readStoredValueVersioned<T extends string>(
   return readStoredValue(key, validValues, fallback)
 }
 
-const SOURCE_COLORS: Record<string, string> = {
-  import: 'bg-indigo-100 text-indigo-700',
-  feed: 'bg-info-100 text-info-700',
-  discovery: 'bg-violet-100 text-violet-700',
-  discovery_save: 'bg-violet-100 text-violet-700',
-  discovery_like: 'bg-violet-100 text-violet-700',
-  discovery_manual: 'bg-violet-100 text-violet-700',
-  manual: 'bg-surface-2 text-slate-600',
-  library_similarity: 'bg-teal-100 text-teal-700',
-  online_search: 'bg-cyan-100 text-cyan-700',
-}
 
 const SOURCE_LABELS: Record<string, string> = {
   import: 'Import',
@@ -1015,7 +1005,7 @@ function SavedCompactTable({
         return (
           <Badge
             variant="secondary"
-            className={`text-[10px] ${SOURCE_COLORS[src] ?? 'bg-surface-2 text-slate-600'}`}
+            className={`text-[10px] ${SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR}`}
           >
             {SOURCE_LABELS[src] ?? src}
           </Badge>

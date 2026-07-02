@@ -8,6 +8,14 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import type { LabelMode, ColorBy, SizeBy, AuthorColorBy, AuthorSizeBy } from './GraphPanel'
 import type { GraphPhysicsConfig } from './ForceGraph'
 
+// Cluster-chip shortcut limits (44.3). The dropdown is the complete control;
+// these only bound the quick-pick toggle row. Corpus maps carry far more
+// clusters, so their shortcut is shorter. `CLUSTER_DROPDOWN_LIMIT` caps the
+// dropdown purely to keep an absurd corpus from rendering thousands of items.
+const CORPUS_CLUSTER_TOGGLE_LIMIT = 12
+const LIBRARY_CLUSTER_TOGGLE_LIMIT = 18
+const CLUSTER_DROPDOWN_LIMIT = 80
+
 interface ClusterSummary {
   id: number
   label: string
@@ -624,6 +632,33 @@ export function GraphControls({
               semantics inherited from Radix. The pill variant on Toggle
               shares its selected palette with `StatusBadge tone="accent"` —
               do not override `data-[state=on]` here. */}
+          {/* The dropdown is the COMPLETE control — it lists every cluster so
+              none is unreachable. The toggle row below is only a shortcut,
+              sliced to `clusterToggleLimit`; before 44.3 the dropdown was hidden
+              unless clusters.length > 18 while the corpus toggles sliced to 12,
+              so clusters 13–18 could be selected from neither. Radix Select
+              scrolls fine at any length. */}
+          {clusters.length >= 2 && onClusterSelect && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              <span className="font-medium">Cluster focus</span>
+              <Select
+                value={selectedClusterId != null ? String(selectedClusterId) : 'all'}
+                onValueChange={(value) => onClusterSelect(value === 'all' ? null : Number(value))}
+              >
+                <SelectTrigger className="h-8 min-w-[260px] max-w-full text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All clusters</SelectItem>
+                  {clusters.slice(0, CLUSTER_DROPDOWN_LIMIT).map((cluster) => (
+                    <SelectItem key={cluster.id} value={String(cluster.id)}>
+                      {cluster.label} ({cluster.size})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <ToggleGroup
             type="single"
             value={selectedClusterId != null ? String(selectedClusterId) : ''}
@@ -633,7 +668,7 @@ export function GraphControls({
             }}
             className="flex flex-wrap justify-start gap-1.5"
           >
-            {clusters.slice(0, 18).map((cluster) => {
+            {clusters.slice(0, includeCorpus ? CORPUS_CLUSTER_TOGGLE_LIMIT : LIBRARY_CLUSTER_TOGGLE_LIMIT).map((cluster) => {
               const badgeLabel = cluster.label
               return (
                 <ToggleGroupItem

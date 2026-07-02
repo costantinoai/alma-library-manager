@@ -24,10 +24,12 @@ const ROOT = join(process.cwd(), 'src')
 function isAllowlisted(rel: string): boolean {
   // All primitive definitions live under components/ui/.
   if (rel.startsWith('components/ui/')) return true
-  // PaperCard owns SIGNAL_META — a legitimate data palette of signal dot colors.
-  if (rel === 'components/shared/PaperCard.tsx') return true
   // This guard file names the banned classes in its own patterns.
   if (rel === 'test/surface-guard.test.ts') return true
+  // Categorical data palettes (signal dots, source chips, category icons) now
+  // live in the single `lib/palette.ts` module (44.5) — a `.ts` file, which
+  // this `.tsx`-only walk never scans. No component may spell a raw hue: they
+  // import the named maps from that one source instead.
   return false
 }
 
@@ -39,9 +41,13 @@ const BANNED: Array<{ name: string; re: RegExp }> = [
   { name: 'aliased surface token', re: /\bbg-alma-(content|chrome)(-elev)?\b/g },
   { name: 'legacy paper surface', re: /\bbg-alma-paper\b/g },
   // Raw semantic colors — must route through success/warning/critical/info.
+  // The full CHROMATIC Tailwind palette is banned (44.5): the old list only
+  // covered emerald|amber|rose|sky|red|green, so a hand-rolled `bg-blue-50`
+  // callout (44.4) slipped straight through. `slate` stays exempt (the neutral
+  // TEXT ramp); genuine data-category palettes are exempted per-file above.
   {
     name: 'raw semantic color',
-    re: /\b(bg|text|border|ring|fill|stroke|divide)-(emerald|amber|rose|sky|red|green)-\d{2,3}\b/g,
+    re: /\b(bg|text|border|ring|fill|stroke|divide)-(red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g,
   },
   // Arbitrary hex in a utility — must be a token.
   { name: 'arbitrary hex', re: /\b(bg|text|border|ring|fill|stroke)-\[#[0-9a-fA-F]{3,8}\]/g },

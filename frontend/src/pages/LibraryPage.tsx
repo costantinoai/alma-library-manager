@@ -9,7 +9,8 @@ import {
   UploadCloud,
 } from 'lucide-react'
 
-import { getLibraryWorkflowSummary, getPaperById, type Publication, updateReadingStatus } from '@/api/client'
+import { getApiErrorMessage, getLibraryWorkflowSummary, getPaperById, type Publication, updateReadingStatus } from '@/api/client'
+import { errorToast } from '@/hooks/useToast'
 import { PaperCard } from '@/components/shared'
 import { PageTour, LIBRARY_TOUR } from '@/components/onboarding'
 import { PaperDetailPanel } from '@/components/discovery'
@@ -139,6 +140,8 @@ export function LibraryPage() {
     queryFn: () => getPaperById(deepLinkPaperId!),
     enabled: !!deepLinkPaperId,
     staleTime: 30_000,
+    // Fail fast: a bad `?paper=<id>` should surface, not silently retry (44.6).
+    retry: 1,
   })
   const handledPaperParamRef = useRef<string | null>(null)
   useEffect(() => {
@@ -147,12 +150,20 @@ export function LibraryPage() {
       return
     }
     if (handledPaperParamRef.current === deepLinkPaperId) return
+    // A 404 / fetch error must be LOUD, not a silent no-op (44.6): toast, drop
+    // the bad param so the URL is clean, and mark it handled so it can't refire.
+    if (deepLinkPaperQuery.isError) {
+      handledPaperParamRef.current = deepLinkPaperId
+      errorToast('Paper not found', getApiErrorMessage(deepLinkPaperQuery.error))
+      clearDeepLinkParam('paper')
+      return
+    }
     const pub = deepLinkPaperQuery.data
-    if (!pub) return // still fetching, or not found — wait
+    if (!pub) return // still fetching — wait
     handledPaperParamRef.current = deepLinkPaperId
     setSelectedPaper(pub)
     setDetailOpen(true)
-  }, [deepLinkPaperId, deepLinkPaperQuery.data])
+  }, [deepLinkPaperId, deepLinkPaperQuery.data, deepLinkPaperQuery.isError, deepLinkPaperQuery.error])
 
   // Drop a deep-link param from the URL while preserving the rest, so the same
   // item can be reopened from search after the user closes its view.

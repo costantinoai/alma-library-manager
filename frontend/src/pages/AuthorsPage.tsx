@@ -197,6 +197,15 @@ export function AuthorsPage() {
   // param is cleared on close — re-triggers.
   const requestedAuthorId = route.params.get('author')
   const handledAuthorParamRef = useRef<string | null>(null)
+  // Drop the ?author deep-link param while preserving the rest, so the same
+  // author can be reopened from search later. Shared by the not-found error
+  // path (below) and the dialog-close handler (44.6).
+  const clearAuthorDeepLinkParam = () => {
+    if (!route.params.get('author')) return
+    const nextParams = new URLSearchParams(route.params)
+    nextParams.delete('author')
+    window.location.hash = buildHashRoute('authors', Object.fromEntries(nextParams))
+  }
   useEffect(() => {
     if (!requestedAuthorId) {
       handledAuthorParamRef.current = null
@@ -204,10 +213,20 @@ export function AuthorsPage() {
     }
     if (handledAuthorParamRef.current === requestedAuthorId) return
     const author = authorsById.get(requestedAuthorId)
-    if (!author) return // list still loading, or unknown id — retry when authors arrive
-    handledAuthorParamRef.current = requestedAuthorId
-    openDetail(author)
-  }, [requestedAuthorId, authorsById])
+    if (author) {
+      handledAuthorParamRef.current = requestedAuthorId
+      openDetail(author)
+      return
+    }
+    // Not in the map. Wait while the list is still loading; once it has
+    // SUCCESSFULLY loaded and the id is still absent, that's a bad deep-link —
+    // surface it loudly and drop the param instead of silently hanging (44.6).
+    if (authorsQuery.isSuccess && !authorsQuery.isFetching) {
+      handledAuthorParamRef.current = requestedAuthorId
+      errorToast('Author not found', 'That author is no longer in your list.')
+      clearAuthorDeepLinkParam()
+    }
+  }, [requestedAuthorId, authorsById, authorsQuery.isSuccess, authorsQuery.isFetching])
 
   // Single shared router for the needs-attention sub-dialogs. The
   // section's row buttons AND each followed-author card's warning
@@ -356,11 +375,7 @@ export function AuthorsPage() {
             // Drop the ?author deep-link param on close so the SAME author can
             // be reopened from search later (a repeat click re-sets the param,
             // which the effect above then acts on). Other params are preserved.
-            if (route.params.get('author')) {
-              const nextParams = new URLSearchParams(route.params)
-              nextParams.delete('author')
-              window.location.hash = buildHashRoute('authors', Object.fromEntries(nextParams))
-            }
+            clearAuthorDeepLinkParam()
           }
         }}
         onDeleted={() => {

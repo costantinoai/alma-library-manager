@@ -10,6 +10,7 @@ import { PaperActionBar, type PaperReaction } from '@/components/discovery/Paper
 import { StarRating } from '@/components/StarRating'
 import { trackInteraction } from '@/api/client'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { formatPercent, formatPaperDate } from '@/lib/format'
 import { byWeightedDesc } from '@/lib/sort'
@@ -168,17 +169,26 @@ function parseAuthorNames(value?: string | null): string[] {
 
 // ── Signal labels & colors ──
 
-const SIGNAL_META: Record<string, { label: string; color: string; description: string }> = {
-  source_relevance:    { label: 'Source Relevance',    color: 'bg-alma-500',    description: 'Position in retrieval results (1st = highest)' },
-  topic_score:         { label: 'Topic Match',         color: 'bg-emerald-500', description: 'Topic overlap with your rated papers' },
-  text_similarity:     { label: 'Text Similarity',     color: 'bg-sky-500',     description: 'Semantic similarity to your top-rated papers' },
-  author_affinity:     { label: 'Author Affinity',     color: 'bg-violet-500',  description: 'Author overlap with papers you follow' },
-  journal_affinity:    { label: 'Journal Affinity',    color: 'bg-indigo-400',  description: 'Published in a journal you read' },
-  recency_boost:       { label: 'Recency',             color: 'bg-amber-500',   description: 'Publication recency (newer = higher)' },
-  citation_quality:    { label: 'Citation Quality',    color: 'bg-orange-400',  description: 'Citation count quality indicator' },
-  feedback_adj:        { label: 'Your Feedback',       color: 'bg-rose-400',    description: 'Adjusted based on your past feedback' },
-  preference_affinity: { label: 'Preference Match',    color: 'bg-fuchsia-400', description: 'Affinity learned from your accumulated feedback interactions' },
-  usefulness_boost:    { label: 'Usefulness',          color: 'bg-teal-500',    description: 'Rewards timely, credible, and less redundant papers' },
+// Label + description only. Dot color comes from the centralized SIGNAL_COLORS
+// palette (44.5) so PaperCard and PaperHoverCard can't drift again.
+const SIGNAL_META: Record<string, { label: string; description: string }> = {
+  source_relevance:    { label: 'Source Relevance',    description: 'Position in retrieval results (1st = highest)' },
+  topic_score:         { label: 'Topic Match',         description: 'Topic overlap with your rated papers' },
+  text_similarity:     { label: 'Text Similarity',     description: 'Semantic similarity to your top-rated papers' },
+  author_affinity:     { label: 'Author Affinity',     description: 'Author overlap with papers you follow' },
+  journal_affinity:    { label: 'Journal Affinity',    description: 'Published in a journal you read' },
+  recency_boost:       { label: 'Recency',             description: 'Publication recency (newer = higher)' },
+  citation_quality:    { label: 'Citation Quality',    description: 'Citation count quality indicator' },
+  feedback_adj:        { label: 'Your Feedback',       description: 'Adjusted based on your past feedback' },
+  preference_affinity: { label: 'Preference Match',    description: 'Affinity learned from your accumulated feedback interactions' },
+  usefulness_boost:    { label: 'Usefulness',          description: 'Rewards timely, credible, and less redundant papers' },
+}
+
+/** Merge a signal key's label/description with its centralized dot color. */
+function signalMeta(key: string): { label: string; color: string; description?: string } {
+  const base = SIGNAL_META[key]
+  const color = SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR
+  return base ? { ...base, color } : { label: key.replace(/_/g, ' '), color }
 }
 
 // ── Score bar ──
@@ -219,7 +229,7 @@ function ScoreBreakdownTeaser({
   const signals = Object.entries(breakdown ?? {})
     .map(([key, signal]) => ({
       key,
-      meta: SIGNAL_META[key] || { label: key.replace(/_/g, ' '), color: 'bg-slate-400' },
+      meta: signalMeta(key),
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)
@@ -271,7 +281,7 @@ function ScoreBreakdownPanel({
   const signals = Object.entries(breakdown ?? {})
     .map(([key, signal]) => ({
       key,
-      meta: SIGNAL_META[key] || { label: key.replace(/_/g, ' '), color: 'bg-slate-400' },
+      meta: signalMeta(key),
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)
@@ -307,7 +317,7 @@ function ScoreBreakdownPanel({
                 </span>
               </span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-parchment-100">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
               <div
                 className={`h-1.5 rounded-full transition-all duration-300 ${meta.color}`}
                 style={{ width: `${barPct}%`, opacity: 0.85 }}
@@ -504,7 +514,7 @@ export function PaperCard({
             'absolute inset-y-0 left-0 z-10 flex w-8 items-start justify-center pt-[18px] transition-colors duration-200',
             selection.checked
               ? 'bg-alma-500'
-              : 'bg-transparent group-hover/paper-card:bg-parchment-50',
+              : 'bg-transparent group-hover/paper-card:bg-surface-1',
           )}
           onClick={(e) => e.stopPropagation()}
         >
@@ -534,7 +544,7 @@ export function PaperCard({
         <div className="flex items-start gap-3">
           {/* Rank pill */}
           {rank != null && (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-parchment-100 text-[11px] font-bold text-slate-500">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[11px] font-bold text-slate-500">
               {rank}
             </div>
           )}
@@ -608,7 +618,7 @@ export function PaperCard({
                   const isPending = followAuthorPendingName === normalized
                   const canWrapHover = authorNames.length > 0
                   const label = (
-                    <span className="cursor-default rounded px-0.5 transition-colors hover:bg-parchment-100 hover:text-slate-700">
+                    <span className="cursor-default rounded px-0.5 transition-colors hover:bg-surface-2 hover:text-slate-700">
                       {authorName}
                     </span>
                   )
@@ -706,7 +716,7 @@ export function PaperCard({
                   <>
                     <span className="text-slate-300">·</span>
                     <span
-                      className="tabular-nums text-amber-600"
+                      className="tabular-nums text-gold-500"
                       title={`Your rating: ${paper.rating}/5`}
                     >
                       {starDisplay}
@@ -729,7 +739,7 @@ export function PaperCard({
                                 setShowBreakdown(next)
                                 if (next && onExpandBreakdown) onExpandBreakdown()
                               }}
-                              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-parchment-100 hover:text-slate-600"
+                              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-surface-2 hover:text-slate-600"
                               title="Show score breakdown"
                             >
                               Why
@@ -763,7 +773,7 @@ export function PaperCard({
                 {sources.map((source) => (
                   <span
                     key={source}
-                    className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-parchment-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
+                    className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-surface-1 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
                     title={`Returned by ${source}`}
                   >
                     {source.replace(/_/g, ' ')}
@@ -808,7 +818,7 @@ export function PaperCard({
               </button>
             )}
             {!suppressSummaries && ((showAbstractByDefault || showAbstract) && paper.abstract) && (
-              <div className="mt-1.5 rounded-md border border-slate-100 bg-parchment-50/50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+              <div className="mt-1.5 rounded-md border border-slate-100 bg-surface-1 px-3 py-2 text-xs leading-relaxed text-slate-600">
                 {paper.abstract}
               </div>
             )}
@@ -833,7 +843,7 @@ export function PaperCard({
 
         {/* Score breakdown (expandable) */}
         {showBreakdown && (hasBreakdown || hasExplanation) && (
-          <div className="mt-3 rounded-md border border-slate-100 bg-parchment-50/50 px-3 py-2.5">
+          <div className="mt-3 rounded-md border border-slate-100 bg-surface-1 px-3 py-2.5">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               Score Breakdown
             </p>

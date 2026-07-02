@@ -8,13 +8,16 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { CATEGORY_ICON_COLORS, CATEGORY_ICON_FALLBACK_COLOR } from '@/lib/palette'
 
 function templateIcon(category: string) {
-  if (category === 'author') return <UserRound className="h-4 w-4 text-indigo-600" />
-  if (category === 'collection') return <FolderOpen className="h-4 w-4 text-violet-600" />
-  if (category === 'feed_monitor') return <Rss className="h-4 w-4 text-success-600" />
-  if (category === 'branch') return <GitBranch className="h-4 w-4 text-info-600" />
-  return <Workflow className="h-4 w-4 text-warning-600" />
+  // Icon shape is per-category; color comes from the centralized palette (44.5).
+  const cls = `h-4 w-4 ${CATEGORY_ICON_COLORS[category] ?? CATEGORY_ICON_FALLBACK_COLOR}`
+  if (category === 'author') return <UserRound className={cls} />
+  if (category === 'collection') return <FolderOpen className={cls} />
+  if (category === 'feed_monitor') return <Rss className={cls} />
+  if (category === 'branch') return <GitBranch className={cls} />
+  return <Workflow className={cls} />
 }
 
 export function AlertTemplatesSection() {

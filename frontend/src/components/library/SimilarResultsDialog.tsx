@@ -48,7 +48,7 @@ export function SimilarResultsDialog({
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-purple-500" />
+            <Sparkles className="h-5 w-5 text-accent" />
             Similar Papers
             {data && (
               <Badge variant="secondary" className="ml-2">
@@ -96,7 +96,7 @@ export function SimilarResultsDialog({
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Progress
                           value={Math.min(item.score, 100)}
-                          className="h-1.5 w-24 [&>div]:bg-purple-500"
+                          className="h-1.5 w-24 [&>div]:bg-accent"
                         />
                         <span className="text-xs font-mono text-slate-500">
                           {Math.round(item.score)}%
@@ -152,7 +152,7 @@ export function SimilarResultsDialog({
                       <button
                         type="button"
                         onClick={() => onLike(item)}
-                        className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-pink-50 hover:text-pink-600"
+                        className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-accent-soft hover:text-accent"
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />

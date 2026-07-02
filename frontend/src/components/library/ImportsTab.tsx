@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Info, Loader2, RefreshCw, UploadCloud, Wand2 } from 'lucide-react'
+import { AlertCircle, CheckCircle, Info, Loader2, RefreshCw, UploadCloud, Wand2 } from 'lucide-react'
 
 import {
+  confirmStagedImport,
   enrichImportedPublications,
   listUnresolvedImportedPublications,
   resolveImportedPublicationsOpenAlex,
@@ -49,7 +50,7 @@ function resolveStatusBadgeProps(
   }
   return { label: status || 'Unknown', tone: 'neutral' }
 }
-import { useToast, errorToast} from '@/hooks/useToast'
+import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
 export function ImportsTab() {
@@ -104,6 +105,30 @@ export function ImportsTab() {
     },
   })
 
+  const confirmMutation = useMutation({
+    mutationFn: (paperId: string) => confirmStagedImport(paperId),
+    onSuccess: (data) => {
+      void invalidateQueries(
+        queryClient,
+        ['library-import-unresolved'],
+        ['papers'],
+        ['library-saved'],
+        ['library-workflow-summary'],
+        ['library-info'],
+      )
+      const duplicateIgnored = data.status === 'duplicate_ignored'
+      toast({
+        title: data.status === 'already_saved' || duplicateIgnored ? 'Already in Library' : 'Saved to Library',
+        description: duplicateIgnored
+          ? 'The staged duplicate was ignored; the existing Library paper was kept.'
+          : 'The imported paper will continue through the shared enrichment path.',
+      })
+    },
+    onError: () => {
+      errorToast('Error', 'Failed to save the staged import.')
+    },
+  })
+
   const unresolvedItems = unresolvedQuery.data?.items ?? []
   const unresolvedTotal = unresolvedQuery.data?.total ?? 0
 
@@ -138,12 +163,12 @@ export function ImportsTab() {
         </div>
       </div>
 
-      <div className="flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-sm text-blue-800">
-        <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
-        <p>
-          Imported papers land directly in <span className="font-semibold">Saved Library</span>. Use this panel to resolve and enrich imported metadata, not to promote imports into Library.
-        </p>
-      </div>
+      <Alert variant="info">
+        <Info className="h-4 w-4" />
+        <AlertDescription>
+          Identified imports land directly in <span className="font-semibold">Saved Library</span>. Low-confidence title-only rows stay here for review before saving.
+        </AlertDescription>
+      </Alert>
 
       <Card>
         <CardContent className="space-y-3 p-4">
@@ -172,6 +197,7 @@ export function ImportsTab() {
           ) : (
             <div className="max-h-80 space-y-2 overflow-y-auto">
               {unresolvedItems.slice(0, 80).map((paper) => {
+                const isStagedImport = (paper.status || 'library').trim().toLowerCase() !== 'library'
                 const cardPaper: PaperCardPaper = {
                   id: paper.id,
                   title: paper.title,
@@ -193,6 +219,11 @@ export function ImportsTab() {
                 )
                 const readingStatusSlot = (
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    {isStagedImport && (
+                      <StatusBadge tone="warning" size="sm">
+                        Review before saving
+                      </StatusBadge>
+                    )}
                     {paper.doi && <span>DOI: {paper.doi}</span>}
                     {/* Hover shows the concrete resolution reason when
                         one exists (e.g. "no_doi_no_title_match").
@@ -217,7 +248,33 @@ export function ImportsTab() {
                     paper={cardPaper}
                     size="compact"
                     readingStatusSlot={readingStatusSlot}
-                  />
+                  >
+                    {isStagedImport && (() => {
+                      // Scope the pending state to THIS row (44.4): react-query's
+                      // `variables` holds the id passed to the last mutate() call,
+                      // so only the row being confirmed spins/disables — not every
+                      // staged row sharing the single mutation.
+                      const isConfirmingThis =
+                        confirmMutation.isPending && confirmMutation.variables === paper.id
+                      return (
+                        <div className="mt-3 flex justify-end" onClick={(event) => event.stopPropagation()}>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => confirmMutation.mutate(paper.id)}
+                            disabled={isConfirmingThis}
+                          >
+                            {isConfirmingThis ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle className="h-3.5 w-3.5" />
+                            )}
+                            Save to Library
+                          </Button>
+                        </div>
+                      )
+                    })()}
+                  </PaperCard>
                 )
               })}
               {unresolvedItems.length > 80 && (

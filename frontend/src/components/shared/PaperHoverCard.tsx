@@ -2,23 +2,27 @@ import { ExternalLink } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { byWeightedDesc } from '@/lib/sort'
+import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
 import type { PaperCardPaper, ScoreSignal } from './PaperCard'
 
 // ── Signal palette ─────────────────────────────────────────────────────────
 // Mirrors the PaperCard signal colors. Kept in sync with the card's
 // ScoreBreakdownTeaser so the hover preview and the in-card breakdown feel
 // consistent.
-const SIGNAL_META: Record<string, { label: string; color: string }> = {
-  source_relevance: { label: 'Source Relevance', color: 'bg-alma-500' },
-  topic_score: { label: 'Topic Match', color: 'bg-success-500' },
-  text_similarity: { label: 'Text Similarity', color: 'bg-info-500' },
-  author_affinity: { label: 'Author Affinity', color: 'bg-violet-500' },
-  journal_affinity: { label: 'Journal Affinity', color: 'bg-indigo-400' },
-  recency_boost: { label: 'Recency', color: 'bg-warning-500' },
-  citation_quality: { label: 'Citation Quality', color: 'bg-orange-400' },
-  feedback_adj: { label: 'Your Feedback', color: 'bg-critical-500' },
-  preference_affinity: { label: 'Preference Match', color: 'bg-fuchsia-400' },
-  usefulness_boost: { label: 'Usefulness', color: 'bg-teal-500' },
+// Labels only; dot color comes from the centralized SIGNAL_COLORS palette
+// (44.5) — this map used to carry its own color values and had drifted from
+// PaperCard's copy.
+const SIGNAL_LABELS: Record<string, string> = {
+  source_relevance: 'Source Relevance',
+  topic_score: 'Topic Match',
+  text_similarity: 'Text Similarity',
+  author_affinity: 'Author Affinity',
+  journal_affinity: 'Journal Affinity',
+  recency_boost: 'Recency',
+  citation_quality: 'Citation Quality',
+  feedback_adj: 'Your Feedback',
+  preference_affinity: 'Preference Match',
+  usefulness_boost: 'Usefulness',
 }
 
 function ScoreBar({ score }: { score: number }) {
@@ -45,7 +49,10 @@ function TopSignals({
   const signals = Object.entries(breakdown ?? {})
     .map(([key, signal]) => ({
       key,
-      meta: SIGNAL_META[key] || { label: key.replace(/_/g, ' '), color: 'bg-slate-400' },
+      meta: {
+        label: SIGNAL_LABELS[key] ?? key.replace(/_/g, ' '),
+        color: SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR,
+      },
       signal,
     }))
     .filter(({ signal }) => signal.weighted > 0.001)

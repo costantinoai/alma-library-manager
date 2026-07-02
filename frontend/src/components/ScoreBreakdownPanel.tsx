@@ -110,7 +110,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                   </span>
                 )}
                 {s.degraded && (
-                  <span className="ml-1 text-[10px] text-orange-500" title={s.description}>
+                  <span className="ml-1 text-[10px] text-warning-600" title={s.description}>
                     keyword
                   </span>
                 )}

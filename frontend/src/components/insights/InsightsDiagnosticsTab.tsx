@@ -370,7 +370,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Brain}
-            accent="text-indigo-500"
+            accent="text-accent"
             title="AI and Similarity Health"
             description="Whether embeddings and scholarly similarity are materially helping retrieval instead of just being enabled."
           />
@@ -607,7 +607,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Sparkles}
-            accent="text-cyan-600"
+            accent="text-accent"
             title="Feedback Learning"
             description="Interaction depth and preference-learning coverage across sources, topics, and authors."
           />
@@ -736,7 +736,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Compass}
-            accent="text-purple-500"
+            accent="text-accent"
             title="Discovery Refresh Trend"
             description={`Daily recommendation refresh output over the last ${windowDays} days.`}
           />
@@ -786,7 +786,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={TrendingUp}
-            accent="text-blue-500"
+            accent="text-accent"
             title="Discovery Action Trend"
             description="Daily recommendation outcomes across seen, saved, likes, and dismissals."
           />
@@ -930,7 +930,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Waves}
-            accent="text-cyan-600"
+            accent="text-accent"
             title="Feedback Activity"
             description="Daily learning volume across feed actions, topic tuning, and ratings."
           />
@@ -998,7 +998,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={Compass}
-            accent="text-indigo-500"
+            accent="text-accent"
             title="Discovery Source Quality"
             description="Recommendation outcomes by source family. High-dismiss groups are candidates for tuning."
           />
@@ -1039,7 +1039,7 @@ export function InsightsDiagnosticsTab({
         <Card>
           <SectionHeader
             icon={GitBranch}
-            accent="text-violet-500"
+            accent="text-accent"
             title="Branch Quality"
             description="Branch outcomes, source mix, and tuning guidance derived from recommendation behavior."
           />
@@ -1158,7 +1158,7 @@ export function InsightsDiagnosticsTab({
       <Card>
         <SectionHeader
           icon={TrendingUp}
-          accent="text-violet-500"
+          accent="text-accent"
           title="Branch Trends"
           description="Recent 14-day branch movement. Compare current-week positive rate against the prior week before tuning."
         />
@@ -1236,7 +1236,7 @@ export function InsightsDiagnosticsTab({
       <Card>
         <SectionHeader
           icon={Clock3}
-          accent="text-blue-500"
+          accent="text-accent"
           title="Recent Refreshes"
           description="Latest Feed and Discovery refresh outcomes with direct actions into the owning pages."
         />

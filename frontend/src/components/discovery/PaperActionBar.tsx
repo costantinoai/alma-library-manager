@@ -3,6 +3,7 @@ import type { ComponentType, ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ACTION_QUEUE_CLASSES } from '@/lib/palette'
 
 type Tone = 'neutral' | 'queue' | 'add' | 'like' | 'love' | 'dismiss' | 'dislike'
 
@@ -58,14 +59,10 @@ const toneClasses: Record<Tone, { icon: string; hover: string; active: string }>
     hover: 'hover:bg-surface-2 hover:text-alma-900',
     active: 'border-[var(--color-border)] bg-surface-2 text-slate-800',
   },
-  // Queue — violet. Reading list is pre-commit limbo: neither a
-  // library save nor a negative signal. Violet keeps it visually
-  // separate from amber Save and emerald Like.
-  queue: {
-    icon: 'text-violet-600',
-    hover: 'hover:bg-violet-50 hover:text-violet-800',
-    active: 'border-violet-200 bg-violet-50 text-violet-800',
-  },
+  // Queue — violet (centralized in the palette, 44.5). Reading list is
+  // pre-commit limbo: neither a library save nor a negative signal, so its
+  // identity color sits outside the semantic state tokens.
+  queue: ACTION_QUEUE_CLASSES,
   // Save — amber. Warm counterpoint to alma teal; reads as "bookmarked".
   add: {
     icon: 'text-warning-600',

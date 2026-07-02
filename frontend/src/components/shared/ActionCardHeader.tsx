@@ -5,7 +5,7 @@ export interface ActionCardHeaderProps {
   icon: React.ComponentType<{ className?: string }>
   title: string
   description?: string
-  /** Tailwind color class for the icon (e.g. "text-blue-500"). */
+  /** Tailwind color class for the icon (e.g. "text-info-600"). */
   accent?: string
   /** Right-aligned primary action. Usually a `<Button>` or spinner state. */
   action?: React.ReactNode

@@ -38,7 +38,14 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
+          // max-h + overflow keep tall content INSIDE the dialog: a centered
+          // (translate-y-[-50%]) dialog taller than the viewport otherwise
+          // bleeds off-screen top AND bottom (seen live: the affiliation-picker
+          // rows extended outside the popup). Several dialogs had already
+          // patched this locally with ad-hoc max-h-[NNvh] overrides — this is
+          // the primitive-level default; per-dialog className overrides still
+          // win via cn()'s twMerge.
+          'fixed left-[50%] top-[50%] z-50 grid max-h-[85dvh] w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded border border-edge-1 bg-surface-1 p-6 shadow-paper-lg',
           className,
         )}
         {...props}

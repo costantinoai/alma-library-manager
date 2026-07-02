@@ -275,7 +275,7 @@ export function InsightsReportsTab({
       <Card>
         <ActionCardHeader
           icon={FileText}
-          accent="text-blue-500"
+          accent="text-accent"
           title="Weekly Brief"
           description="Summary of your library activity over the past week"
           action={
@@ -345,7 +345,7 @@ export function InsightsReportsTab({
       <Card>
         <ActionCardHeader
           icon={FolderOpen}
-          accent="text-purple-500"
+          accent="text-accent"
           title="Collection Intelligence"
           description="Detailed analytics for each of your collections"
           action={
@@ -379,7 +379,7 @@ export function InsightsReportsTab({
       <Card>
         <ActionCardHeader
           icon={TrendingUp}
-          accent="text-cyan-500"
+          accent="text-accent"
           title="Topic Drift"
           description="How your research interests have shifted over time"
           action={
