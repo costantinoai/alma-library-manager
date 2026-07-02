@@ -21,6 +21,7 @@ digest-based alerts.  Clean reset — no migration code.
 import os
 import sqlite3
 import logging
+import stat
 import threading
 from typing import Generator, Optional
 from pathlib import Path
@@ -61,19 +62,17 @@ def _db_path() -> str:
 
 
 def normalize_author_id(raw_id: str | None) -> str | None:
-    """Normalize an OpenAlex author ID to bare form (e.g. 'A1234567890').
+    """Normalize an OpenAlex author ID to bare canonical form (``A1234567890``).
 
-    Handles full URLs like 'https://openalex.org/A1234567890' and
-    returns just the ID portion. Returns None for empty/invalid input.
+    Delegates to the single canonical normalizer (43.4). This weak local copy
+    used to only strip the two URL prefixes — no case-fold, no bare
+    ``openalex.org/`` strip, no ``%3A`` repair — so an under-normalized id could
+    reach ``POST /authors`` and later spawn a duplicate profile. Returns ``None``
+    for empty/invalid input (this call site's strict contract).
     """
-    if not raw_id:
-        return None
-    s = raw_id.strip()
-    if s.startswith("https://openalex.org/"):
-        s = s[len("https://openalex.org/"):]
-    elif s.startswith("http://openalex.org/"):
-        s = s[len("http://openalex.org/"):]
-    return s if s else None
+    from alma.core.utils import normalize_openalex_id
+
+    return normalize_openalex_id(raw_id) or None
 
 
 # API key for authentication (None or empty = no auth required)
@@ -129,6 +128,115 @@ def _safe_execute(conn: sqlite3.Connection, sql: str) -> None:
         logger.debug("Skipping schema statement: %s", sql, exc_info=True)
 
 
+def _raise_unwritable_volume_error(path: Path, exc: OSError) -> "RuntimeError":
+    """Actionable error when a sidecar can't be removed because its PARENT
+    directory is unwritable (43.7).
+
+    The docker-compose service runs as ``10001:10001``; a data/config volume
+    first populated under the previous ``0:0`` (root) is root-owned, so the
+    non-root process can't unlink the stale WAL/SHM sidecars — the bare OSError
+    surfaces as an opaque "unable to open database file". Name the path and the
+    one-time ownership fix instead.
+    """
+    return RuntimeError(
+        "SQLite sidecar could not be removed — its data volume is owned by "
+        "another user (a volume first created under root, now run as "
+        "10001:10001). Fix the ownership once, then restart:\n"
+        f"    docker compose run --user 0 --rm <service> chown -R 10001:10001 /data /config\n"
+        f"Offending path: {_sidecar_details(path)} (parent dir: {path.parent})"
+    )
+
+
+def _sidecar_details(path: Path) -> str:
+    try:
+        st = path.stat()
+    except OSError as exc:
+        return f"{path} (stat failed: {exc})"
+    return (
+        f"{path} (uid={st.st_uid}, gid={st.st_gid}, "
+        f"mode={stat.filemode(st.st_mode)}, size={st.st_size})"
+    )
+
+
+def _ensure_sqlite_sidecar_writable(path: Path) -> bool:
+    """Return whether SQLite can open a sidecar for writing.
+
+    A previous container/user may have left ``scholar.db-wal`` or
+    ``scholar.db-shm`` with stale permissions. First try the harmless
+    same-owner repair (add user read/write); if that is not allowed, the
+    caller decides whether the sidecar is safe to recreate.
+    """
+    if not path.exists():
+        return True
+
+    def _append_open_ok() -> bool:
+        try:
+            with path.open("ab"):
+                pass
+            return True
+        except OSError:
+            return False
+
+    if _append_open_ok():
+        return True
+
+    try:
+        current = path.stat().st_mode
+        path.chmod(current | stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+    return _append_open_ok()
+
+
+def _repair_stale_sqlite_sidecars(db_path: Path) -> None:
+    """Repair stale WAL sidecars before opening the DB.
+
+    ``-shm`` is a transient WAL index and can be recreated. A zero-byte
+    ``-wal`` contains no frames and can also be recreated. A non-empty WAL
+    may contain committed transactions that have not been checkpointed, so
+    failing loudly is the only data-preserving automatic behavior.
+    """
+    if not db_path.exists():
+        return
+
+    wal_path = db_path.with_name(f"{db_path.name}-wal")
+    shm_path = db_path.with_name(f"{db_path.name}-shm")
+
+    if wal_path.exists() and not _ensure_sqlite_sidecar_writable(wal_path):
+        try:
+            wal_size = wal_path.stat().st_size
+        except OSError as exc:
+            raise RuntimeError(
+                "SQLite WAL sidecar exists but is not writable and could not "
+                f"be inspected: {_sidecar_details(wal_path)}"
+            ) from exc
+        if wal_size > 0:
+            raise RuntimeError(
+                "SQLite WAL sidecar is not writable and contains data, so ALMa "
+                "will not delete it automatically. Stop all ALMa processes and "
+                "fix the data-volume ownership before restarting: "
+                f"{_sidecar_details(wal_path)}"
+            )
+        try:
+            wal_path.unlink()
+        except OSError as exc:
+            raise _raise_unwritable_volume_error(wal_path, exc) from exc
+        logger.warning(
+            "Removed stale zero-byte SQLite WAL sidecar so SQLite can recreate it: %s",
+            wal_path,
+        )
+
+    if shm_path.exists() and not _ensure_sqlite_sidecar_writable(shm_path):
+        try:
+            shm_path.unlink()
+        except OSError as exc:
+            raise _raise_unwritable_volume_error(shm_path, exc) from exc
+        logger.warning(
+            "Removed stale SQLite SHM sidecar so SQLite can recreate it: %s",
+            shm_path,
+        )
+
+
 def init_db_schema() -> None:
     """Create all tables and seed defaults.
 
@@ -147,6 +255,7 @@ def init_db_schema() -> None:
         if _schema_initialized and _schema_initialized_path == db_path_str:
             return
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        _repair_stale_sqlite_sidecars(db_path)
 
         db = db_path_str
         conn = sqlite3.connect(db, check_same_thread=False)

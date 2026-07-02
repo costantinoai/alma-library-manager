@@ -22,6 +22,9 @@ class ParsedImportRecords:
 
     records: list[dict[str, Any]]
     errors: list[str]
+    # Canonical-identity collapses dropped during parsing (Zotero RDF only).
+    # Surfaced so silent parse-time data loss can't hide (40.1).
+    parse_duplicates: int = 0
 
 
 def parse_bibtex_records(content: str) -> ParsedImportRecords:
@@ -52,7 +55,8 @@ def parse_bibtex_records(content: str) -> ParsedImportRecords:
 def parse_zotero_rdf_records(content: str) -> ParsedImportRecords:
     """Parse Zotero RDF into the same normalized shape used by `import_zotero_rdf`."""
     try:
-        return ParsedImportRecords(importer._parse_zotero_rdf(content), [])
+        records, parse_duplicates = importer._parse_zotero_rdf(content)
+        return ParsedImportRecords(records, [], parse_duplicates=parse_duplicates)
     except Exception as exc:
         return ParsedImportRecords([], [f"Zotero RDF parse error: {exc}"])
 
@@ -93,6 +97,7 @@ def summarize_records(
     *,
     source: str,
     errors: Iterable[str] = (),
+    parse_duplicates: int = 0,
 ) -> dict[str, Any]:
     """Return identifier, duplicate, and likely-enrichment counts for records."""
     rows = list(records)
@@ -157,6 +162,10 @@ def summarize_records(
         "dedup": {
             "existing_matches": existing_matches,
             "likely_new_rows": likely_new_rows,
+            # Records collapsed at parse time (Zotero RDF resource aliases /
+            # shared containers). Non-zero means the source file carried
+            # duplicate identities — surfaced, never silently dropped (40.1).
+            "parse_duplicates": parse_duplicates,
         },
         "likely_source_calls": {
             "openalex": openalex_requests,

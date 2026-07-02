@@ -19,7 +19,7 @@ from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from alma.core.db_write import write_section
-from alma.core.utils import canonical_lookup_doi, normalize_orcid
+from alma.core.utils import canonical_lookup_doi, normalize_openalex_id, normalize_orcid
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +38,10 @@ def _norm_orcid(value: Optional[str]) -> str:
 
 
 def _norm_openalex_author(value: Optional[str]) -> str:
-    s = (value or "").strip()
-    if not s:
-        return ""
-    ls = s.lower()
-    for pfx in ("https://openalex.org/", "http://openalex.org/", "openalex.org/"):
-        if ls.startswith(pfx):
-            return s[len(pfx):].strip().upper()
-    return s.strip().upper()
+    # Delegate to the canonical normalizer (43.4). The old local copy uppercased
+    # the whole string and never repaired `%3A` residue, so it diverged from the
+    # OpenAlex client on exactly the malformed ids dedup needs to match.
+    return normalize_openalex_id(value)
 
 
 def _norm_doi(value: Optional[str]) -> str:

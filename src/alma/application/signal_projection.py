@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import age_decay, clamp as _clamp, days_since as _days_since
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.topics import DEFAULT_TOPIC_SCORE, topic_relevance
 
 
 _POSITIVE_ACTIONS = {
@@ -396,7 +397,11 @@ def _project_topics(
                 term = str(row["term"] or "").strip()
                 if not term:
                     continue
-                score = _clamp(float(row["score"] or 0.5), 0.1, 1.0)
+                # topic_relevance = clamp([0.1,1.0]) with a 0.5 default — the
+                # centralized form of the old `_clamp(float(score or 0.5), …)`
+                # (44.1). `or DEFAULT_TOPIC_SCORE` preserves the exact prior
+                # semantics (a falsy 0.0 → 0.5, so the 0.1 floor never bites).
+                score = topic_relevance(row["score"] or DEFAULT_TOPIC_SCORE)
                 _add(out.topic, term, paper_strength.get(str(row["paper_id"]), 0.0) * 0.65 * score)
     except sqlite3.OperationalError:
         return
@@ -710,7 +715,8 @@ def _project_author_profiles(
                 signal = author_signals.get(str(row["openalex_id"] or ""), 0.0)
                 term = str(row["term"] or "").strip()
                 if term:
-                    _add(out.topic, term, signal * 0.25 * _clamp(float(row["score"] or 0.5), 0.1, 1.0))
+                    # Centralized topic relevance (44.1); see the note above.
+                    _add(out.topic, term, signal * 0.25 * topic_relevance(row["score"] or DEFAULT_TOPIC_SCORE))
 
             venue_rows = db.execute(
                 f"""

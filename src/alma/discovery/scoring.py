@@ -34,6 +34,7 @@ from alma.core.scoring_math import (
 )
 from alma.core.keywords import parse_keywords
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core import topics
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
 from alma.application.author_signal import build_discovery_author_affinity
@@ -235,7 +236,10 @@ def compute_preference_profile(
                     for tr in topic_rows:
                         term = (tr["canonical_name"] or tr["term"] or "").strip().lower()
                         if term:
-                            topic_weights[term] = topic_weights.get(term, 0) + weight * (tr["score"] or 0.5)
+                            # 44.1: only the magic 0.5 → the shared default. NO
+                            # topic_relevance() here — its 0.1 floor/clamp is a
+                            # signal change gated on an A/B (task 10).
+                            topic_weights[term] = topic_weights.get(term, 0) + weight * (tr["score"] or topics.DEFAULT_TOPIC_SCORE)
                 except sqlite3.OperationalError:
                     logger.warning("publication_topics table not available for preference profile")
 
@@ -264,7 +268,8 @@ def compute_preference_profile(
                 for ct in c_topics:
                     term = (ct["canonical_name"] or ct["term"] or "").strip().lower()
                     if term:
-                        topic_weights[term] = topic_weights.get(term, 0) + 0.5 * (ct["score"] or 0.5)
+                        # 44.1: shared default only (no floor/clamp — see above).
+                        topic_weights[term] = topic_weights.get(term, 0) + 0.5 * (ct["score"] or topics.DEFAULT_TOPIC_SCORE)
             except sqlite3.OperationalError:
                 pass
     except sqlite3.OperationalError:
@@ -997,9 +1002,10 @@ def _projected_feedback_adjustment(
         if not term:
             continue
         try:
-            topic_strength = float(topic.get("score") or 0.5)
+            # 44.1: shared default only (no floor/clamp — A/B-gated).
+            topic_strength = float(topic.get("score") or topics.DEFAULT_TOPIC_SCORE)
         except (TypeError, ValueError):
-            topic_strength = 0.5
+            topic_strength = topics.DEFAULT_TOPIC_SCORE
         adjustment += 0.45 * _clamp(topic_strength, 0.1, 1.0) * float(projected.topic.get(term, 0.0))
 
     for keyword in _candidate_keywords(candidate):
@@ -1060,9 +1066,10 @@ def _dismissal_cluster_penalty(
         if not term:
             continue
         try:
-            topic_strength = float(topic.get("score") or 0.5)
+            # 44.1: shared default only (no floor/clamp — A/B-gated).
+            topic_strength = float(topic.get("score") or topics.DEFAULT_TOPIC_SCORE)
         except (TypeError, ValueError):
-            topic_strength = 0.5
+            topic_strength = topics.DEFAULT_TOPIC_SCORE
         topic_pen += (
             _DISMISSAL_TOPIC_PENALTY_PER_HIT
             * _clamp(topic_strength, 0.1, 1.0)

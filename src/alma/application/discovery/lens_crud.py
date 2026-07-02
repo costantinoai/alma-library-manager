@@ -25,6 +25,7 @@ from typing import Any, Optional
 from alma.application import library as library_app
 from alma.core.components import not_component_sql
 from alma.core.db_write import run_write_unit
+from alma.core.sql_helpers import canonical_paper_filter
 from alma.core.scoring_math import age_decay, clamp
 from alma.discovery.defaults import (
     DISCOVERY_SETTINGS_DEFAULTS,
@@ -163,7 +164,7 @@ def list_recommendations(
     query.append(
         "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
         "AND COALESCE(TRIM(p.reading_status), '') = '' "
-        "AND COALESCE(p.canonical_paper_id, '') = '' "
+        f"AND {canonical_paper_filter('p')} "
         "AND " + not_component_sql("p") + " "
         "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
     )

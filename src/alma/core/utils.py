@@ -175,6 +175,37 @@ def candidate_dedup_key(item: dict) -> str:
     return f"title:{title}"
 
 
+def strong_identifiers_conflict(
+    *,
+    incoming_doi: Optional[str] = None,
+    incoming_openalex_id: Optional[str] = None,
+    candidate_doi: Optional[str] = None,
+    candidate_openalex_id: Optional[str] = None,
+) -> bool:
+    """True when two records each carry a strong identifier that DISAGREES.
+
+    A "strong identifier" is an OpenAlex id or a (normalized) DOI. When the
+    incoming record and a candidate row BOTH carry one and they differ, the two
+    are provably different works — a title-based match must never merge them
+    (e.g. a Zenodo software DOI and a journal DOI sharing one title/year, or a
+    title-only re-import with DOI X folding into a same-title row with DOI Y).
+    Absence or agreement on either identifier is not a conflict.
+
+    This is the single guard shared by ``resolve_existing_paper_id``'s title/year
+    branch and the importer's year-less exact-title fallback so the rule lives in
+    exactly one place (DRY).
+    """
+    oa_in = (incoming_openalex_id or "").strip()
+    oa_cand = (candidate_openalex_id or "").strip()
+    if oa_in and oa_cand and oa_in != oa_cand:
+        return True
+    doi_in = normalize_doi(incoming_doi)
+    doi_cand = normalize_doi(candidate_doi)
+    if doi_in and doi_cand and doi_in.lower() != doi_cand.lower():
+        return True
+    return False
+
+
 def resolve_existing_paper_id(
     conn: sqlite3.Connection,
     *,
@@ -182,6 +213,8 @@ def resolve_existing_paper_id(
     doi: Optional[str] = None,
     title: Optional[str] = None,
     year: Optional[int] = None,
+    exclude_id: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> Optional[str]:
     """Return the `papers.id` of an existing row matching the canonical triple.
 
@@ -195,16 +228,30 @@ def resolve_existing_paper_id(
     normalization is idempotent. Returns ``None`` when no row matches;
     the caller is expected to insert one.
     """
+    filters: list[str] = []
+    params_tail: list[str] = []
+    if exclude_id:
+        filters.append("id != ?")
+        params_tail.append(exclude_id)
+    if status:
+        filters.append("status = ?")
+        params_tail.append(status)
+    filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
+
     oa = (openalex_id or "").strip()
     if oa:
-        row = conn.execute("SELECT id FROM papers WHERE openalex_id = ?", (oa,)).fetchone()
+        row = conn.execute(
+            f"SELECT id FROM papers WHERE openalex_id = ?{filter_sql}",
+            (oa, *params_tail),
+        ).fetchone()
         if row:
             return str(row["id"])
 
     doi_norm = normalize_doi(doi)
     if doi_norm:
         row = conn.execute(
-            "SELECT id FROM papers WHERE lower(doi) = lower(?)", (doi_norm,)
+            f"SELECT id FROM papers WHERE lower(doi) = lower(?){filter_sql}",
+            (doi_norm, *params_tail),
         ).fetchone()
         if row:
             return str(row["id"])
@@ -213,10 +260,18 @@ def resolve_existing_paper_id(
         key = normalize_title_key(title)
         if key:
             rows = conn.execute(
-                "SELECT id, title FROM papers WHERE year = ?", (year,)
+                f"SELECT id, title, doi, openalex_id FROM papers WHERE year = ?{filter_sql}",
+                (year, *params_tail),
             ).fetchall()
             for candidate_row in rows:
                 if normalize_title_key(str(candidate_row["title"] or "")) == key:
+                    if strong_identifiers_conflict(
+                        incoming_doi=doi_norm,
+                        incoming_openalex_id=oa,
+                        candidate_doi=candidate_row["doi"],
+                        candidate_openalex_id=candidate_row["openalex_id"],
+                    ):
+                        continue
                     return str(candidate_row["id"])
 
     return None
@@ -369,6 +424,58 @@ def normalize_orcid(orcid_val: Optional[str]) -> Optional[str]:
     if not _ORCID_RE.match(raw):
         return None
     return raw
+
+
+def normalize_openalex_id(value: Optional[str]) -> str:
+    """Normalize an OpenAlex author ID to the canonical bare ``A…`` form.
+
+    The single chokepoint for the OpenAlex author identifier — sibling of
+    :func:`normalize_doi` / :func:`normalize_orcid` in the same
+    identifier-class family (43.4). Every entry point that persists or compares
+    an author id must funnel through here so an under-normalized value can't
+    slip past `POST /authors` and later spawn a duplicate profile.
+
+    Accepts, and folds to one form:
+      * URL forms — ``https://openalex.org/A5..`` / ``http://…`` / bare
+        ``openalex.org/A5..``;
+      * URL-encoded residue from a prior buggy decode — ``3Aa5..`` (a leftover
+        ``%3A`` artefact that was then persisted);
+      * lowercase variants — ``a5042972527`` → ``A5042972527``;
+      * already-bare ids — returned unchanged.
+
+    Returns the canonical uppercase bare form. Returns ``""`` for empty input
+    and the original (stripped) value when it is not a recognisable OpenAlex id
+    (lenient — callers that need strict None semantics wrap with ``or None``).
+    """
+    if not value:
+        return ""
+    aid = str(value).strip()
+    if not aid:
+        return ""
+    for prefix in (
+        "https://openalex.org/",
+        "http://openalex.org/",
+        "openalex.org/",
+    ):
+        if aid.lower().startswith(prefix.lower()):
+            aid = aid[len(prefix):].rstrip("/")
+            break
+    else:
+        if aid.startswith("http"):
+            # Generic URL fallback — extract the terminal path segment.
+            aid = aid.rstrip("/").split("/")[-1]
+
+    # Strip URL-encoded residue: `%3A` → `3A`. The two leading chars before the
+    # author prefix are the leftover after a buggy decode pass; the canonical
+    # shape is `A<digits>`, so drop a stray `3a` prefix.
+    if aid and aid[:2].lower() == "3a":
+        aid = aid[2:]
+
+    # Uppercase the author-prefix letter (OpenAlex uses `A` + digits).
+    if aid and aid[0] == "a":
+        aid = "A" + aid[1:]
+
+    return aid
 
 
 def to_publication_dataclass(pub_dict: Dict) -> Publication:

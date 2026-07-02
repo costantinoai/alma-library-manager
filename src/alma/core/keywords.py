@@ -24,9 +24,16 @@ it was dropped rather than shipped unused. See
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
-__all__ = ["parse_keywords"]
+__all__ = [
+    "format_keyword_for_display",
+    "format_keywords_for_display",
+    "parse_keywords",
+]
+
+_TRAILING_DISAMBIGUATION_RE = re.compile(r"\s*\([^()]*\)\s*$")
 
 
 def _coerce(raw: Any) -> Any:
@@ -82,6 +89,46 @@ def parse_keywords(raw: Any) -> list[str]:
     out: list[str] = []
     for item in items:
         text = _item_to_text(item).lower()
+        if text:
+            out.append(text)
+    return out
+
+
+def format_keyword_for_display(keyword: Any) -> str:
+    """Return a readable keyword label without changing signal semantics.
+
+    OpenAlex keyword display names often carry Wikidata-style trailing
+    disambiguators (``"Object (grammar)"``, ``"Face (sociological concept)"``).
+    Those suffixes are useful as raw source evidence but noisy in the UI. This
+    helper is intentionally display-only: it strips a single trailing parenthetical
+    suffix and collapses whitespace, but it does not lowercase, dedupe, or apply
+    a stoplist.
+    """
+    text = _item_to_text(keyword)
+    if not text:
+        return ""
+    return " ".join(_TRAILING_DISAMBIGUATION_RE.sub("", text).split())
+
+
+def format_keywords_for_display(raw: Any) -> list[str]:
+    """Parse keyword-like input into display labels, preserving order and case.
+
+    Accepts the same raw shapes as :func:`parse_keywords`, but deliberately keeps
+    capitalization for rendering. Empty labels are dropped; duplicates are left to
+    the caller because repetition can be useful when characterizing source payloads.
+    """
+    value = _coerce(raw)
+    if isinstance(value, list):
+        items: list[Any] = value
+    elif isinstance(value, str):
+        items = value.replace(";", ",").split(",")
+    elif isinstance(value, dict):
+        items = [value]
+    else:
+        items = []
+    out: list[str] = []
+    for item in items:
+        text = format_keyword_for_display(item)
         if text:
             out.append(text)
     return out

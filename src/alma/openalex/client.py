@@ -22,6 +22,7 @@ from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
     normalize_doi as _normalize_doi,
+    normalize_openalex_id,
     normalize_text as _normalize_text,
     utcnow_iso,
 )
@@ -92,42 +93,13 @@ def find_author_by_orcid(orcid: str, mailto: Optional[str] = None) -> Optional[D
 
 
 def _normalize_openalex_author_id(author_id: str) -> str:
-    """Normalize an OpenAlex author ID to the canonical ``A...`` form.
+    """Thin wrapper over :func:`alma.core.utils.normalize_openalex_id` (43.4).
 
-    Accepts URL forms, URL-encoded residue from prior mangling
-    (``3Aa5042972527`` — a `%3A` artefact from an earlier URL decode
-    that was then persisted), lowercase variants (``a5042972527``), and
-    already-bare IDs. Returns the canonical uppercase bare form.
-    Returns the original value when empty/unparseable.
+    Kept as a module-local name because many callers in this file reference it;
+    the canonical implementation now lives once in ``core/utils`` next to
+    ``normalize_doi`` / ``normalize_orcid``.
     """
-    if not author_id:
-        return author_id
-    aid = author_id.strip()
-    for prefix in (
-        "https://openalex.org/",
-        "http://openalex.org/",
-        "openalex.org/",
-    ):
-        if aid.lower().startswith(prefix.lower()):
-            aid = aid[len(prefix):].rstrip("/")
-            break
-    else:
-        if aid.startswith("http"):
-            # Generic URL fallback -- extract terminal segment
-            aid = aid.rstrip("/").split("/")[-1]
-
-    # Strip URL-encoded residue: `%3A` → `3A`. The first two chars before
-    # the author prefix are the leftover after a buggy decode pass. The
-    # canonical shape is `A<digits>`; anything before the first `A`/`a`
-    # that isn't a real prefix can be dropped.
-    if aid and aid[:2].lower() == "3a":
-        aid = aid[2:]
-
-    # Uppercase the author prefix letter (OpenAlex uses `A` + digits).
-    if aid and aid[0] in ("a",):
-        aid = "A" + aid[1:]
-
-    return aid
+    return normalize_openalex_id(author_id)
 
 
 def _normalize_openalex_work_id(work_id: str) -> str:
@@ -1694,6 +1666,15 @@ def batch_fetch_referenced_works_for_openalex_ids(
     return result
 
 
+# Terminal-stamp identity for the reference backfill (42.1). A work OpenAlex
+# reports ZERO references for can never leave the `pr.paper_id IS NULL` pool, so
+# we stamp a terminal `paper_enrichment_status` row (its own source, so it never
+# collides with the metadata/S2/crossref ledgers) and the selector excludes it.
+_REFERENCES_SOURCE = "references"
+_REFERENCES_FIELDS_KEY = "references_v1"
+_REFERENCES_TERMINAL_STATUSES = ("enriched", "terminal_no_match")
+
+
 def backfill_missing_publication_references(
     conn: sqlite3.Connection,
     *,
@@ -1703,12 +1684,27 @@ def backfill_missing_publication_references(
     max_workers: int = 4,
 ) -> dict[str, int]:
     """Backfill missing `publication_references` rows from OpenAlex in batches."""
+    from alma.core.sql_helpers import standalone_paper_sql
+
     _ensure_schema(conn)
 
+    _terminal_list = ", ".join(f"'{s}'" for s in _REFERENCES_TERMINAL_STATUSES)
     params: list[object] = []
     where_clauses = [
         "COALESCE(p.openalex_id, '') <> ''",
         "pr.paper_id IS NULL",
+        # Count parity with the health/enrichment reference counts (42.1): both
+        # gate the standalone universe, so op-pool == dimension count.
+        standalone_paper_sql("p"),
+        # Drain: skip papers already stamped terminal for references so the pool
+        # can reach zero instead of re-walking the same works every run.
+        f"""NOT EXISTS (
+            SELECT 1 FROM paper_enrichment_status es
+            WHERE es.paper_id = p.id
+              AND es.source = '{_REFERENCES_SOURCE}'
+              AND es.purpose = 'metadata'
+              AND es.status IN ({_terminal_list})
+        )""",
     ]
     if paper_ids:
         cleaned_ids = [str(paper_id or "").strip() for paper_id in paper_ids if str(paper_id or "").strip()]
@@ -1745,23 +1741,43 @@ def backfill_missing_publication_references(
         batch_size=batch_size,
         max_workers=max_workers,
     )
+    from alma.services.corpus_rehydrate import _write_ledger
+
     papers_updated = 0
     references_inserted = 0
+    terminal_stamped = 0
     # Network fetch already returned above; the write window is local-only —
     # gate it (BEGIN IMMEDIATE + writer gate) instead of a raw commit.
     with write_section(conn, label="openalex backfill_references"):
         for openalex_id, paper_group in openalex_to_papers.items():
             referenced_ids = references_by_work.get(openalex_id)
             if referenced_ids is None:
-                continue
+                continue  # fetch miss — transient, leave eligible for next run
             for paper_id in paper_group:
                 references_inserted += _upsert_referenced_works(conn, paper_id, referenced_ids)
                 papers_updated += 1
+                if not referenced_ids:
+                    # OpenAlex has the work but it lists ZERO references — terminal
+                    # (42.1). Stamp it so the paper leaves the pool; without this it
+                    # matches `pr.paper_id IS NULL` forever and the op never drains.
+                    _write_ledger(
+                        conn,
+                        paper_id=paper_id,
+                        source=_REFERENCES_SOURCE,
+                        lookup_key=openalex_id,
+                        status="terminal_no_match",
+                        reason="no_references",
+                        fields_filled=[],
+                        fields_key=_REFERENCES_FIELDS_KEY,
+                        retry_after=None,
+                    )
+                    terminal_stamped += 1
     return {
         "candidates": len(openalex_to_papers),
         "fetched": len(references_by_work),
         "papers_updated": papers_updated,
         "references_inserted": references_inserted,
+        "terminal_no_references": terminal_stamped,
     }
 
 

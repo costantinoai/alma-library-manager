@@ -41,6 +41,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from alma.core.db_write import write_section
+from alma.core.sql_helpers import canonical_paper_filter
 from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
@@ -101,10 +102,10 @@ def find_preprint_twin_candidates(
     if scope not in {"library", "corpus"}:
         scope = "corpus"
 
-    sql = """
+    sql = f"""
         SELECT id, title, year, doi, status, canonical_paper_id
         FROM papers
-        WHERE COALESCE(canonical_paper_id, '') = ''
+        WHERE {canonical_paper_filter('papers')}
           AND COALESCE(title, '') <> ''
           AND year IS NOT NULL
           AND doi IS NOT NULL AND TRIM(doi) <> ''

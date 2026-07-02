@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from alma.api.models import PaperResponse
+from alma.core.keywords import format_keywords_for_display
 from alma.core.redaction import redact_sensitive_text
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ def row_to_paper_response(row: sqlite3.Row) -> PaperResponse:
                 data[field] = json.loads(data[field])
             except (json.JSONDecodeError, TypeError):
                 data[field] = None
+    if "keywords" in data:
+        display_keywords = format_keywords_for_display(data.get("keywords"))
+        data["keywords"] = display_keywords or None
     return PaperResponse(**data)
 
 
