@@ -539,3 +539,68 @@ def _days_since(ts: Optional[str], now: datetime) -> Optional[float]:
         parsed = parsed.replace(tzinfo=timezone.utc)
     delta = now - parsed
     return delta.total_seconds() / 86400.0
+
+
+def recompute_library_signal_scores(
+    db: sqlite3.Connection,
+    *,
+    only_missing: bool = False,
+) -> int:
+    """Persist ``papers.global_signal_score`` for saved Library rows.
+
+    The paper_signal composite is a LIBRARY-WIDE derived cache: one paper's
+    save or rating shifts the library centroid + topic weights, so every row's
+    score can move. This is the single canonical writer of the column.
+
+    It runs OFF the read path (43.2). Homes:
+      * the mutation paths that invalidate the inputs — save / rate — call it
+        post-commit;
+      * the periodic recommendation refresh keeps it converged for indirect
+        invalidations (feedback, embedding/centroid fills).
+
+    ``only_missing=True`` scores just never-computed rows (cheap fill for a
+    freshly-saved paper); the default full recompute is for input-changing
+    mutations + maintenance.
+
+    Compute is CPU-only (no network) and runs BEFORE the write window, so the
+    writer gate is never held across it (write-discipline rule #2). Returns the
+    number of rows written.
+    """
+    from alma.core.db_write import run_write_unit
+
+    where = "status = 'library'"
+    if only_missing:
+        where += " AND COALESCE(global_signal_score, 0) = 0"
+    try:
+        pending_rows = db.execute(f"SELECT id FROM papers WHERE {where}").fetchall()
+    except sqlite3.OperationalError as exc:
+        logger.debug("signal recompute skipped (schema): %s", exc)
+        return 0
+    pending = [str(r["id"]) for r in pending_rows]
+    if not pending:
+        return 0
+
+    # Gather + score outside any write window (no gate held across compute).
+    try:
+        state = load_library_state(db)
+        scores = score_papers_batch(db, pending, state)
+    except Exception as exc:
+        logger.debug("signal recompute compute failed: %s", exc)
+        return 0
+    if not scores:
+        return 0
+
+    updates = [(float(scores.get(pid, 0.0)), pid) for pid in pending]
+    try:
+        run_write_unit(
+            db,
+            lambda: db.executemany(
+                "UPDATE papers SET global_signal_score = ? WHERE id = ?",
+                updates,
+            ),
+            label="library_signal_recompute",
+        )
+    except sqlite3.OperationalError as exc:
+        logger.debug("signal recompute write failed: %s", exc)
+        return 0
+    return len(updates)

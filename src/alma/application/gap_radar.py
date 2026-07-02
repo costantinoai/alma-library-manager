@@ -8,7 +8,6 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from alma.application.followed_authors import ensure_followed_author_contract
 from alma.core.scoring_math import age_decay
 from alma.core.utils import utcnow as _utcnow
 from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid

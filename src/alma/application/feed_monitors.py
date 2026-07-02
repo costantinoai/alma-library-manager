@@ -8,7 +8,6 @@ import sqlite3
 import uuid
 from typing import Any
 
-from alma.application.followed_authors import ensure_followed_author_contract
 from alma.application.feed_query_language import normalize_keyword_expression
 from alma.core.db_write import commit_unless_gated, run_write_unit
 
@@ -104,7 +103,9 @@ def sync_author_monitors(db: sqlite3.Connection) -> None:
     if not _table_exists(db, "feed_monitors"):
         return
 
-    ensure_followed_author_contract(db)
+    # Contract canonicalization already ran on the mutation entry point
+    # (apply_follow_state ensures it before mirroring here). Re-running it
+    # inside this mirror added a redundant write on every sync (43.1).
     rows = db.execute(
         """
         SELECT fa.author_id, fa.followed_at, a.name

@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from alma.application.followed_authors import (
-    ensure_followed_author_contract,
     get_followed_author_backfill_status,
     get_followed_author_backfill_status_map,
 )
@@ -60,6 +59,17 @@ _MAX_SUGGESTION_SCORE = 100.0
 # expressed as a fraction so it stays calibrated if `_MAX` rescales.
 _CONSENSUS_BONUS_FRACTION = 0.12
 
+# Paper-feedback projection scales. Kept as named calibration points because
+# task-10 A/Bs must move one central knob, not hidden literals inside the scorer.
+# The keyword scale stays at 3.0 for now: a 2026-06-28 half-strength A/B trended
+# better but did not clear the uncertainty bar for a recommendation-signal flip.
+_PROJECTED_AUTHOR_DIRECT_SCALE = 18.0
+_PROJECTED_AUTHOR_TOPIC_SCALE = 5.0
+_PROJECTED_AUTHOR_VENUE_SCALE = 4.0
+_PROJECTED_AUTHOR_KEYWORD_SCALE = 3.0
+_PROJECTED_AUTHOR_TAG_SCALE = 4.0
+_PROJECTED_AUTHOR_ADJUSTMENT_CAP = 24.0
+
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     row = db.execute(
@@ -70,10 +80,10 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
 
 
 def _followed_author_ids(db: sqlite3.Connection) -> set[str]:
-    try:
-        ensure_followed_author_contract(db)
-    except Exception:
-        pass
+    # Pure read. Canonicalization of legacy followed_authors rows is NOT a
+    # read-path concern — it lives on the follow/unfollow mutation
+    # (apply_follow_state) and the author-maintenance sweep. Doing it here
+    # made every `GET /authors` write on an ungated connection (43.1).
     if not _table_exists(db, "followed_authors"):
         return set()
     try:
@@ -1824,12 +1834,27 @@ def _projected_author_signal_adjustment(
     if not oid:
         return 0.0, {}
 
-    direct = float(projected.author.get(oid, 0.0)) * 18.0
-    topic = sum(float(projected.topic.get(term, 0.0)) for term in _candidate_projection_topics(db, oid)) * 5.0
-    venue = sum(float(projected.venue.get(venue, 0.0)) for venue in _candidate_projection_venues(db, oid)) * 4.0
-    keyword = sum(float(projected.keyword.get(keyword, 0.0)) for keyword in _candidate_projection_keywords(db, oid)) * 3.0
-    tag = sum(float(projected.tag.get(tag_name, 0.0)) for tag_name in _candidate_projection_tags(db, oid)) * 4.0
-    total = max(-24.0, min(24.0, direct + topic + venue + keyword + tag))
+    direct = float(projected.author.get(oid, 0.0)) * _PROJECTED_AUTHOR_DIRECT_SCALE
+    topic = (
+        sum(float(projected.topic.get(term, 0.0)) for term in _candidate_projection_topics(db, oid))
+        * _PROJECTED_AUTHOR_TOPIC_SCALE
+    )
+    venue = (
+        sum(float(projected.venue.get(venue, 0.0)) for venue in _candidate_projection_venues(db, oid))
+        * _PROJECTED_AUTHOR_VENUE_SCALE
+    )
+    keyword = (
+        sum(float(projected.keyword.get(keyword, 0.0)) for keyword in _candidate_projection_keywords(db, oid))
+        * _PROJECTED_AUTHOR_KEYWORD_SCALE
+    )
+    tag = (
+        sum(float(projected.tag.get(tag_name, 0.0)) for tag_name in _candidate_projection_tags(db, oid))
+        * _PROJECTED_AUTHOR_TAG_SCALE
+    )
+    total = max(
+        -_PROJECTED_AUTHOR_ADJUSTMENT_CAP,
+        min(_PROJECTED_AUTHOR_ADJUSTMENT_CAP, direct + topic + venue + keyword + tag),
+    )
     parts = {
         "author": round(direct, 3),
         "topic": round(topic, 3),

@@ -20,7 +20,6 @@ from alma.application import authors as authors_app
 from alma.services import health as health_service
 from alma.application.followed_authors import (
     apply_follow_state,
-    ensure_followed_author_contract,
     resolve_canonical_author_id,
     schedule_followed_author_historical_backfill,
 )
@@ -2222,8 +2221,11 @@ def follow_author_from_paper(
 ):
     try:
         from alma.openalex.client import upsert_work_sidecars
-        ensure_followed_author_contract(db)
 
+        # Contract canonicalization is NOT done here (43.1): it ran ungated on
+        # this POST, before any run_write_unit. The follow write below goes
+        # through apply_follow_state, which ensures the contract inside its
+        # gated unit — so the heal happens correctly, once, in-transaction.
         paper_row = db.execute(
             """
             SELECT id, title, authors, abstract, doi, openalex_id, year, publication_date, journal, url

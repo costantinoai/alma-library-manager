@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 import uuid
 from typing import Optional
 
-from alma.application.followed_authors import ensure_followed_author_contract
 from alma.application.feed_query_language import (
     FeedQuerySyntaxError,
     keyword_expression_matches,
@@ -1169,9 +1168,11 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
         return 0
 
     # ── Pre-load followed author IDs for source_relevance ──
+    # Pure read of the followed set for source_relevance. Legacy-row
+    # canonicalization is a mutation/maintenance concern, not a scoring-path
+    # one (43.1) — never write here.
     followed_ids: set[str] = set()
     try:
-        ensure_followed_author_contract(db)
         fa_rows = db.execute("SELECT author_id FROM followed_authors").fetchall()
         followed_ids = {r["author_id"] for r in fa_rows}
     except Exception:

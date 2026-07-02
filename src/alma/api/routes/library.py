@@ -34,7 +34,7 @@ from alma.application.followed_authors import (
 )
 from alma.application import library as library_app
 from alma.core.db_write import run_write_unit
-from alma.core.sql_helpers import paper_date_sort_expr
+from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
 from alma.services import health as health_service
 
 
@@ -45,59 +45,6 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
     responses={401: {"description": "Unauthorized"}},
 )
-
-
-def _ensure_library_signal_scores(db: sqlite3.Connection) -> None:
-    """Populate `papers.global_signal_score` for Library rows that are
-    missing it.
-
-    The column is the paper_signal composite used as the Library "Ranking"
-    column — a 0..1 blend of rating, topic alignment, embedding
-    similarity, author alignment, accumulated feedback interactions,
-    and recency
-    (weights in `DISCOVERY_SETTINGS_DEFAULTS`). It stays 0 until somebody
-    computes it; this helper is the cheapest way to keep the sort
-    meaningful without paying compute cost on every `list_saved` call.
-
-    Called only when the caller asks for `order=signal`. Scope: every
-    Library row with `global_signal_score = 0` OR missing. One batch
-    computation + one UPDATE per row. Errors are swallowed so the
-    route still returns rows.
-    """
-    try:
-        pending_rows = db.execute(
-            "SELECT id FROM papers "
-            "WHERE status = 'library' "
-            "AND COALESCE(global_signal_score, 0) = 0"
-        ).fetchall()
-    except sqlite3.OperationalError as exc:
-        logger.debug("signal backfill skipped (schema): %s", exc)
-        return
-    pending = [str(r["id"]) for r in pending_rows]
-    if not pending:
-        return
-    try:
-        from alma.application import paper_signal as _paper_signal
-
-        state = _paper_signal.load_library_state(db)
-        scores = _paper_signal.score_papers_batch(db, pending, state)
-    except Exception as exc:
-        logger.debug("signal backfill compute failed: %s", exc)
-        return
-    if not scores:
-        return
-    try:
-        rows = [(float(scores.get(pid, 0.0)), pid) for pid in pending]
-        run_write_unit(
-            db,
-            lambda: db.executemany(
-                "UPDATE papers SET global_signal_score = ? WHERE id = ?",
-                rows,
-            ),
-            label="library_signal_backfill",
-        )
-    except sqlite3.OperationalError as exc:
-        logger.debug("signal backfill write failed: %s", exc)
 
 
 def _paper_tag_count(db: sqlite3.Connection, paper_id: str) -> int:
@@ -208,13 +155,12 @@ def list_saved(
         order_value = (order or "date").strip().lower()
         direction_value = (order_dir or "desc").strip().lower()
         direction = "ASC" if direction_value == "asc" else "DESC"
-        # When the user asks for signal-ranked order, make sure every
-        # Library row has a populated `global_signal_score` — otherwise
-        # never-scored papers sink to the bottom regardless of how
-        # signal-rich they actually are. Backfill is bounded + cheap
-        # (one `score_papers_batch` call over the library set).
-        if order_value == "signal":
-            _ensure_library_signal_scores(db)
+        # `order=signal` sorts by the STORED `global_signal_score` only — this
+        # GET never computes or writes it (43.2: sorting a page must not
+        # acquire the writer gate). The column is populated off the read path:
+        # by `recompute_library_signal_scores` on the save/rate mutations and
+        # the periodic recommendation refresh. Never-scored rows sort last
+        # until that convergence runs — acceptable and visible.
         date_sort = paper_date_sort_expr()
         order_clause = {
             "date": f"{date_sort} {direction}, title COLLATE NOCASE ASC",
@@ -235,7 +181,7 @@ def list_saved(
             cursor = db.execute(
                 f"""SELECT * FROM papers
                     WHERE status = 'library'
-                      AND COALESCE(canonical_paper_id, '') = ''
+                      AND {canonical_paper_filter('papers')}
                       AND (
                         title LIKE ?
                         OR COALESCE(notes, '') LIKE ?
@@ -250,7 +196,7 @@ def list_saved(
             cursor = db.execute(
                 f"""SELECT * FROM papers
                     WHERE status = 'library'
-                      AND COALESCE(canonical_paper_id, '') = ''
+                      AND {canonical_paper_filter('papers')}
                     ORDER BY {order_clause}
                     LIMIT ? OFFSET ?""",
                 (limit, offset),
@@ -300,23 +246,53 @@ def save_publication(
 
         def _persist() -> tuple[str, bool]:
             # One atomic write unit (writer gate + BEGIN IMMEDIATE + retry):
-            # upsert the row → promote to library → reconcile feed/discovery.
+            # dedup → upsert the row → promote to library → reconcile feed/discovery.
             # add_to_library defers its enrichment scheduling past the gate.
-            pid = paper_id or library_app.upsert_paper(
-                db,
-                title=title,
-                authors=req.authors,
-                year=req.year,
-                journal=req.journal,
-                abstract=req.abstract,
-                url=req.url,
-                doi=req.doi,
-                openalex_id=req.openalex_id,
-                status=library_app.TRACKED_STATUS,
-            )
+            if paper_id:
+                pid = paper_id
+            else:
+                duplicate_id = library_app.find_library_duplicate_for_metadata(
+                    db,
+                    title=title,
+                    authors=req.authors,
+                    year=req.year,
+                    doi=req.doi,
+                    openalex_id=req.openalex_id,
+                )
+                if duplicate_id:
+                    return duplicate_id, True
+                pid = library_app.upsert_paper(
+                    db,
+                    title=title,
+                    authors=req.authors,
+                    year=req.year,
+                    journal=req.journal,
+                    abstract=req.abstract,
+                    url=req.url,
+                    doi=req.doi,
+                    openalex_id=req.openalex_id,
+                    status=library_app.TRACKED_STATUS,
+                )
+
+            save_id, duplicate_ignored = library_app.resolve_library_save_target(db, pid)
+            if duplicate_ignored:
+                library_app.sync_surface_resolution(
+                    db,
+                    pid,
+                    action="save",
+                    source_surface="library",
+                )
+                library_app.sync_surface_resolution(
+                    db,
+                    save_id,
+                    action="save",
+                    source_surface="library",
+                )
+                return save_id, True
+
             ok = library_app.add_to_library(
                 db,
-                pid,
+                save_id,
                 rating=req.rating if req.rating is not None else library_app.DEFAULT_LIBRARY_RATING,
                 notes=req.notes,
                 added_from=added_from,
@@ -324,15 +300,24 @@ def save_publication(
             if ok:
                 library_app.sync_surface_resolution(
                     db,
-                    pid,
+                    save_id,
                     action="save",
                     source_surface="library",
                 )
-            return pid, ok
+            return save_id, ok
 
         paper_id, cursor_ok = run_write_unit(db, _persist, label="library_save")
         if not cursor_ok:
             raise HTTPException(status_code=404, detail="Paper not found")
+        # Post-commit (gate released): a new Library member shifts the
+        # library-wide centroid/topic weights, so refresh the signal cache off
+        # the read path (43.2). Best-effort — a failure never blocks the save.
+        try:
+            from alma.application.paper_signal import recompute_library_signal_scores
+
+            recompute_library_signal_scores(db)
+        except Exception as exc:
+            logger.debug("signal recompute after save skipped: %s", exc)
         row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
         return row_to_paper_response(row)
     except HTTPException:
@@ -439,6 +424,16 @@ def update_saved_paper(
             )
 
     run_write_unit(db, _persist, label="library_update_saved")
+    # A rating change is a direct paper_signal input; refresh the cache
+    # post-commit, off the read path (43.2). Only when the rating actually
+    # changed — pure notes/metadata edits don't move the signal.
+    if rating is not None:
+        try:
+            from alma.application.paper_signal import recompute_library_signal_scores
+
+            recompute_library_signal_scores(db)
+        except Exception as exc:
+            logger.debug("signal recompute after rating skipped: %s", exc)
     updated = db.execute(
         "SELECT * FROM papers WHERE id = ?",
         (paper_id,),
@@ -1496,7 +1491,8 @@ def list_followed_authors(
     off this list) never waits on the signal context build, and a dismiss that
     invalidates this list updates the grid instantly.
     """
-    ensure_followed_author_contract(db)
+    # Pure read (43.1): legacy-row canonicalization is a mutation/maintenance
+    # concern, never a GET one.
     rows = db.execute(
         """
         SELECT fa.author_id, fa.followed_at, fa.notify_new_papers, fa.is_owner, a.name
@@ -1531,7 +1527,7 @@ def list_followed_author_signals(
 ):
     from alma.application.author_signal import compute_author_signals
 
-    ensure_followed_author_contract(db)
+    # Pure read (43.1) — no contract canonicalization on the GET path.
     rows = db.execute(
         """
         SELECT fa.author_id, a.name, a.openalex_id
