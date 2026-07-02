@@ -17,6 +17,34 @@ logger = logging.getLogger(__name__)
 FETCH_SOURCE_SEMANTIC_SCHOLAR = "semantic_scholar"
 
 
+def prepare_publication_embedding_text(
+    title: str,
+    abstract: str,
+    *,
+    is_local_specter2: bool,
+    max_tokens: int,
+) -> str:
+    """Build the text sent to the active embedding provider.
+
+    Task 10 established that noisy OpenAlex taxonomy labels must not alter the
+    embedding substrate — structured topics remain ranking/display evidence, not
+    vector text. (The former `topics` guardrail kwarg was dead at the only call
+    site and is dropped; the format change is now enforced via the versioned
+    storage key — see `storage_model_key` / 43.6.)
+    """
+    from alma.discovery.similarity import prepare_text, prepare_text_specter2
+
+    if is_local_specter2:
+        # SPECTER2 expects canonical `title + [SEP] + abstract` (HF model card).
+        return prepare_text_specter2(title or "", abstract or "")
+    return prepare_text(
+        title or "",
+        abstract or "",
+        max_tokens=max_tokens,
+        is_query=False,
+    )
+
+
 def run_embedding_computation(
     job_id: str,
     *,
@@ -31,7 +59,6 @@ def run_embedding_computation(
     from alma.ai.environment import get_dependency_environment
     from alma.ai.providers import get_active_provider
     from alma.api.deps import open_db_connection
-    from alma.discovery.similarity import prepare_text, prepare_text_specter2
 
     conn = open_db_connection()
 
@@ -127,6 +154,14 @@ def run_embedding_computation(
         max_tokens = model_config.max_tokens if model_config else 256
         model_hf_id = provider.model_name
         is_local_specter2 = provider.name == "local" and model_hf_id == "allenai/specter2_base"
+        # Storage key = the versioned model identity written to / read from
+        # publication_embeddings (43.6). SPECTER2 is unchanged; remote providers
+        # get the text-format version suffix so a format change invalidates old
+        # vectors instead of silently mixing them. `model_hf_id` stays RAW for
+        # model loading + the is_local_specter2 text branch.
+        from alma.discovery.similarity import storage_model_key
+
+        storage_model = storage_model_key(model_hf_id)
         local_specter2_text_filter = (
             """
                 AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
@@ -166,7 +201,7 @@ def run_embedding_computation(
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
                 {limit_clause}
                 """,
-                [model_hf_id, *target_ids, *limit_params],
+                [storage_model, *target_ids, *limit_params],
             ).fetchall()
         elif scope == "stale":
             # A paper is "stale" for the active model if it has vectors under
@@ -189,7 +224,7 @@ def run_embedding_computation(
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
                 {limit_clause}
                 """,
-                [model_hf_id, model_hf_id, *target_ids, *limit_params],
+                [storage_model, storage_model, *target_ids, *limit_params],
             ).fetchall()
         elif scope == "all":
             rows = conn.execute(
@@ -219,7 +254,7 @@ def run_embedding_computation(
                 ORDER BY COALESCE(p.fetched_at, p.updated_at, p.created_at, '') DESC, p.id ASC
                 {limit_clause}
                 """,
-                [model_hf_id, *target_ids, *limit_params],
+                [storage_model, *target_ids, *limit_params],
             ).fetchall()
 
         total = len(rows)
@@ -319,35 +354,12 @@ def run_embedding_computation(
             chunk = rows[i:i + batch_size]
             payload: list[tuple[sqlite3.Row, str]] = []
             for row in chunk:
-                topics: list[str] = []
-                try:
-                    topic_rows = conn.execute(
-                        "SELECT term FROM publication_topics WHERE paper_id = ?",
-                        (row["id"],),
-                    ).fetchall()
-                    topics = [
-                        r["term"] if isinstance(r, sqlite3.Row) else r[0]
-                        for r in topic_rows
-                        if (r["term"] if isinstance(r, sqlite3.Row) else r[0])
-                    ]
-                except sqlite3.OperationalError:
-                    pass
-
-                if is_local_specter2:
-                    # SPECTER2 expects canonical `title + [SEP] + abstract`
-                    # (per the HF model card). Using `prepare_text`'s
-                    # enriched format pushes vectors ~0.99 cosine off the
-                    # S2-downloaded ones; the canonical input lifts the
-                    # match to ~1.0 on the median paper.
-                    text = prepare_text_specter2(row["title"] or "", row["abstract"] or "")
-                else:
-                    text = prepare_text(
-                        row["title"] or "",
-                        row["abstract"] or "",
-                        topics=topics,
-                        max_tokens=max_tokens,
-                        is_query=False,
-                    )
+                text = prepare_publication_embedding_text(
+                    row["title"] or "",
+                    row["abstract"] or "",
+                    is_local_specter2=is_local_specter2,
+                    max_tokens=max_tokens,
+                )
                 if not text:
                     skipped_empty += 1
                     processed += 1
@@ -377,7 +389,7 @@ def run_embedding_computation(
                                 (
                                     row["id"],
                                     encode_vector(emb),
-                                    model_hf_id,
+                                    storage_model,
                                     source_for_provider_name(provider.name),
                                     datetime.utcnow().isoformat(),
                                 ),
@@ -396,7 +408,7 @@ def run_embedding_computation(
                         # write window instead of a raw commit.
                         with write_section(conn, label="embeddings centroid refresh"):
                             refresh_centroids_for_papers(
-                                conn, inserted_paper_ids, model=model_hf_id
+                                conn, inserted_paper_ids, model=storage_model
                             )
                     except Exception:
                         logger.debug(
@@ -427,7 +439,7 @@ def run_embedding_computation(
                                     (
                                         row["id"],
                                         encode_vector(emb),
-                                        model_hf_id,
+                                        storage_model,
                                         source_for_provider_name(provider.name),
                                         datetime.utcnow().isoformat(),
                                     ),

@@ -942,13 +942,46 @@ def calibrate_similarity_score(raw_score: float, *, mode: str = "semantic") -> f
 # ---------------------------------------------------------------------------
 
 
-def get_active_embedding_model(conn: sqlite3.Connection) -> str:
-    """Return the HF id of the currently-configured embedding model.
+# The text format sent to REMOTE embedding providers is versioned into the
+# stored `publication_embeddings.model` key (43.6). Task 10 ("embedding
+# hygiene") dropped the noisy `Topics:` block from remote-provider text; the
+# vectors are keyed only by (paper_id, model), so without a version bump the
+# old with-topics vectors and the new without-topics vectors would coexist in
+# one similarity space. Bumping this tag makes old-key rows residuals the normal
+# fill sweep replaces — mirroring how LABELLING_VERSION / CLUSTERING_ALGO_VERSION
+# force rebuilds (see ai/graph_versions.py). Bump on any remote text-format change.
+EMBEDDING_TEXT_VERSION = "notopics-v2"
 
-    The value is read from ``discovery_settings.embedding_model``. The
-    default is sourced from ``DISCOVERY_SETTINGS_DEFAULTS`` so this
-    helper is the single source of truth for every read that needs to
-    filter ``publication_embeddings`` by model.
+# SPECTER2 local embeddings use the canonical `title[SEP]abstract` text (HF model
+# card) — that format is fixed, so its storage key stays UNVERSIONED. Only remote
+# providers carry the version suffix.
+_SPECTER2_STORAGE_MODEL = "allenai/specter2_base"
+
+
+def storage_model_key(hf_id: str) -> str:
+    """Map an embedding model's HF id to its ``publication_embeddings.model``
+    storage key.
+
+    Single chokepoint used by BOTH the writer (``services/embeddings``) and every
+    reader (via :func:`get_active_embedding_model`) so a versioned remote-text
+    format can never be read back under an unversioned key. SPECTER2 is returned
+    unchanged; every other provider gets the ``@<EMBEDDING_TEXT_VERSION>`` suffix.
+    """
+    hid = (hf_id or "").strip()
+    if not hid or hid == _SPECTER2_STORAGE_MODEL:
+        return hid
+    return f"{hid}@{EMBEDDING_TEXT_VERSION}"
+
+
+def get_active_embedding_model(conn: sqlite3.Connection) -> str:
+    """Return the storage ``model`` key of the currently-configured embedding model.
+
+    The HF id is read from ``discovery_settings.embedding_model`` (default from
+    ``DISCOVERY_SETTINGS_DEFAULTS``); this helper is the single source of truth
+    for every read that filters ``publication_embeddings`` by model. It returns
+    the VERSIONED storage key (see :func:`storage_model_key`), so remote-provider
+    reads never mix a stale text-format's vectors with the current one (43.6).
+    For the default SPECTER2 setup this is a no-op — the key is unchanged.
     """
     from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
@@ -958,11 +991,12 @@ def get_active_embedding_model(conn: sqlite3.Connection) -> str:
         ).fetchone()
     except sqlite3.OperationalError:
         row = None
+    raw = ""
     if row is not None:
-        value = str(row["value"] or "").strip()
-        if value:
-            return value
-    return DISCOVERY_SETTINGS_DEFAULTS["embedding_model"]
+        raw = str(row["value"] or "").strip()
+    if not raw:
+        raw = DISCOVERY_SETTINGS_DEFAULTS["embedding_model"]
+    return storage_model_key(raw)
 
 
 def get_cached_embedding(
