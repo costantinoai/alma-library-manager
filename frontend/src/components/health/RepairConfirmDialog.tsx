@@ -42,7 +42,7 @@ import {
  *  confidence, the quieter the badge). */
 function sourceBadge(c: MergeCandidate): { tone: StatusBadgeTone; label: string } {
   if (c.source === 'orcid') return { tone: 'info', label: 'ORCID' }
-  const tone: BadgeTone = c.confidence === 'high' ? 'info' : c.confidence === 'medium' ? 'warning' : 'neutral'
+  const tone: StatusBadgeTone = c.confidence === 'high' ? 'info' : c.confidence === 'medium' ? 'warning' : 'neutral'
   return { tone, label: `Name · ${c.confidence ?? 'low'}` }
 }
 

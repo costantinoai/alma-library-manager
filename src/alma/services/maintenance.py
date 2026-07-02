@@ -209,11 +209,23 @@ def _run_author_metadata(job_id: str, cap: int, target_paper_ids=None, params=No
 
 def _run_gc_orphan_authors(job_id: str, cap: int, target_paper_ids=None, params=None):
     from alma.application.author_lifecycle import garbage_collect_orphan_authors
+    from alma.application.followed_authors import ensure_followed_author_contract
+    from alma.core.db_write import write_section
 
     dry_run = bool((params or {}).get("dry_run", False))
     # cap = the run's total budget (was previously ignored — the sweep collected
     # every orphan regardless of the cap).
     with _maintenance_conn() as conn:
+        # Maintenance home for followed_authors canonicalization (43.1). The
+        # per-request read paths no longer heal legacy raw-id rows, so a
+        # background sweep keeps them converging on the canonical authors.id
+        # contract. Gated background write — never on a GET.
+        if not dry_run:
+            try:
+                with write_section(conn, label="followed_authors contract heal"):
+                    ensure_followed_author_contract(conn)
+            except Exception:
+                logger.debug("followed_authors contract heal skipped", exc_info=True)
         return garbage_collect_orphan_authors(conn, dry_run=dry_run, limit=cap, job_id=job_id)
 
 
@@ -396,15 +408,48 @@ def _count_author_centroids(conn: sqlite3.Connection, params=None) -> int:
     return count_authors_needing_centroid(conn)
 
 
+def _count_corpus_metadata(conn: sqlite3.Connection, params=None) -> int:
+    """Pending for "Rehydrate corpus metadata" = DISTINCT papers eligible in ANY
+    of its four phases (42.3): OpenAlex, S2-metadata, Crossref, abstract-recovery.
+
+    The old ``candidate_path="totals.eligible_now"`` counted the OpenAlex phase
+    ONLY, so the op noop-gated (eligible_now=0) while S2/Crossref/recovery had
+    thousands of candidates. Routing pending through the runner's own union count
+    keeps the op's noop gate honest and its plan complete.
+    """
+    from alma.services.corpus_rehydrate import count_corpus_metadata_candidates
+
+    try:
+        return int(count_corpus_metadata_candidates(conn) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
 def _count_reference_graph(conn: sqlite3.Connection, params=None) -> int:
-    """Identified papers with no local reference edges yet (the backfill pool)."""
+    """Identified papers with no local reference edges yet (the backfill pool).
+
+    Shares the backfill op's exact selector so this "pending" count == the op's
+    target (42.1): the standalone universe (matching the health/enrichment
+    counts) and excluding papers OpenAlex reports zero references for (terminal
+    references-ledger stamp), so the count converges to the no-fix floor instead
+    of freezing above it forever.
+    """
+    from alma.core.sql_helpers import standalone_paper_sql
+
     try:
         row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS n
             FROM papers p
             WHERE COALESCE(TRIM(p.openalex_id), '') <> ''
+              AND {standalone_paper_sql("p")}
               AND NOT EXISTS (SELECT 1 FROM publication_references r WHERE r.paper_id = p.id)
+              AND NOT EXISTS (
+                  SELECT 1 FROM paper_enrichment_status es
+                  WHERE es.paper_id = p.id
+                    AND es.source = 'references' AND es.purpose = 'metadata'
+                    AND es.status IN ('enriched', 'terminal_no_match')
+              )
             """
         ).fetchone()
         return int((row["n"] if row else 0) or 0)
@@ -545,6 +590,10 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "papers.missing_url",
             ),
             candidate_path="totals.eligible_now",
+            # 42.3: pending = distinct papers eligible in ANY of the four metadata
+            # phases (not just OpenAlex `eligible_now`), so the op stops noop-ing
+            # while S2/Crossref/recovery phases still have work.
+            count_fn=_count_corpus_metadata,
             operation_key="papers.rehydrate_metadata:openalex:metadata",
             job_id_prefix="maint_corpus_metadata",
             cost=COST_NETWORK,
@@ -1601,6 +1650,9 @@ def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
       the quota neared the reserve (its result carried ``abort_reason ==
       'credit_limit'``), with the remaining-credit snapshot at abort time, so the
       card can say "last operation aborted due to credit limit (N left)".
+    - ``last_pause`` (42.6) — the most recent background op that yielded because
+      the user became active (``abort_reason == 'paused_for_user'``), so a paused
+      system reads as "paused, resumes when idle" instead of looking dead.
     """
     import json
 
@@ -1608,6 +1660,7 @@ def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
     from alma.services.background_settings import get_reserved_api_calls
 
     last_abort: Optional[dict[str, Any]] = None
+    last_pause: Optional[dict[str, Any]] = None
     try:
         rows = conn.execute(
             """
@@ -1623,22 +1676,29 @@ def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
                 result = json.loads(row["result_json"] or "{}")
             except Exception:
                 continue
-            if result.get("abort_reason") == "credit_limit":
-                last_abort = {
-                    "job_id": row["job_id"],
-                    "operation_key": row["operation_key"],
-                    "message": row["message"],
-                    "finished_at": row["finished_at"] or row["updated_at"],
-                    "openalex_credits_remaining": result.get("openalex_credits_remaining"),
-                }
+            reason = result.get("abort_reason")
+            record = {
+                "job_id": row["job_id"],
+                "operation_key": row["operation_key"],
+                "message": row["message"],
+                "finished_at": row["finished_at"] or row["updated_at"],
+                "openalex_credits_remaining": result.get("openalex_credits_remaining"),
+            }
+            if reason == "credit_limit" and last_abort is None:
+                last_abort = record
+            elif reason == "paused_for_user" and last_pause is None:
+                last_pause = record
+            if last_abort is not None and last_pause is not None:
                 break
     except sqlite3.OperationalError:
         last_abort = None
+        last_pause = None
 
     return {
         "openalex_credits_remaining": provider_remaining_credits("openalex"),
         "reserved_user_calls": get_reserved_api_calls(conn),
         "last_credit_abort": last_abort,
+        "last_pause": last_pause,
     }
 
 

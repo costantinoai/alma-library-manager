@@ -16,7 +16,7 @@
  * carries its run / auto-repair / cap / scope / batch controls once. Every
  * number reads the canonical endpoints (/insights/health + /health/operations).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -58,7 +58,15 @@ export function HealthPage() {
   // advance only after it COMPLETES, stop on failed/cancelled, and stop (instead
   // of looping forever) if the same op is still recommended after it finished.
   const [sequenceActive, setSequenceActive] = useState(false)
-  const [watchedJob, setWatchedJob] = useState<{ jobId: string; opKey: string } | null>(null)
+  // `pendingBefore` (42.5) is the op's pending count at launch — the sequence
+  // loops the SAME op while its pending strictly decreases, and stops truthfully
+  // when it doesn't. A ref mirrors `sequenceActive` so a mid-poll "Stop" is
+  // honoured even inside the async post-repair freshness wait (42.4).
+  const [watchedJob, setWatchedJob] = useState<{ jobId: string; opKey: string; pendingBefore: number } | null>(null)
+  const sequenceActiveRef = useRef(false)
+  useEffect(() => {
+    sequenceActiveRef.current = sequenceActive
+  }, [sequenceActive])
 
   const snapshotQuery = useQuery({
     queryKey: SNAPSHOT_KEY,
@@ -90,6 +98,7 @@ export function HealthPage() {
   // step (H-4: "Stop auto-advance" ≠ cancel). The control is labelled to match.
   const stopSequence = (message?: string, tone: 'info' | 'error' = 'info') => {
     setSequenceActive(false)
+    sequenceActiveRef.current = false
     setWatchedJob(null)
     if (message) {
       if (tone === 'error') errorToast('Recommended sequence stopped', message)
@@ -116,7 +125,12 @@ export function HealthPage() {
         if (!launched) {
           stopSequence('The recommended step had nothing eligible to run — auto-advance stopped.')
         } else {
-          setWatchedJob({ jobId: result.job_id as string, opKey: result.key })
+          const before = (operationsQuery.data?.operations ?? []).find((o) => o.key === result.key)
+          setWatchedJob({
+            jobId: result.job_id as string,
+            opKey: result.key,
+            pendingBefore: Number(before?.candidates_pending ?? Number.POSITIVE_INFINITY),
+          })
         }
         return
       }
@@ -207,22 +221,58 @@ export function HealthPage() {
     if (status !== 'completed') return
 
     const completedKey = watchedJob.opKey
+    const pendingBefore = watchedJob.pendingBefore
     setWatchedJob(null) // consume this completion exactly once
     if (!sequenceActive) return // user stopped while it ran — leave the job's results in place
-    void operationsQuery.refetch().then((res) => {
-      const next = res.data?.recommended_next ?? null
-      if (!next) {
-        stopSequence('Recommended sequence finished — no further safe steps (any manual-review gates remain for you).')
-      } else if (next.key === completedKey) {
-        stopSequence(
-          `"${next.label}" still has work after a full batch — run it again or review it. Auto-advance stopped.`,
-        )
-      } else {
-        runMutation.mutate({ key: next.key, sequence: true })
-      }
-    })
+    void advanceSequence(completedKey, pendingBefore)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- driven by the job status + identity
   }, [jobStatusQuery.data?.status, watchedJob])
+
+  // Advance the recommended sequence off FRESH counts (42.4 + 42.5). A repair
+  // job's terminal state fires this; the materialized health view rebuilds
+  // asynchronously (SWR), so evaluating immediately reads yesterday's counts and
+  // stops a working repair. We (1) refetch until the snapshot is no longer
+  // stale/rebuilding — bounded so a stuck rebuild can't hang the sequence — then
+  // (2) LOOP the same op while its pending strictly decreased and is > 0, else
+  // advance to the next recommended op, else stop truthfully.
+  const advanceSequence = async (completedKey: string, pendingBefore: number) => {
+    let opsData = operationsQuery.data
+    let fresh = false
+    for (let i = 0; i < 10; i++) {
+      if (!sequenceActiveRef.current) return // user stopped during the wait
+      const [snap, ops] = await Promise.all([snapshotQuery.refetch(), operationsQuery.refetch()])
+      opsData = ops.data
+      const s = snap.data
+      if (s && s.stale !== true && s.rebuilding !== true) {
+        fresh = true
+        break
+      }
+      await new Promise((r) => setTimeout(r, 3000))
+    }
+    if (!sequenceActiveRef.current) return
+    if (!fresh) {
+      toast({ title: 'Health', description: 'Diagnostics are still refreshing — counts may lag briefly.' })
+    }
+    const opNow = (opsData?.operations ?? []).find((o) => o.key === completedKey)
+    const pendingNow = Number(opNow?.candidates_pending ?? 0)
+    // 42.5: keep running the same op while it is genuinely draining the backlog.
+    if (pendingNow > 0 && pendingNow < pendingBefore) {
+      runMutation.mutate({ key: completedKey, sequence: true })
+      return
+    }
+    const next = opsData?.recommended_next ?? null
+    if (!next) {
+      stopSequence('Recommended sequence finished — no further safe steps (any manual-review gates remain for you).')
+    } else if (next.key === completedKey) {
+      // Same op still recommended but pending did NOT drop → truthful no-progress stop.
+      stopSequence(
+        `"${next.label}" made no progress this run (${pendingNow.toLocaleString()} still pending) — ` +
+          'it may be throttled or blocked; retry later or review. Auto-advance stopped.',
+      )
+    } else {
+      runMutation.mutate({ key: next.key, sequence: true })
+    }
+  }
 
   const onRun = (key: string, request: MaintenanceRunRequest) =>
     runMutation.mutate({ key, request })

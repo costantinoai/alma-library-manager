@@ -289,15 +289,23 @@ def _clear_terminal_status_row(
     )
 
 
-def _count_remaining_eligible(conn: sqlite3.Connection, model: str) -> int:
+def _count_remaining_eligible(
+    conn: sqlite3.Connection, model: str, *, queued_only: bool = False
+) -> int:
     """Count papers still eligible for title resolution after this run.
 
     Used by the self-rescheduling decision at the end of each outer
     run. Mirrors the eligibility predicate in the runner's SELECT
-    minus the LIMIT.
+    minus the LIMIT. ``queued_only`` (41.3) ANDs the shared
+    enqueued-never-attempted predicate for the Health "queued" split.
     """
+    extra = ""
+    if queued_only:
+        from alma.services.corpus_rehydrate import queued_metadata_exists_sql
+
+        extra = f" AND {queued_metadata_exists_sql('p')}"
     row = conn.execute(
-        f"SELECT COUNT(*) AS c {_ELIGIBILITY_FROM_WHERE}",
+        f"SELECT COUNT(*) AS c {_ELIGIBILITY_FROM_WHERE}{extra}",
         _eligibility_params(model),
     ).fetchone()
     return int(row["c"]) if row else 0
@@ -309,15 +317,21 @@ def _active_model(conn: sqlite3.Connection) -> str:
     return get_active_embedding_model(conn)
 
 
-def count_remaining_eligible(conn: sqlite3.Connection, model: Optional[str] = None) -> int:
+def count_remaining_eligible(
+    conn: sqlite3.Connection, model: Optional[str] = None, *, queued_only: bool = False
+) -> int:
     """Public count of papers still eligible for title resolution.
 
     The Health ``identity.unresolved`` dimension count, the maintenance op's
     pending count, and this op's drilldown ALL share ONE definition (the
     ``_ELIGIBILITY_FROM_WHERE`` predicate) so the dimension reconciles with both
     its repair op and its drilldown. Defaults to the active embedding model.
+
+    ``queued_only`` restricts to the enqueued-but-never-attempted subset (41.3),
+    so Health can show "N queued — runs when idle" for a fresh corpus whose
+    pipeline simply hasn't reached these papers yet.
     """
-    return _count_remaining_eligible(conn, model or _active_model(conn))
+    return _count_remaining_eligible(conn, model or _active_model(conn), queued_only=queued_only)
 
 
 def list_remaining_eligible(
@@ -969,6 +983,13 @@ def run_title_resolution_sweep(
             and continuation_depth < _MAX_CONTINUATION_DEPTH
         )
 
+        # 42.2: a run can "complete" having done nothing because it hit its
+        # deadline sitting in provider throttling. Carry deadline_hit / dropped /
+        # a no-progress warning so the message and the Health card tell the truth
+        # instead of reporting a clean success.
+        deadline_hit = bool(pipeline_result.deadline_hit)
+        dropped = int(pipeline_result.dropped)
+        no_progress_throttled = processed == 0 and (deadline_hit or s2_rate_limited)
         result_data: dict = {
             "processed": processed,
             "resolved_via_openalex": resolved_via_openalex,
@@ -979,8 +1000,17 @@ def run_title_resolution_sweep(
             "remaining_eligible": remaining,
             "remaining_session_budget": remaining_session,
             "continuation_depth": continuation_depth,
+            "deadline_hit": deadline_hit,
+            "dropped": dropped,
             "model": model,
         }
+        if no_progress_throttled:
+            result_data["no_progress"] = True
+            result_data["warning"] = (
+                "OpenAlex / Semantic Scholar is throttling — this run made no "
+                "progress. The papers stay eligible and will retry when the app "
+                "is idle; try again later."
+            )
 
         if will_continue:
             from uuid import uuid4
@@ -1035,13 +1065,24 @@ def run_title_resolution_sweep(
                 },
             )
 
-        message = (
-            f"Title resolution complete: "
-            f"openalex={resolved_via_openalex}, "
-            f"s2_fallback={resolved_via_s2}, "
-            f"vectors={vectors_captured}, "
-            f"remaining={remaining}"
-        )
+        if no_progress_throttled:
+            # 0 processed + throttled/deadline: do NOT report "complete" — say so.
+            message = (
+                f"Title resolution made no progress (provider throttling); "
+                f"remaining={remaining} — will retry."
+            )
+        else:
+            message = (
+                f"Title resolution complete: "
+                f"openalex={resolved_via_openalex}, "
+                f"s2_fallback={resolved_via_s2}, "
+                f"vectors={vectors_captured}, "
+                f"remaining={remaining}"
+            )
+            if deadline_hit:
+                message += ", deadline hit"
+            if dropped:
+                message += f", dropped={dropped}"
         if will_continue:
             message += ", continuation queued"
 

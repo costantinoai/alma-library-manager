@@ -23,8 +23,11 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
   // render as muted "not applicable" / "not enough data", never a healthy count.
   const isNotApplicable = dim.state === 'not_applicable'
   const isInsufficient = dim.state === 'insufficient_data'
+  // 41.3: the gap is (nearly) all enqueued background work — a calm "N queued",
+  // not a warning. Takes precedence over the coverage bar.
+  const isQueued = dim.state === 'queued'
   const isUnmeasured = isError || isNotApplicable || isInsufficient
-  const isCoverage = !isUnmeasured && dim.coverage_pct != null
+  const isCoverage = !isUnmeasured && !isQueued && dim.coverage_pct != null
   const pct = Math.round(dim.coverage_pct ?? 0)
 
   // H-2: a failed assessor must read as "couldn't measure", never a healthy 0.
@@ -44,6 +47,13 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
     <span className="shrink-0 text-xs italic text-slate-400" title={dim.severity_reason}>
       not enough data
     </span>
+  ) : isQueued ? (
+    <span
+      className="shrink-0 text-xs tabular-nums text-info-600"
+      title={dim.severity_reason || 'Queued for background enrichment — runs when the app is idle.'}
+    >
+      {(dim.queued ?? dim.count ?? 0).toLocaleString()} queued
+    </span>
   ) : isCoverage ? (
     <span className="flex items-center gap-2">
       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200" aria-hidden>
@@ -60,6 +70,14 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
         {(dim.count ?? 0).toLocaleString()}
         {(dim.total ?? 0) > 0 ? <span className="text-slate-400"> / {(dim.total ?? 0).toLocaleString()}</span> : null}
       </span>
+      {dim.queued ? (
+        <span
+          className="font-normal text-info-600"
+          title="Enqueued for background enrichment — runs when the app is idle. Severity is graded on the remainder."
+        >
+          · {dim.queued.toLocaleString()} queued
+        </span>
+      ) : null}
       {dim.exhausted ? (
         <span
           className="font-normal text-slate-400"

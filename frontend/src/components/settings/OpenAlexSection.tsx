@@ -85,7 +85,9 @@ export function OpenAlexSection({
 
   const openalexUsageQuery = useQuery({
     queryKey: ['openalex-usage'],
-    queryFn: () => api.get<OpenAlexUsage>('/settings/openalex/usage'),
+    // Timer-driven poll → background so an open Settings tab doesn't pin the
+    // app "active" (41.1).
+    queryFn: () => api.get<OpenAlexUsage>('/settings/openalex/usage', { background: true }),
     retry: 1,
     refetchInterval: 60_000,
     enabled: formData.backend === 'openalex',

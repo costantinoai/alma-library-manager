@@ -19,7 +19,7 @@ from typing import Any, Callable
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
 from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
 from alma.core.utils import (
     normalize_id_list,
     normalize_doi,
@@ -150,6 +150,27 @@ def _missing_metadata_clause() -> str:
     """
 
 
+def queued_metadata_exists_sql(alias: str = "p") -> str:
+    """EXISTS predicate: this paper has an OpenAlex-metadata enrichment-ledger row
+    that is ENQUEUED but NEVER attempted (status pending/queued, attempts=0).
+
+    Such a paper's whole gap (missing identity, missing fields, missing vector) is
+    background work-in-progress the pipeline simply hasn't reached yet — not a
+    defect. Every enrichment-serviced Health dimension counts this subset as
+    `queued` (41.3), so a freshly-onboarded corpus reads "N queued — runs when
+    idle" instead of red. Shared here so the identity / metadata / S2 / local
+    counts all agree on what "queued" means. ``alias`` is the papers-table alias.
+    """
+    return f"""EXISTS (
+        SELECT 1 FROM paper_enrichment_status es
+        WHERE es.paper_id = {alias}.id
+          AND es.source = '{OPENALEX_SOURCE}'
+          AND es.purpose = '{METADATA_PURPOSE}'
+          AND COALESCE(es.status, '') IN ('pending', 'queued')
+          AND COALESCE(es.attempts, 0) = 0
+    )"""
+
+
 def _eligible_status_clause(force: bool) -> str:
     if force:
         return "1 = 1"
@@ -214,7 +235,7 @@ def _select_openalex_candidates(
          AND es.source = ?
          AND es.purpose = ?
         WHERE COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
-          AND COALESCE(p.canonical_paper_id, '') = ''
+          AND {canonical_paper_filter('p')}
           {target_clause}
           AND {_missing_metadata_clause()}
           AND {status_clause}
@@ -273,7 +294,7 @@ def _select_s2_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE COALESCE(p.canonical_paper_id, '') = ''
+        WHERE {canonical_paper_filter('p')}
           {target_clause}
           AND (
               COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
@@ -304,6 +325,27 @@ def _select_s2_candidates(
     ).fetchall()
 
 
+def count_corpus_metadata_candidates(conn: sqlite3.Connection) -> int:
+    """Distinct papers eligible in ANY corpus-metadata phase (42.3).
+
+    OpenAlex, S2-metadata, Crossref-abstract, and abstract-recovery each have
+    INDEPENDENT eligibility — an insert hook can leave an S2/Crossref/recovery
+    row pending while the OpenAlex row is already ``enriched``. The maintenance
+    op's pending / noop-gate must count the UNION; using OpenAlex ``eligible_now``
+    alone made "Rehydrate metadata" noop while thousands of S2/Crossref/recovery
+    candidates waited (measured: OpenAlex 0 · S2 2,851 · Crossref 12 · recovery
+    1,054). Reuses the SAME selectors the runner's preflight uses — no new SQL.
+    """
+    ids: set[str] = set()
+    for row in _select_openalex_candidates(conn, limit=None):
+        ids.add(str(row["id"]))
+    for row in _select_s2_candidates(conn, limit=None):
+        ids.add(str(row["id"]))
+    ids.update(str(i) for i in _select_crossref_abstract_candidates(conn, limit=None))
+    ids.update(str(i) for i in _select_abstract_recovery_candidates(conn, limit=None))
+    return len(ids)
+
+
 def _candidate_count(conn: sqlite3.Connection) -> int:
     lookup_expr = _openalex_lookup_expr()
     row = conn.execute(
@@ -315,7 +357,7 @@ def _candidate_count(conn: sqlite3.Connection) -> int:
          AND es.source = ?
          AND es.purpose = ?
         WHERE COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
-          AND COALESCE(p.canonical_paper_id, '') = ''
+          AND {canonical_paper_filter('p')}
           AND {_missing_metadata_clause()}
           AND (
               es.paper_id IS NULL
@@ -717,7 +759,7 @@ def _select_crossref_abstract_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE COALESCE(p.canonical_paper_id, '') = ''
+        WHERE {canonical_paper_filter('p')}
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
           AND COALESCE(NULLIF(TRIM(p.doi), ''), '') != ''
           {seed_clause}
@@ -1013,7 +1055,7 @@ def _select_abstract_recovery_candidates(
           ON es.paper_id = p.id
          AND es.source = ?
          AND es.purpose = ?
-        WHERE COALESCE(p.canonical_paper_id, '') = ''
+        WHERE {canonical_paper_filter('p')}
           AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
           {target_clause}
           AND (
@@ -1210,6 +1252,51 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
         """,
         (OPENALEX_SOURCE, METADATA_PURPOSE),
     ).fetchone()
+    # References EXHAUSTED (42.1): standalone, OpenAlex-identified papers still
+    # missing references that carry a TERMINAL references-ledger stamp — OpenAlex
+    # reported the work has zero references, so no backfill run can ever fill
+    # them. Its own `source='references'` ledger (never colliding with the
+    # metadata/S2/crossref ledgers) is the drain signal.
+    references_exhausted_row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM papers p
+        WHERE {standalone_paper_sql("p")}
+          AND COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
+          AND NOT EXISTS (SELECT 1 FROM publication_references pr WHERE pr.paper_id = p.id)
+          AND EXISTS (
+              SELECT 1 FROM paper_enrichment_status es
+              WHERE es.paper_id = p.id
+                AND es.source = 'references' AND es.purpose = ?
+                AND es.status IN ('enriched', 'terminal_no_match')
+          )
+        """,
+        (METADATA_PURPOSE,),
+    ).fetchone()
+    references_exhausted = int((references_exhausted_row["c"] if references_exhausted_row else 0) or 0)
+    # Abstract EXHAUSTED consulting ALL channels (42.3): a missing abstract is
+    # only "no fix" once the LAST channel — abstract-recovery (Unpaywall /
+    # landing page / preprint twin) — has a terminal stamp. The OpenAlex-only
+    # exhausted (below) marked papers no-fix that recovery never tried (measured:
+    # only 71 of 1,114 abstract-less papers were ever attempted), so the abstract
+    # dimension lied "1,114 no fix". A paper reaching a terminal recovery row has
+    # been through every earlier channel too, so this is the true floor.
+    abstract_exhausted_row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM papers p
+        WHERE {standalone_paper_sql("p")}
+          AND COALESCE(NULLIF(TRIM(p.openalex_id), ''), '') != ''
+          AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
+          AND EXISTS (
+              SELECT 1 FROM paper_enrichment_status es
+              WHERE es.paper_id = p.id AND es.source = ? AND es.purpose = ?
+                AND es.status IN ('unchanged', 'terminal_no_match', 'enriched')
+          )
+        """,
+        (ABSTRACT_RECOVERY_SOURCE, METADATA_PURPOSE),
+    ).fetchone()
+    abstract_exhausted_all = int((abstract_exhausted_row["c"] if abstract_exhausted_row else 0) or 0)
     return {
         "source": OPENALEX_SOURCE,
         "purpose": METADATA_PURPOSE,
@@ -1230,18 +1317,54 @@ def build_enrichment_status(conn: sqlite3.Connection) -> dict[str, Any]:
             "topics": int(missing["missing_topics"] or 0) if missing else 0,
             "references": int(missing["missing_references"] or 0) if missing else 0,
         },
-        # Subset of `missing` that OpenAlex already tried and can't fill (no source
-        # value). `references` is omitted: its repair op (reference_graph) is a
-        # separate fetch whose pending already tracks the gap, so it isn't exhausted.
+        # Subset of `missing` that a source already tried and can't fill (no value
+        # to give). `references` now carries its OWN terminal stamp (42.1): a work
+        # OpenAlex reports zero references for is exhausted, so the dimension can
+        # show "N missing · M no fix" and its op can drain to zero.
         "exhausted": {
             "doi": int(exhausted["doi"] or 0) if exhausted else 0,
-            "abstract": int(exhausted["abstract"] or 0) if exhausted else 0,
+            # 42.3: abstract exhaustion consults the recovery ledger, not just the
+            # OpenAlex row, so recovery-untried papers read as fixable.
+            "abstract": abstract_exhausted_all,
             "url": int(exhausted["url"] or 0) if exhausted else 0,
             "publication_date": int(exhausted["publication_date"] or 0) if exhausted else 0,
             "authorships": int(exhausted["authorships"] or 0) if exhausted else 0,
             "topics": int(exhausted["topics"] or 0) if exhausted else 0,
+            "references": references_exhausted,
         },
     }
+
+
+def reconcile_satisfied_pending(conn: sqlite3.Connection) -> int:
+    """Mark OpenAlex-metadata `pending`/`queued` ledger rows whose paper has NO
+    missing hydratable fields as terminal `enriched` (41.4), returning the count.
+
+    Reuses the sweep's OWN `_missing_metadata_clause` so "pending work exists" is
+    truthful. Without this, fully-hydrated papers leave stale pending rows and the
+    15-min drain schedules zero-work sweeps forever (measured: 3,591 pending rows,
+    all fully hydrated → 250 of 295 sweeps processed 0, starving real background
+    ops). Write via `write_section`; single connection; no network held.
+    """
+    _ensure_enrichment_status_table(conn)
+    missing_clause = _missing_metadata_clause()  # aliased on `p`
+    with write_section(conn, label="reconcile satisfied pending ledger"):
+        cur = conn.execute(
+            f"""
+            UPDATE paper_enrichment_status
+            SET status = 'enriched',
+                reason = 'reconciled_no_missing_fields',
+                updated_at = ?
+            WHERE source = ? AND purpose = ?
+              AND status IN ('pending', 'queued')
+              AND EXISTS (
+                  SELECT 1 FROM papers p
+                  WHERE p.id = paper_enrichment_status.paper_id
+                    AND NOT {missing_clause}
+              )
+            """,
+            (_utcnow_iso(), OPENALEX_SOURCE, METADATA_PURPOSE),
+        )
+        return int(cur.rowcount or 0)
 
 
 def list_enrichment_status_items(
@@ -1943,6 +2066,21 @@ def run_corpus_metadata_rehydration(
                     step="chain_post_hydration_skipped",
                     data={"trigger_source": trigger_source, "abort_reason": _yield_sink.get("reason", "")},
                 )
+                # 41.2: a NON-user run that yielded still OWES the S2-vector chain.
+                # The metadata sweep resumes off the durable ledger, but the chain
+                # hook has no durable pending rows — record a marker so the idle
+                # drain re-arms it once metadata has drained. (A user run never
+                # yields and must never chain, so it is excluded.)
+                if _yield_sink and trigger_source != "user":
+                    try:
+                        from alma.services.embedding_chain import (
+                            mark_post_hydration_chain_pending,
+                        )
+
+                        with write_section(conn, label="mark post-hydration chain pending"):
+                            mark_post_hydration_chain_pending(conn)
+                    except Exception as mark_exc:
+                        logger.debug("chain-pending marker not set: %s", mark_exc)
             else:
                 chain = schedule_post_hydration_chain(
                     conn,

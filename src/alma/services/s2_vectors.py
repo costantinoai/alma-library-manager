@@ -57,6 +57,10 @@ TERMINAL_FETCH_STATUSES = {
 # 1.05 s/req gate, ~6 batches × 2.5 s ≈ 15–30 s wall-clock per outer
 # run — short enough that any single uvicorn `--reload` only loses one
 # chunk's worth of work, and the next continuation picks up cleanly.
+# Operation key for the S2 backfill (42.6) — the background-governance tripwire
+# and the Activity row use the same value.
+_S2_BACKFILL_OPERATION_KEY = "ai.backfill_s2_vectors"
+
 _PER_RUN_PAPERS = 1500
 # Self-rescheduling depth cap. 50 outer runs × 1500 papers = 75 000
 # papers per click — generous and bounded so a stuck loop can't run
@@ -341,6 +345,28 @@ def run_s2_vector_backfill(
     model = semantic_scholar.S2_SPECTER2_MODEL
     try:
         _ensure_fetch_status_table(conn)
+
+        # 42.6: give scheduler/auto-triggered S2 runs the SAME background
+        # governance the sibling network sweeps have — yield to the user
+        # (paused_for_user) and honor the credit reserve. A user-triggered run
+        # never yields (the tripwire checks trigger_source internally), so manual
+        # "Fetch missing S2 vectors" clicks run to completion as before.
+        from alma.api.scheduler import (
+            BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+            get_job_trigger_source,
+            make_background_cancel_check,
+        )
+
+        _trigger_source = get_job_trigger_source(job_id)
+        _yield_sink: dict[str, str] = {}
+        _is_cancelled = make_background_cancel_check(
+            conn,
+            job_id,
+            _S2_BACKFILL_OPERATION_KEY,
+            is_cancellation_requested,
+            trigger_source=_trigger_source,
+            sink=_yield_sink,
+        )
         limit = max(1, min(int(limit or 200), 5000))
         # Per outer-run cap. Reload-resilience: each chunk is ~30 s
         # wall, so any single `--reload` only loses one chunk; the
@@ -453,7 +479,44 @@ def run_s2_vector_backfill(
         chunk_size = max(1, min(int(chunk_size or 250), 500))
 
         for start in range(0, total, chunk_size):
-            if is_cancellation_requested(job_id):
+            if _is_cancelled():
+                if _yield_sink:
+                    # Background yield (paused_for_user / credit_limit): RETRYABLE.
+                    # Stamp 'completed' + abort_reason so the Health budget card can
+                    # report the pause; unprocessed papers keep their eligibility
+                    # (no terminal stamp). Re-arm the vector chain (41.2) so the idle
+                    # drain resumes S2 once the app is idle — S2 has no durable
+                    # pending rows, so without this the yielded work would be lost.
+                    reason = _yield_sink.get("reason", "")
+                    msg = _yield_sink.get("message", "S2 vector fetch paused for user activity")
+                    payload: dict = {
+                        "success": True,
+                        "yielded": True,
+                        "abort_reason": reason,
+                        "processed": processed,
+                    }
+                    if reason == _BG_CREDIT_LIMIT:
+                        from alma.core.http_sources import provider_remaining_credits
+
+                        payload["openalex_credits_remaining"] = provider_remaining_credits("openalex")
+                    try:
+                        from alma.services.embedding_chain import mark_post_hydration_chain_pending
+
+                        with write_section(conn, label="mark s2 chain pending"):
+                            mark_post_hydration_chain_pending(conn)
+                    except Exception as mark_exc:
+                        logger.debug("s2 chain-pending marker not set: %s", mark_exc)
+                    set_job_status(
+                        job_id,
+                        status="completed",
+                        processed=processed,
+                        total=total,
+                        message=msg,
+                        finished_at=datetime.utcnow().isoformat(),
+                        result=payload,
+                    )
+                    add_job_log(job_id, msg, step=reason or "background_yield", data=payload)
+                    return
                 set_job_status(
                     job_id,
                     status="cancelled",

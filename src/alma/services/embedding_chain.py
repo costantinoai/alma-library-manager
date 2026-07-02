@@ -64,8 +64,58 @@ _LOCAL_FILL_OPERATION_KEY = "embeddings.local_specter2_fill"
 _AUTO_S2_FETCH_LIMIT = 5000
 
 
+# Durable "the S2-vector chain is owed" marker (41.2). A background metadata
+# rehydration that yields on `paused_for_user` / `credit_limit` skips its
+# post-hydration chain hook (the sweep resumes via the durable enrichment
+# ledger, but the chain — which has no durable pending rows of its own — would be
+# lost). We record this KV flag on that yield; the idle drain re-arms the chain
+# once metadata has drained and the app is idle, then clears it. Lives in the
+# shared `discovery_settings` KV, like the governance knobs.
+_CHAIN_PENDING_KEY = "hydration.post_hydration_chain_pending"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _queued_clause(queued_only: bool, alias: str = "p") -> str:
+    """`AND <queued predicate>` when restricting a candidate count to the
+    enqueued-but-never-attempted subset (41.3), else empty. Reuses the ONE shared
+    predicate so S2 / local / identity / metadata all agree on "queued"."""
+    if not queued_only:
+        return ""
+    from alma.services.corpus_rehydrate import queued_metadata_exists_sql
+
+    return f"AND {queued_metadata_exists_sql(alias)}"
+
+
 def _new_chain_id() -> str:
     return uuid.uuid4().hex[:10]
+
+
+def mark_post_hydration_chain_pending(conn: sqlite3.Connection) -> None:
+    """Remember that a background yield deferred the S2-vector chain (41.2).
+
+    Caller-owns-transaction: wrap in ``write_section`` / ``run_write_unit``.
+    """
+    from alma.application.discovery import lens_crud
+
+    lens_crud.upsert_setting(conn, _CHAIN_PENDING_KEY, "1")
+
+
+def clear_post_hydration_chain_pending(conn: sqlite3.Connection) -> None:
+    """Clear the deferred-chain marker once the drain has re-armed it (41.2).
+
+    Caller-owns-transaction: wrap in ``write_section`` / ``run_write_unit``.
+    """
+    from alma.application.discovery import lens_crud
+
+    lens_crud.upsert_setting(conn, _CHAIN_PENDING_KEY, "0")
+
+
+def is_post_hydration_chain_pending(conn: sqlite3.Connection) -> bool:
+    """True when a background yield left the S2-vector chain owed (41.2)."""
+    from alma.application.discovery import lens_crud
+
+    raw = lens_crud.read_settings(conn).get(_CHAIN_PENDING_KEY)
+    return str(raw or "").strip().lower() in _TRUTHY
 
 
 def _has_local_specter2_provider(conn: sqlite3.Connection) -> bool:
@@ -124,13 +174,15 @@ def _count_s2_fetch_candidates(
     conn: sqlite3.Connection,
     *,
     target_paper_ids: list[str] | tuple[str, ...] | None = None,
+    queued_only: bool = False,
 ) -> int:
     """Estimate of papers eligible for the next S2 vector backfill run.
 
     Mirrors the SELECT in `run_s2_vector_backfill` (DOI or s2_id, no
     active-model vector yet, no terminal fetch_status row). Used only
     to skip scheduling when zero — coarse over- / under-counts are
-    fine.
+    fine. ``queued_only`` (41.3) ANDs the shared enqueued-never-attempted
+    predicate so Health can show the "queued" split for this dimension.
     """
     try:
         from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
@@ -143,6 +195,7 @@ def _count_s2_fetch_candidates(
             target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
             params.extend(target_ids)
         params.append(model)
+        queued_clause = _queued_clause(queued_only)
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS c
@@ -157,6 +210,7 @@ def _count_s2_fetch_candidates(
             )
             AND {standalone_paper_sql("p")}
             {target_clause}
+            {queued_clause}
             AND NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id
@@ -178,8 +232,13 @@ def _count_local_specter2_candidates(
     conn: sqlite3.Connection,
     *,
     target_paper_ids: list[str] | tuple[str, ...] | None = None,
+    queued_only: bool = False,
 ) -> int:
-    """Papers that local SPECTER2 *can* compute right now."""
+    """Papers that local SPECTER2 *can* compute right now.
+
+    ``queued_only`` (41.3) restricts to the enqueued-never-attempted subset for
+    the Health "queued" split.
+    """
     try:
         from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
@@ -190,6 +249,7 @@ def _count_local_specter2_candidates(
         if target_ids:
             target_clause = f"AND p.id IN ({','.join('?' for _ in target_ids)})"
             params.extend(target_ids)
+        queued_clause = _queued_clause(queued_only)
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS c
@@ -200,6 +260,7 @@ def _count_local_specter2_candidates(
             )
             AND {standalone_paper_sql("p")}
             {target_clause}
+            {queued_clause}
             AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
             AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
             """,

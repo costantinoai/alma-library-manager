@@ -1430,6 +1430,19 @@ def refresh_recommendations_periodic() -> None:
                     "error": str(exc),
                 })
 
+        # Maintenance home for the Library signal cache (43.2). The composite
+        # depends on library-wide centroid/topic/feedback state that the reads
+        # no longer recompute, so converge `papers.global_signal_score` here on
+        # the idle scheduler. Best-effort — a failure never fails the refresh.
+        try:
+            from alma.application.paper_signal import recompute_library_signal_scores
+
+            rescored = recompute_library_signal_scores(conn)
+            if rescored:
+                logger.info("Recomputed %d Library signal scores (periodic)", rescored)
+        except Exception:
+            logger.debug("periodic library signal recompute skipped", exc_info=True)
+
         conn.close()
         logger.info(
             "Periodic recommendation refresh complete: %d total across %d lenses",
@@ -1701,6 +1714,17 @@ def drain_pending_hydration_periodic() -> None:
             except sqlite3.OperationalError:
                 return 0
 
+        # 41.4: retire pending ledger rows for papers that have nothing left to
+        # hydrate BEFORE counting, so a fully-satisfied ledger stops scheduling
+        # zero-work sweeps (which also hold the "another op is active" slot and
+        # starve real background ops).
+        try:
+            from alma.services.corpus_rehydrate import reconcile_satisfied_pending
+
+            reconcile_satisfied_pending(conn)
+        except Exception:
+            logger.exception("pending-ledger reconcile failed")
+
         papers_pending = _pending("paper_enrichment_status")
         authors_pending = _pending("author_enrichment_status")
     finally:
@@ -1720,6 +1744,42 @@ def drain_pending_hydration_periodic() -> None:
             schedule_pending_author_hydration_sweep(reason="restart_drain")
         except Exception:
             logger.exception("restart hydration drain (authors) failed to schedule")
+
+    # Re-arm a deferred post-hydration vector chain (41.2). A background metadata
+    # run that yielded on `paused_for_user` / `credit_limit` skips its S2-vector
+    # chain hook; the metadata sweep resumes off the durable ledger, but the S2
+    # chain has no durable pending rows and would otherwise never run. Fire it
+    # here — but only once idle admission passes, which naturally holds only
+    # after the metadata sweeps above have drained (an active sweep counts as
+    # activity), so S2 runs AFTER metadata, never in competition with it.
+    try:
+        from alma.services.embedding_chain import (
+            clear_post_hydration_chain_pending,
+            is_post_hydration_chain_pending,
+            schedule_post_hydration_chain,
+        )
+        from alma.core.db_write import run_write_unit
+
+        conn2 = open_db_connection()
+        try:
+            if is_post_hydration_chain_pending(conn2):
+                ok, _reason = may_background_run(conn2)
+                if ok:
+                    chain = schedule_post_hydration_chain(
+                        conn2, trigger_reason="chain_rearm"
+                    )
+                    # Duty discharged when we armed the S2 fetch OR there is
+                    # nothing left to chain — clear the marker either way.
+                    if chain.get("scheduled_jobs") or chain.get("skipped") == "no_candidates":
+                        run_write_unit(
+                            conn2,
+                            lambda: clear_post_hydration_chain_pending(conn2),
+                            label="clear post-hydration chain pending",
+                        )
+        finally:
+            conn2.close()
+    except Exception:
+        logger.exception("post-hydration chain re-arm failed")
 
 
 # ===================================================================

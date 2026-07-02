@@ -20,6 +20,7 @@ export function ApiBudgetCard({ budget }: { budget: HealthOperationsResponse['ap
   const remaining = budget.openalex_credits_remaining
   const reserve = budget.reserved_user_calls
   const abort = budget.last_credit_abort
+  const pause = budget.last_pause
 
   // Tone tracks headroom: critical at/below the reserve, warning within 2× of it.
   const tone: Tone =
@@ -55,6 +56,15 @@ export function ApiBudgetCard({ budget }: { budget: HealthOperationsResponse['ap
             will resume automatically once the quota recovers.
           </AlertDescription>
         </Alert>
+      ) : null}
+      {/* 42.6: a background op that yielded to user activity — informational, so a
+          paused system reads as "paused, resumes when idle", not stalled. */}
+      {pause ? (
+        <p className="text-xs text-slate-500">
+          Background enrichment paused for your activity
+          {pause.finished_at ? ` at ${new Date(pause.finished_at).toLocaleTimeString()}` : ''} — it
+          resumes automatically when the app is idle.
+        </p>
       ) : null}
     </div>
   )

@@ -12,7 +12,7 @@ import { OnboardingFlow } from './OnboardingFlow'
 export function OnboardingGate() {
   const { data } = useQuery({
     queryKey: ['bootstrap'],
-    queryFn: getBootstrap,
+    queryFn: () => getBootstrap(),
     staleTime: 60_000,
   })
 

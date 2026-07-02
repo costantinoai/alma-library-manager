@@ -48,6 +48,7 @@ DIM_MEASURED = "measured"
 DIM_ERROR = "error"  # the assessor raised — count is unknown, NOT zero
 DIM_NOT_APPLICABLE = "not_applicable"  # the feature isn't configured — N/A, not a gap
 DIM_INSUFFICIENT_DATA = "insufficient_data"  # empty universe — nothing to measure yet
+DIM_QUEUED = "queued"  # the gap is (nearly) all enqueued background work — runs when idle, not a defect (41.3)
 
 
 def _safe_assess(label: str, fn: Callable[[], Any]) -> Tuple[Any, bool]:
@@ -318,6 +319,44 @@ def _gap_dim_args(
     return _assess_gap(int(count or 0), total, impact=impact)
 
 
+# Fraction of a gap that must be enqueued-never-attempted for the WHOLE dimension
+# to read as `queued` (a calm "runs when idle") rather than a warning (41.3).
+_QUEUED_STATE_THRESHOLD = 0.9
+
+
+def _gap_dim_args_queued(
+    count: int | None, total: int, *, impact: Impact, ok: bool, queued: int = 0
+) -> tuple[Severity, str, str]:
+    """Like ``_gap_dim_args`` but treats enqueued-but-never-attempted rows as
+    background work-in-progress, not a defect (41.3).
+
+    When (nearly) the entire gap is queued, the dimension is a calm ``queued``
+    state ("N queued — runs when idle"), not a warning — so a freshly-onboarded
+    corpus whose pipeline simply hasn't run yet reads as onboarding, not broken.
+    When only part is queued, severity is graded on the NON-queued remainder (the
+    work a repair op could move now) and the reason surfaces the split. ``queued``
+    is clamped to ``count`` so a coarse input can never make a dimension look
+    calmer than its real fixable gap.
+    """
+    if not ok:
+        return "warning", DIM_ERROR, "Couldn't measure — see logs."
+    c = int(count or 0)
+    q = max(0, min(int(queued or 0), c))
+    if c <= 0 or total <= 0:
+        return _assess_gap(c, total, impact=impact)
+    if q / c >= _QUEUED_STATE_THRESHOLD:
+        return (
+            "ok",
+            DIM_QUEUED,
+            f"{q} of {c} are queued for background enrichment — they run when the app is idle.",
+        )
+    remainder = c - q
+    sev, _st, reason = _assess_gap(remainder, total, impact=impact)
+    if q > 0:
+        reason = f"{remainder} to fix now · {q} queued for background enrichment. {reason}"
+    return sev, DIM_MEASURED, reason
+
+
 # --------------------------------------------------------------------------
 # Fix actions — keyed by repair_task. The ``operation_key`` values line up
 # with the maintenance registry (task 24 Phase 2); the ``target`` is the
@@ -378,6 +417,7 @@ def _dimension(
     scope: str = "corpus",
     extra_actions: list[dict[str, str]] | None = None,
     exhausted: int | None = None,
+    queued: int | None = None,
     state: str = DIM_MEASURED,
     severity_reason: str = "",
     impact_tier: str | None = None,
@@ -415,6 +455,9 @@ def _dimension(
         "actions": actions,
         "scope": scope,
         "exhausted": int(exhausted) if exhausted is not None else None,
+        # Subset of the gap that is enqueued-but-never-attempted background work
+        # (41.3) — the UI shows "N queued" and it doesn't count against severity.
+        "queued": int(queued) if queued is not None else None,
         "state": state,
     }
 
@@ -550,6 +593,63 @@ def embedding_coverage(
     }
 
 
+def _count_uncovered_queued(conn: sqlite3.Connection, model: str | None = None) -> int:
+    """Standalone papers with no active-model vector that are enqueued but never
+    attempted (41.3) — the queued slice of the embedding-coverage gap, so a fresh
+    corpus reads "coverage rises as the queue runs" instead of critically low."""
+    from alma.services.corpus_rehydrate import queued_metadata_exists_sql
+
+    if model is None:
+        from alma.discovery.similarity import get_active_embedding_model
+
+        model = get_active_embedding_model(conn)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS c FROM papers p
+        WHERE {standalone_paper_sql('p')}
+          AND NOT EXISTS (
+              SELECT 1 FROM publication_embeddings pe
+              WHERE pe.paper_id = p.id AND pe.model = ?
+          )
+          AND {queued_metadata_exists_sql('p')}
+        """,
+        (model,),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
+
+
+def _count_uncoverable(conn: sqlite3.Connection, model: str | None = None) -> int:
+    """Standalone papers that can NEVER get an active-model vector (42.7):
+    no vector now, no abstract to compute one locally, AND Semantic Scholar is
+    terminal for them (tried, no vector). They move OUT of the coverage
+    denominator into an explicit "N uncoverable" slice rather than sit as a
+    permanent low-coverage warning no repair op could ever clear."""
+    from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
+
+    if model is None:
+        from alma.discovery.similarity import get_active_embedding_model
+
+        model = get_active_embedding_model(conn)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*) AS c FROM papers p
+        WHERE {standalone_paper_sql('p')}
+          AND NOT EXISTS (
+              SELECT 1 FROM publication_embeddings pe
+              WHERE pe.paper_id = p.id AND pe.model = ?
+          )
+          AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') = ''
+          AND EXISTS (
+              SELECT 1 FROM publication_embedding_fetch_status fs
+              WHERE fs.paper_id = p.id AND fs.model = ? AND fs.source = 'semantic_scholar'
+                AND COALESCE(fs.status, '') IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
+          )
+        """,
+        (model, S2_SPECTER2_MODEL),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
+
+
 def _count_canonical_orphans(conn: sqlite3.Connection) -> int:
     """Papers whose ``canonical_paper_id`` points at a non-existent row.
 
@@ -623,12 +723,32 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     )
     unresolved = int(unresolved or 0)
 
+    # Queued subcounts (41.3): the enqueued-but-never-attempted slice of each
+    # enrichment-serviced gap. On a fresh corpus the pipeline simply hasn't run
+    # yet, so these dominate — grading them as "queued" (runs when idle) instead
+    # of warnings is what lets onboarding end healthy, not red.
+    queued_unresolved, _ = _safe_assess(
+        "title_resolution_queued", lambda: count_remaining_eligible(conn, queued_only=True)
+    )
+    s2_queued, _ = _safe_assess(
+        "s2_fetch_queued", lambda: _count_s2_fetch_candidates(conn, queued_only=True)
+    )
+    local_queued, _ = _safe_assess(
+        "local_specter2_queued", lambda: _count_local_specter2_candidates(conn, queued_only=True)
+    )
+    uncovered_queued, _ = _safe_assess(
+        "coverage_queued", lambda: _count_uncovered_queued(conn)
+    )
+    uncoverable, _ = _safe_assess(
+        "coverage_uncoverable", lambda: _count_uncoverable(conn)
+    )
+
     dims: list[dict[str, Any]] = []
 
     # --- Identity ----------------------------------------------------------
     # High impact: a paper with no usable identity can't be embedded or ranked.
-    id_sev, id_state, id_reason = _gap_dim_args(
-        unresolved, papers_total, impact="high", ok=unres_ok
+    id_sev, id_state, id_reason = _gap_dim_args_queued(
+        unresolved, papers_total, impact="high", ok=unres_ok, queued=queued_unresolved
     )
     dims.append(
         _dimension(
@@ -637,6 +757,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Unresolved identity",
             count=unresolved if unres_ok else None,
             total=papers_total,
+            queued=queued_unresolved if unres_ok else None,
             state=id_state,
             severity=id_sev,
             severity_reason=id_reason,
@@ -718,6 +839,40 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # insufficient_data, not a false "critically low coverage".
     cov_sev, cov_state, cov_reason = _assess_coverage(coverage)
     cov_measured = cov_state == DIM_MEASURED
+    # 41.3 + 42.7: for a measured corpus, judge coverage on the ATTAINABLE
+    # denominator (excluding terminally-uncoverable papers) and read an
+    # all-queued gap as "queued", not critical — so a fresh corpus whose vectors
+    # simply haven't been computed yet is onboarding, not broken, and a permanent
+    # no-abstract/no-S2 floor shows as "N uncoverable" instead of a stuck warning.
+    cov_exhausted: int | None = None
+    cov_queued: int | None = None
+    if cov_measured:
+        papers_ct = int(coverage["papers_count"] or 0)
+        emb_ct = int(coverage["embeddings_count"] or 0)
+        uncovered = max(0, papers_ct - emb_ct)
+        unc = max(0, min(int(uncoverable or 0), uncovered))
+        uq = max(0, min(int(uncovered_queued or 0), uncovered))
+        cov_queued = uq
+        if uncovered > 0 and uq / uncovered >= _QUEUED_STATE_THRESHOLD:
+            cov_sev, cov_state, cov_reason = (
+                "ok",
+                DIM_QUEUED,
+                f"{uq} of {uncovered} uncovered papers are queued for background "
+                "enrichment — coverage rises as they run.",
+            )
+        else:
+            attainable = max(0, papers_ct - unc)
+            adj_pct = round(emb_ct / attainable * 100.0, 1) if attainable > 0 else 100.0
+            ready = int(EMBEDDINGS_READY_THRESHOLD)
+            if adj_pct >= EMBEDDINGS_READY_THRESHOLD:
+                cov_sev, cov_reason = "ok", f"{adj_pct}% of coverable papers embedded (ready at ≥{ready}%)."
+            elif adj_pct >= 50.0:
+                cov_sev, cov_reason = "warning", f"{adj_pct}% of coverable papers embedded — below the {ready}% ready line."
+            else:
+                cov_sev, cov_reason = "critical", f"Only {adj_pct}% of coverable papers embedded."
+            if unc > 0:
+                cov_reason += f" {unc} are uncoverable (no abstract + Semantic Scholar has no vector)."
+            cov_exhausted = unc or None
     dims.append(
         _dimension(
             key="embeddings.coverage",
@@ -726,6 +881,8 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             count=coverage["embeddings_count"] if cov_measured else None,
             total=coverage["papers_count"] if cov_measured else None,
             coverage_pct=coverage["coverage_pct"],
+            exhausted=cov_exhausted,
+            queued=cov_queued,
             state=cov_state,
             severity=cov_sev,
             severity_reason=cov_reason,
@@ -745,7 +902,9 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     )
     # Medium impact: fetched vectors improve coverage but local compute is a
     # fallback, so a backlog degrades rather than blocks.
-    s2_sev, s2_state, s2_reason = _gap_dim_args(s2_missing, papers_total, impact="medium", ok=s2_ok)
+    s2_sev, s2_state, s2_reason = _gap_dim_args_queued(
+        s2_missing, papers_total, impact="medium", ok=s2_ok, queued=s2_queued
+    )
     dims.append(
         _dimension(
             key="embeddings.s2_vector_missing",
@@ -753,6 +912,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Fetchable S2 vectors",
             count=s2_missing if s2_ok else None,
             total=papers_total,
+            queued=s2_queued if s2_ok else None,
             state=s2_state,
             severity=s2_sev,
             severity_reason=s2_reason,
@@ -771,8 +931,8 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             exhausted=s2_terminal,
         )
     )
-    local_sev, local_state, local_reason = _gap_dim_args(
-        local_computable, papers_total, impact="medium", ok=local_ok
+    local_sev, local_state, local_reason = _gap_dim_args_queued(
+        local_computable, papers_total, impact="medium", ok=local_ok, queued=local_queued
     )
     dims.append(
         _dimension(
@@ -781,6 +941,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             label="Locally computable embeddings",
             count=local_computable if local_ok else None,
             total=papers_total,
+            queued=local_queued if local_ok else None,
             state=local_state,
             severity=local_sev,
             severity_reason=local_reason,
@@ -857,9 +1018,14 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # one rebuild for the canonical-only fix; v9→v10 forces another now that the
 # universe also excludes part-of components (standalone_paper_sql), so the
 # component-corrected coverage lands.
+# v10→v11: the enrichment-serviced dimensions gained a `queued` split (41.3) and
+# coverage now judges the attainable denominator + an uncoverable slice (42.7).
+# The queued input itself is already captured — a never-attempted row becoming
+# attempted bumps paper_enrichment_status.updated_at (below) — so only the logic
+# literal needs the bump to force one rebuild onto the new assessment.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v10',
+      'health-logic-v11',
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),

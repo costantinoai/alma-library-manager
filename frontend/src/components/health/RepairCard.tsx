@@ -190,7 +190,9 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savi
 
       {op.blocked_by.length > 0 ? (
         <p className="rounded-sm border border-warning-100 bg-warning-50 px-3 py-2 text-xs text-warning-800">
-          Blocked by {op.blocked_by.map((item) => `${item.label} (${item.pending})`).join(', ')}.
+          Prerequisite still pending:{' '}
+          {op.blocked_by.map((item) => `${item.label} (${item.pending})`).join(', ')} — you can run this
+          now, but results may be incomplete until it finishes.
         </p>
       ) : null}
 
@@ -339,7 +341,10 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savi
             icon={<Play className="h-4 w-4" />}
             pending={running}
             className="border-alma-200 text-alma-700 hover:bg-alma-50"
-            disabled={op.blocked_by.length > 0}
+            // 42.2: a pending prerequisite is a WARNING (banner above), not a hard
+            // block — one stuck upstream op (e.g. a throttled title_resolution)
+            // must not freeze every downstream repair. The backend DAG still
+            // orders auto-sequences; only this manual hard-disable is lifted.
             onClick={() =>
               op.destructive
                 ? setConfirmOpen(true)

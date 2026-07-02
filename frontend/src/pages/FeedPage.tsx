@@ -223,7 +223,9 @@ export function FeedPage() {
 
   const feedStatusQuery = useQuery({
     queryKey: ['feed-status'],
-    queryFn: getFeedStatus,
+    // Timer-driven poll → mark background so an open Feed tab doesn't pin the
+    // app "active" and starve background enrichment (41.1).
+    queryFn: () => getFeedStatus({ background: true }),
     retry: 1,
     refetchInterval: 60_000,
   })

@@ -88,7 +88,10 @@ CLUSTERING_ALGO_VERSION = "2026.07-5"
 #            biased labels toward famous members). The cluster-detail payload also
 #            gains a cohesion metric + a representative_selection marker; re-key so
 #            the cached label + the default graph payload rebuild with the new picks.
-LABELLING_VERSION = "2026.07-7"
+# 2026.07-8: task 10 scale — score_cluster_terms can use corpus-background
+#            document frequencies for IDF while keeping per-cluster TF/prevalence
+#            local; paper-map payloads also carry corpus-navigation metadata.
+LABELLING_VERSION = "2026.07-8"
 
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding

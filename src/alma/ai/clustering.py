@@ -710,6 +710,8 @@ def score_cluster_terms(
     ngram_range: tuple[int, int] = (1, 2),
     max_features: int = 4000,
     top_k: int = 40,
+    background_doc_freq: dict[str, int] | None = None,
+    background_doc_count: int | None = None,
 ) -> dict[int, list[tuple[str, float]]]:
     """Per-cluster ranked terms by PREVALENCE-WEIGHTED c-TF-IDF.
 
@@ -726,9 +728,15 @@ def score_cluster_terms(
     rather than one paper's idiosyncrasy. Terms confined to a single paper of a
     multi-paper cluster are dropped outright.
 
-    Single source of truth for both :func:`label_clusters_tfidf` and the paper-
-    map word clouds. Aggregates per cluster through a SPARSE membership matrix
-    so it never densifies the (n_papers × n_terms) matrix — safe on the corpus.
+    ``background_doc_freq`` optionally swaps the IDF estimate from "terms in the
+    currently rendered clusters" to "paper-level document frequency in a wider
+    background corpus" while keeping term-frequency and prevalence local to each
+    cluster. That makes small-library labels stable and distinctive against the
+    full tracked corpus without letting background papers contribute cluster TF.
+
+    Single source of truth for both :func:`label_clusters_tfidf` and the paper-map
+    word clouds. Aggregates per cluster through a SPARSE membership matrix so it
+    never densifies the (n_papers × n_terms) matrix — safe on the corpus.
 
     Returns ``{cluster_id: [(term, score), ...]}`` ranked desc, ≤ ``top_k`` each.
     """
@@ -790,9 +798,25 @@ def score_cluster_terms(
     class_sizes = class_counts.sum(axis=1)
     class_sizes_safe = np.maximum(class_sizes, 1.0)
     tf = class_counts / class_sizes_safe[:, None]
-    A = float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
-    f_x = np.maximum(class_counts.sum(axis=0), 1.0)
-    idf = np.log1p(A / f_x)
+    if background_doc_freq and background_doc_count and background_doc_count > 0:
+        # Corpus-background IDF: feature names are emitted by the same vectorizer
+        # as the clustered docs, so exact string lookup is deterministic. Missing
+        # entries fall back to the local paper-level DF; this protects callers that
+        # pass a capped/stale background map without exploding the score.
+        local_df = np.asarray(binary.sum(axis=0)).ravel()
+        bg_n = float(max(int(background_doc_count), 1))
+        bg_df = np.array(
+            [
+                float(max(1, int(background_doc_freq.get(str(term), 0) or local_df[idx] or 1)))
+                for idx, term in enumerate(feature_names)
+            ],
+            dtype=np.float64,
+        )
+        idf = np.log1p((bg_n + 1.0) / (bg_df + 1.0))
+    else:
+        A = float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
+        f_x = np.maximum(class_counts.sum(axis=0), 1.0)
+        idf = np.log1p(A / f_x)
     cf_idf = tf * idf[None, :]
 
     # Prevalence: fraction of the cluster's papers containing the term.
@@ -825,6 +849,9 @@ def label_clusters_tfidf(
     clusters: list[Cluster],
     texts: dict[str, str],
     top_n: int = 4,
+    *,
+    background_doc_freq: dict[str, int] | None = None,
+    background_doc_count: int | None = None,
 ) -> list[str]:
     """Generate distinctive cluster labels via class-based TF-IDF (c-TF-IDF).
 
@@ -864,7 +891,13 @@ def label_clusters_tfidf(
         ]
         for cluster in clusters
     }
-    scored = score_cluster_terms(member_texts, ngram_range=(1, 2), top_k=top_n * 4)
+    scored = score_cluster_terms(
+        member_texts,
+        ngram_range=(1, 2),
+        top_k=top_n * 4,
+        background_doc_freq=background_doc_freq,
+        background_doc_count=background_doc_count,
+    )
 
     labels: list[str] = []
     for cluster in clusters:

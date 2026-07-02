@@ -103,7 +103,9 @@ export function Sidebar({
 }: SidebarProps) {
   const { data: bootstrap } = useQuery({
     queryKey: ['bootstrap'],
-    queryFn: getBootstrap,
+    // Timer-driven poll → background so the always-mounted Sidebar doesn't pin
+    // the app "active" between real interactions (41.1).
+    queryFn: () => getBootstrap({ background: true }),
     staleTime: 60_000,
     refetchInterval: 300_000,
   })

@@ -236,7 +236,7 @@ export function PageTour({ pageKey, steps }: { pageKey: string; steps: TourStep[
   // the wizard (z-60) sits above the tour (z-55), and they'd fight on boot.
   const { data: bootstrap } = useQuery({
     queryKey: ['bootstrap'],
-    queryFn: getBootstrap,
+    queryFn: () => getBootstrap(),
     staleTime: 60_000,
   })
   const onboardingActive = bootstrap?.onboarding?.completed === false

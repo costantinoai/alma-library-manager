@@ -130,6 +130,10 @@ class PipelineResult:
     stopped_early: bool
     deadline_hit: bool
     cancelled: bool
+    # Intermediate results dropped unwritten because the run stopped mid-flight
+    # (42.2). They stay eligible and are retried next run — the defect was the
+    # SILENCE, not the drop, so the count is surfaced for a truthful message.
+    dropped: int = 0
 
 
 def _always_terminal(item: Any, result: Any) -> Optional[Any]:
@@ -231,6 +235,7 @@ def run_staged_fetch_pipeline(
         return False
 
     processed = 0
+    dropped = 0
     pending: list[Any] = []
     last_flush = time.monotonic()
 
@@ -273,11 +278,13 @@ def run_staged_fetch_pipeline(
         # next stage — UNLESS we're stopping, in which case the intermediate
         # result is dropped unwritten so the item stays eligible and is retried
         # next run (never a half-resolved terminal stamp).
+        nonlocal dropped
         nxt = stage_i + 1
         if not isinstance(result, FetchError) and nxt < n:
             advanced = stages[stage_i].advance_on(item, result)
             if advanced is not None:
                 if _should_stop():
+                    dropped += 1  # 42.2: count the drop so the run can report it
                     return  # don't start a NEW downstream fetch on the way out
                 _submit(nxt, advanced)
                 return
@@ -324,6 +331,7 @@ def run_staged_fetch_pipeline(
         stopped_early=stopped_early,
         deadline_hit=deadline_hit,
         cancelled=cancelled,
+        dropped=dropped,
     )
 
 

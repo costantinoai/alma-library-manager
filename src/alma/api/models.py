@@ -1027,6 +1027,7 @@ class ImportResultResponse(BaseModel):
 
     total: int = 0
     imported: int = 0
+    staged: int = 0
     skipped: int = 0
     failed: int = 0
     errors: List[str] = Field(default_factory=list)
@@ -1100,5 +1101,4 @@ class GraphData(BaseModel):
     nodes: List[dict]
     edges: List[dict]
     metadata: Optional[dict] = None
-
 

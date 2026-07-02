@@ -29,6 +29,12 @@ from alma.config import (
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+# Hard ceiling on a single honored `Retry-After` sleep (42.2). A throttled
+# provider can advertise minutes; a background sweep must never sit in one sleep
+# longer than this, or it sleeps past its own deadline. Bounded → worst-case
+# overshoot is one cap, then the between-fetch deadline check stops the run.
+MAX_RETRY_AFTER_SECONDS = 60.0
 _ACTIVE_DIAGNOSTICS: ContextVar["SourceDiagnosticsCollector | None"] = ContextVar(
     "alma_active_source_diagnostics",
     default=None,
@@ -431,14 +437,23 @@ class SourceHttpClient:
         if response is not None:
             retry_after = response.headers.get("retry-after")
             if retry_after:
+                wait: float | None = None
                 try:
-                    return max(0.0, float(retry_after))
+                    wait = max(0.0, float(retry_after))
                 except (TypeError, ValueError):
                     try:
                         dt = parsedate_to_datetime(retry_after)
-                        return max(0.0, dt.timestamp() - time.time())
+                        wait = max(0.0, dt.timestamp() - time.time())
                     except Exception:
-                        pass
+                        wait = None
+                if wait is not None:
+                    # 42.2: honor Retry-After but CAP it. A throttled provider can
+                    # send minutes; an uncapped sleep would sit past a background
+                    # sweep's whole deadline (its runner only re-checks the
+                    # deadline BETWEEN fetches, never mid-sleep). A bounded sleep
+                    # means the worst-case overshoot is one cap, then the sweep
+                    # stops and stays retryable.
+                    return min(wait, MAX_RETRY_AFTER_SECONDS)
         cap = max(1.0, float(self._policy.max_retry_backoff_seconds or 8.0))
         base = min(cap, 0.75 * (2 ** attempt))
         return base + random.uniform(0.0, 0.4)

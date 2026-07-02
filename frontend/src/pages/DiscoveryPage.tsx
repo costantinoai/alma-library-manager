@@ -242,7 +242,9 @@ export function DiscoveryPage() {
 
   const discoveryStatusQuery = useQuery({
     queryKey: ['discovery-status'],
-    queryFn: getDiscoveryStatus,
+    // Timer-driven poll → background so an open Discovery tab doesn't pin the
+    // app "active" (41.1).
+    queryFn: () => getDiscoveryStatus({ background: true }),
     retry: 1,
     refetchInterval: 60_000,
   })
