@@ -458,6 +458,9 @@ export interface RunMaintenanceResponse {
   key: string
   status: string
   job_id: string | null
+  /** Non-launch explanation (e.g. status='skipped_daily_cap' — provider daily
+      API quota exhausted). Present only when the backend has something to say. */
+  message?: string | null
   plan: MaintenancePlan
 }
 

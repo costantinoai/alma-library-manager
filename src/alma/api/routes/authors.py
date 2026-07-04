@@ -6,7 +6,7 @@ import os
 import sqlite3
 import threading
 import uuid
-from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
 
 from alma.core.concurrency import bounded_thread_pool
 from typing import Any, Dict, List, Optional
@@ -178,6 +178,20 @@ _RESOLUTION_STATUSES = {
     # flagging it." Excluded from needs-attention + author-health counts.
     "dismissed",
 }
+
+# Interactive identifier-candidate lookup (the Identifiers tab fires this on
+# open). It fans out to OpenAlex / Semantic Scholar / ORCID, each of which can
+# retry with backoff (up to minutes) when an upstream is rate-limiting — so the
+# synchronous call could appear to "hang forever". We run it on a small,
+# persistent pool with a hard wall-clock deadline: past the deadline the request
+# returns with `timed_out=True` (empty candidates + a Retry affordance) instead
+# of blocking the tab. A timed-out worker keeps running to completion on its OWN
+# short-lived connection (never the request's `db`, which is closed on return),
+# so it can neither wedge the response nor race the request connection's close.
+_ID_CANDIDATE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="alma-id-candidates"
+)
+_ID_CANDIDATE_DEADLINE_S = 25.0
 
 
 def _immediate_job_response(
@@ -3694,6 +3708,7 @@ class ConfirmOpenAlexRequest(BaseModel):
 class ConfirmIdentifiersRequest(BaseModel):
     openalex_id: Optional[str] = None
     scholar_id: Optional[str] = None
+    orcid: Optional[str] = None
     status: str = "resolved_manual"
     reason: Optional[str] = None
 
@@ -3999,39 +4014,93 @@ def author_id_candidates(
     row = db.execute("SELECT id, name, openalex_id, orcid FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
-    titles = _get_author_sample_titles(db, author_id, limit=5)
     settings = _id_resolution_settings()
-    resolution = resolve_author_identity(
-        db,
-        author_id=author_id,
-        author_name=str(row["name"] or "").strip() or None,
-        openalex_id=str(row["openalex_id"] or "").strip() or None,
-        orcid=str(row["orcid"] or "").strip() or None,
-        sample_titles=titles,
-        use_semantic_scholar=settings["semantic_scholar_enabled"],
-        use_orcid=settings["orcid_enabled"],
-    )
-    scholar_candidates = _resolve_scholar_candidates(
-        str(row["name"] or "").strip(),
-        titles,
-        openalex_id=str(row["openalex_id"] or "").strip() or None,
-        orcid=str(row["orcid"] or "").strip() or None,
-        mode="auto",
-    ) or resolution.scholar_candidates
+    a_name = str(row["name"] or "").strip() or None
+    a_oaid = str(row["openalex_id"] or "").strip() or None
+    a_orcid = str(row["orcid"] or "").strip() or None
+
+    def _compute() -> dict:
+        # Own connection — this may outlive the request when the deadline fires,
+        # so it must NOT touch the request's `db` (committed + closed on return).
+        work = open_db_connection()
+        try:
+            titles = _get_author_sample_titles(work, author_id, limit=5)
+            resolution = resolve_author_identity(
+                work,
+                author_id=author_id,
+                author_name=a_name,
+                openalex_id=a_oaid,
+                orcid=a_orcid,
+                sample_titles=titles,
+                use_semantic_scholar=settings["semantic_scholar_enabled"],
+                use_orcid=settings["orcid_enabled"],
+            )
+            # `resolution` ALREADY ran the source-based (S2/ORCID) scholar lookup;
+            # only pay for the EXTRA scrape pass when auto-scrape is enabled —
+            # calling _resolve_scholar_candidates unconditionally re-did the whole
+            # network fanout a second time (the doubled work behind the hang).
+            scholar_candidates = list(resolution.scholar_candidates or [])
+            if settings["scholar_scrape_auto_enabled"]:
+                scraped = _resolve_scholar_candidates(
+                    a_name or "", titles, openalex_id=a_oaid, orcid=a_orcid, mode="auto"
+                )
+                if scraped:
+                    scholar_candidates = scraped
+            return {
+                "titles": titles,
+                "openalex": resolution.openalex_candidates,
+                "scholar": scholar_candidates,
+                "resolved": {
+                    "openalex_id": resolution.openalex_id,
+                    "scholar_id": resolution.scholar_id,
+                    "orcid": resolution.orcid,
+                    "status": resolution.status,
+                    "confidence": resolution.confidence,
+                    "reason": resolution.reason,
+                },
+            }
+        finally:
+            work.close()
+
+    timed_out = False
+    empty = {"titles": [], "openalex": [], "scholar": [], "resolved": None}
+    try:
+        computed = _ID_CANDIDATE_EXECUTOR.submit(_compute).result(
+            timeout=_ID_CANDIDATE_DEADLINE_S
+        )
+    except FuturesTimeout:
+        # Don't cancel — the orphaned worker finishes on its own connection and
+        # frees its slot. Return an honest empty result the UI can retry.
+        logger.warning(
+            "id-candidates lookup for author %s exceeded %.0fs — returning "
+            "timed_out (upstream likely rate-limited)",
+            author_id,
+            _ID_CANDIDATE_DEADLINE_S,
+        )
+        timed_out = True
+        computed = empty
+    except Exception as exc:  # noqa: BLE001 — never 500 the diagnostics tab
+        logger.warning("id-candidates lookup for author %s failed: %s", author_id, exc)
+        computed = empty
+
+    # Surface OpenAlex's daily-cap state so the UI can say "OpenAlex daily limit
+    # reached" instead of a bare "no OpenAlex candidates" — the OpenAlex calls
+    # fail fast when the quota is drained, so this is the honest reason the
+    # OpenAlex column is empty. (Scholar/S2 has no daily pool and still runs.)
+    from alma.core.http_sources import provider_remaining_credits
+
+    oa_remaining = provider_remaining_credits("openalex")
+    openalex_cap_reached = oa_remaining is not None and oa_remaining <= 0
+
     return {
         "author_id": author_id,
         "name": row["name"],
-        "titles": titles,
-        "openalex": resolution.openalex_candidates,
-        "scholar": scholar_candidates,
-        "resolved": {
-            "openalex_id": resolution.openalex_id,
-            "scholar_id": resolution.scholar_id,
-            "orcid": resolution.orcid,
-            "status": resolution.status,
-            "confidence": resolution.confidence,
-            "reason": resolution.reason,
-        },
+        "titles": computed["titles"],
+        "openalex": computed["openalex"],
+        "scholar": computed["scholar"],
+        "resolved": computed["resolved"],
+        "timed_out": timed_out,
+        "openalex_cap_reached": openalex_cap_reached,
         "scholar_manual_search_enabled": settings["scholar_scrape_manual_enabled"],
         "scholar_auto_scrape_enabled": settings["scholar_scrape_auto_enabled"],
     }
@@ -4100,6 +4169,13 @@ def confirm_identifiers_for_author(
     if payload.scholar_id is not None:
         updates.append("scholar_id = ?")
         params.append((payload.scholar_id or "").strip())
+    if payload.orcid is not None:
+        # Store the canonical 0000-0000-0000-000X form when the input parses;
+        # fall back to the trimmed raw so a manual override is never silently
+        # dropped (parity with how openalex_id/scholar_id are taken as given).
+        normalized_orcid = normalize_orcid(payload.orcid)
+        updates.append("orcid = ?")
+        params.append(normalized_orcid or (payload.orcid or "").strip())
 
     status_value = (payload.status or "resolved_manual").strip().lower()
     if status_value not in _RESOLUTION_STATUSES:
@@ -4127,6 +4203,7 @@ def confirm_identifiers_for_author(
         data={
             "openalex_id": payload.openalex_id,
             "scholar_id": payload.scholar_id,
+            "orcid": payload.orcid,
             "status": status_value,
         },
     )

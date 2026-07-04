@@ -27,6 +27,14 @@ interface ScholarCandidate {
 interface CandidatesResponse {
   openalex: OpenAlexCandidate[]
   scholar: ScholarCandidate[]
+  resolved?: { orcid?: string | null } | null
+  // Backend bounds the online lookup with a hard deadline; true ⇒ it gave up
+  // before finishing (upstream rate-limited) so the UI shows a Retry instead of
+  // a permanent spinner.
+  timed_out?: boolean
+  // OpenAlex daily API quota is drained — its calls fail fast, so the OpenAlex
+  // column is empty for that reason (Scholar/S2 still runs). Shown as a note.
+  openalex_cap_reached?: boolean
   scholar_manual_search_enabled?: boolean
   scholar_auto_scrape_enabled?: boolean
 }
@@ -46,6 +54,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
   const { toast } = useToast()
   const [openalexId, setOpenalexId] = useState(author.openalex_id ?? '')
   const [scholarId, setScholarId] = useState(author.scholar_id ?? '')
+  const [orcid, setOrcid] = useState(author.orcid ?? '')
   const [manualScholarCandidates, setManualScholarCandidates] = useState<ScholarCandidate[]>([])
 
   const candidateQuery = useQuery({
@@ -78,7 +87,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
   })
 
   const confirmMutation = useMutation({
-    mutationFn: (payload: { openalex_id?: string; scholar_id?: string }) =>
+    mutationFn: (payload: { openalex_id?: string; scholar_id?: string; orcid?: string }) =>
       api.post(`/authors/${encodeURIComponent(author.id)}/confirm-identifiers`, payload),
     onSuccess: () => {
       void invalidateQueries(queryClient, ['authors'], ['author-detail', author.id])
@@ -89,10 +98,35 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
 
   return (
     <div className="space-y-4">
+      {candidateQuery.data?.timed_out ? (
+        <div className="flex items-center justify-between gap-3 rounded border border-warning-100 bg-warning-50 px-3 py-2">
+          <p className="text-xs text-warning-700">
+            Online candidate search timed out (a source is likely rate-limiting).
+            No candidates this time — retry in a moment.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => candidateQuery.refetch()}
+            disabled={candidateQuery.isFetching}
+          >
+            {candidateQuery.isFetching ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : null}
+            Retry
+          </Button>
+        </div>
+      ) : null}
       <section>
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
           OpenAlex candidates
         </p>
+        {candidateQuery.data?.openalex_cap_reached ? (
+          <p className="mb-2 text-[11px] text-warning-700">
+            OpenAlex daily API limit reached — online OpenAlex matches are
+            unavailable until the quota resets (around 00:00 UTC).
+          </p>
+        ) : null}
         {candidateQuery.isLoading ? (
           <p className="text-xs text-slate-400">Loading candidates...</p>
         ) : (
@@ -194,7 +228,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
         ) : null}
       </section>
 
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className="grid gap-2 sm:grid-cols-3">
         <Input
           placeholder="OpenAlex ID (A...)"
           value={openalexId}
@@ -204,6 +238,11 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
           placeholder="Scholar ID"
           value={scholarId}
           onChange={(e) => setScholarId(e.target.value)}
+        />
+        <Input
+          placeholder="ORCID (0000-0000-0000-0000)"
+          value={orcid}
+          onChange={(e) => setOrcid(e.target.value)}
         />
       </div>
 
@@ -218,6 +257,7 @@ export function AuthorIdentifierResolution({ author }: AuthorIdentifierResolutio
             confirmMutation.mutate({
               openalex_id: openalexId.trim() || undefined,
               scholar_id: scholarId.trim() || undefined,
+              orcid: orcid.trim() || undefined,
             })
           }
           disabled={confirmMutation.isPending}

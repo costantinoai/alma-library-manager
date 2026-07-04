@@ -839,17 +839,23 @@ function AffiliationPickerDialog({
             moved. Pick the one to display; it sticks and won&apos;t be flagged again.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-2">
+        {/* min-w-0: DialogContent is display:grid, whose items default to
+            min-width:auto and won't shrink below their content's max-content — a
+            long institution name would otherwise widen the whole dialog past
+            max-w-lg and push the "Use this" button off-screen (horizontal
+            scroll). min-w-0 lets the name truncate instead, so the row (and its
+            button) always fit. */}
+        <div className="min-w-0 space-y-2">
           {isLoading ? (
             <LoadingState message="Loading affiliation evidence..." />
           ) : options.length === 0 ? (
             <p className="text-xs text-slate-500">No affiliation evidence on file — type one below.</p>
           ) : (
-            <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
+            <div className="max-h-72 min-w-0 space-y-1.5 overflow-y-auto pr-1">
               {options.map((opt) => {
                 const isCurrent = current && opt.institution_name.toLowerCase() === current.toLowerCase()
                 return (
-                  <SubPanel key={opt.institution_name} className="flex items-center gap-2 p-2.5">
+                  <SubPanel key={opt.institution_name} className="flex w-full min-w-0 items-center gap-2 p-2.5">
                     <Building2 className="h-4 w-4 shrink-0 text-slate-400" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-slate-700" title={opt.institution_name}>
@@ -869,13 +875,14 @@ function AffiliationPickerDialog({
                       </div>
                     </div>
                     {isCurrent ? (
-                      <span className="flex items-center gap-1 text-xs font-medium text-accent-600">
+                      <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-accent-600">
                         <Check className="h-3.5 w-3.5" /> Selected
                       </span>
                     ) : (
                       <Button
                         size="sm"
                         variant="outline"
+                        className="shrink-0"
                         onClick={() => mutation.mutate(opt.institution_name)}
                         disabled={pending}
                       >
@@ -892,7 +899,7 @@ function AffiliationPickerDialog({
           )}
           <div className="space-y-1 pt-1">
             <Label htmlFor="affiliation-custom">Or type an institution</Label>
-            <div className="flex gap-2">
+            <div className="flex min-w-0 gap-2">
               <Input
                 id="affiliation-custom"
                 placeholder="e.g. Harvard University"
@@ -902,6 +909,7 @@ function AffiliationPickerDialog({
               />
               <Button
                 variant="outline"
+                className="shrink-0"
                 onClick={() => mutation.mutate(custom.trim())}
                 disabled={!custom.trim() || pending}
               >
