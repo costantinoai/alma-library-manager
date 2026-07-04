@@ -33,7 +33,7 @@ from alma.discovery.orcid import fetch_record_by_orcid
 from alma.openalex.client import (
     _AUTHORS_SELECT_FIELDS,
     _normalize_openalex_author_id,
-    batch_get_author_details,
+    get_author_details_singleton,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,7 +302,9 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
                 )
         return {"source": OPENALEX_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
-    detail = batch_get_author_details([oid], batch_size=1, max_workers=1).get(oid)
+    # Free singleton GET ($0) — a batch-of-1 list+filter call here spent one
+    # credit per hydrated author for the identical payload.
+    detail = get_author_details_singleton(oid)
     # ONE gated write window for the profile + affiliation writes, opened AFTER
     # the OpenAlex fetch above so the writer lock is never held across network.
     # The no-detail terminal write returns from inside the section (committed on

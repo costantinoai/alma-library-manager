@@ -1369,6 +1369,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     from alma.application.discovery import read_settings as read_discovery_settings
     from alma.discovery import source_search
     from alma.openalex.client import _normalize_work, batch_fetch_recent_works_for_authors
+    from alma.openalex.http import get_client as get_openalex_client
 
     monitors_total = 0
     monitor_idx = 0
@@ -1452,7 +1453,12 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     # candidate (N+1 schedule_with_envelope + operation_status scans).
     pending_hydration_ids: set[str] = set()
 
-    with source_diagnostics_scope() as source_diag:
+    # Operation-scoped OpenAlex cache: duplicate work/author fetches within
+    # this one sweep (incl. negative 404s) are served from the in-run cache
+    # instead of re-hitting the network. Read-path only — the interleaved DB
+    # writes below are unaffected. The cache lives on the client instance, so
+    # the Phase A pool threads share it too.
+    with get_openalex_client().operation_cache("feed_refresh"), source_diagnostics_scope() as source_diag:
         author_ready = [m for m in author_monitors if m.get("health") == "ready" and m.get("openalex_id")]
         author_by_openalex = {
             str(m.get("openalex_id") or "").strip(): m for m in author_ready

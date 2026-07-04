@@ -238,12 +238,17 @@ _POLICIES: dict[str, SourcePolicy] = {
         # seen in practice.
         max_retries=5,
         max_retry_backoff_seconds=60.0,
-        # On any 429, freeze the per-request interval at 30 s for the
-        # next 60 s so we stop firing hot calls into a clearly-busy
-        # upstream. Resets automatically once the cooldown window
-        # elapses; a fresh 429 re-arms it.
-        adaptive_throttle_floor_seconds=30.0,
-        adaptive_cooldown_seconds=60.0,
+        # On any 429, freeze the per-request interval at 10 s for the
+        # next 30 s so we stop firing hot calls into a busy upstream.
+        # Measured 2026-07-04 (keyed, exact 1.05 s pacing, raw requests):
+        # S2 429s ~25% of calls even when fully compliant and sends NO
+        # Retry-After, and the next call typically succeeds — so these are
+        # transient server-side congestion blips, not "we're too fast".
+        # The previous 30 s/60 s setting amplified every blip into a ~6×
+        # per-paper slowdown on search sweeps. Resets automatically once
+        # the cooldown window elapses; a fresh 429 re-arms it.
+        adaptive_throttle_floor_seconds=10.0,
+        adaptive_cooldown_seconds=30.0,
         default_headers=(("Accept", "application/json"),),
         auth_header_factory=_semantic_headers,
     ),
@@ -629,6 +634,10 @@ def openalex_usage_snapshot() -> dict[str, Any]:
             "calls_saved_by_cache": int(client.calls_saved_by_cache or 0),
             "credits_used": client.credits_used,
             "credits_remaining": client.rate_remaining,
+            # Per-pricing-class upstream calls this process + the $ they imply
+            # (singleton free / list $0.10/1k / search $1.00/1k).
+            "calls_by_class": client.class_counts,
+            "estimated_spend_usd": client.estimated_spend_usd,
             "summary": client.credits_summary(),
         }
     except Exception:
@@ -639,6 +648,8 @@ def openalex_usage_snapshot() -> dict[str, Any]:
             "calls_saved_by_cache": 0,
             "credits_used": None,
             "credits_remaining": None,
+            "calls_by_class": {},
+            "estimated_spend_usd": 0.0,
             "summary": "unavailable",
         }
 

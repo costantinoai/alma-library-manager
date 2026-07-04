@@ -53,7 +53,9 @@ def get_author_name_by_id(author_openalex_id: str, mailto: Optional[str] = None)
     try:
         client = get_client()
         aid = _normalize_openalex_author_id(author_openalex_id)
-        resp = client.get(f"/authors/{aid}", timeout=20)
+        resp = client.get(
+            f"/authors/{aid}", params={"select": "id,display_name"}, timeout=20
+        )
         if resp.status_code != 200:
             return None
         data = resp.json()
@@ -303,7 +305,7 @@ def fetch_works_page_for_author(
         filt = f"author.id:{oaid}"
         params = {
             "filter": filt,
-            "per-page": max(1, min(per_page, 200)),
+            "per-page": max(1, min(per_page, 100)),
             "cursor": cursor or "*",
             "sort": sort,
             "select": _WORKS_SELECT_FIELDS,
@@ -1227,6 +1229,35 @@ def batch_get_author_details(
     return result
 
 
+def get_author_details_singleton(author_openalex_id: str) -> Optional[dict]:
+    """Fetch ONE author's normalized detail dict via the free singleton
+    endpoint (``GET /authors/{id}``, $0) — same shape as one entry of
+    `batch_get_author_details`'s result. The right call for per-author
+    hydration loops, where a batch-of-1 list+filter call spends a credit
+    for the same payload."""
+    aid = _normalize_openalex_author_id(author_openalex_id)
+    if not aid:
+        return None
+    try:
+        client = get_client()
+        resp = client.get(
+            f"/authors/{aid}", params={"select": _AUTHORS_SELECT_FIELDS}, timeout=20
+        )
+        if resp.status_code != 200:
+            return None
+        item = resp.json() or {}
+        if not item:
+            return None
+        return _normalize_author_detail(item)
+    except Exception as exc:
+        logger.warning(
+            "OpenAlex author details fetch failed for '%s': %s",
+            author_openalex_id,
+            exc,
+        )
+        return None
+
+
 def batch_fetch_recent_works_for_authors(
     author_openalex_ids: list[str],
     from_year: int | None = None,
@@ -1413,6 +1444,33 @@ def search_works_for_title(title: str, per_title: int = 5) -> list[dict]:
         return []
 
 
+# Flip known-ID batch fetchers to the free singleton path once the
+# server-reported remaining daily credits fall to this reserve.
+_SINGLETON_FALLBACK_RESERVE = 25
+
+
+def _iter_singleton_works(client, path_ids, *, label: str):
+    """Yield works fetched one-by-one via free singleton GETs.
+
+    Fallback for the known-ID batch fetchers when the daily credit budget is
+    drained: ``/works/{id}`` and ``/works/doi:{doi}`` cost $0 under the
+    Feb-2026 pricing, so known-ID hydration keeps moving instead of stalling
+    until the midnight-UTC budget reset. Slower (one request per work) but
+    free; misses (404) are skipped like batch misses.
+    """
+    count = 0
+    for path_id in path_ids:
+        try:
+            work = client.get_singleton(path_id, select=_WORKS_SELECT_FIELDS, timeout=20)
+        except Exception as exc:
+            logger.debug("%s: singleton fallback failed for %s: %s", label, path_id, exc)
+            continue
+        if work:
+            count += 1
+            yield work
+    logger.info("%s: served %d works via the free singleton path", label, count)
+
+
 def batch_fetch_works_by_dois(
     dois: list[str],
     batch_size: int = 100,
@@ -1423,6 +1481,8 @@ def batch_fetch_works_by_dois(
     Uses ``GET /works?filter=doi:D1|D2|...|D100`` to resolve up to 100 DOIs
     per request (1 credit each) instead of individual singleton lookups
     (which would also be 0-credit each but incur per-request latency).
+    When the daily credit budget is drained, flips to the free singleton
+    path so known-ID hydration keeps working at $0.
 
     Args:
         dois: List of DOI strings (bare or URL form).
@@ -1445,6 +1505,18 @@ def batch_fetch_works_by_dois(
         return {}
 
     client = get_client()
+    # Singleton path when the budget is drained (list+filter would 429) OR the
+    # input is tiny — 1-2 singleton GETs are free where a batch call costs a
+    # credit for the same latency.
+    if client.budget_drained(_SINGLETON_FALLBACK_RESERVE) or len(clean_dois) <= 2:
+        out: dict[str, dict] = {}
+        for work in _iter_singleton_works(
+            client, (f"doi:{nd}" for nd in clean_dois), label="Batch DOI fetch"
+        ):
+            work_doi = _norm_doi(work.get("doi") or "")
+            if work_doi:
+                out[work_doi.lower()] = work
+        return out
     batch_size = max(1, min(batch_size, 100))
     max_workers = max(1, int(max_workers or 1))
     chunks = [clean_dois[i : i + batch_size] for i in range(0, len(clean_dois), batch_size)]
@@ -1509,7 +1581,10 @@ def batch_fetch_works_by_openalex_ids(
     batch_size: int = 50,
     max_workers: int = 4,
 ) -> dict[str, dict]:
-    """Fetch multiple works by OpenAlex IDs using piped list filters."""
+    """Fetch multiple works by OpenAlex IDs using piped list filters.
+
+    When the daily credit budget is drained, flips to the free singleton
+    path so known-ID hydration keeps working at $0."""
     clean_ids: list[str] = []
     seen: set[str] = set()
     for wid in work_ids:
@@ -1528,6 +1603,15 @@ def batch_fetch_works_by_openalex_ids(
         return {}
 
     client = get_client()
+    # Singleton path when the budget is drained OR the input is tiny — 1-2
+    # singleton GETs are free where a batch call costs a credit.
+    if client.budget_drained(_SINGLETON_FALLBACK_RESERVE) or len(clean_ids) <= 2:
+        out: dict[str, dict] = {}
+        for work in _iter_singleton_works(client, clean_ids, label="Batch work-id fetch"):
+            work_id = (work.get("id") or "").rstrip("/").split("/")[-1]
+            if work_id:
+                out[work_id] = work
+        return out
     batch_size = max(1, min(batch_size, 50))
     max_workers = max(1, int(max_workers or 1))
     chunks = [clean_ids[i : i + batch_size] for i in range(0, len(clean_ids), batch_size)]
@@ -2055,6 +2139,15 @@ _WORKS_SELECT_FIELDS = ",".join([
     "keywords", "referenced_works", "referenced_works_count", "biblio",
     "sustainable_development_goals",
     "institutions_distinct_count", "countries_distinct_count",
+])
+
+# Lean select for candidate SCORING paths (title/identity matching reads only
+# title, doi, year, authors, citations). The full 25-field projection pulls
+# `abstract_inverted_index` / `referenced_works` / `counts_by_year` for
+# nothing on those paths — same credit cost, but ~10× the payload.
+_WORKS_SCORING_SELECT = ",".join([
+    "id", "doi", "display_name", "publication_year", "publication_date",
+    "authorships", "cited_by_count",
 ])
 
 

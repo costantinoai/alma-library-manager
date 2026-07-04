@@ -205,16 +205,44 @@ class OpenAIProvider:
 
         # Process in batches of 100 to stay within API limits
         batch_size = 100
+        max_attempts = 3
+        rate_limit_error = getattr(openai_module, "RateLimitError", None)
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
 
             if i > 0 and self._api_call_delay > 0:
                 time.sleep(self._api_call_delay)
 
-            response = client.embeddings.create(
-                model=self.MODEL_NAME,
-                input=batch,
-            )
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    response = client.embeddings.create(
+                        model=self.MODEL_NAME,
+                        input=batch,
+                    )
+                    break
+                except Exception as exc:
+                    retryable = rate_limit_error is not None and isinstance(
+                        exc, rate_limit_error
+                    )
+                    if not retryable:
+                        status = getattr(exc, "status_code", None)
+                        message = str(exc)
+                        retryable = status in (429, 500, 502, 503, 504) or any(
+                            code in message
+                            for code in ("429", "500", "502", "503", "504")
+                        )
+                    if not retryable or attempt >= max_attempts:
+                        raise
+                    wait = 2.0 * (2 ** (attempt - 1))
+                    logger.warning(
+                        "OpenAI embeddings batch failed (attempt %d/%d): %s; "
+                        "retrying in %.0fs",
+                        attempt,
+                        max_attempts,
+                        exc,
+                        wait,
+                    )
+                    time.sleep(wait)
             for item in response.data:
                 results.append(item.embedding)
 

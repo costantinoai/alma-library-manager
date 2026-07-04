@@ -38,6 +38,15 @@ class SlackPlugin(MessagingPlugin):
         >>> plugin.send_message("Hello!", "general")
     """
 
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        # Cache: user-supplied name → resolved Slack ID. Avoids re-listing
+        # the whole workspace on every send within a single process lifetime
+        # (mirrors SlackNotifier._resolved_channel_cache in alma.slack.client).
+        # IDs are stable; a process restart clears the cache.
+        self._resolved_channel_cache: Dict[str, str] = {}
+        self._resolved_user_cache: Dict[str, str] = {}
+
     # Plugin metadata
     @property
     def name(self) -> str:
@@ -248,6 +257,10 @@ class SlackPlugin(MessagingPlugin):
 
     def _get_channel_id_by_name(self, channel_name: str, token: str) -> Optional[str]:
         """Get channel ID by name."""
+        cached = self._resolved_channel_cache.get(channel_name)
+        if cached:
+            return cached
+
         url = "https://slack.com/api/conversations.list"
         headers = {"Authorization": f"Bearer {token}"}
         params = {
@@ -265,7 +278,10 @@ class SlackPlugin(MessagingPlugin):
 
                 for channel in response.get("channels", []):
                     if channel.get("name") == channel_name:
-                        return channel.get("id")
+                        channel_id = channel.get("id")
+                        if channel_id:
+                            self._resolved_channel_cache[channel_name] = channel_id
+                        return channel_id
 
                 # Handle pagination
                 cursor = response.get("response_metadata", {}).get("next_cursor")
@@ -282,6 +298,10 @@ class SlackPlugin(MessagingPlugin):
 
     def _get_user_id_by_name(self, user_name: str, token: str) -> Optional[str]:
         """Get user ID by name."""
+        cached = self._resolved_user_cache.get(user_name)
+        if cached:
+            return cached
+
         url = "https://slack.com/api/users.list"
         headers = {"Authorization": f"Bearer {token}"}
         params = {"limit": 1000}
@@ -299,7 +319,10 @@ class SlackPlugin(MessagingPlugin):
                     real_name = member.get("real_name", "")
 
                     if user_handle == user_name or real_name == user_name:
-                        return member.get("id")
+                        user_id = member.get("id")
+                        if user_id:
+                            self._resolved_user_cache[user_name] = user_id
+                        return user_id
 
                 # Handle pagination
                 cursor = response.get("response_metadata", {}).get("next_cursor")

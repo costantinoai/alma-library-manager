@@ -34,6 +34,7 @@ import dataclasses
 import logging
 import os
 import random
+import re
 import threading
 import time
 import json
@@ -71,6 +72,50 @@ _CREDIT_LOG_INTERVAL = 50
 _CACHE_TTL_SECONDS = 300
 _CACHE_MAX_ENTRIES = 1024
 _CACHEABLE_STATUSES = frozenset({200, 404})
+
+# OpenAlex per-page hard maximum (Feb-2026 API: was 200, now 100). Enforced
+# centrally in `get()` so no caller can trip a 400 with a stale clamp.
+_MAX_PER_PAGE = 100
+
+# Cost classes under the Feb-2026 usage-based pricing. Singleton entity GETs
+# are free and unlimited; list+filter costs $0.10/1k; search costs $1.00/1k.
+_CLASS_COSTS_USD = {"singleton": 0.0, "list": 0.0001, "search": 0.001}
+
+# Credit units (the X-RateLimit headers count the $0.0001 list-call unit; the
+# daily $1.00 free budget is 10,000 units) charged per `?search` call. Budget
+# gates sizing a search-heavy run MUST multiply their planned call count by
+# this — comparing raw paper counts against unit-denominated remaining credits
+# understates the need 10× (2026-07-04 onboarding e2e finding).
+SEARCH_COST_CREDITS = 10
+
+# Same unit table keyed by cost class, for the drained-pool fail-fast: a 429
+# whose remaining credits can't cover THIS call's class cannot succeed on any
+# backoff within the run (the pool refills at the daily reset). Singleton GETs
+# are free — their 429s are per-second bursts and take the normal backoff.
+_CLASS_COST_CREDITS = {"singleton": 0, "list": 1, "search": SEARCH_COST_CREDITS}
+
+# Anything under an entity collection path is a singleton GET — note `.+`
+# not `[^/]+`: DOI-form ids (`/works/doi:10.1234/abc`) contain slashes.
+_SINGLETON_PATH_RE = re.compile(
+    r"^/(works|authors|sources|institutions|topics|publishers|funders|concepts|keywords)/.+"
+)
+
+
+def classify_request(path: str, params: Optional[Dict[str, Any]] = None) -> str:
+    """Return the OpenAlex cost class of a request: ``singleton`` (free,
+    unlimited), ``search`` ($1.00/1k — 10× list), or ``list`` ($0.10/1k).
+
+    ONE canonical classifier — budget gates, usage snapshots, and fallback
+    logic must all route through this instead of re-deriving URL shapes.
+    """
+    p = params or {}
+    if str(p.get("search") or "").strip():
+        return "search"
+    clean = path if path.startswith("/") else f"/{path}"
+    clean = clean.split("?", 1)[0].rstrip("/")
+    if _SINGLETON_PATH_RE.match(clean) and not str(p.get("filter") or "").strip():
+        return "singleton"
+    return "list"
 
 
 @dataclasses.dataclass
@@ -145,6 +190,9 @@ class OpenAlexClient:
         self._retry_count: int = 0
         self._rate_limited_events: int = 0
         self._calls_saved_by_cache: int = 0
+        # Upstream calls by cost class (cache hits excluded) — backs the
+        # per-class spend estimate in the usage snapshot / ApiBudgetCard.
+        self._class_counts: Dict[str, int] = {"singleton": 0, "list": 0, "search": 0}
         self._cache_lock = threading.RLock()
         # key -> (expires_at, status_code, headers, content, url, reason, encoding)
         self._response_cache: Dict[
@@ -283,6 +331,14 @@ class OpenAlexClient:
         """
         url = f"{BASE_URL}{path}" if path.startswith("/") else f"{BASE_URL}/{path}"
         merged = self._inject_auth(params)
+        # Central per-page clamp: the API maximum dropped 200 → 100 with the
+        # Feb-2026 pricing release; enforcing here fixes every caller at once.
+        for key in ("per-page", "per_page"):
+            if key in merged:
+                try:
+                    merged[key] = max(1, min(int(merged[key]), _MAX_PER_PAGE))
+                except (TypeError, ValueError):
+                    pass
         return self._request_with_retry(url, merged, timeout)
 
     def get_singleton(
@@ -304,19 +360,6 @@ class OpenAlexClient:
             return None
         resp.raise_for_status()
         return resp.json()
-
-    def get_list(
-        self,
-        path: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: float = 30,
-    ) -> requests.Response:
-        """Send a GET request for a list endpoint (1 credit each).
-
-        Identical to :meth:`get` but uses a longer default timeout suitable
-        for paginated list queries.
-        """
-        return self.get(path, params=params, timeout=timeout)
 
     def seed_cache(
         self,
@@ -459,6 +502,12 @@ class OpenAlexClient:
         if self._op_stats:
             self._op_stats.calls_total += 1
 
+        # Count one upstream call per logical request (cache hits returned
+        # above; retries below don't re-count) under its pricing class.
+        cost_class = classify_request(urlsplit(url).path, params)
+        with self._stats_lock:
+            self._class_counts[cost_class] = self._class_counts.get(cost_class, 0) + 1
+
         last_exc: Optional[Exception] = None
         last_resp: Optional[requests.Response] = None
 
@@ -477,6 +526,32 @@ class OpenAlexClient:
                     self._rate_limited_events += 1
                     if self._op_stats:
                         self._op_stats.rate_limited_events += 1
+                    # Daily quota exhausted: this 429's header (just parsed by
+                    # _update_rate_limits above) reports 0 remaining, and the pool
+                    # only refills at X-RateLimit-Reset (hours away) — no backoff
+                    # within this run can succeed. Fail fast instead of sleeping
+                    # _MAX_RETRIES × up to 60s, which is the "hangs forever" on a
+                    # drained key (seen live on the id-candidates path). A
+                    # transient per-second burst 429 still reports remaining > 0
+                    # and takes the normal backoff path below.
+                    with self._stats_lock:
+                        remaining = self._rate_remaining
+                    # "Exhausted" is class-relative: a search needs
+                    # SEARCH_COST_CREDITS units, so a pool sitting at 1-9
+                    # remaining is just as dead for searches as 0 — the old
+                    # `<= 0` check let drained-pool searches grind full backoff
+                    # ladders for hours (2026-07-04 onboarding e2e wedge).
+                    daily_exhausted = remaining is not None and remaining < _CLASS_COST_CREDITS.get(
+                        cost_class, 1
+                    )
+                    if daily_exhausted:
+                        logger.warning(
+                            "OpenAlex daily quota exhausted (0 remaining, resets %s) — "
+                            "failing fast on %s instead of retrying",
+                            self._rate_reset or "unknown",
+                            url,
+                        )
+                        break
 
                 if attempt >= _MAX_RETRIES:
                     break
@@ -757,6 +832,31 @@ class OpenAlexClient:
     def calls_saved_by_cache(self) -> int:
         """Number of upstream API calls avoided due to local response cache."""
         return self._calls_saved_by_cache
+
+    @property
+    def class_counts(self) -> Dict[str, int]:
+        """Upstream calls by pricing class since process start."""
+        with self._stats_lock:
+            return dict(self._class_counts)
+
+    @property
+    def estimated_spend_usd(self) -> float:
+        """Estimated $ spent this process, from per-class call counts."""
+        with self._stats_lock:
+            return round(
+                sum(
+                    count * _CLASS_COSTS_USD.get(cls, 0.0)
+                    for cls, count in self._class_counts.items()
+                ),
+                4,
+            )
+
+    def budget_drained(self, reserve: int = 0) -> bool:
+        """True when the server-reported remaining credits are known and at or
+        below *reserve*. Singleton requests stay free regardless — callers use
+        this to decide when to flip known-ID fetches to the singleton path."""
+        remaining = self._rate_remaining
+        return remaining is not None and remaining <= max(0, int(reserve))
 
     def credits_summary(self) -> str:
         """Return a human-readable credit usage summary."""

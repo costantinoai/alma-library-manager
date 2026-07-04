@@ -16,7 +16,6 @@ import re
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
 
-from alma.discovery.semantic_scholar import fetch_authors_batch
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_orcid, normalize_text as _normalize_text  # noqa: F401  (normalize_orcid re-exported for back-compat)
 
@@ -210,31 +209,20 @@ def resolve_scholar_candidates_from_semantic_scholar(
         logger.debug("Semantic Scholar author search failed for '%s': %s", name, exc)
         return []
 
-    detail_by_author_id = fetch_authors_batch(
-        [
-            str((row or {}).get("authorId") or "").strip()
-            for row in rows
-        ],
-        fields="authorId,name,aliases,affiliations,homepage,url,externalIds,paperCount,citationCount,hIndex",
-    )
-
     preliminary: list[dict[str, object]] = []
     for row in rows:
         semantic_author_id = str(row.get("authorId") or "").strip()
-        detail_row = detail_by_author_id.get(semantic_author_id) or {}
-        merged_row = dict(row)
-        merged_row.update({k: v for k, v in detail_row.items() if v not in (None, "", [], {})})
 
-        cand_name = (merged_row.get("name") or "").strip()
+        cand_name = (row.get("name") or "").strip()
         if not cand_name:
             continue
 
-        ext_ids = _extract_external_ids(merged_row.get("externalIds"))
+        ext_ids = _extract_external_ids(row.get("externalIds"))
         scholar_id, scholar_url = _extract_scholar_from_external_ids(ext_ids)
         if not scholar_id:
-            scholar_id = extract_scholar_id((merged_row.get("homepage") or "").strip())
+            scholar_id = extract_scholar_id((row.get("homepage") or "").strip())
         if not scholar_id:
-            scholar_id = extract_scholar_id((merged_row.get("url") or "").strip())
+            scholar_id = extract_scholar_id((row.get("url") or "").strip())
         if not scholar_id:
             continue
 
@@ -248,7 +236,7 @@ def resolve_scholar_candidates_from_semantic_scholar(
         if normalized_orcid and ext_orcid and ext_orcid == normalized_orcid:
             score += 4.0
 
-        affs = merged_row.get("affiliations") or []
+        affs = row.get("affiliations") or []
         primary_aff = ""
         if isinstance(affs, list) and affs:
             first = affs[0]
@@ -334,17 +322,16 @@ def resolve_scholar_candidates_from_orcid(
     headers = {"Accept": "application/json"}
     payloads: list[dict[str, Any]] = []
 
-    for suffix in ("person", "researcher-urls"):
-        try:
-            r = get_source_http_client("orcid").get(
-                f"/{normalized}/{suffix}",
-                headers=headers,
-                timeout=timeout_seconds,
-            )
-            if r.status_code == 200:
-                payloads.append(r.json() or {})
-        except Exception as exc:
-            logger.debug("ORCID %s lookup failed for %s: %s", suffix, normalized, exc)
+    try:
+        r = get_source_http_client("orcid").get(
+            f"/{normalized}/person",
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+        if r.status_code == 200:
+            payloads.append(r.json() or {})
+    except Exception as exc:
+        logger.debug("ORCID person lookup failed for %s: %s", normalized, exc)
 
     candidates: list[dict[str, object]] = []
     seen: set[str] = set()

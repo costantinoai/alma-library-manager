@@ -51,6 +51,7 @@ from alma.api.deps import get_current_user
 from alma.openalex.http import get_client as get_openalex_client, reset_client as reset_openalex_client
 from alma.slack.client import get_slack_notifier
 from alma.plugins.config import save_plugin_config
+from alma.core.http_sources import get_source_http_client
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
     SECRET_OPENALEX_API_KEY,
@@ -673,11 +674,13 @@ def get_semantic_scholar_status():
         return {"configured": False, "valid": None, "detail": "No API key set."}
 
     try:
-        resp = requests.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
+        client = get_source_http_client("semantic_scholar")
+        resp = client.get(
+            "/paper/search",
             params={"query": "machine learning", "limit": 1, "fields": "title"},
-            headers={"x-api-key": key, "Accept": "application/json"},
+            headers={"Accept": "application/json"},
             timeout=8,
+            max_retries=0,
         )
     except requests.RequestException as exc:
         logger.info("Semantic Scholar key probe could not complete: %s", exc)

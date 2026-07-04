@@ -765,6 +765,24 @@ def backfill_all_resolved_authors(
 
     candidates = [str(r["oid"]) for r in rows if r["oid"]]
     total = len(candidates)
+
+    # Pre-flight: pipe-filter every candidate's profile into ONE cache so each
+    # per-author run below skips its own `fetch_author_profile` roundtrip
+    # (mirrors `_deep_refresh_all_impl`'s pre-fetch — ceil(N/50) batched calls
+    # instead of N per-author calls). Failure is non-fatal: on a cache miss
+    # `refresh_author_works_and_vectors` falls back to the per-author fetch.
+    profile_cache: dict = {}
+    if candidates:
+        try:
+            profile_cache = openalex_client.batch_get_author_profiles(
+                candidates, batch_size=50, max_workers=4
+            )
+        except Exception as exc:
+            logger.warning(
+                "author-works profile pre-fetch failed (falling back per-author): %s",
+                exc,
+            )
+            profile_cache = {}
     summary = {
         "total": total,
         "processed": 0,
@@ -788,7 +806,9 @@ def backfill_all_resolved_authors(
             summary["cancelled"] = True
             break
         try:
-            per = refresh_author_works_and_vectors(db_path, oid, ctx=None)
+            per = refresh_author_works_and_vectors(
+                db_path, oid, ctx=None, profile_cache=profile_cache
+            )
         except Exception as exc:
             logger.warning("author backfill failed for %s: %s", oid, exc)
             summary["failures"] += 1
