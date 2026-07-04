@@ -42,6 +42,11 @@ from alma.openalex.http import get_client
 
 logger = logging.getLogger(__name__)
 
+# Flip interactive title resolution to the free-but-slow S2-first order when
+# fewer than this many OpenAlex credits remain (paid `?search` ≈ 0.3 s/paper
+# vs S2 ≈ 6 s/paper, measured 2026-07-04 on the real corpus).
+_TITLE_SEARCH_BUDGET_RESERVE = 100
+
 
 @dataclass(slots=True)
 class ResolutionEvidence:
@@ -945,14 +950,70 @@ def resolve_paper_openalex_work(
             evidence=evidence,
         )
 
-    openalex_candidates: dict[str, dict[str, Any]] = {}
-    for query in _title_variants(title):
-        for candidate in _search_openalex_work_candidates(query, per_page=10):
-            candidate_id = str(candidate.get("id") or "").strip()
-            if candidate_id:
-                openalex_candidates[candidate_id] = candidate
+    # Adaptive title-search order (2026-07-04, benchmarked on the real
+    # corpus): OpenAlex `?search` resolves at ~0.3 s/paper but costs $1.00/1k;
+    # S2 `/paper/search` is free but ~6 s/paper (server-side throttling well
+    # past its nominal 1 RPS). These interactive resolution paths (imports,
+    # enrich-all) run OpenAlex-first while the daily budget is healthy — the
+    # user is waiting — and flip to free-S2-first when credits run low.
+    top_semantic: dict[str, Any] | None = None
 
-    if openalex_candidates:
+    def _try_semantic_bridge() -> Optional[PaperResolutionResult]:
+        """Free path: S2 title search, then bridge to OpenAlex via DOI."""
+        nonlocal top_semantic
+        semantic_candidates = search_semantic_papers(title, limit=8) if title else []
+        for candidate in semantic_candidates:
+            candidate["score"] = _score_semantic_candidate(candidate, pub)
+        semantic_candidates.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+        top_semantic = _pick_top_candidate(semantic_candidates, min_score=4.2, min_margin=0.6)
+        if not top_semantic:
+            return None
+        semantic_dois = _doi_variants(str(top_semantic.get("doi") or ""))
+        if semantic_dois:
+            bridged = batch_fetch_works_by_dois(semantic_dois, batch_size=min(len(semantic_dois), 10), max_workers=1)
+            for doi_try in semantic_dois:
+                normalized = (normalize_doi(doi_try) or doi_try).strip().lower()
+                work = bridged.get(normalized)
+                if work:
+                    normalized_work = _normalize_work(work)
+                    if title_search_cache is not None and title_key:
+                        title_search_cache[title_key] = normalized_work
+                    evidence.append(
+                        ResolutionEvidence(
+                            "semantic_to_openalex",
+                            f"Semantic Scholar bridged this paper back to OpenAlex via DOI {normalized}",
+                            float(top_semantic.get("score") or 0.0),
+                        )
+                    )
+                    return PaperResolutionResult(
+                        work=normalized_work,
+                        source="semantic_doi_bridge",
+                        reason=None,
+                        confidence=min(0.9, round(float(top_semantic.get("score") or 0.0) / 7.5, 3)),
+                        evidence=evidence,
+                        semantic_candidate=top_semantic,
+                    )
+        # Strong S2 match but no OpenAlex bridge: remember it and still give
+        # the other source a chance before settling for it (tail below).
+        evidence.append(
+            ResolutionEvidence(
+                "semantic_only_match",
+                f"Semantic Scholar found a strong candidate for '{title[:80]}' but no OpenAlex bridge was available",
+                float(top_semantic.get("score") or 0.0),
+            )
+        )
+        return None
+
+    def _try_openalex_title_scored() -> Optional[PaperResolutionResult]:
+        """Paid path: OpenAlex title-variant searches, scored + margin-gated."""
+        openalex_candidates: dict[str, dict[str, Any]] = {}
+        for query in _title_variants(title):
+            for candidate in _search_openalex_work_candidates(query, per_page=10):
+                candidate_id = str(candidate.get("id") or "").strip()
+                if candidate_id:
+                    openalex_candidates[candidate_id] = candidate
+        if not openalex_candidates:
+            return None
         ranked = sorted(
             (
                 (
@@ -988,47 +1049,25 @@ def resolve_paper_openalex_work(
                 top_score,
             )
         )
+        return None
 
-    semantic_candidates = search_semantic_papers(title, limit=8) if title else []
-    for candidate in semantic_candidates:
-        candidate["score"] = _score_semantic_candidate(candidate, pub)
-    semantic_candidates.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
-    top_semantic = _pick_top_candidate(semantic_candidates, min_score=4.2, min_margin=0.6)
+    openalex_first = not get_client().budget_drained(reserve=_TITLE_SEARCH_BUDGET_RESERVE)
+    attempts = (
+        (_try_openalex_title_scored, _try_semantic_bridge)
+        if openalex_first
+        else (_try_semantic_bridge, _try_openalex_title_scored)
+    )
+    for attempt in attempts:
+        resolved = attempt()
+        if resolved is not None:
+            return resolved
+
+    if title_search_cache is not None and title_key:
+        title_search_cache[title_key] = None
     if top_semantic:
-        semantic_dois = _doi_variants(str(top_semantic.get("doi") or ""))
-        if semantic_dois:
-            bridged = batch_fetch_works_by_dois(semantic_dois, batch_size=min(len(semantic_dois), 10), max_workers=1)
-            for doi_try in semantic_dois:
-                normalized = (normalize_doi(doi_try) or doi_try).strip().lower()
-                work = bridged.get(normalized)
-                if work:
-                    normalized_work = _normalize_work(work)
-                    if title_search_cache is not None and title_key:
-                        title_search_cache[title_key] = normalized_work
-                    evidence.append(
-                        ResolutionEvidence(
-                            "semantic_to_openalex",
-                            f"Semantic Scholar bridged this paper back to OpenAlex via DOI {normalized}",
-                            float(top_semantic.get("score") or 0.0),
-                        )
-                    )
-                    return PaperResolutionResult(
-                        work=normalized_work,
-                        source="semantic_doi_bridge",
-                        reason=None,
-                        confidence=min(0.9, round(float(top_semantic.get("score") or 0.0) / 7.5, 3)),
-                        evidence=evidence,
-                        semantic_candidate=top_semantic,
-                    )
-        evidence.append(
-            ResolutionEvidence(
-                "semantic_only_match",
-                f"Semantic Scholar found a strong candidate for '{title[:80]}' but no OpenAlex bridge was available",
-                float(top_semantic.get("score") or 0.0),
-            )
-        )
-        if title_search_cache is not None and title_key:
-            title_search_cache[title_key] = None
+        # Neither the S2 DOI bridge nor the OpenAlex title search produced an
+        # OpenAlex record — settle for the S2-only match (pre-inversion
+        # semantics preserved).
         return PaperResolutionResult(
             work=None,
             source=None,
@@ -1037,9 +1076,6 @@ def resolve_paper_openalex_work(
             evidence=evidence,
             semantic_candidate=top_semantic,
         )
-
-    if title_search_cache is not None and title_key:
-        title_search_cache[title_key] = None
     return PaperResolutionResult(
         work=None,
         source=None,

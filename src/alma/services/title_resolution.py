@@ -1,21 +1,24 @@
-"""Title-search-based identity resolution. OpenAlex first, S2 fallback.
+"""Title-search-based identity resolution. ADAPTIVE source order.
 
-Two-tier strategy (revised 2026-05-08):
+Two sources, order picked per run (2026-07-04, driven by the OpenAlex
+usage-based pricing and a real-corpus benchmark: OpenAlex ``?search`` ≈
+0.3 s/paper at $1.00/1k; S2 ``/paper/search`` free but ≈ 6 s/paper under
+server-side throttling):
 
-1. **OpenAlex** ``/works?search=<title>`` first. The polite pool runs
-   at ~10 RPS — 10× S2's ``/paper/search`` cap — and OpenAlex indexes
-   a much larger long tail than S2 for non-STEM venues. On a
-   high-confidence Jaccard match we fill ``openalex_id`` and ``doi``
-   back into ``papers`` (fill-only — never overwrite a curated value).
-   The next ``/paper/batch`` sweep then picks up the SPECTER2 vector
-   cleanly using the new DOI.
-2. **S2 ``/paper/search`` fallback** only when OpenAlex misses or
-   returns nothing above the Jaccard + year-delta threshold. Capped
-   at ``S2_FALLBACK_PER_RUN_BUDGET`` (50 calls per outer run — the
-   S2 1 RPS reality) so an OpenAlex-cold corpus can't blow S2's
-   quota in one shot. Free-data side effect when S2 hits: the FIELDS
-   projection includes SPECTER2 embeddings, so the vector is
-   captured here too — same response, no extra HTTP.
+- **User-triggered run with a healthy budget → OpenAlex-first.** The user
+  is waiting; the run only picks this order when remaining credits cover
+  the whole run plus the user reserve. The OpenAlex primary is ungated; a
+  miss advances to the free S2 stage.
+- **Background / low-budget run → S2-first.** Free; the paid OpenAlex
+  fallback is capped at ``OPENALEX_FALLBACK_PER_RUN_BUDGET`` searches per
+  outer run. When the cap is hit the paper is stamped retryable (NOT
+  terminal — OpenAlex never saw it) and the next run picks it up.
+
+Either way: on a high-confidence Jaccard match we fill identifiers +
+metadata back into ``papers`` (fill-only — never overwrite a curated
+value). Free-data side effect on S2 hits: the FIELDS projection includes
+SPECTER2 embeddings, so the vector is captured in the same response — no
+extra HTTP.
 
 Eligibility (the SELECT): papers with a non-empty title that either
 lack a usable identity (no ``semantic_scholar_id`` and no DOI) or
@@ -24,16 +27,16 @@ for the active SPECTER2 model.
 
 Decoupled multi-source fetch/write (tasks/11 + tasks/38): the per-paper
 loop runs through ``core.fetch_pipeline.run_staged_fetch_pipeline`` as TWO
-**independent** source stages — an OpenAlex stage (own pool, ~10 RPS) whose
-MISSES flow into an S2 fallback stage (own pool, 1 RPS) — both feeding a
-SINGLE writer (this thread) that batches its ``write_section`` flushes.
-Because the stages run concurrently, item A's S2 fallback fetch happens
-while item B's OpenAlex fetch is still in flight, and an OpenAlex 429 never
-stalls the S2 stage or the writer (task 38). Fetch and write stay
-independent channels, so the writer gate is never held across a network
-call and a 500-paper run finishes in ~minutes (concurrency) instead of ~20
-(the old 1-paper/s serial interleave that got runs orphaned by a uvicorn
-``--reload``).
+**independent** source stages — an S2 stage (own pool, 1 RPS) whose MISSES
+flow into an OpenAlex fallback stage (own pool, budget-gated) — both
+feeding a SINGLE writer (this thread) that batches its ``write_section``
+flushes. Because the stages run concurrently, item A's OpenAlex fallback
+fetch happens while item B's S2 fetch is still in flight, and an S2 429
+never stalls the OpenAlex stage or the writer (task 38). Fetch and write
+stay independent channels, so the writer gate is never held across a
+network call. Wall-clock is now dominated by S2's 1 RPS (~75 papers per
+75 s run); the continuation loop drains larger backlogs across runs — the
+trade accepted for making the steady-state sweep free.
 
 Every attempt is stamped in the ``paper_enrichment_status`` ledger
 (``title_resolution`` source): resolved → identifiers; genuine no-match →
@@ -99,17 +102,15 @@ _PER_RUN_SECONDS = 75.0
 # task-37 background-yield gate to exclude this op's own row from the
 # "another operation is active?" check.
 _TITLE_SWEEP_OPERATION_KEY = "ai.title_resolution_sweep"
-# Fetch-pool width requested for the OpenAlex title search. Clamped down to
-# the running job's `fanout_budget` by `bounded_thread_pool` (default 4 for the
-# `ai` maintenance namespace) — enough to turn a ~1 paper/s serial run into a
-# ~4-5× faster one while staying under the declared maintenance ceiling. The
-# S2 fallback self-serialises to 1 RPS via its source-client policy regardless.
+# Fetch-pool width for the OpenAlex fallback stage. Clamped down to the
+# running job's `fanout_budget` by `bounded_thread_pool` (default 4 for the
+# `ai` maintenance namespace); the per-run `_FallbackGate` caps total paid
+# calls regardless of width.
 _FETCH_WORKERS = 8
-# Worker width for the independent S2 fallback stage. S2 ``/paper/search`` is
-# 1 RPS even with a key (the source client self-serialises), and the per-run
-# `_S2FallbackGate` caps total S2 calls — so a couple of workers is plenty to
-# keep the fallback queue draining concurrently with the OpenAlex stage without
-# any benefit from going wider.
+# Worker width for the PRIMARY S2 stage. S2 ``/paper/search`` is 1 RPS even
+# with a key (the source client self-serialises), so a couple of workers is
+# plenty to keep the queue draining concurrently with the fallback stage —
+# no benefit from going wider.
 _S2_FETCH_WORKERS = 2
 # Writer flush size: how many fetched results the single writer batches into
 # one `write_section` (one BEGIN IMMEDIATE → commit) before yielding.
@@ -125,14 +126,15 @@ TITLE_RESOLUTION_JACCARD_THRESHOLD = 0.92
 TITLE_RESOLUTION_YEAR_DELTA = 1
 TITLE_RESOLUTION_MAX_RESULTS = 3
 TITLE_RESOLUTION_QUERY_MAX_CHARS = 200
-# Per outer-run cap on OpenAlex `/works?search=` calls — the polite
-# pool's ~10 RPS makes 500 calls land in ~50 s wall-clock.
+# Per outer-run cap on papers attempted (S2 primary calls). S2 is free but
+# 1 RPS; the `_PER_RUN_SECONDS` deadline is the effective cap per run and
+# the continuation loop drains the rest.
 TITLE_RESOLUTION_PER_RUN_BUDGET = 500
-# Per outer-run cap on S2 `/paper/search` fallback calls — the
-# endpoint runs at 1 RPS even with an API key, so 50 calls = ~52 s
-# at the floor. An OpenAlex-cold corpus that misses every OpenAlex
-# call still can't blow S2's quota in one outer run.
-S2_FALLBACK_PER_RUN_BUDGET = 50
+# Per outer-run cap on PAID OpenAlex `/works?search=` fallback calls
+# ($0.001 each — 100 calls = $0.10 = 10% of the free daily budget). Papers
+# past the cap are stamped retryable, not terminal, so the next run
+# retries them.
+OPENALEX_FALLBACK_PER_RUN_BUDGET = 100
 # Self-rescheduling depth cap. 50 outer runs × 500 papers = 25 000
 # papers per click — generous for any realistic backlog and bounded
 # so a stuck loop can't run away.
@@ -380,15 +382,14 @@ _TITLE_LEDGER_FIELDS_KEY = "title_resolution_v1"
 _RETRYABLE_STATUS = "retryable_error"
 
 
-class _S2FallbackGate:
-    """Thread-safe S2 budget + 429 short-circuit, shared across fetch workers.
+class _FallbackGate:
+    """Thread-safe per-run budget + 429 short-circuit for the PAID OpenAlex
+    fallback stage, shared across fetch workers.
 
-    S2 ``/paper/search`` is 1 RPS even with a key, so an OpenAlex-cold run
-    must not let a concurrent pool blow the quota. ``acquire()`` hands out at
-    most ``budget`` S2 attempts for the whole outer run and stops once
-    ``block()`` fires (first 429). The source client also self-serialises S2
-    to 1 RPS + arms a cooldown, so this is the budget cap on top of that.
-    """
+    OpenAlex ``/works?search=`` costs $0.001/call, so an S2-cold run must not
+    let a concurrent pool drain the daily credit budget. ``acquire()`` hands
+    out at most ``budget`` paid attempts for the whole outer run and stops
+    once ``block()`` fires (first 429)."""
 
     def __init__(self, budget: int) -> None:
         self._lock = threading.Lock()
@@ -484,19 +485,21 @@ def _fetch_s2_title_match(
 
 
 # ----------------------------------------------------------------------
-# Two INDEPENDENT source stages (tasks/38). The OpenAlex stage churns the
-# backlog at the polite pool's ~10 RPS; its MISSES flow into the S2 fallback
-# stage, which drains them at S2's 1 RPS — concurrently. So an OpenAlex 429
-# never stalls the S2 stage or the writer (and vice versa). Both are
-# NETWORK-ONLY workers; the single writer applies their results.
+# Two INDEPENDENT source stages (tasks/38). The FREE S2 stage churns the
+# backlog at 1 RPS; its MISSES flow into the PAID OpenAlex fallback stage,
+# budget-gated per run — concurrently. So an S2 429 never stalls the
+# OpenAlex stage or the writer (and vice versa). Both are NETWORK-ONLY
+# workers; the single writer applies their results.
 # ----------------------------------------------------------------------
 
 
-def _fetch_openalex_stage(row: sqlite3.Row) -> dict:
-    """STAGE 0 (worker): OpenAlex ``/works?search`` for one paper's identity.
+def _fetch_s2_stage(row: sqlite3.Row) -> dict:
+    """STAGE 0 (worker): FREE S2 ``/paper/search`` for one paper's identity.
 
     Returns a result dict the writer applies (on a hit) or the miss router
-    advances to the S2 stage (on a miss). NETWORK ONLY — never touches the DB.
+    advances to the OpenAlex fallback stage (on a miss). An S2 429 stamps
+    the paper retryable — never terminal. NETWORK ONLY — never touches the
+    DB.
     """
     paper_id = str(row["id"])
     title = str(row["title"] or "").strip()
@@ -505,43 +508,8 @@ def _fetch_openalex_stage(row: sqlite3.Row) -> dict:
         return {**base, "source": "none", "resolved": False, "reason": "empty_title"}
 
     local_year = _local_year(row)
-    best_oa, oa_score = _fetch_openalex_title_match(title, local_year)
-    if best_oa is not None:
-        return {**base, "source": "openalex", "resolved": True,
-                "work": best_oa, "score": round(oa_score, 4)}
-    return {**base, "source": "openalex", "resolved": False, "reason": "openalex_no_match"}
-
-
-def _advance_after_openalex(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
-    """Miss router for the OpenAlex stage: hand the row to the S2 fallback
-    stage ONLY on a genuine OpenAlex miss. An OpenAlex hit (or an empty-title
-    terminal) goes straight to the writer. (``FetchError`` is routed to the
-    writer by the pipeline itself — a network error is not a content miss.)"""
-    if result.get("resolved") or result.get("reason") == "empty_title":
-        return None
-    return row
-
-
-def _fetch_s2_stage(row: sqlite3.Row, *, s2_gate: _S2FallbackGate) -> dict:
-    """STAGE 1 (worker): S2 ``/paper/search`` fallback for an OpenAlex miss.
-
-    Guarded by the per-run ``_S2FallbackGate`` (S2's 1 RPS reality) — when the
-    budget is spent or a 429 has tripped, returns a terminal OpenAlex no-match
-    without an S2 call. Every outcome here is terminal (last stage) → writer.
-    NETWORK ONLY — never touches the DB.
-    """
-    paper_id = str(row["id"])
-    title = str(row["title"] or "").strip()
-    base: dict = {"paper_id": paper_id, "title": title, "row": row}
-    local_year = _local_year(row)
-
-    if not s2_gate.acquire():
-        # No S2 budget left this run → terminal OpenAlex no-match (S2 not tried).
-        return {**base, "source": "openalex", "resolved": False, "reason": "openalex_no_match"}
-
     best_s2, s2_score, rate_limited = _fetch_s2_title_match(title, local_year)
     if rate_limited:
-        s2_gate.block()
         return {**base, "source": "s2", "resolved": False, "reason": "rate_limited"}
     if best_s2 is not None:
         return {**base, "source": "s2", "resolved": True,
@@ -549,7 +517,76 @@ def _fetch_s2_stage(row: sqlite3.Row, *, s2_gate: _S2FallbackGate) -> dict:
     return {**base, "source": "s2", "resolved": False, "reason": "s2_no_match"}
 
 
-def build_title_resolution_stages(s2_gate: _S2FallbackGate) -> list[FetchStage]:
+def _advance_after_s2(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
+    """Miss router for the S2 stage: hand the row to the OpenAlex fallback
+    stage ONLY on a genuine S2 miss. A hit, an empty-title terminal, or a
+    rate-limited retryable goes straight to the writer. (``FetchError`` is
+    routed to the writer by the pipeline itself — a network error is not a
+    content miss.)"""
+    if result.get("resolved") or result.get("reason") in {"empty_title", "rate_limited"}:
+        return None
+    return row
+
+
+def _fetch_openalex_stage(
+    row: sqlite3.Row, *, fallback_gate: Optional[_FallbackGate] = None
+) -> dict:
+    """PAID OpenAlex ``/works?search`` stage — fallback OR primary.
+
+    Fallback mode (``fallback_gate`` set, S2-first order): guarded by the
+    per-run ``_FallbackGate`` ($0.001/call) — when the budget is spent or a
+    429 has tripped, returns a RETRYABLE budget-exhausted outcome (never
+    terminal: OpenAlex hasn't seen the title, so stamping
+    ``terminal_no_match`` would wrongly evict it from the pool). A genuine
+    both-sources miss is terminal (``title_no_match``).
+
+    Primary mode (``fallback_gate is None``, OpenAlex-first order): ungated —
+    the order was only chosen because the daily budget is healthy — and a
+    miss (``openalex_no_match``) ADVANCES to the free S2 stage instead of
+    terminating. NETWORK ONLY — never touches the DB.
+    """
+    paper_id = str(row["id"])
+    title = str(row["title"] or "").strip()
+    base: dict = {"paper_id": paper_id, "title": title, "row": row}
+    if not title:
+        return {**base, "source": "none", "resolved": False, "reason": "empty_title"}
+    local_year = _local_year(row)
+
+    if fallback_gate is not None:
+        # Live-credit pre-check BEFORE burning a gate slot or a socket: with
+        # the daily pool below one search + the user reserve, every paid call
+        # would 429 into its full backoff ladder — 4 workers grinding those
+        # ladders wedged a sweep for 40+ minutes (2026-07-04 e2e). Retryable,
+        # never terminal: OpenAlex hasn't seen the title.
+        from alma.core.http_sources import RESERVED_USER_CALLS
+        from alma.openalex.http import SEARCH_COST_CREDITS, get_client
+
+        if get_client().budget_drained(reserve=SEARCH_COST_CREDITS + RESERVED_USER_CALLS):
+            return {**base, "source": "openalex", "resolved": False,
+                    "reason": "fallback_budget_exhausted"}
+        if not fallback_gate.acquire():
+            return {**base, "source": "openalex", "resolved": False,
+                    "reason": "fallback_budget_exhausted"}
+
+    best_oa, oa_score = _fetch_openalex_title_match(title, local_year)
+    if best_oa is not None:
+        return {**base, "source": "openalex", "resolved": True,
+                "work": best_oa, "score": round(oa_score, 4)}
+    miss_reason = "openalex_no_match" if fallback_gate is None else "title_no_match"
+    return {**base, "source": "openalex", "resolved": False, "reason": miss_reason}
+
+
+def _advance_after_openalex(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
+    """Miss router for the PRIMARY OpenAlex stage (OpenAlex-first order):
+    hand the row to the free S2 stage ONLY on a genuine OpenAlex miss."""
+    if result.get("resolved") or result.get("reason") == "empty_title":
+        return None
+    return row
+
+
+def build_title_resolution_stages(
+    fallback_gate: _FallbackGate, *, openalex_first: bool = False
+) -> list[FetchStage]:
     """The two independent source stages for title resolution (tasks/38).
 
     Shared by the standalone "Resolve missing identity" sweep AND the
@@ -558,20 +595,43 @@ def build_title_resolution_stages(s2_gate: _S2FallbackGate) -> list[FetchStage]:
     reserve) composes through the runner's ``is_cancelled`` callback
     (``scheduler.make_background_cancel_check``), not per-stage gating — so the
     stages stay source-pure here.
+
+    ``openalex_first`` picks the ADAPTIVE order (benchmarked 2026-07-04 on
+    the real corpus: OpenAlex ≈ 0.3 s/paper at $0.001 each; S2 ≈ 6 s/paper,
+    free): user-triggered runs with a healthy budget go OpenAlex-first
+    (ungated primary — the user is waiting; a miss advances to free S2);
+    background runs and low-budget runs go S2-first with the gate-capped
+    paid fallback.
     """
+    if openalex_first:
+        return [
+            FetchStage(
+                name="openalex_title",
+                fetch_one=_fetch_openalex_stage,  # primary mode: no gate
+                advance_on=_advance_after_openalex,
+                workers=_FETCH_WORKERS,
+                thread_name_prefix="alma-title-oa",
+            ),
+            FetchStage(
+                name="s2_title",
+                fetch_one=_fetch_s2_stage,
+                workers=_S2_FETCH_WORKERS,
+                thread_name_prefix="alma-title-s2",
+            ),
+        ]
     return [
         FetchStage(
-            name="openalex_title",
-            fetch_one=_fetch_openalex_stage,
-            advance_on=_advance_after_openalex,
-            workers=_FETCH_WORKERS,
-            thread_name_prefix="alma-title-oa",
-        ),
-        FetchStage(
             name="s2_title",
-            fetch_one=lambda row: _fetch_s2_stage(row, s2_gate=s2_gate),
+            fetch_one=_fetch_s2_stage,
+            advance_on=_advance_after_s2,
             workers=_S2_FETCH_WORKERS,
             thread_name_prefix="alma-title-s2",
+        ),
+        FetchStage(
+            name="openalex_title",
+            fetch_one=lambda row: _fetch_openalex_stage(row, fallback_gate=fallback_gate),
+            workers=_FETCH_WORKERS,
+            thread_name_prefix="alma-title-oa",
         ),
     ]
 
@@ -582,21 +642,23 @@ def run_title_resolution_pipeline(
     conn: sqlite3.Connection,
     model: str,
     counters: dict[str, int],
-    s2_gate: _S2FallbackGate,
+    fallback_gate: _FallbackGate,
     is_cancelled: Callable[[], bool],
     on_progress: Optional[Callable[[int, int], None]] = None,
     deadline: Optional[float] = None,
+    openalex_first: bool = False,
 ) -> PipelineResult:
-    """Run the staged OpenAlex→S2 title-resolution pipeline over ``rows``.
+    """Run the staged two-source title-resolution pipeline over ``rows``.
 
     ONE definition of the resolver wiring (stages + writer), shared by the
     standalone sweep and corpus-rehydrate Phase 0 — so a fix to the
     decoupling lands in both. The writer (``_write_title_results``) runs on
-    THIS (caller) thread and owns every DB write.
+    THIS (caller) thread and owns every DB write. ``openalex_first`` selects
+    the adaptive source order (see ``build_title_resolution_stages``).
     """
     return run_staged_fetch_pipeline(
         rows,
-        stages=build_title_resolution_stages(s2_gate),
+        stages=build_title_resolution_stages(fallback_gate, openalex_first=openalex_first),
         write_batch=lambda batch: _write_title_results(
             conn, batch, model=model, counters=counters
         ),
@@ -609,10 +671,20 @@ def run_title_resolution_pipeline(
 
 def _apply_openalex_title_match(
     conn: sqlite3.Connection, paper_id: str, raw_work: dict
-) -> list[str]:
+) -> tuple[list[str], Optional[str]]:
     """WRITE: fill id+doi AND merge the FULL metadata the search already
     returned (B1 — no Phase-1 re-fetch), then stamp the OpenAlex enrichment
-    ledger ``enriched`` so the rehydrate Phase-1 selector skips this paper."""
+    ledger ``enriched`` so the rehydrate Phase-1 selector skips this paper.
+
+    Returns ``(fields_filled, duplicate_of_paper_id)``. ``duplicate_of``
+    is non-None when the matched work's openalex_id already belongs to a
+    DIFFERENT paper row — the title search has discovered a duplicate.
+    Writing the id then would trip the UNIQUE ``idx_papers_openalex_id``
+    and abort the whole write batch, so instead we fill only the DOI (no
+    unique index — it makes the pair visible to the duplicate-DOI health
+    proxy and mergeable by ``library.deduplicate``), skip the metadata
+    merge + enrichment stamp, and let the caller stamp a terminal
+    ``duplicate_identity`` ledger row."""
     from alma.application.paper_metadata import merge_openalex_work_metadata
     from alma.core.paper_updates import fill_only_update_paper
     from alma.openalex.client import _normalize_work
@@ -621,6 +693,22 @@ def _apply_openalex_title_match(
     oa_id_raw = str(raw_work.get("id") or "").strip()
     oa_id = _normalize_openalex_work_id(oa_id_raw) if oa_id_raw else ""
     new_doi = canonical_lookup_doi(str(raw_work.get("doi") or "")) or ""
+
+    if oa_id:
+        owner = conn.execute(
+            "SELECT id FROM papers WHERE openalex_id = ? AND id <> ?",
+            (oa_id, paper_id),
+        ).fetchone()
+        if owner is not None:
+            fields = [
+                str(f)
+                for f in (
+                    fill_only_update_paper(conn, paper_id, fill_fields={"doi": new_doi})
+                    or []
+                )
+            ] if new_doi else []
+            return fields, str(owner["id"])
+
     fill_fields: dict[str, str] = {}
     if oa_id:
         fill_fields["openalex_id"] = oa_id
@@ -647,19 +735,42 @@ def _apply_openalex_title_match(
             reason="title_resolution_inline_merge",
             fields_filled=fields_filled,
         )
-    return fields_filled
+    return fields_filled, None
 
 
 def _apply_s2_title_match(
     conn: sqlite3.Connection, paper_id: str, candidate: dict
 ) -> tuple[list[str], bool]:
-    """WRITE: fill id+doi+abstract and store the SPECTER2 vector the S2
-    search response carried (free). Returns ``(fields_filled, vector_stored)``."""
+    """WRITE: merge the FULL metadata the S2 search response already carried
+    (same fill semantics as ``s2_vectors._apply_s2_metadata`` + the tldr /
+    influential-count extras of ``corpus_rehydrate._apply_s2_paper``), store
+    the free SPECTER2 vector, then stamp the S2 enrichment ledger
+    ``enriched`` so the rehydrate Phase-1.5 selector doesn't re-fetch the
+    same record (B1 twin of ``_apply_openalex_title_match``).
+    Returns ``(fields_filled, vector_stored)``."""
     from alma.core.paper_updates import fill_only_update_paper
+    from alma.services.corpus_rehydrate import (
+        S2_SOURCE,
+        _s2_lookup_key_for_values,
+        _write_ledger,
+    )
 
     new_s2_id = str(candidate.get("semantic_scholar_id") or "").strip()
     new_doi = canonical_lookup_doi(str(candidate.get("doi") or "")) or ""
     new_abstract = str(candidate.get("abstract") or "").strip()
+    new_url = str(candidate.get("url") or "").strip()
+    try:
+        year = int(candidate.get("year")) if candidate.get("year") is not None else None
+    except (TypeError, ValueError):
+        year = None
+    try:
+        cited_by = int(candidate.get("cited_by_count") or 0)
+    except (TypeError, ValueError):
+        cited_by = 0
+    try:
+        influential = int(candidate.get("influential_citation_count") or 0)
+    except (TypeError, ValueError):
+        influential = 0
     fields_filled = [
         str(f)
         for f in (
@@ -668,9 +779,22 @@ def _apply_s2_title_match(
                 paper_id,
                 fill_fields={
                     "semantic_scholar_id": new_s2_id,
+                    "semantic_scholar_corpus_id": str(
+                        candidate.get("semantic_scholar_corpus_id") or ""
+                    ).strip(),
                     "doi": new_doi,
                     "abstract": new_abstract,
+                    "url": new_url,
+                    "publication_date": str(candidate.get("publication_date") or "").strip(),
+                    "source_id": new_doi or new_url or str(candidate.get("title") or "").strip(),
+                    "tldr": str(candidate.get("tldr") or "").strip(),
                 },
+                fill_null_fields={"year": year},
+                max_int_fields={
+                    "cited_by_count": cited_by,
+                    "influential_citation_count": influential,
+                },
+                always_fields={"fetched_at": datetime.utcnow().isoformat()},
             )
             or []
         )
@@ -688,6 +812,26 @@ def _apply_s2_title_match(
             )
         except Exception as exc:
             logger.warning("title-resolution S2 vector store failed for %s: %s", paper_id, exc)
+
+    # Stamp the S2 metadata ledger from the paper's FINAL identifiers so the
+    # Phase-1.5 selector's lookup-key comparison matches and skips this paper
+    # (fill-only above may have kept a pre-existing doi/s2_id over ours).
+    id_row = conn.execute(
+        "SELECT semantic_scholar_id, doi FROM papers WHERE id = ?", (paper_id,)
+    ).fetchone()
+    if id_row is not None:
+        _write_ledger(
+            conn,
+            paper_id=paper_id,
+            source=S2_SOURCE,
+            lookup_key=_s2_lookup_key_for_values(
+                str(id_row["semantic_scholar_id"] or ""), str(id_row["doi"] or "")
+            ),
+            status="enriched",
+            reason="title_resolution_inline_merge",
+            fields_filled=fields_filled,
+            fields_key="s2_paper_v1",
+        )
     return fields_filled, vector_stored
 
 
@@ -737,7 +881,16 @@ def _write_title_results(
             title = str(r["title"])
             if r.get("resolved"):
                 if r.get("source") == "openalex":
-                    fields = _apply_openalex_title_match(conn, paper_id, r["work"])
+                    fields, duplicate_of = _apply_openalex_title_match(conn, paper_id, r["work"])
+                    if duplicate_of is not None:
+                        # The matched work already lives on another paper row:
+                        # this row is a duplicate, not a resolution. Sticky
+                        # terminal so it leaves the candidate pool; the filled
+                        # DOI surfaces the pair to the dedup health proxy.
+                        _stamp(paper_id, title, "terminal_no_match",
+                               f"duplicate_identity:{duplicate_of}", fields, None)
+                        counters["duplicate_identity"] += 1
+                        continue
                     counters["resolved_via_openalex"] += 1
                 else:
                     fields, vector_stored = _apply_s2_title_match(conn, paper_id, r["candidate"])
@@ -748,8 +901,11 @@ def _write_title_results(
                 _clear_terminal_status_row(conn, paper_id=paper_id, model=model)
                 _stamp(paper_id, title, "enriched",
                        f"title_match:{r.get('source')}:{r.get('score')}", fields, None)
-            elif r.get("reason") == "rate_limited":
-                _stamp(paper_id, title, _RETRYABLE_STATUS, "s2_rate_limited", [],
+            elif r.get("reason") in ("rate_limited", "fallback_budget_exhausted"):
+                # Retryable, never terminal: rate-limited means the source
+                # said "not now"; budget-exhausted means OpenAlex never saw
+                # the title this run. Both re-enter the pool after the TTL.
+                _stamp(paper_id, title, _RETRYABLE_STATUS, str(r.get("reason")), [],
                        timedelta(minutes=10))
                 counters["errors"] += 1
             else:
@@ -769,14 +925,14 @@ def run_title_resolution_sweep(
     is_cancellation_requested: Callable[[str], bool],
     continuation_depth: int = 0,
 ) -> None:
-    """Resolve paper identity via OpenAlex (first) then S2 (fallback).
+    """Resolve paper identity via S2 (first, free) then OpenAlex (fallback).
 
     Eligibility: papers with a non-empty title that either lack a
     usable identity (no ``semantic_scholar_id`` and no DOI) or carry
     a terminal ``unmatched`` / ``bad_local_doi`` fetch_status row for
     the active SPECTER2 model. Bounded per outer run by
-    ``min(limit, TITLE_RESOLUTION_PER_RUN_BUDGET)`` papers
-    (OpenAlex calls) and ``S2_FALLBACK_PER_RUN_BUDGET`` (S2 calls).
+    ``min(limit, TITLE_RESOLUTION_PER_RUN_BUDGET)`` papers (S2 calls)
+    and ``OPENALEX_FALLBACK_PER_RUN_BUDGET`` (paid OpenAlex calls).
     Self-reschedules a continuation job when more remain — see module
     docstring for the rationale.
     """
@@ -808,15 +964,34 @@ def run_title_resolution_sweep(
             )
             return
 
+        # Adaptive order (benchmarked 2026-07-04: OpenAlex ≈ 0.3 s/paper paid,
+        # S2 ≈ 6 s/paper free): a USER-FACING run (manual click or the
+        # onboarding-complete kick) with enough remaining credits for the
+        # whole run + the user reserve goes OpenAlex-first — the user is
+        # waiting. Background / low-budget runs go free-S2-first.
+        from alma.core.http_sources import RESERVED_USER_CALLS as _RESERVED
+        from alma.api.scheduler import (
+            get_job_trigger_source as _get_trigger,
+            is_user_facing_trigger as _is_user_facing,
+        )
+        from alma.openalex.http import SEARCH_COST_CREDITS, get_client as _oa_client
+
+        # One title = one ?search = SEARCH_COST_CREDITS budget units — size the
+        # reserve in the same unit the credit headers report.
+        openalex_first = (
+            _is_user_facing(_get_trigger(job_id))
+            and not _oa_client().budget_drained(
+                reserve=total * SEARCH_COST_CREDITS + _RESERVED
+            )
+        )
+        order_label = "OpenAlex first, S2 fallback" if openalex_first else "S2 first, OpenAlex fallback"
+
         set_job_status(
             job_id,
             status="running",
             processed=0,
             total=total,
-            message=(
-                f"Resolving identity for {total} papers "
-                f"(OpenAlex first, S2 fallback)"
-            ),
+            message=f"Resolving identity for {total} papers ({order_label})",
         )
         add_job_log(
             job_id,
@@ -824,8 +999,9 @@ def run_title_resolution_sweep(
             step="prepare",
             data={
                 "papers": total,
-                "openalex_budget": budget,
-                "s2_fallback_budget": S2_FALLBACK_PER_RUN_BUDGET,
+                "order": "openalex_first" if openalex_first else "s2_first",
+                "run_budget": budget,
+                "openalex_fallback_budget": OPENALEX_FALLBACK_PER_RUN_BUDGET,
                 "continuation_depth": continuation_depth,
             },
         )
@@ -844,9 +1020,10 @@ def run_title_resolution_sweep(
             "resolved_via_s2": 0,
             "vectors_captured": 0,
             "no_match": 0,
+            "duplicate_identity": 0,
             "errors": 0,
         }
-        s2_gate = _S2FallbackGate(S2_FALLBACK_PER_RUN_BUDGET)
+        fallback_gate = _FallbackGate(OPENALEX_FALLBACK_PER_RUN_BUDGET)
 
         # Background governance (task 37 A/C): a BACKGROUND sweep yields the
         # moment the user does anything (pause) or the OpenAlex quota nears the
@@ -881,8 +1058,8 @@ def run_title_resolution_sweep(
                 processed=done,
                 total=total_now,
                 message=(
-                    f"Title resolution: openalex={counters['resolved_via_openalex']}, "
-                    f"s2_fallback={counters['resolved_via_s2']}, "
+                    f"Title resolution: s2={counters['resolved_via_s2']}, "
+                    f"openalex_fallback={counters['resolved_via_openalex']}, "
                     f"vectors={counters['vectors_captured']}"
                 ),
             )
@@ -892,18 +1069,19 @@ def run_title_resolution_sweep(
             conn=conn,
             model=model,
             counters=counters,
-            s2_gate=s2_gate,
+            fallback_gate=fallback_gate,
             deadline=make_deadline(_PER_RUN_SECONDS),
             is_cancelled=_is_cancelled,
             on_progress=_progress,
+            openalex_first=openalex_first,
         )
 
         processed = pipeline_result.processed
         resolved_via_openalex = counters["resolved_via_openalex"]
         resolved_via_s2 = counters["resolved_via_s2"]
         vectors_captured = counters["vectors_captured"]
-        s2_fallback_calls = s2_gate.calls
-        s2_rate_limited = s2_gate.blocked
+        openalex_fallback_calls = fallback_gate.calls
+        openalex_rate_limited = fallback_gate.blocked
 
         # Stopped mid-pipeline (do NOT reschedule a continuation either way):
         if pipeline_result.cancelled:
@@ -921,8 +1099,8 @@ def run_title_resolution_sweep(
                     "yielded": True,
                     "abort_reason": reason,
                     "processed": processed,
-                    "resolved_via_openalex": resolved_via_openalex,
-                    "resolved_via_s2_fallback": resolved_via_s2,
+                    "resolved_via_s2": resolved_via_s2,
+                    "resolved_via_openalex_fallback": resolved_via_openalex,
                 }
                 if reason == _BG_CREDIT_LIMIT:
                     from alma.core.http_sources import provider_remaining_credits
@@ -989,14 +1167,15 @@ def run_title_resolution_sweep(
         # instead of reporting a clean success.
         deadline_hit = bool(pipeline_result.deadline_hit)
         dropped = int(pipeline_result.dropped)
-        no_progress_throttled = processed == 0 and (deadline_hit or s2_rate_limited)
+        no_progress_throttled = processed == 0 and (deadline_hit or openalex_rate_limited)
         result_data: dict = {
             "processed": processed,
-            "resolved_via_openalex": resolved_via_openalex,
-            "resolved_via_s2_fallback": resolved_via_s2,
+            "resolved_via_s2": resolved_via_s2,
+            "resolved_via_openalex_fallback": resolved_via_openalex,
             "vectors_captured": vectors_captured,
-            "s2_fallback_calls": s2_fallback_calls,
-            "s2_rate_limited": s2_rate_limited,
+            "duplicate_identity": counters["duplicate_identity"],
+            "openalex_fallback_calls": openalex_fallback_calls,
+            "openalex_rate_limited": openalex_rate_limited,
             "remaining_eligible": remaining,
             "remaining_session_budget": remaining_session,
             "continuation_depth": continuation_depth,
