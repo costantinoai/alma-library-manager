@@ -190,6 +190,7 @@ def cancel_operation(
         job_id,
         status="cancelling",
         cancel_requested=True,
+        cancel_mode="hard",
         message="Cancellation requested; killing worker thread",
     )
     add_job_log(job_id, "Cancellation requested by user", step="cancel_requested")
@@ -206,4 +207,103 @@ def cancel_operation(
         "status": "cancelling",
         "cancel_requested": True,
         "message": "Cancellation requested" + (" (thread interrupt sent)" if killed else ""),
+    }
+
+
+@router.post(
+    "/{job_id}/stop",
+    summary="Gracefully stop an operation",
+    description=(
+        "Request a GRACEFUL stop for a running operation: the worker keeps "
+        "control, finishes its in-flight batch, commits the work done so far "
+        "and exits at its next cooperative checkpoint. No thread interrupt "
+        "is sent (contrast with /cancel, which kills the worker thread). "
+        "Queued jobs are unscheduled immediately."
+    ),
+)
+def stop_operation(
+    job_id: str,
+    user: dict = Depends(get_current_user),
+):
+    from alma.api.scheduler import (
+        add_job_log,
+        get_job_status,
+        get_scheduler,
+        set_job_status,
+    )
+
+    st = get_job_status(job_id)
+    if not st:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Operation '{job_id}' not found",
+        )
+
+    current = (st.get("status") or "").lower()
+    if current in {"completed", "failed", "cancelled"}:
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": current,
+            "cancel_requested": False,
+            "message": f"Operation already {current}",
+        }
+
+    # A stop request never downgrades a hard cancel already in flight.
+    if st.get("cancel_requested"):
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": current,
+            "cancel_requested": True,
+            "message": "Cancellation already requested",
+        }
+
+    # Not started yet → nothing to finish gracefully; cancel outright.
+    removed = False
+    try:
+        sched = get_scheduler()
+        job = sched.get_job(job_id)
+        if job is not None:
+            sched.remove_job(job_id)
+            removed = True
+    except Exception as exc:
+        logger.debug("Stop unschedule attempt failed for %s: %s", job_id, exc)
+
+    if removed or current in {"queued", "scheduled"}:
+        set_job_status(
+            job_id,
+            status="cancelled",
+            cancel_requested=True,
+            cancel_mode="graceful",
+            finished_at=datetime.utcnow().isoformat(),
+            message="Operation cancelled",
+        )
+        add_job_log(job_id, "Stop completed before execution", step="cancelled")
+        return {
+            "success": True,
+            "job_id": job_id,
+            "status": "cancelled",
+            "cancel_requested": True,
+            "message": "Operation cancelled",
+        }
+
+    # Running: raise the cooperative flag only. Runners break at their next
+    # `is_cancellation_requested(job_id)` loop boundary with the current
+    # batch's work already committed; the final partial summary is merged
+    # into the Activity row when the runner returns.
+    set_job_status(
+        job_id,
+        status="cancelling",
+        cancel_requested=True,
+        cancel_mode="graceful",
+        message="Graceful stop requested; finishing current batch",
+    )
+    add_job_log(job_id, "Graceful stop requested by user", step="cancel_requested")
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "cancelling",
+        "cancel_requested": True,
+        "message": "Graceful stop requested; work done so far will be saved",
     }

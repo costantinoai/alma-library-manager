@@ -12,6 +12,7 @@ import {
   Clock,
   UserRound,
   X,
+  Square,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
@@ -152,9 +153,39 @@ function isActiveOperation(status: string): boolean {
 }
 
 const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+const ORPHAN_REAP_MESSAGE = 'Orphaned across process restart; auto-cancelled'
+const LEGACY_ORPHAN_REAP_ERROR = 'Worker process exited before this job finished'
 
 function isTerminalStatus(status: string): boolean {
   return TERMINAL_STATUSES.has(status)
+}
+
+function isOrphanedAcrossRestart(job: JobStatus): boolean {
+  return (
+    job.message === ORPHAN_REAP_MESSAGE ||
+    job.error === LEGACY_ORPHAN_REAP_ERROR ||
+    Boolean(job.error?.startsWith('Backend process restarted or exited while this job was running'))
+  )
+}
+
+function describeStopReason(job: JobStatus): { title: string; detail?: string } {
+  if (isOrphanedAcrossRestart(job)) {
+    const timeHint = job.finished_at
+      ? ` around ${formatTimestamp(job.finished_at)}`
+      : ' around the recorded finish time'
+    return {
+      title: 'Backend restarted while this job was running.',
+      detail: (
+        `The worker thread disappeared before it could write completion, so ALMa marked the stale Activity row ` +
+        `as cancelled on the next startup. This is not a title-resolution exception. Check backend logs${timeHint} ` +
+        `for the restart, reload, crash, or container-stop cause.`
+      ),
+    }
+  }
+  return {
+    title: job.message || (job.status === 'failed' ? 'Operation failed.' : 'Operation stopped.'),
+    detail: job.error && job.error !== job.message ? job.error : undefined,
+  }
 }
 
 function formatDuration(started?: string | null, finished?: string | null): string | null {
@@ -253,12 +284,14 @@ function OperationsView({
   onSelect,
   onDismiss,
   onCancel,
+  onStop,
 }: {
   ops: JobStatus[]
   selectedJobId: string | null
   onSelect: (jobId: string) => void
   onDismiss: (jobId: string) => void
   onCancel: (jobId: string) => void
+  onStop: (jobId: string) => void
 }) {
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>({})
   const [showBackground, setShowBackground] = useState(false)
@@ -395,7 +428,7 @@ function OperationsView({
         type="button"
         onClick={() => onSelect(op.job_id)}
         className={cn(
-          'flex w-full items-start gap-3 border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
+          'flex w-full min-w-0 items-start gap-3 overflow-hidden border-b border-l-2 border-b-slate-200 bg-surface-cool-1 px-4 py-3 text-left transition-colors hover:bg-surface-cool-2',
           statusAccent(op.status),
           isChild && 'bg-surface-cool-2 pl-8',
           selectedJobId === op.job_id && 'bg-accent-soft',
@@ -422,10 +455,10 @@ function OperationsView({
         <StatusIcon status={op.status} />
         <div className="min-w-0 flex-1 space-y-1">
           {/* Primary line: title + action buttons */}
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-start justify-between gap-2">
             <span
               className={cn(
-                'min-w-0 flex-1 truncate text-sm leading-tight',
+                'min-w-0 flex-1 whitespace-normal break-words text-sm leading-snug',
                 op.status === 'failed'
                   ? 'font-semibold text-critical-700'
                   : terminal
@@ -438,13 +471,18 @@ function OperationsView({
               {displayMessage}
             </span>
             <div className="flex shrink-0 items-center gap-1">
-              {/* One X per row, never two. Semantics depend on state:
-                  • active  → kills the worker thread (POST /activity/{id}/cancel
-                    hard-kills via PyThreadState_SetAsyncExc) and the row
-                    transitions through "cancelling" → "cancelled".
-                  • terminal → just dismisses the row from Activity.
-                  Pre-2026-05-08 we showed Square+X side by side, which let users
-                  "dismiss" a running job — the operation kept running invisibly. */}
+              {/* Terminal rows get ONE X (dismiss). Active rows get TWO stop
+                  verbs with distinct semantics:
+                  • Square → GRACEFUL stop (POST /activity/{id}/stop): the
+                    worker finishes its in-flight batch, commits the work done
+                    so far, and exits at its next cooperative checkpoint.
+                  • X      → hard kill (POST /activity/{id}/cancel): injects
+                    JobCancelled via PyThreadState_SetAsyncExc; the in-flight
+                    batch may be lost.
+                  Both act on the OPERATION (never dismiss a running row —
+                  pre-2026-05-08 that let jobs keep running invisibly). While
+                  "cancelling", the graceful button disables; the hard X stays
+                  live as an escalation. */}
               {terminal ? (
                 <button
                   type="button"
@@ -459,18 +497,37 @@ function OperationsView({
                   <X className="h-3.5 w-3.5" />
                 </button>
               ) : (
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-critical-500 hover:bg-critical-100 hover:text-critical-700"
-                  title="Stop operation now (kills worker thread)"
-                  aria-label="Stop operation"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onCancel(op.job_id)
-                  }}
-                >
-                  <X className="h-3.5 w-3.5" strokeWidth={2.5} />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="rounded p-0.5 text-warning-600 hover:bg-warning-100 hover:text-warning-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    title={
+                      op.status === 'cancelling'
+                        ? 'Stopping — finishing current batch'
+                        : 'Stop gracefully (finish current batch, save progress, then stop)'
+                    }
+                    aria-label="Stop operation gracefully"
+                    disabled={op.status === 'cancelling'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onStop(op.job_id)
+                    }}
+                  >
+                    <Square className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded p-0.5 text-critical-500 hover:bg-critical-100 hover:text-critical-700"
+                    title="Kill now (interrupts worker thread; in-flight batch may be lost)"
+                    aria-label="Kill operation"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onCancel(op.job_id)
+                    }}
+                  >
+                    <X className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -484,7 +541,7 @@ function OperationsView({
           )}
 
           {/* Metadata chips \u2014 canonical StatusBadge */}
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5 overflow-hidden">
             {op.chain_step && (
               <StatusBadge tone="info" size="sm" className="uppercase tracking-wide">
                 {formatChainStepLabel(op.chain_step)}
@@ -501,8 +558,8 @@ function OperationsView({
               </StatusBadge>
             )}
             {op.trigger_source && (
-              <StatusBadge tone="neutral" size="sm" className="uppercase tracking-wide">
-                {op.trigger_source}
+              <StatusBadge tone="neutral" size="sm" className="max-w-full uppercase tracking-wide">
+                <span className="min-w-0 truncate">{op.trigger_source}</span>
               </StatusBadge>
             )}
             <span className="font-mono text-[10px] text-slate-400">
@@ -514,7 +571,7 @@ function OperationsView({
           {op.error && (
             <p
               className={cn(
-                'text-xs text-critical-700',
+                'break-words text-xs text-critical-700',
                 op.status === 'failed' && 'rounded-md border border-critical-100 bg-critical-50/70 px-2 py-1',
               )}
             >
@@ -588,15 +645,15 @@ function OperationsView({
           <button
             type="button"
             onClick={() => setShowBackground((v) => !v)}
-            className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-surface-cool-2 hover:text-slate-600"
+            className="flex w-full min-w-0 items-center gap-2 px-4 py-2 text-left text-xs font-medium text-slate-400 transition-colors hover:bg-surface-cool-2 hover:text-slate-600"
             title={showBackground ? 'Hide background activity' : 'Show background activity'}
           >
             {showBackground ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            <span>Background activity</span>
-            <span className="rounded-full bg-surface-cool-3 px-1.5 py-0.5 tabular-nums text-slate-500">
+            <span className="shrink-0">Background activity</span>
+            <span className="shrink-0 rounded-full bg-surface-cool-3 px-1.5 py-0.5 tabular-nums text-slate-500">
               {backgroundParents.length}
             </span>
-            <span className="ml-1 truncate font-normal text-slate-400">cache &amp; maintenance — runs on its own</span>
+            <span className="ml-1 min-w-0 truncate font-normal text-slate-400">cache &amp; maintenance — runs on its own</span>
           </button>
           {showBackground && (
             <div className="divide-y divide-slate-100 opacity-60">
@@ -800,7 +857,7 @@ function LogsView({ logs }: { logs: LogEntry[] }) {
   }
 
   return (
-    <ScrollArea ref={scrollRef} className="h-full">
+    <ScrollArea ref={scrollRef} scrollbars="both" className="h-full min-w-0">
       <div className="space-y-0">
         {logs.map((entry, i) => (
           <div
@@ -888,9 +945,11 @@ function OperationDetailView({
   const resultKeys = job.result ? Object.keys(job.result) : []
   const hasResult = resultKeys.length > 0
   const errorsPlus = counts.ERROR + counts.CRITICAL
+  const stoppedWithReason = terminal && (job.status === 'failed' || job.status === 'cancelled' || Boolean(job.error))
+  const stopReason = stoppedWithReason ? describeStopReason(job) : null
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-col">
       {/* ── HEADER ── */}
       <div
         className={cn(
@@ -898,12 +957,12 @@ function OperationDetailView({
           job.status === 'failed' && 'bg-critical-50/30',
         )}
       >
-        <div className="flex items-start gap-2">
+        <div className="flex min-w-0 items-start gap-2">
           <StatusIcon status={job.status} />
           <div className="min-w-0 flex-1">
             <h3
               className={cn(
-                'text-sm font-semibold leading-tight',
+                'break-words text-sm font-semibold leading-tight',
                 job.status === 'failed' ? 'text-critical-700' : 'text-slate-800',
               )}
               title={title}
@@ -918,9 +977,9 @@ function OperationDetailView({
                 <StatusBadge
                   tone="neutral"
                   size="sm"
-                  className="font-mono normal-case tracking-normal"
+                  className="max-w-full font-mono normal-case tracking-normal"
                 >
-                  {job.operation_key}
+                  <span className="min-w-0 truncate">{job.operation_key}</span>
                 </StatusBadge>
               )}
               {job.trigger_source && (
@@ -965,8 +1024,36 @@ function OperationDetailView({
           </p>
         )}
 
-        <p className="font-mono text-[10px] text-slate-400">{job.job_id}</p>
+        <p className="break-all font-mono text-[10px] text-slate-400">{job.job_id}</p>
       </div>
+
+      {stoppedWithReason && (
+        <div
+          className={cn(
+            'border-b px-4 py-3 text-xs',
+            job.status === 'failed'
+              ? 'border-critical-100 bg-critical-50/30 text-critical-800'
+              : 'border-warning-100 bg-warning-50/30 text-warning-800',
+          )}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <EyebrowLabel tone="muted">Why it stopped</EyebrowLabel>
+            <StatusBadge tone={job.status === 'failed' ? 'negative' : 'warning'} size="sm" className="capitalize">
+              {job.status}
+            </StatusBadge>
+          </div>
+          {stopReason?.title && (
+            <p className="mt-2 break-words font-medium">
+              {stopReason.title}
+            </p>
+          )}
+          {stopReason?.detail && (
+            <p className="mt-1 break-words">
+              {stopReason.detail}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ── RESULT ── */}
       {hasResult && (
@@ -1248,6 +1335,19 @@ export function ActivityPanel() {
       void invalidateQueries(queryClient, ['activity-operations'], ['activity-operation-logs', jobId])
     },
   })
+  const stopMutation = useMutation({
+    mutationFn: (jobId: string) =>
+      api.post<{
+        success: boolean
+        job_id: string
+        status: string
+        cancel_requested: boolean
+        message: string
+      }>(`/activity/${encodeURIComponent(jobId)}/stop`),
+    onSuccess: (_data, jobId) => {
+      void invalidateQueries(queryClient, ['activity-operations'], ['activity-operation-logs', jobId])
+    },
+  })
   const selectedOpLogs = (selectedOpLogsQuery.data ?? []).slice(-100)
   const logs = (logsQuery.data ?? []).slice(-100)
   const opsError = opsQuery.error instanceof Error ? opsQuery.error.message : null
@@ -1358,22 +1458,23 @@ export function ActivityPanel() {
           {/* Content area — ScrollArea wraps both split panes so long
               operation / log lists get a styled scrollbar and never clip
               the surrounding drawer chrome. */}
-          <div className="min-h-0 flex-1 overflow-hidden">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             {activeTab === 'operations' ? (
               opsError ? (
                 <QueryErrorView title="Failed to load operations" message={opsError} />
               ) : (
-                <div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-2">
-                  <ScrollArea className="h-full border-r border-slate-200">
+                <div className="grid h-full min-h-0 min-w-0 grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                  <ScrollArea scrollbars="both" className="h-full min-w-0 border-r border-slate-200">
                     <OperationsView
                       ops={operations}
                       selectedJobId={selectedJobId}
                       onSelect={setSelectedJobId}
                       onCancel={(jobId) => cancelMutation.mutate(jobId)}
+                      onStop={(jobId) => stopMutation.mutate(jobId)}
                       onDismiss={(jobId) => dismissMutation.mutate(jobId)}
                     />
                   </ScrollArea>
-                  <ScrollArea className="h-full">
+                  <ScrollArea scrollbars="both" className="h-full min-w-0">
                     {selectedOpError ? (
                       <QueryErrorView title="Failed to load operation logs" message={selectedOpError} />
                     ) : (
