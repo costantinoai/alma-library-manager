@@ -34,6 +34,7 @@ from ..seed_profile import (
     _candidate_negative_preference_penalty,
     _negative_preference_context,
     _plan_branch_queries_deterministic,
+    _resolve_branch_resolution,
     _resolve_branch_temperature,
     _top_negative_terms,
     _top_preferred_authors,
@@ -86,6 +87,7 @@ def _retrieve_external_channel(
     # Manual branch_controls remain the only user-driven overrides.
     effective_branch_controls = branch_controls
     temperature = _resolve_branch_temperature(settings, branch_controls.get("temperature"))
+    resolution = _resolve_branch_resolution(branch_controls.get("resolution"), settings)
     current_year = datetime.utcnow().year
     profile = preference_profile or {}
     preferred_topics = _top_profile_terms(
@@ -222,6 +224,7 @@ def _retrieve_external_channel(
             settings=settings,
             max_branches=max_branches,
             temperature=temperature,
+            resolution=resolution,
             lens_id=str(lens.get("id") or "") or None,
         )
         branches = _apply_branch_controls(

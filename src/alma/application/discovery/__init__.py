@@ -124,6 +124,7 @@ from .seed_profile import (
     _planner_clamp,
     _planner_sanitize_queries,
     _recent_positive_publications,
+    _resolve_branch_resolution,
     _resolve_branch_temperature,
     _seed_strength,
     _seed_token_set,

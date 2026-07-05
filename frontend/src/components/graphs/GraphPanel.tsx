@@ -144,7 +144,19 @@ export function GraphPanel() {
   const [physics, setPhysics] = useState<GraphPhysicsConfig>(DEFAULT_GRAPH_PHYSICS)
   // Cluster detail knob (Phase 3): 1.0 = default; >1 finer (more clusters),
   // <1 coarser. A non-default value bypasses the MV cache (live re-cluster).
-  const [clusterResolution, setClusterResolution] = useState(1.0)
+  // Cluster-detail default is PER-VIEW. The paper map opens at 1.5 — the
+  // granularity that reads well on a coherent single-user corpus (1.0 merged
+  // everything into a few broad clusters) — served from the durable variant
+  // cache. The author network stays at 1.0: its non-default variant re-clusters
+  // AND re-lays-out the whole graph live (the 1.0 MV is the only precomputed
+  // layout), which is too slow to be a default on a large corpus. Separate
+  // knobs so switching tabs never carries a slow resolution across.
+  const [paperMapResolution, setPaperMapResolution] = useState(1.5)
+  const [authorNetworkResolution, setAuthorNetworkResolution] = useState(1.0)
+  const clusterResolution =
+    activeView === 'paper-map' ? paperMapResolution : authorNetworkResolution
+  const setClusterResolution =
+    activeView === 'paper-map' ? setPaperMapResolution : setAuthorNetworkResolution
   // Author-network encodings — applied client-side from node metadata (below),
   // so changing them never refetches.
   const [authorColorBy, setAuthorColorBy] = useState<AuthorColorBy>('cluster')

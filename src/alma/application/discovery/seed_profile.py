@@ -625,6 +625,38 @@ def _resolve_branch_temperature(
         return fallback
 
 
+# Branch-clustering granularity: mirrors the Insights graph "Cluster detail"
+# knob and drives the SAME shared engine (`ai.clustering.cluster_publications`).
+BRANCH_RESOLUTION_DEFAULT = 1.0
+BRANCH_RESOLUTION_MIN = 0.5
+BRANCH_RESOLUTION_MAX = 3.0
+
+
+def _resolve_branch_resolution(
+    override: Optional[float] = None,
+    settings: Optional[dict[str, str]] = None,
+) -> float:
+    """Resolve the branch cluster-granularity (>1 finer, <1 coarser).
+
+    Priority: explicit ``override`` (live slider / persisted lens control) →
+    ``branches.resolution`` setting → engine default 1.0. Clamped to the same
+    [0.5, 3.0] band as the graph so the two surfaces share one contract."""
+    if override is not None:
+        try:
+            return _clamp(float(override), BRANCH_RESOLUTION_MIN, BRANCH_RESOLUTION_MAX)
+        except (TypeError, ValueError):
+            pass
+    raw = (settings or {}).get("branches.resolution")
+    try:
+        return (
+            _clamp(float(raw), BRANCH_RESOLUTION_MIN, BRANCH_RESOLUTION_MAX)
+            if raw is not None
+            else BRANCH_RESOLUTION_DEFAULT
+        )
+    except (TypeError, ValueError):
+        return BRANCH_RESOLUTION_DEFAULT
+
+
 def _seed_strength(seed: dict) -> float:
     """Seed-paper strength used to rank / cluster lens seeds.
 
@@ -726,116 +758,87 @@ def _cluster_seed_papers_vector(
     seeds: list[dict],
     vectors: dict[str, "np.ndarray"],
     max_clusters: int,
+    resolution: float = BRANCH_RESOLUTION_DEFAULT,
 ) -> list[dict[str, Any]]:
+    """Cluster lens seeds into branches via the SHARED clustering engine.
+
+    Delegates to ``ai.clustering.cluster_publications`` — the SAME
+    BERTopic / HDBSCAN recipe the Insights graph uses — so one ``resolution``
+    knob (>1 finer, <1 coarser) governs branch granularity on both surfaces.
+    This replaces the old bespoke spherical k-means + 0.85 centroid-merge,
+    whose merge loop collapsed every coherent single-user library to its hard
+    floor of 2 branches regardless of size (the reported bug).
+
+    Cluster COUNT is inferred by the engine from ``resolution``; ``max_clusters``
+    is only a display ceiling. Overflow clusters + density-noise outliers are
+    absorbed into the nearest retained centroid (cosine) so NO seed is dropped
+    from the branch view. Returns ``[{"seeds": [...], "centroid": np.ndarray}]``
+    with unit-normalized raw-vector centroids for the downstream
+    core-pull / explore-push neighbour geometry.
+    """
     seed_by_id = {str(seed.get("id") or ""): seed for seed in seeds}
-    items: list[tuple[str, "np.ndarray", float]] = []
+    emb: dict[str, list[float]] = {}
     for paper_id, vec in vectors.items():
-        seed = seed_by_id.get(paper_id)
-        if not seed:
-            continue
-        items.append((paper_id, vec, _seed_strength(seed)))
-
-    if not items:
+        if paper_id in seed_by_id:
+            emb[paper_id] = vec.tolist() if hasattr(vec, "tolist") else list(vec)
+    if not emb:
         return []
-    if len(items) == 1:
-        sid, vec, _ = items[0]
-        return [{"seeds": [seed_by_id[sid]], "centroid": vec}]
+    if len(emb) == 1:
+        sid = next(iter(emb))
+        return [{"seeds": [seed_by_id[sid]], "centroid": vectors[sid]}]
 
-    items.sort(key=lambda x: x[2], reverse=True)
-    k = max(2, int(round(len(items) ** 0.5)))
-    k = min(k, max(2, max_clusters), len(items))
+    def _unit(v: "np.ndarray") -> "np.ndarray":
+        n = float(np.linalg.norm(v))
+        return v / n if n > 0.0 else v
 
-    centers: list["np.ndarray"] = [items[0][1]]
-    used_ids: set[str] = {items[0][0]}
-    while len(centers) < k:
-        best_idx: Optional[int] = None
-        best_dist = -1.0
-        for idx, (paper_id, vec, _score) in enumerate(items):
-            if paper_id in used_ids:
-                continue
-            nearest = min(1.0 - float(np.dot(vec, c)) for c in centers)
-            if nearest > best_dist:
-                best_dist = nearest
-                best_idx = idx
-        if best_idx is None:
-            break
-        seed_id, seed_vec, _ = items[best_idx]
-        centers.append(seed_vec)
-        used_ids.add(seed_id)
+    from alma.ai.clustering import cluster_publications
 
-    assignments: list[list[tuple[str, "np.ndarray"]]] = [[] for _ in centers]
-    for _ in range(6):
-        assignments = [[] for _ in centers]
-        for paper_id, vec, _score in items:
-            best_i = max(range(len(centers)), key=lambda i: float(np.dot(vec, centers[i])))
-            assignments[best_i].append((paper_id, vec))
+    result = cluster_publications(emb, resolution=resolution)
 
-        new_centers: list["np.ndarray"] = []
-        for i, group in enumerate(assignments):
-            if not group:
-                new_centers.append(centers[i])
-                continue
-            mat = np.vstack([v for _, v in group])
-            centroid = np.mean(mat, axis=0)
-            norm = float(np.linalg.norm(centroid))
-            if norm <= 0.0:
-                new_centers.append(centers[i])
-            else:
-                new_centers.append(centroid / norm)
-        centers = new_centers
+    real: list[dict[str, Any]] = []
+    for cluster in result.clusters:
+        ids = [k for k in cluster.member_keys if k in seed_by_id]
+        if not ids:
+            continue
+        real.append(
+            {"ids": ids, "centroid": _unit(np.asarray(cluster.centroid, dtype=float))}
+        )
+
+    if not real:
+        # The engine placed every seed in density-noise → one catch-all branch
+        # (never collapse the whole library to an empty branch view).
+        all_ids = list(emb.keys())
+        centroid = _unit(np.mean(np.vstack([vectors[i] for i in all_ids]), axis=0))
+        pooled = sorted((seed_by_id[i] for i in all_ids), key=_seed_strength, reverse=True)
+        return [{"seeds": pooled, "centroid": centroid}]
+
+    # Rank by size then aggregate seed strength; cap to the display ceiling.
+    real.sort(
+        key=lambda c: (len(c["ids"]), sum(_seed_strength(seed_by_id[i]) for i in c["ids"])),
+        reverse=True,
+    )
+    cap = len(real) if max_clusters <= 0 else max(2, min(int(max_clusters), len(real)))
+    retained = real[:cap]
+
+    # Absorb overflow-cluster members + density outliers into the nearest
+    # retained centroid so the branch view still covers every seed.
+    leftover: list[str] = list(result.outliers)
+    for cluster in real[cap:]:
+        leftover.extend(cluster["ids"])
+    for paper_id in leftover:
+        vec = vectors.get(paper_id)
+        if vec is None or paper_id not in seed_by_id:
+            continue
+        best = max(retained, key=lambda c: float(np.dot(vec, c["centroid"])))
+        best["ids"].append(paper_id)
 
     clusters: list[dict[str, Any]] = []
-    for i, group in enumerate(assignments):
-        if not group:
-            continue
-        group_seeds = [seed_by_id[sid] for sid, _ in group if sid in seed_by_id]
+    for cluster in retained:
+        group_seeds = [seed_by_id[i] for i in cluster["ids"] if i in seed_by_id]
         if not group_seeds:
             continue
         group_seeds.sort(key=_seed_strength, reverse=True)
-        clusters.append({"seeds": group_seeds, "centroid": centers[i]})
-
-    # Data-driven K: merge any two clusters whose centroid cosine
-    # similarity exceeds 0.85 — i.e. K-means produced "near-duplicate"
-    # clusters because the library is more cohesive than `sqrt(N)`
-    # suggests. The hard `K = round(sqrt(N))` was producing 4-5
-    # near-duplicate clusters on coherent libraries; merging here
-    # naturally yields fewer-but-distinct branches when the data
-    # supports it. Repeats until no pair clears the threshold.
-    merge_threshold = 0.85
-    changed = True
-    while changed and len(clusters) > 2:
-        changed = False
-        best_pair: Optional[tuple[int, int]] = None
-        best_sim = merge_threshold
-        for i in range(len(clusters)):
-            ci = clusters[i].get("centroid")
-            if ci is None:
-                continue
-            for j in range(i + 1, len(clusters)):
-                cj = clusters[j].get("centroid")
-                if cj is None:
-                    continue
-                sim = float(np.dot(ci, cj))
-                if sim > best_sim:
-                    best_sim = sim
-                    best_pair = (i, j)
-        if best_pair is None:
-            break
-        i, j = best_pair
-        merged_seeds = clusters[i]["seeds"] + clusters[j]["seeds"]
-        merged_seeds.sort(key=_seed_strength, reverse=True)
-        # Recompute centroid as the mean of all member vectors.
-        merged_vecs = [vectors[str(s.get("id"))] for s in merged_seeds if str(s.get("id")) in vectors]
-        if merged_vecs:
-            stack = np.vstack(merged_vecs)
-            new_centroid = np.mean(stack, axis=0)
-            norm = float(np.linalg.norm(new_centroid))
-            new_centroid = new_centroid / norm if norm > 0 else clusters[i]["centroid"]
-        else:
-            new_centroid = clusters[i]["centroid"]
-        clusters[i] = {"seeds": merged_seeds, "centroid": new_centroid}
-        clusters.pop(j)
-        changed = True
+        clusters.append({"seeds": group_seeds, "centroid": cluster["centroid"]})
 
     clusters.sort(
         key=lambda c: (
@@ -938,16 +941,20 @@ def _build_seed_branches(
     settings: Optional[dict[str, str]] = None,
     max_branches: int = 6,
     temperature: Optional[float] = None,
+    resolution: Optional[float] = None,
     lens_id: Optional[str] = None,
 ) -> list[dict]:
     if not seeds:
         return []
     effective_max = max(2, min(12, int(max_branches or 6)))
     effective_temp = _resolve_branch_temperature(settings, temperature)
+    effective_resolution = _resolve_branch_resolution(resolution, settings)
 
     vectors = _fetch_seed_embedding_vectors(db, seeds)
     if len(vectors) >= 4:
-        clusters = _cluster_seed_papers_vector(seeds, vectors, effective_max)
+        clusters = _cluster_seed_papers_vector(
+            seeds, vectors, effective_max, resolution=effective_resolution
+        )
     else:
         clusters = _cluster_seed_papers_lexical(seeds, effective_max)
     if not clusters:
@@ -1098,6 +1105,7 @@ def preview_lens_branches(
     *,
     max_branches: int = 6,
     temperature: Optional[float] = None,
+    resolution: Optional[float] = None,
 ) -> Optional[dict]:
     """Build an explainable branch map for one lens (for UI visualization).
 
@@ -1105,6 +1113,10 @@ def preview_lens_branches(
     refresh allocator will apply to its retrieval budget based on past
     save/dismiss outcomes. Manual pin/boost/mute remain available as hard
     overrides; with no override, `auto_weight` is what shapes allocation.
+
+    ``resolution`` (live slider override → else the persisted
+    ``branch_controls.resolution``) tunes cluster granularity via the shared
+    engine and is echoed back so the UI can render the current knob value.
     """
     lens = get_lens(db, lens_id)
     if lens is None:
@@ -1116,12 +1128,17 @@ def preview_lens_branches(
         settings,
         temperature if temperature is not None else controls.get("temperature"),
     )
+    effective_resolution = _resolve_branch_resolution(
+        resolution if resolution is not None else controls.get("resolution"),
+        settings,
+    )
     branches = _build_seed_branches(
         db,
         seeds,
         settings=settings,
         max_branches=max_branches,
         temperature=effective_temp,
+        resolution=effective_resolution,
         lens_id=lens_id,
     )
     branches = _apply_branch_controls(branches, controls, db=db, lens_id=lens_id)
@@ -1139,6 +1156,7 @@ def preview_lens_branches(
         "context_type": lens.get("context_type"),
         "seed_count": len(seeds),
         "temperature": round(effective_temp, 3),
+        "resolution": round(effective_resolution, 3),
         "generated_at": datetime.utcnow().isoformat(),
         "branches": enriched_branches,
     }

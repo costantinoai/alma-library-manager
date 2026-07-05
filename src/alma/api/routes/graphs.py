@@ -227,7 +227,7 @@ def get_paper_map(
     size_by: str = Query("citations", description="Size by: citations, uniform, rating"),
     show_edges: bool = Query(True, description="Show edges between nodes"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
-    cluster_resolution: float = Query(1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"),
+    cluster_resolution: float = Query(1.5, ge=0.5, le=3.0, description="Cluster detail (default 1.5): >1 finer (more clusters), <1 coarser. Non-1.0 serves from the durable variant cache."),
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
@@ -311,6 +311,9 @@ def get_paper_map(
 def get_author_network(
     scope: str = Query("library", description="library (default) or corpus"),
     cluster_resolution: float = Query(
+        # Author network stays at 1.0 (the precomputed MV layout). Unlike the
+        # paper map, its non-default variant re-clusters AND re-lays-out the
+        # whole graph live — too slow to default on a large corpus.
         1.0, ge=0.5, le=3.0, description="Cluster detail: >1 finer (more clusters), <1 coarser"
     ),
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic weight in the fused author layout"),

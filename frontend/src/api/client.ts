@@ -1812,6 +1812,7 @@ export interface Lens {
   weights?: Record<string, number> | null
   branch_controls?: {
     temperature?: number | null
+    resolution?: number | null
     pinned?: string[]
     muted?: string[]
     boosted?: string[]
@@ -1894,6 +1895,7 @@ export interface LensBranchPreview {
   context_type: Lens['context_type']
   seed_count: number
   temperature: number
+  resolution?: number
   generated_at: string
   branches: LensBranchItem[]
 }
@@ -3580,6 +3582,7 @@ export function updateLens(
     weights?: Record<string, number>
     branch_controls?: {
       temperature?: number | null
+      resolution?: number | null
       pinned?: string[]
       muted?: string[]
       boosted?: string[]
@@ -3613,11 +3616,12 @@ export function listLensRecommendations(
 
 export function previewLensBranches(
   lensId: string,
-  params?: { max_branches?: number; temperature?: number },
+  params?: { max_branches?: number; temperature?: number; resolution?: number },
 ): Promise<LensBranchPreview> {
   const qs = new URLSearchParams()
   if (params?.max_branches != null) qs.set('max_branches', String(params.max_branches))
   if (params?.temperature != null) qs.set('temperature', String(params.temperature))
+  if (params?.resolution != null) qs.set('resolution', String(params.resolution))
   const q = qs.toString()
   return api.get<LensBranchPreview>(`/lenses/${encodeURIComponent(lensId)}/branches${q ? `?${q}` : ''}`)
 }

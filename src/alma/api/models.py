@@ -481,6 +481,7 @@ class LensBranchPreviewResponse(BaseModel):
     context_type: str
     seed_count: int = 0
     temperature: float = 0.0
+    resolution: float = 1.0
     generated_at: str
     branches: List[BranchPreviewItem] = Field(default_factory=list)
 

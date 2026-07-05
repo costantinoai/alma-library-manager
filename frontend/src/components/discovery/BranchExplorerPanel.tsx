@@ -49,9 +49,14 @@ const BRANCH_PRESETS = [
   { id: 'serendipity', label: 'Serendipity', description: 'Push lateral discovery and exploratory variants.', temperature: 0.7 },
 ] as const
 
+// Branch cluster-granularity default (mirrors the Insights graph "Cluster
+// detail"): 1.0 = engine default; >1 finer/more branches, <1 coarser/fewer.
+const BRANCH_RESOLUTION_DEFAULT = 1.0
+
 function normalizeControls(lens: Lens | null) {
   return {
     temperature: lens?.branch_controls?.temperature ?? 0.28,
+    resolution: lens?.branch_controls?.resolution ?? BRANCH_RESOLUTION_DEFAULT,
     pinned: lens?.branch_controls?.pinned ?? [],
     muted: lens?.branch_controls?.muted ?? [],
     boosted: lens?.branch_controls?.boosted ?? [],
@@ -85,6 +90,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [temperature, setTemperature] = useState(0.28)
+  const [resolution, setResolution] = useState(BRANCH_RESOLUTION_DEFAULT)
   const [pinned, setPinned] = useState<string[]>([])
   const [muted, setMuted] = useState<string[]>([])
   const [boosted, setBoosted] = useState<string[]>([])
@@ -92,14 +98,17 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
   useEffect(() => {
     const controls = normalizeControls(lens)
     setTemperature(controls.temperature)
+    setResolution(controls.resolution)
     setPinned(controls.pinned)
     setMuted(controls.muted)
     setBoosted(controls.boosted)
   }, [lens?.id, lens?.branch_controls])
 
   const branchQuery = useQuery({
-    queryKey: ['lens-branches', lens?.id, lens?.branch_controls],
-    queryFn: () => previewLensBranches(lens?.id as string, { max_branches: 8 }),
+    // `resolution` in the key so dragging the slider re-previews live before the
+    // controls are persisted (mirrors the graph's cluster-detail behaviour).
+    queryKey: ['lens-branches', lens?.id, lens?.branch_controls, resolution],
+    queryFn: () => previewLensBranches(lens?.id as string, { max_branches: 8, resolution }),
     enabled: Boolean(lens?.id),
     staleTime: 30_000,
   })
@@ -109,6 +118,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
       updateLens(lens?.id as string, {
         branch_controls: {
           temperature,
+          resolution,
           pinned,
           muted,
           boosted,
@@ -142,11 +152,12 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
     }
     return (
       Math.abs((savedControls.temperature ?? 0.28) - temperature) > 0.001
+      || Math.abs((savedControls.resolution ?? BRANCH_RESOLUTION_DEFAULT) - resolution) > 0.001
       || !sameArray(savedControls.pinned, pinned)
       || !sameArray(savedControls.muted, muted)
       || !sameArray(savedControls.boosted, boosted)
     )
-  }, [boosted, muted, pinned, savedControls, temperature])
+  }, [boosted, muted, pinned, savedControls, temperature, resolution])
 
   const setBranchState = (branchId: string, state: 'normal' | 'pinned' | 'boosted' | 'muted') => {
     const nextPinned = pinned.filter((value) => value !== branchId)
@@ -249,6 +260,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
               onClick={() => {
                 const controls = normalizeControls(lens)
                 setTemperature(controls.temperature)
+                setResolution(controls.resolution)
                 setPinned(controls.pinned)
                 setMuted(controls.muted)
                 setBoosted(controls.boosted)
@@ -380,6 +392,51 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
               <p className="text-xs text-slate-500">
                 Active preset: <span className="font-medium text-alma-800">{activePreset.label}</span>. {activePreset.description}
               </p>
+            </div>
+          </div>
+
+          {/* Cluster detail — branch granularity. Same shared clustering engine
+              as the Insights graph's "Cluster detail" knob (temperature is
+              orthogonal: it steers topic spread, this steers branch COUNT). */}
+          <div className="rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <p className="font-brand text-sm font-semibold text-alma-800">Cluster detail</p>
+                  <JargonHint
+                    title="Cluster detail"
+                    description={
+                      <>
+                        How finely the lens's saved papers are split into branches. <strong>Higher</strong>{' '}
+                        (&gt;1) splits into more, tighter branches; <strong>lower</strong> (&lt;1) merges into
+                        fewer, broader ones. Drives the SAME clustering engine as the Insights graph's
+                        cluster-detail knob. Tune live; Apply Controls to persist — the saved value also
+                        shapes the next Discovery refresh's per-branch budget. (Distinct from Temperature,
+                        which steers topic spread, not branch count.)
+                      </>
+                    }
+                  />
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">Raise for more, finer branches; lower for fewer, broader ones.</p>
+              </div>
+              <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-1 font-brand text-sm font-semibold text-alma-800 tabular-nums">
+                {resolution.toFixed(2)}×
+              </div>
+            </div>
+            <div className="mt-4 space-y-2">
+              <input
+                type="range"
+                min={0.5}
+                max={3}
+                step={0.25}
+                value={resolution}
+                onChange={(e) => setResolution(Number(e.target.value))}
+                className="w-full accent-alma-folio"
+              />
+              <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                <span>Fewer, broader</span>
+                <span>More, finer</span>
+              </div>
             </div>
           </div>
 

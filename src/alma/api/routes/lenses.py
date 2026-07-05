@@ -220,6 +220,7 @@ def preview_lens_branches(
     lens_id: str,
     max_branches: int = Query(default=6, ge=2, le=12),
     temperature: float | None = Query(default=None, ge=0.0, le=1.0),
+    resolution: float | None = Query(default=None, ge=0.5, le=3.0),
     db: sqlite3.Connection = Depends(get_db),
 ):
     try:
@@ -228,6 +229,7 @@ def preview_lens_branches(
             lens_id,
             max_branches=max_branches,
             temperature=temperature,
+            resolution=resolution,
         )
         if preview is None:
             raise HTTPException(status_code=404, detail="Lens not found")
