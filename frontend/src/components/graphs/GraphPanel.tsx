@@ -490,13 +490,14 @@ export function GraphPanel() {
               <div className="flex flex-col gap-2">
                 {/* On a large graph edges are hidden until you zoom in (perf +
                     they're a hairball when zoomed out) — say so, so an empty
-                    edge view at fit doesn't read as "no edges". */}
+                    edge view at fit doesn't read as "no edges". Selecting a
+                    cluster no longer forces edges on (that hairball is the
+                    slowdown), so the hint only points at zoom. */}
                 {showEdges &&
-                  selectedClusterId === null &&
                   (data.nodes.length > LARGE_GRAPH_THRESHOLD ||
                     data.edges.length > LARGE_GRAPH_EDGE_THRESHOLD) && (
                     <p className="text-xs text-slate-400">
-                      Zoom in to reveal edges, or select a cluster to see its connections.
+                      Zoom in to reveal edges.
                     </p>
                   )}
                 {showEdges && layerKeys.length > 0 && (

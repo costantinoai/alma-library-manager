@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 _COAUTHOR_PAPER_DF_CAP = 100
 # Bibliographic-coupling df cap: a work cited by more than this many authors
 # couples them all pairwise and is non-discriminative (everyone cites the classic).
-_AUTHOR_BIB_DF_CAP = 50
+_AUTHOR_BIB_DF_CAP = 200
+# Minimum in-scope papers for an author to appear in the network. A one-paper
+# author has no co-authorship/coupling signal and too thin an embedding basis to
+# place meaningfully — HDBSCAN can only leave it a stray outlier at a position
+# that reads as data but isn't. We drop them from generation entirely rather than
+# scatter meaningless dots. Raise to prune more aggressively.
+_MIN_AUTHOR_PUBS = 2
 
 # Optional dependency
 try:
@@ -310,8 +316,10 @@ def build_coauthor_network(
                      a.orcid,
                      a.openalex_id,
                      a.interests
+            HAVING COUNT(DISTINCT pa.paper_id) >= ?
             ORDER BY pub_count DESC
-            """
+            """,
+            (_MIN_AUTHOR_PUBS,),
         ).fetchall()
     except Exception as exc:
         logger.warning("Could not query publication_authors for author network: %s", exc)

@@ -270,6 +270,30 @@ export function ForceGraph({
     }
   }, [onNodeClick])
 
+  // Force a repaint when a RENDER-ONLY visual prop changes. react-force-graph
+  // registers its draw callbacks (nodeCanvasObject, onRenderFramePost, …) with
+  // triggerUpdate:false, so pushing a new closure stores it but does NOT redraw
+  // — the canvas only repaints when the engine ticks or `needsRedraw` flips.
+  // Re-applying the current zoom sets needsRedraw without moving the view, so
+  // slider/toggle changes (word-cloud density/size, labels, edges) take effect
+  // immediately instead of only after the next rebuild or manual pan/zoom.
+  useEffect(() => {
+    const g = fgRef.current as { zoom?: (k?: number, ms?: number) => number } | null
+    if (!g?.zoom) return
+    const current = g.zoom()
+    if (Number.isFinite(current)) g.zoom(current)
+  }, [
+    showLabels,
+    showEdges,
+    showWordCloud,
+    showClusterLabels,
+    wordCloudDensity,
+    wordCloudSize,
+    selectedNodeId,
+    selectedClusterId,
+    visibleLayers,
+  ])
+
   const nodeCanvasObject = useCallback((node: Record<string, unknown>, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const label = String(node.name || '')
     const nodeId = String(node.id || '')
@@ -450,7 +474,11 @@ export function ForceGraph({
       }
       ctx.restore()
     },
-    [clusterLookup, graphData.nodes, selectedClusterId, showWordCloud],
+    // wordCloudDensity/wordCloudSize MUST be deps — the callback closes over them
+    // to size the budget + fonts. Omitting them froze the sliders at their
+    // first-render values, so a slide only took effect after a graph rebuild
+    // (which changes graphData.nodes and rebuilds this callback anyway).
+    [clusterLookup, graphData.nodes, selectedClusterId, showWordCloud, wordCloudDensity, wordCloudSize],
   )
 
   const renderClusterLabels = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -502,12 +530,13 @@ export function ForceGraph({
 
   // Edge rendering policy (perf). Drawing every edge on every pan/zoom frame is
   // the dominant cost on a big graph, so edges are OFF by default; the studio's
-  // Edges toggle turns them on. Even when on, a LARGE graph hides them until you
-  // zoom past EDGE_ZOOM_THRESHOLD (fit ≈ 1×) — at that point you're in a local
-  // region where edges are meaningful and few enough to draw smoothly. Focusing
-  // a cluster always shows THAT cluster's edges regardless, so you can inspect a
-  // neighbourhood without turning the global layer on. Reads the live zoom ref
-  // so it tracks zoom without a React re-render (the canvas repaints on zoom).
+  // Edges toggle is the ONLY thing that turns them on. Selecting a paper /
+  // highlighting a cluster deliberately does NOT reveal edges — on a big library
+  // that hairball is exactly the slowdown we're avoiding. Even with the toggle
+  // on, a LARGE graph hides edges until you zoom past EDGE_ZOOM_THRESHOLD
+  // (fit ≈ 1×), where you're in a local region few enough to draw smoothly.
+  // Reads the live zoom ref so it tracks zoom without a React re-render (the
+  // canvas repaints on zoom).
   const EDGE_ZOOM_THRESHOLD = 2.2
   const linkVisibility = useCallback(
     (link: Record<string, unknown>) => {
@@ -515,12 +544,11 @@ export function ForceGraph({
       if (visibleLayers && !visibleLayers.includes(String(link.edge_type || 'semantic'))) {
         return false
       }
-      if (selectedClusterId !== null) return true
       if (!showEdges) return false
       if (!isLargeGraph) return true
       return zoomRef.current >= EDGE_ZOOM_THRESHOLD
     },
-    [isLargeGraph, selectedClusterId, showEdges, visibleLayers],
+    [isLargeGraph, showEdges, visibleLayers],
   )
 
   const linkColor = useCallback((link: Record<string, unknown>) => {
