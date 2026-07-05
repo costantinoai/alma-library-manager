@@ -108,6 +108,8 @@ interface SystemComponent {
   note?: string
   states: OperationalState[]
   reviewItems: ReviewItem[]
+  /** Count of review rows beyond the capped `reviewItems` slice ("+N more"). */
+  reviewOverflow?: number
   ownerPage: string
   ownerParams?: Record<string, string>
 }
@@ -218,7 +220,11 @@ export function SystemStatusCards() {
   const { toast } = useToast()
   const reducedMotion = useReducedMotion()
   const sections = useDiagnosticsSections()
-  const [openComp, setOpenComp] = useState<SystemComponent | null>(null)
+  // Track the OPEN component by id, not a captured snapshot — the popup then
+  // reads from the live `components` memo below, so a successful remediation
+  // (which invalidates + refetches diagnostics) updates the open popup's states
+  // / counts in place instead of showing the stale click-time snapshot.
+  const [openId, setOpenId] = useState<string | null>(null)
 
   const invalidateOperational = (...extraKeys: readonly unknown[][]) => {
     void invalidateQueries(
@@ -241,7 +247,7 @@ export function SystemStatusCards() {
   const handlePhantomTarget = (err: unknown, noun: string): boolean => {
     if (err instanceof ApiError && err.status === 404) {
       invalidateOperational()
-      setOpenComp(null)
+      setOpenId(null)
       toast({
         title: `${noun} no longer exists`,
         description: 'It was already gone — cleared from health.',
@@ -412,7 +418,7 @@ export function SystemStatusCards() {
           states: at('monitors'),
           reviewItems: [],
           ownerPage: 'authors',
-          ownerParams: { followed: 'true' },
+          ownerParams: { focus: 'needs-attention' },
         },
         { count: monitorsDegraded, countLabel: 'degraded', healthyLabel: 'all healthy' },
       ),
@@ -430,7 +436,7 @@ export function SystemStatusCards() {
             secondary: humanizeSourceError(s),
           })),
           ownerPage: 'settings',
-          ownerParams: { section: 'connections' },
+          ownerParams: { anchor: 'external-apis' },
         },
         {
           count: badSources.length,
@@ -449,7 +455,7 @@ export function SystemStatusCards() {
           states: at('ai'),
           reviewItems: [],
           ownerPage: 'settings',
-          ownerParams: { section: 'ai' },
+          ownerParams: { anchor: 'ai-config' },
         },
         { count: 0, countLabel: 'issues', healthyLabel: 'operational', attentionLabel: 'needs attention' },
       ),
@@ -465,8 +471,9 @@ export function SystemStatusCards() {
             primary: a.author_name || 'Author',
             secondary: a.last_error || a.health_reason,
           })),
+          reviewOverflow: Math.max(0, degradedAuthors.length - 12),
           ownerPage: 'authors',
-          ownerParams: { followed: 'true' },
+          ownerParams: { focus: 'needs-attention' },
         },
         {
           count: degradedAuthors.length,
@@ -489,8 +496,7 @@ export function SystemStatusCards() {
             description: 'Scheduled digests and their delivery channel (Slack).',
             states: at('alerts'),
             reviewItems: [],
-            ownerPage: 'settings',
-            ownerParams: { section: 'channels' },
+            ownerPage: 'alerts',
           },
           { count: 0, countLabel: 'issues', healthyLabel: 'delivering', attentionLabel: 'delivery degraded' },
         ),
@@ -516,7 +522,7 @@ export function SystemStatusCards() {
                 secondary: p.is_healthy === true ? 'Configured · healthy' : 'Configured · not yet tested',
               })),
             ownerPage: 'settings',
-            ownerParams: { section: 'plugins' },
+            ownerParams: { anchor: 'channels' },
           },
           { count: unhealthyPlugins, countLabel: 'unhealthy', healthyLabel: `${configuredPlugins} configured` },
         ),
@@ -532,7 +538,8 @@ export function SystemStatusCards() {
             description: 'Maintenance, hydration and embedding jobs run on the scheduler.',
             states: at('jobs'),
             reviewItems: [],
-            ownerPage: 'activity',
+            ownerPage: 'insights',
+            ownerParams: { tab: 'activity' },
           },
           { count: failedJobs, countLabel: 'failed (24h)', healthyLabel: 'all healthy' },
         ),
@@ -561,8 +568,20 @@ export function SystemStatusCards() {
     )
   }
 
+  // Derive the open component from the LIVE list so remediations reflect in place.
+  const openComp = openId != null ? components.find((c) => c.id === openId) ?? null : null
   const hasIssues = (c: SystemComponent) => c.states.length > 0 || c.reviewItems.length > 0
   const HeaderIcon = openComp?.icon
+  // Name the destination so the CTA isn't a generic "Open owner".
+  const OWNER_LABEL: Record<string, string> = {
+    authors: 'Open in Authors',
+    settings: 'Open in Settings',
+    insights: 'Open in Activity',
+    alerts: 'Open in Alerts',
+    feed: 'Open in Feed',
+    discovery: 'Open in Discovery',
+    library: 'Open in Library',
+  }
 
   return (
     <>
@@ -575,7 +594,7 @@ export function SystemStatusCards() {
             <motion.button
               key={c.id}
               type="button"
-              onClick={() => setOpenComp(c)}
+              onClick={() => setOpenId(c.id)}
               initial={reducedMotion ? false : { opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
@@ -599,7 +618,7 @@ export function SystemStatusCards() {
 
       {/* Centered per-component detail — what's healthy / how it's configured,
           or the degraded issues + one-click remediation. One Dialog, no route. */}
-      <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenComp(null)}>
+      <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenId(null)}>
         <DialogContent className="max-w-lg bg-surface-1">
           {openComp ? (
             <>
@@ -639,7 +658,6 @@ export function SystemStatusCards() {
                               key={`${state.id}-${target.id ?? arg}`}
                               size="sm"
                               variant="outline"
-                              className="border-alma-200 text-alma-700 hover:bg-alma-50"
                               icon={handler.icon}
                               pending={pending}
                               onClick={() => (handler.argless ? handler.mutation.mutate(undefined) : handler.mutation.mutate(arg))}
@@ -662,6 +680,11 @@ export function SystemStatusCards() {
                       {item.secondary ? <p className="mt-1 text-xs text-slate-500">{item.secondary}</p> : null}
                     </div>
                   ))}
+                  {openComp.reviewOverflow ? (
+                    <p className="px-1 text-xs text-slate-500">
+                      +{openComp.reviewOverflow} more — open {OWNER_LABEL[openComp.ownerPage]?.replace('Open in ', '') ?? 'the owner'} to see all.
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 /* Healthy — explain in plain English what "healthy" means here. */
@@ -674,17 +697,18 @@ export function SystemStatusCards() {
               <div className="flex justify-end">
                 <AsyncButton
                   size="sm"
-                  variant="ghost"
+                  variant="outline"
                   icon={<Activity className="h-4 w-4" />}
-                  className="text-alma-700 hover:bg-alma-50"
-                  onClick={() =>
+                  onClick={() => {
+                    const page = openComp.ownerPage
+                    setOpenId(null)
                     navigateTo(
-                      openComp.ownerPage as Parameters<typeof buildHashRoute>[0],
+                      page as Parameters<typeof buildHashRoute>[0],
                       openComp.ownerParams ?? {},
                     )
-                  }
+                  }}
                 >
-                  Open owner
+                  {OWNER_LABEL[openComp.ownerPage] ?? 'Open owner'}
                 </AsyncButton>
               </div>
             </>

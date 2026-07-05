@@ -5,7 +5,7 @@ import { AlertCircle, CheckCircle, Cable, Database, HeartPulse, Save, Sparkles }
 import { api, getApiErrorMessage, resetOnboarding, type Settings } from '@/api/client'
 import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
 import { Button } from '@/components/ui/button'
-import { navigateTo } from '@/lib/hashRoute'
+import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -120,6 +120,9 @@ export function SettingsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [activeAnchor, setActiveAnchor] = useState<AnchorId>('backend')
   const contentRef = useRef<HTMLDivElement | null>(null)
+  const route = useHashRoute()
+  const anchorParam = route.params.get('anchor')
+  const didJumpToAnchorRef = useRef(false)
 
   useEffect(() => {
     if (settingsQuery.data) setFormData(settingsQuery.data)
@@ -174,6 +177,23 @@ export function SettingsPage() {
     node.scrollIntoView({ behavior: 'smooth', block: 'start' })
     setActiveAnchor(id)
   }
+
+  // Deep-link reader: `#/settings?anchor=<id>` (e.g. Health → "Open in Settings",
+  // which targets external-apis / ai-config / channels) scrolls to that card once
+  // settings + its anchors have rendered. Previously SettingsPage read NO URL
+  // param, so every deep link dead-ended at the top of the page. Guarded by a ref
+  // so the scroll-spy doesn't re-fire it on subsequent scrolls.
+  useEffect(() => {
+    if (didJumpToAnchorRef.current || !settingsQuery.data || !anchorParam) return
+    const raf = requestAnimationFrame(() => {
+      const node = contentRef.current?.querySelector<HTMLElement>(`[data-anchor="${anchorParam}"]`)
+      if (!node) return
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      setActiveAnchor(anchorParam as AnchorId)
+      didJumpToAnchorRef.current = true
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [anchorParam, settingsQuery.data])
 
   // ── Loading / error ──
   if (settingsQuery.isLoading) {
