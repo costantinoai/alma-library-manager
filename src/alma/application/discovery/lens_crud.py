@@ -76,6 +76,9 @@ _PAPER_DISMISS_SUPPRESSION_THRESHOLD = -0.18
 
 DEFAULT_BRANCH_CONTROLS: dict[str, Any] = {
     "temperature": None,
+    # Cluster-granularity knob (mirrors the Insights graph "Cluster detail").
+    # None → engine default 1.0. >1 finer (more branches); <1 coarser.
+    "resolution": None,
     "pinned": [],
     "muted": [],
     "boosted": [],
@@ -170,7 +173,30 @@ def list_recommendations(
     )
     params.extend([limit, offset])
     rows = db.execute(" ".join(query), params).fetchall()
-    return [_normalize_recommendation(dict(r)) for r in rows]
+    # Read-time logical-duplicate safety net (mirrors the Feed inbox). Rows are
+    # ranked score DESC, so keep the FIRST occurrence of each (year + normalized
+    # title) and drop lower-ranked twins — the v0.19.0 duplicate-identity
+    # regression surfaced the same paper under two paper_ids. canonical_paper_filter
+    # already hides rows the background collapse merged; this covers the window
+    # before it runs. Strong-id conflicts (distinct DOIs / openalex_ids) never fold.
+    from alma.core.utils import logical_dup_signature, strong_identifiers_conflict
+
+    deduped: list[sqlite3.Row] = []
+    seen: dict[str, dict] = {}
+    for r in rows:
+        sig = logical_dup_signature(r["paper_title"], r["paper_year"])
+        keeper = seen.get(sig) if sig is not None else None
+        if keeper is not None and not strong_identifiers_conflict(
+            incoming_doi=r["paper_doi"],
+            incoming_openalex_id=r["paper_openalex_id"],
+            candidate_doi=keeper["doi"],
+            candidate_openalex_id=keeper["openalex_id"],
+        ):
+            continue
+        if sig is not None:
+            seen[sig] = {"doi": r["paper_doi"], "openalex_id": r["paper_openalex_id"]}
+        deduped.append(r)
+    return [_normalize_recommendation(dict(r)) for r in deduped]
 
 
 def mark_recommendation_action(
@@ -1056,6 +1082,13 @@ def _normalize_branch_controls(raw: Optional[dict]) -> dict[str, Any]:
             out["temperature"] = round(_clamp(float(temp_raw), 0.0, 1.0), 3)
         except (TypeError, ValueError):
             out["temperature"] = None
+
+    res_raw = value.get("resolution")
+    if res_raw is not None:
+        try:
+            out["resolution"] = round(_clamp(float(res_raw), 0.5, 3.0), 3)
+        except (TypeError, ValueError):
+            out["resolution"] = None
 
     for key in ("pinned", "muted", "boosted"):
         seen: set[str] = set()

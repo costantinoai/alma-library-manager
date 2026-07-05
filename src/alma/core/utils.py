@@ -206,6 +206,30 @@ def strong_identifiers_conflict(
     return False
 
 
+def logical_dup_signature(title: Optional[str], year: Optional[object]) -> Optional[str]:
+    """Read-time collapse key for "the same paper shown twice" (year + title).
+
+    Returns ``"<normalized-title>::<year>"`` or ``None`` when the title is
+    unusable. Feed and Discovery use this to fold the ``duplicate_identity``
+    rows the user saw (two paper rows for one work) into one card at read time —
+    a safety net that hides the visible dupe immediately, before the background
+    ``collapse_duplicate_identity`` op merges the rows. Callers MUST additionally
+    gate on :func:`strong_identifiers_conflict` so two rows with DIFFERENT
+    non-empty DOIs / openalex_ids (provably distinct works that merely share a
+    title/year) are never folded.
+    """
+    nk = normalize_title_key(title)
+    if not nk:
+        return None
+    y = ""
+    if year is not None and str(year).strip() != "":
+        try:
+            y = str(int(year))
+        except (TypeError, ValueError):
+            y = str(year).strip()
+    return f"{nk}::{y}"
+
+
 def resolve_existing_paper_id(
     conn: sqlite3.Connection,
     *,

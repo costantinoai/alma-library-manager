@@ -2215,37 +2215,7 @@ def _aggregate_feed_rows(
             ordered_ids.append(group_key)
             continue
 
-        for matched_author_id in mapped.get("matched_author_ids") or []:
-            author_id = str(matched_author_id or "").strip()
-            if author_id and author_id not in existing["matched_author_ids"]:
-                existing["matched_author_ids"].append(author_id)
-        for author_name in mapped.get("matched_authors") or []:
-            normalized = str(author_name or "").strip()
-            if normalized and normalized not in existing["matched_authors"]:
-                existing["matched_authors"].append(normalized)
-        for monitor in mapped.get("matched_monitors") or []:
-            monitor_id = str((monitor or {}).get("monitor_id") or "").strip()
-            monitor_type = str((monitor or {}).get("monitor_type") or "").strip().lower()
-            monitor_label = str((monitor or {}).get("monitor_label") or "").strip()
-            duplicate = any(
-                str((item or {}).get("monitor_id") or "").strip() == monitor_id
-                and str((item or {}).get("monitor_type") or "").strip().lower() == monitor_type
-                and str((item or {}).get("monitor_label") or "").strip() == monitor_label
-                for item in existing["matched_monitors"]
-            )
-            if not duplicate and (monitor_id or monitor_label or monitor_type):
-                existing["matched_monitors"].append(
-                    {
-                        "monitor_id": monitor_id or None,
-                        "monitor_type": monitor_type or None,
-                        "monitor_label": monitor_label or None,
-                    }
-                )
-        if not existing.get("author_name") and mapped.get("author_name"):
-            existing["author_name"] = mapped["author_name"]
-        if mapped.get("monitor_type") == "author" and mapped.get("author_id"):
-            existing["author_id"] = mapped["author_id"]
-        existing["signal_value"] = max(int(existing.get("signal_value") or 0), int(mapped.get("signal_value") or 0))
+        _absorb_feed_card(existing, mapped)
 
     start, finish = latest_fetch_window
     for group_key, item in aggregated.items():
@@ -2258,4 +2228,79 @@ def _aggregate_feed_rows(
             and has_new_status.get(group_key, False)
         )
 
-    return [aggregated[group_key] for group_key in ordered_ids]
+    # Second pass — logical-duplicate safety net. Pass 1 collapsed feed_items
+    # that share a paper_id; this folds cards that are the SAME logical paper
+    # under two DIFFERENT paper_ids (the v0.19.0 duplicate-identity regression:
+    # two canonical rows, one normalized title+year), so the inbox never shows
+    # the same title twice even before the background collapse merges the rows.
+    return _consolidate_logical_duplicates(
+        [aggregated[group_key] for group_key in ordered_ids]
+    )
+
+
+def _absorb_feed_card(existing: dict, other: dict) -> None:
+    """Merge ``other``'s author / monitor provenance + signal into ``existing``.
+
+    Shared by both aggregation passes: pass 1 (same paper_id, different author
+    monitors) and pass 2 (same logical paper, different paper_id). Author /
+    monitor lists dedupe; ``signal_value`` and ``is_new`` take the stronger."""
+    for matched_author_id in other.get("matched_author_ids") or []:
+        author_id = str(matched_author_id or "").strip()
+        if author_id and author_id not in existing["matched_author_ids"]:
+            existing["matched_author_ids"].append(author_id)
+    for author_name in other.get("matched_authors") or []:
+        normalized = str(author_name or "").strip()
+        if normalized and normalized not in existing["matched_authors"]:
+            existing["matched_authors"].append(normalized)
+    for monitor in other.get("matched_monitors") or []:
+        monitor_id = str((monitor or {}).get("monitor_id") or "").strip()
+        monitor_type = str((monitor or {}).get("monitor_type") or "").strip().lower()
+        monitor_label = str((monitor or {}).get("monitor_label") or "").strip()
+        duplicate = any(
+            str((item or {}).get("monitor_id") or "").strip() == monitor_id
+            and str((item or {}).get("monitor_type") or "").strip().lower() == monitor_type
+            and str((item or {}).get("monitor_label") or "").strip() == monitor_label
+            for item in existing["matched_monitors"]
+        )
+        if not duplicate and (monitor_id or monitor_label or monitor_type):
+            existing["matched_monitors"].append(
+                {
+                    "monitor_id": monitor_id or None,
+                    "monitor_type": monitor_type or None,
+                    "monitor_label": monitor_label or None,
+                }
+            )
+    if not existing.get("author_name") and other.get("author_name"):
+        existing["author_name"] = other["author_name"]
+    if other.get("monitor_type") == "author" and other.get("author_id"):
+        existing["author_id"] = other["author_id"]
+    existing["signal_value"] = max(
+        int(existing.get("signal_value") or 0), int(other.get("signal_value") or 0)
+    )
+    existing["is_new"] = bool(existing.get("is_new")) or bool(other.get("is_new"))
+
+
+def _consolidate_logical_duplicates(cards: list[dict]) -> list[dict]:
+    """Fold cards that are the SAME logical paper (year + normalized title) into
+    one, preserving order and provenance. Strong-identifier conflicts (different
+    non-empty DOIs / openalex_ids — provably distinct works) are NEVER folded."""
+    from alma.core.utils import logical_dup_signature, strong_identifiers_conflict
+
+    survivors: list[dict] = []
+    by_sig: dict[str, dict] = {}
+    for card in cards:
+        paper = card.get("paper") or {}
+        sig = logical_dup_signature(paper.get("title"), paper.get("year"))
+        keeper = by_sig.get(sig) if sig is not None else None
+        if keeper is not None and not strong_identifiers_conflict(
+            incoming_doi=paper.get("doi"),
+            incoming_openalex_id=paper.get("openalex_id"),
+            candidate_doi=(keeper.get("paper") or {}).get("doi"),
+            candidate_openalex_id=(keeper.get("paper") or {}).get("openalex_id"),
+        ):
+            _absorb_feed_card(keeper, card)
+            continue
+        if sig is not None:
+            by_sig[sig] = card
+        survivors.append(card)
+    return survivors

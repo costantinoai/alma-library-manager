@@ -176,6 +176,31 @@ _FK_TABLES_TO_MIGRATE: list[tuple[str, tuple[str, ...]]] = [
     ("publication_clusters", ("paper_id",)),
 ]
 
+# Tables with a standalone unique ``id`` PK (NOT a paper-scoped composite key):
+# the ``_migrate_fk_rows`` INSERT-copy helper would clone the loser's ``id`` and
+# self-collide on the PK (OR IGNORE → row dropped, then DELETE loses it), so
+# these repoint ``paper_id`` in place via UPDATE OR IGNORE + DELETE instead.
+#  - recommendations: UNIQUE(lens_id, paper_id, suggestion_set_id)
+#  - feed_items: UNIQUE(paper_id, author_id). MUST migrate — the Feed read does
+#    NOT filter canonical rows, so an un-migrated feed_item keeps the hidden
+#    loser visible in the inbox (the v0.19.0 duplicate symptom).
+_ID_PK_TABLES_TO_REPOINT: tuple[str, ...] = ("recommendations", "feed_items")
+
+
+def _repoint_paper_id(conn: sqlite3.Connection, table: str, loser_id: str, keeper_id: str) -> None:
+    """Move a standalone-``id`` table's rows loser → keeper in place.
+
+    UPDATE OR IGNORE rewrites ``paper_id`` (keeping each row's own PK ``id``);
+    a UNIQUE collision leaves the loser row, which the DELETE then drops."""
+    try:
+        conn.execute(
+            f"UPDATE OR IGNORE {table} SET paper_id = ? WHERE paper_id = ?",
+            (keeper_id, loser_id),
+        )
+        conn.execute(f"DELETE FROM {table} WHERE paper_id = ?", (loser_id,))
+    except sqlite3.OperationalError as exc:
+        logger.debug("repoint skipped on %s: %s", table, exc)
+
 
 def _migrate_fk_rows(
     conn: sqlite3.Connection,
@@ -281,6 +306,103 @@ def _upgrade_canonical_from_preprint(
         logger.warning("canonical upgrade failed: %s", exc)
 
 
+def merge_duplicate_paper_rows(
+    conn: sqlite3.Connection,
+    loser_id: str,
+    keeper_id: str,
+    *,
+    reason: Optional[str] = None,
+) -> dict[str, Any]:
+    """Soft-merge a duplicate paper row (``loser_id``) into its keeper.
+
+    The ONE generic FK-rewiring collapse shared by every duplicate-pair
+    merge: preprint↔journal twins (:func:`merge_preprint_into_canonical`),
+    same-``openalex_id`` duplicate-identity pairs discovered during title
+    resolution (``title_resolution`` / ``corpus_rehydrate``), and the
+    retro-collapse repair (:func:`run_duplicate_identity_collapse`).
+
+    SOFT by construction (product decision D3): the loser row is NEVER
+    hard-deleted — it is stamped ``canonical_paper_id = keeper_id`` so every
+    read-side ``standalone_paper_sql`` / ``canonical_paper_filter`` hides it
+    while the Corpus explorer keeps its provenance and Discovery still reads
+    its ``removed`` signal. Idempotent — a second call on an already-merged
+    pair is a no-op.
+
+    Migrates every FK child + ``feedback_events`` + ``recommendations`` from
+    loser → keeper, fills the keeper's empty scalars from the loser (keeper
+    wins on conflict), then stamps the pointer. ``reason`` (when given) is
+    recorded in the loser's ``openalex_resolution_reason`` for the Corpus
+    explorer without overwriting an existing reason.
+
+    Returns a summary dict; ``{"skipped": True, "reason": ...}`` when the pair
+    is invalid or already merged.
+    """
+    if not loser_id or not keeper_id or loser_id == keeper_id:
+        return {"skipped": True, "reason": "same_id"}
+
+    row = conn.execute(
+        "SELECT canonical_paper_id FROM papers WHERE id = ?",
+        (loser_id,),
+    ).fetchone()
+    if row is None:
+        return {"skipped": True, "reason": "loser_missing"}
+    if str(row["canonical_paper_id"] or "").strip() == keeper_id:
+        return {"skipped": True, "reason": "already_merged"}
+    if conn.execute(
+        "SELECT 1 FROM papers WHERE id = ?", (keeper_id,)
+    ).fetchone() is None:
+        return {"skipped": True, "reason": "keeper_missing"}
+
+    # 1. Migrate FK children first (INSERT OR IGNORE + DELETE per table) so the
+    #    keeper acquires everything before its scalar upgrade.
+    migrated: dict[str, int] = {}
+    for table, unique_cols in _FK_TABLES_TO_MIGRATE:
+        migrated[table] = _migrate_fk_rows(
+            conn, loser_id, keeper_id, table=table, unique_cols=unique_cols
+        )
+
+    # 2. feedback_events keyed by (entity_type, entity_id) — NOT a `paper_id`
+    #    column — so the loser's likes/dismisses move to the keeper via a bare
+    #    UPDATE on entity_id (not unique, so no collision to guard).
+    try:
+        conn.execute(
+            "UPDATE feedback_events SET entity_id = ? "
+            "WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
+            (keeper_id, loser_id),
+        )
+    except sqlite3.OperationalError:
+        pass
+
+    # 3. Standalone-`id` tables (recommendations, feed_items): repoint paper_id
+    #    in place so the row keeps its own PK (see _ID_PK_TABLES_TO_REPOINT).
+    for table in _ID_PK_TABLES_TO_REPOINT:
+        _repoint_paper_id(conn, table, loser_id, keeper_id)
+
+    # 4. Scalar upgrade: copy the loser's fields into the keeper's empty ones.
+    _upgrade_canonical_from_preprint(conn, loser_id, keeper_id)
+
+    # 5. Stamp the soft-merge pointer (no hard delete — D3).
+    conn.execute(
+        """
+        UPDATE papers
+        SET canonical_paper_id = ?,
+            openalex_resolution_reason = CASE
+                WHEN ? <> '' AND COALESCE(TRIM(openalex_resolution_reason), '') = ''
+                THEN ? ELSE openalex_resolution_reason
+            END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (keeper_id, reason or "", reason or "", datetime.utcnow().isoformat(), loser_id),
+    )
+    return {
+        "skipped": False,
+        "loser_id": loser_id,
+        "keeper_id": keeper_id,
+        "fk_migrated": migrated,
+    }
+
+
 def merge_preprint_into_canonical(
     conn: sqlite3.Connection,
     preprint_id: str,
@@ -288,30 +410,15 @@ def merge_preprint_into_canonical(
 ) -> dict[str, Any]:
     """Collapse the preprint into the canonical journal row.
 
-    Idempotent — calling again on an already-merged pair is a no-op.
-    Returns a summary dict with migrated row counts per FK table plus
-    the final status stamp on the preprint.
+    Thin preprint-flavored wrapper over :func:`merge_duplicate_paper_rows`
+    (the generic soft-merge): the only preprint-specific step is tagging the
+    collapsed row with its venue ``preprint_source``. Idempotent — calling
+    again on an already-merged pair is a no-op.
     """
     if preprint_id == canonical_id:
         return {"skipped": True, "reason": "same_id"}
 
-    # Idempotent guard: already merged?
-    row = conn.execute(
-        "SELECT canonical_paper_id FROM papers WHERE id = ?",
-        (preprint_id,),
-    ).fetchone()
-    if row and row["canonical_paper_id"] == canonical_id:
-        return {"skipped": True, "reason": "already_merged"}
-
-    # Canonical must exist.
-    canonical = conn.execute(
-        "SELECT id, doi FROM papers WHERE id = ?",
-        (canonical_id,),
-    ).fetchone()
-    if not canonical:
-        return {"skipped": True, "reason": "canonical_missing"}
-
-    # Infer preprint source tag from DOI if we don't have one yet.
+    # Infer the venue source tag before the merge (needs the loser's DOI).
     preprint_row = conn.execute(
         "SELECT id, doi, preprint_source FROM papers WHERE id = ?",
         (preprint_id,),
@@ -324,83 +431,22 @@ def merge_preprint_into_canonical(
         or "unknown"
     )
 
-    # 1. Migrate FK rows first so the canonical acquires everything
-    #    before we upgrade its scalar fields (order-insensitive in
-    #    theory, but this keeps the preprint's FK shadow clean).
-    migrated: dict[str, int] = {}
-    for table, unique_cols in _FK_TABLES_TO_MIGRATE:
-        migrated[table] = _migrate_fk_rows(
-            conn,
-            preprint_id,
-            canonical_id,
-            table=table,
-            unique_cols=unique_cols,
-        )
+    result = merge_duplicate_paper_rows(conn, preprint_id, canonical_id, reason=None)
+    if result.get("skipped"):
+        return result
 
-    # 2. Also migrate feedback_events so the preprint's likes/dismisses move to
-    #    the canonical paper instead of being orphaned on a hidden row. The table
-    #    is keyed by (entity_type, entity_id) — NOT a `paper_id` column — so the
-    #    pre-fix `SET paper_id = ?` updated a non-existent column and the bare
-    #    `except OperationalError` swallowed "no such column" (preference silently
-    #    lost on every merge). entity_id isn't unique, so a bare UPDATE is safe.
-    try:
-        conn.execute(
-            "UPDATE feedback_events SET entity_id = ? "
-            "WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
-            (canonical_id, preprint_id),
-        )
-    except sqlite3.OperationalError:
-        pass
-
-    # 3. Migrate recommendations — each lens has a unique
-    #    (lens_id, paper_id, suggestion_set_id) triple, so use
-    #    INSERT OR IGNORE + DELETE semantics like the FK helpers.
-    try:
-        conn.execute(
-            """
-            UPDATE OR IGNORE recommendations
-            SET paper_id = ?
-            WHERE paper_id = ?
-            """,
-            (canonical_id, preprint_id),
-        )
-        # Drop any surviving recommendations that couldn't migrate
-        # (duplicate triple) — the canonical already has that slot.
-        conn.execute(
-            "DELETE FROM recommendations WHERE paper_id = ?",
-            (preprint_id,),
-        )
-    except sqlite3.OperationalError:
-        pass
-
-    # 4. Scalar upgrade: copy missing fields, MAX monotonic counters,
-    #    promote Library status.
-    _upgrade_canonical_from_preprint(conn, preprint_id, canonical_id)
-
-    # 5. Stamp the preprint row with the canonical pointer so read-side
-    #    queries can filter it out. Keep its FK-orphan-safe breadcrumbs.
+    # Preprint-specific: stamp the venue source on the collapsed row.
     conn.execute(
-        """
-        UPDATE papers
-        SET canonical_paper_id = ?,
-            preprint_source = COALESCE(NULLIF(preprint_source, ''), ?),
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (
-            canonical_id,
-            preprint_source,
-            datetime.utcnow().isoformat(),
-            preprint_id,
-        ),
+        "UPDATE papers SET preprint_source = COALESCE(NULLIF(preprint_source, ''), ?) "
+        "WHERE id = ?",
+        (preprint_source, preprint_id),
     )
-
     return {
         "skipped": False,
         "preprint_id": preprint_id,
         "canonical_id": canonical_id,
         "preprint_source": preprint_source,
-        "fk_migrated": migrated,
+        "fk_migrated": result.get("fk_migrated", {}),
     }
 
 
@@ -527,3 +573,137 @@ def run_preprint_dedup(
     finally:
         conn.close()
     return summary
+
+
+# -- duplicate-identity collapse (legacy backlog) -----------------------------
+
+
+def find_duplicate_identity_pairs(conn: sqlite3.Connection) -> list[dict[str, str]]:
+    """Legacy same-``openalex_id`` duplicate pairs still awaiting collapse.
+
+    Before the at-source merge landed (title_resolution / corpus_rehydrate),
+    a title match to an OpenAlex work already owned by another paper row was
+    stamped ``duplicate_identity:<owner>`` (terminal) and LEFT both rows
+    canonical — the merge was deferred to the never-auto ``library_dedup``,
+    so the pair accumulated and both cards showed in Feed / Discovery. This
+    finds those still-split pairs (loser still canonical, keeper still
+    present) so the retro-collapse can fold each loser into its ``<owner>``
+    keeper. Returns ``[{"loser_id", "keeper_id"}]``.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT es.paper_id AS loser_id, es.reason AS reason
+            FROM paper_enrichment_status es
+            JOIN papers p ON p.id = es.paper_id
+            WHERE es.reason LIKE 'duplicate_identity:%'
+              AND es.status = 'terminal_no_match'
+              AND COALESCE(TRIM(p.canonical_paper_id), '') = ''
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    pairs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for r in rows:
+        loser_id = str(r["loser_id"] or "").strip()
+        keeper_id = str(r["reason"] or "").split("duplicate_identity:", 1)[-1].strip()
+        if not loser_id or not keeper_id or loser_id == keeper_id or loser_id in seen:
+            continue
+        if conn.execute(
+            "SELECT 1 FROM papers WHERE id = ?", (keeper_id,)
+        ).fetchone() is None:
+            continue
+        seen.add(loser_id)
+        pairs.append({"loser_id": loser_id, "keeper_id": keeper_id})
+    return pairs
+
+
+def run_duplicate_identity_collapse(
+    db_path: str,
+    *,
+    ctx: Optional[Any] = None,
+    limit: Optional[int] = None,
+) -> dict[str, Any]:
+    """Activity-envelope runner: collapse the LEGACY duplicate-identity backlog.
+
+    Folds each still-split ``duplicate_identity:<owner>`` pair into its owner
+    via the generic soft-merge (non-destructive — D3). Per-pair commit +
+    idempotent, mirroring :func:`run_preprint_dedup`. The at-source merge in
+    title resolution / corpus rehydrate prevents NEW splits, so this pool only
+    shrinks and drains to zero.
+    """
+    import sqlite3 as _sqlite3  # local to avoid mis-shadowing
+
+    def _log(step: str, message: str, **kwargs: Any) -> None:
+        if ctx is None:
+            return
+        try:
+            ctx.log_step(step, message=message, **kwargs)
+        except Exception:
+            logger.debug("log_step failed on %s", step, exc_info=True)
+
+    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
+    conn.row_factory = _sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    summary: dict[str, Any] = {"candidates": 0, "merged": 0, "skipped": 0, "errors": 0}
+    try:
+        pairs = find_duplicate_identity_pairs(conn)
+        if limit is not None:
+            pairs = pairs[:limit]
+        summary["candidates"] = len(pairs)
+        _log(
+            "detect",
+            f"Found {len(pairs)} duplicate-identity pairs to collapse",
+            processed=0,
+            total=len(pairs),
+        )
+        for idx, pair in enumerate(pairs, start=1):
+            try:
+                with write_section(conn, label="duplicate-identity collapse"):
+                    result = merge_duplicate_paper_rows(
+                        conn,
+                        loser_id=pair["loser_id"],
+                        keeper_id=pair["keeper_id"],
+                        reason=f"duplicate_identity:{pair['keeper_id']}",
+                    )
+                if result.get("skipped"):
+                    summary["skipped"] += 1
+                else:
+                    summary["merged"] += 1
+                _log(
+                    "merge",
+                    f"{idx}/{len(pairs)}: {pair['loser_id']} → {pair['keeper_id']}",
+                    processed=idx,
+                    total=len(pairs),
+                )
+            except Exception as exc:
+                conn.rollback()
+                summary["errors"] += 1
+                logger.warning(
+                    "duplicate-identity collapse failed for %s→%s: %s",
+                    pair["loser_id"],
+                    pair["keeper_id"],
+                    exc,
+                )
+                _log(
+                    "error",
+                    f"{idx}/{len(pairs)}: failed — {exc}",
+                    processed=idx,
+                    total=len(pairs),
+                )
+    finally:
+        conn.close()
+    return summary
+
+
+def count_duplicate_identity_pairs(conn: sqlite3.Connection) -> int:
+    """How many legacy duplicate-identity pairs the collapse would fold.
+    Drives the maintenance op's pending count (local scan — no ETA)."""
+    try:
+        return len(find_duplicate_identity_pairs(conn))
+    except Exception:
+        return 0

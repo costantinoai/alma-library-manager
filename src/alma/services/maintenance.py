@@ -257,6 +257,14 @@ def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, para
     return run_preprint_dedup(_db_path(), limit=cap, scope=scope)
 
 
+def _run_collapse_duplicate_identity(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Collapse the LEGACY same-openalex_id duplicate backlog (non-destructive)."""
+    from alma.api.deps import _db_path
+    from alma.application.preprint_dedup import run_duplicate_identity_collapse
+
+    return run_duplicate_identity_collapse(_db_path(), limit=cap)
+
+
 # --- Checkpoint C: discrete author / derived / cleanup / housekeeping runners --
 # These split the old monolithic "deep refresh" (which hid identity + works +
 # vectors + centroid in one call) and register the derived-data rebuilds that
@@ -549,6 +557,16 @@ def _count_preprint_twins(conn: sqlite3.Connection, params=None) -> int:
 
     scope = str((params or {}).get("scope") or "library")
     return count_preprint_twins(conn, scope)
+
+
+def _count_duplicate_identity(conn: sqlite3.Connection, params=None) -> int:
+    """Legacy duplicate-identity pairs awaiting collapse (local scan)."""
+    from alma.application.preprint_dedup import count_duplicate_identity_pairs
+
+    try:
+        return int(count_duplicate_identity_pairs(conn) or 0)
+    except Exception:
+        return 0
 
 
 def _count_title_resolution_eligible(conn: sqlite3.Connection, params=None) -> int:
@@ -886,6 +904,36 @@ REGISTRY: dict[str, MaintenanceTask] = {
             default_auto_daily_cap=100,
             auto_chunk_size=25,
             destructive=True,
+        ),
+        MaintenanceTask(
+            key="collapse_duplicate_identity",
+            label="Collapse duplicate-identity papers",
+            description=(
+                "Fold same-openalex_id duplicate paper rows (stamped "
+                "duplicate_identity by title resolution before the at-source "
+                "merge landed) into their keeper so Feed / Discovery show ONE "
+                "card. Non-destructive: the loser is stamped canonical_paper_id "
+                "(hidden, provenance kept in the Corpus explorer), never deleted. "
+                "The pool only shrinks — new duplicates now merge at the source."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="papers.collapse_duplicate_identity",
+            job_id_prefix="maint_collapse_dupe_identity",
+            cost=COST_CHEAP,
+            runner=_run_collapse_duplicate_identity,
+            stage=MaintenanceStage.PAPER_CANONICALIZATION,
+            order=58,
+            unit=MaintenanceUnit.PAIR,
+            target_kind=TargetKind.PAIR,
+            supports_targets=False,
+            prerequisites=("corpus_metadata",),
+            count_fn=_count_duplicate_identity,
+            default_manual_limit=500,
+            max_manual_limit=5_000,
+            default_auto_daily_cap=500,
+            auto_chunk_size=100,
+            destructive=False,
         ),
         MaintenanceTask(
             key="dedup_preprint_twins",

@@ -676,15 +676,16 @@ def _apply_openalex_title_match(
     returned (B1 — no Phase-1 re-fetch), then stamp the OpenAlex enrichment
     ledger ``enriched`` so the rehydrate Phase-1 selector skips this paper.
 
-    Returns ``(fields_filled, duplicate_of_paper_id)``. ``duplicate_of``
-    is non-None when the matched work's openalex_id already belongs to a
-    DIFFERENT paper row — the title search has discovered a duplicate.
-    Writing the id then would trip the UNIQUE ``idx_papers_openalex_id``
-    and abort the whole write batch, so instead we fill only the DOI (no
-    unique index — it makes the pair visible to the duplicate-DOI health
-    proxy and mergeable by ``library.deduplicate``), skip the metadata
-    merge + enrichment stamp, and let the caller stamp a terminal
-    ``duplicate_identity`` ledger row."""
+    Returns ``(fields_filled, merged_into)``. ``merged_into`` is non-None
+    when the matched work's openalex_id already belongs to a DIFFERENT paper
+    row — the title search has discovered that THIS row and that owner are the
+    same paper. Rather than leave two canonical rows for the manual, never-auto
+    dedup (which is why Feed / Discovery showed duplicates), we SOFT-merge this
+    row INTO the owner (D3 — ``canonical_paper_id`` stamp, no hard delete;
+    migrates FK / feedback / recommendations, fills the owner's empty scalars)
+    and return the owner id so the caller stamps a terminal ``duplicate_merged``
+    ledger row on the now-hidden loser. Writing the openalex_id onto this row
+    would instead trip the UNIQUE ``idx_papers_openalex_id`` and abort the batch."""
     from alma.application.paper_metadata import merge_openalex_work_metadata
     from alma.core.paper_updates import fill_only_update_paper
     from alma.openalex.client import _normalize_work
@@ -700,14 +701,22 @@ def _apply_openalex_title_match(
             (oa_id, paper_id),
         ).fetchone()
         if owner is not None:
-            fields = [
-                str(f)
-                for f in (
-                    fill_only_update_paper(conn, paper_id, fill_fields={"doi": new_doi})
-                    or []
-                )
-            ] if new_doi else []
-            return fields, str(owner["id"])
+            # Same-openalex_id ⇒ same paper. Soft-merge THIS row into the owner
+            # (D3 — canonical_paper_id stamp, no hard delete) so Feed / Discovery
+            # collapse to one card, instead of leaving two canonical rows for the
+            # manual, never-auto library_dedup. The owner keeps the unique
+            # openalex_id; the merge migrates this row's FK / feedback /
+            # recommendations and fills any richer scalar it carried.
+            from alma.application.preprint_dedup import merge_duplicate_paper_rows
+
+            owner_id = str(owner["id"])
+            merge_duplicate_paper_rows(
+                conn,
+                loser_id=paper_id,
+                keeper_id=owner_id,
+                reason=f"duplicate_identity:{owner_id}",
+            )
+            return [], owner_id
 
     fill_fields: dict[str, str] = {}
     if oa_id:
@@ -881,15 +890,14 @@ def _write_title_results(
             title = str(r["title"])
             if r.get("resolved"):
                 if r.get("source") == "openalex":
-                    fields, duplicate_of = _apply_openalex_title_match(conn, paper_id, r["work"])
-                    if duplicate_of is not None:
-                        # The matched work already lives on another paper row:
-                        # this row is a duplicate, not a resolution. Sticky
-                        # terminal so it leaves the candidate pool; the filled
-                        # DOI surfaces the pair to the dedup health proxy.
+                    fields, merged_into = _apply_openalex_title_match(conn, paper_id, r["work"])
+                    if merged_into is not None:
+                        # Same-openalex_id duplicate: the row was soft-merged INTO
+                        # its keeper (Feed / Discovery now show one card). Sticky
+                        # terminal keeps the now-hidden loser out of the pool.
                         _stamp(paper_id, title, "terminal_no_match",
-                               f"duplicate_identity:{duplicate_of}", fields, None)
-                        counters["duplicate_identity"] += 1
+                               f"duplicate_merged:{merged_into}", fields, None)
+                        counters["duplicate_merged"] += 1
                         continue
                     counters["resolved_via_openalex"] += 1
                 else:
@@ -1021,6 +1029,7 @@ def run_title_resolution_sweep(
             "vectors_captured": 0,
             "no_match": 0,
             "duplicate_identity": 0,
+            "duplicate_merged": 0,
             "errors": 0,
         }
         fallback_gate = _FallbackGate(OPENALEX_FALLBACK_PER_RUN_BUDGET)
@@ -1174,6 +1183,7 @@ def run_title_resolution_sweep(
             "resolved_via_openalex_fallback": resolved_via_openalex,
             "vectors_captured": vectors_captured,
             "duplicate_identity": counters["duplicate_identity"],
+            "duplicate_merged": counters["duplicate_merged"],
             "openalex_fallback_calls": openalex_fallback_calls,
             "openalex_rate_limited": openalex_rate_limited,
             "remaining_eligible": remaining,

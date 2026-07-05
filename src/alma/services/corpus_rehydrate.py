@@ -2570,11 +2570,12 @@ def _resolve_identifiers_via_title(
         # branch S2 is then skipped (the row now has an identifier), so no
         # network follows this write.
         with write_section(conn, label="title-resolution oa fill"):
-            oa_fields, duplicate_of = _apply_openalex_title_match(conn, paper_id, best_oa)
-        if duplicate_of is not None:
-            # Matched work already belongs to another paper row — duplicate
-            # discovered, not a resolution. Sticky terminal; the filled DOI
-            # surfaces the pair to the dedup health proxy / library.deduplicate.
+            oa_fields, merged_into = _apply_openalex_title_match(conn, paper_id, best_oa)
+        if merged_into is not None:
+            # Same-openalex_id duplicate: _apply_openalex_title_match soft-merged
+            # THIS row into its keeper (D3 — canonical_paper_id stamp, no hard
+            # delete) so Feed / Discovery collapse to one card. Sticky terminal
+            # keeps the now-hidden loser out of the candidate pool.
             with write_section(conn, label="title-resolution ledger"):
                 _write_ledger(
                     conn,
@@ -2582,7 +2583,7 @@ def _resolve_identifiers_via_title(
                     source=TITLE_RESOLUTION_SOURCE,
                     lookup_key=lookup_key,
                     status="terminal_no_match",
-                    reason=f"duplicate_identity:{duplicate_of}",
+                    reason=f"duplicate_merged:{merged_into}",
                     fields_filled=oa_fields,
                     fields_key="title_resolution_v1",
                 )
