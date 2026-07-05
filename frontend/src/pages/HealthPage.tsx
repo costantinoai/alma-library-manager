@@ -117,13 +117,21 @@ export function HealthPage() {
     onSuccess: async (result, variables) => {
       await invalidateQueries(queryClient, OPERATIONS_KEY, SNAPSHOT_KEY)
       const launched = result.status !== 'noop' && !!result.job_id
+      // Provider daily-cap block: the op didn't run because the external API's
+      // daily quota is exhausted. Surface the backend's clear message instead of
+      // the generic "nothing to run".
+      const capSkipped = result.status === 'skipped_daily_cap'
       if (variables.sequence) {
         // Enqueue succeeded, but a background FAILURE is not this mutation's
         // onError — so we can't trust "started" as "will finish". If nothing was
         // eligible, the step can't make progress → stop truthfully. Otherwise
         // hand off to the job watcher, which advances only on COMPLETED.
         if (!launched) {
-          stopSequence('The recommended step had nothing eligible to run — auto-advance stopped.')
+          stopSequence(
+            capSkipped && result.message
+              ? result.message
+              : 'The recommended step had nothing eligible to run — auto-advance stopped.',
+          )
         } else {
           const before = (operationsQuery.data?.operations ?? []).find((o) => o.key === result.key)
           setWatchedJob({
@@ -134,7 +142,14 @@ export function HealthPage() {
         }
         return
       }
-      if (!launched) {
+      if (capSkipped) {
+        toast({
+          title: 'Daily API limit reached',
+          description:
+            result.message ??
+            'The provider daily API quota is exhausted — try again after it resets.',
+        })
+      } else if (!launched) {
         toast({ title: 'Nothing to run', description: 'No provider or no eligible items.' })
       } else {
         toast({
