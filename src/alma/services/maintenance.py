@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -346,10 +347,17 @@ def _run_topic_normalize(job_id: str, cap: int, target_paper_ids=None, params=No
     """Topic normalization (step 10, derived): the deterministic canonical-topic
     pass (NFKD + acronym folding → canonical term + aliases). Safe + idempotent;
     fuzzy/AI merges stay manual."""
+    from alma.core.db_write import write_section
     from alma.library.topic_deduplication import build_canonical_topics
 
     with _maintenance_conn() as conn:
-        return build_canonical_topics(conn)
+        # build_canonical_topics is caller-owns-transaction (no commit inside);
+        # without the gated section every link silently rolled back when this
+        # connection closed — the job reported "completed" with 0 rows linked
+        # (2026-07-04 e2e). No network in the builder, so holding the writer
+        # gate for the one batched pass is safe.
+        with write_section(conn, label="topic normalize sweep"):
+            return build_canonical_topics(conn)
 
 
 def _run_library_dedup(job_id: str, cap: int, target_paper_ids=None, params=None):
@@ -673,8 +681,9 @@ REGISTRY: dict[str, MaintenanceTask] = {
             key="title_resolution",
             label="Resolve missing identity",
             description=(
-                "Resolve paper identity via Semantic Scholar title search for papers "
-                "with no usable DOI / S2 id, so they can later be enriched + embedded."
+                "Resolve paper identity via Semantic Scholar title search (free), "
+                "with a budget-capped OpenAlex search fallback, for papers with no "
+                "usable DOI / S2 id, so they can later be enriched + embedded."
             ),
             health_dimensions=("identity.unresolved",),
             candidate_path="dim:identity.unresolved",
@@ -692,7 +701,10 @@ REGISTRY: dict[str, MaintenanceTask] = {
             max_manual_limit=5_000,
             default_auto_daily_cap=200,
             auto_chunk_size=100,
-            sources=(SOURCE_SEMANTIC_SCHOLAR,),
+            # OpenAlex listed because the PAID `?search` fallback stage spends
+            # credits — the daily-cap gate must see this task (2026-07-04
+            # S2-first inversion).
+            sources=(SOURCE_SEMANTIC_SCHOLAR, SOURCE_OPENALEX),
             # Honest pending: the op's own eligibility (excludes terminal_no_match /
             # unmatched), not the raw identity.unresolved gap it would skip past.
             count_fn=_count_title_resolution_eligible,
@@ -815,7 +827,7 @@ REGISTRY: dict[str, MaintenanceTask] = {
             description=(
                 "Find duplicate author profiles two ways: by shared ORCID "
                 "(authoritative, via OpenAlex) and by a name/initials match "
-                "(“E. van Hove” ≈ “Emily van Hove”). High-confidence pairs "
+                "(“J. Doe” ≈ “Jane Doe”). High-confidence pairs "
                 "(ORCID, or same full name + shared affiliation) are AUTO-MERGED; "
                 "less certain pairs are recorded for review on the Merge card. The "
                 "count is ORCID-scan coverage (authors not yet checked)."
@@ -1283,7 +1295,14 @@ def _candidate_count(health_payload: dict[str, Any], candidate_path: str) -> int
         wanted = candidate_path.split(":", 1)[1]
         for dim in health_payload.get("dimensions") or []:
             if dim.get("key") == wanted:
-                return int(dim.get("count") or 0)
+                count = int(dim.get("count") or 0)
+                # ACTIONABLE work only: the exhausted floor (every remaining
+                # row already tried; upstream can't supply) is not pending
+                # work. Counting it kept `s2_vector` "pending" forever on
+                # papers S2 has no vector for — which blocked the dependent
+                # local-embedding stage for the whole corpus (2026-07-04 e2e).
+                exhausted = int(dim.get("exhausted") or 0)
+                return max(0, count - exhausted)
     return 0
 
 
@@ -1384,7 +1403,11 @@ def plan_task(
                 key=dependency.key,
                 label=dependency.label,
                 pending=dep_pending,
-                required=not dependency.optional,
+                # Manual-gate deps are ADVISORY: they can only be resolved by a
+                # human, so treating them as hard blockers deadlocks the auto
+                # chain (2 preprint-twin candidates froze the whole vector lane,
+                # 2026-07-04 e2e). The banner still warns; automation proceeds.
+                required=not (dependency.optional or dependency.manual_gate),
             )
         )
 
@@ -1557,7 +1580,8 @@ def describe_task(
                 "key": dependency.key,
                 "label": dependency.label,
                 "pending": task_pending_count(conn, dependency, health_payload),
-                "required": not dependency.optional,
+                # Manual-gate deps are advisory (see PlanDependency note).
+                "required": not (dependency.optional or dependency.manual_gate),
             }
         )
     params_spec: dict[str, Any] = {}
@@ -1880,6 +1904,72 @@ class MaintenanceLaunch:
     status: str
     job_id: Optional[str]
     plan: MaintenanceRunPlan
+    # Human-readable reason surfaced to the UI for non-launch outcomes (today:
+    # status="skipped_daily_cap" carries the provider daily-cap explanation).
+    message: Optional[str] = None
+
+
+def _provider_daily_cap_block(
+    task: MaintenanceTask, *, trigger_source: str
+) -> Optional[str]:
+    """Clear, informative message when a network task can't run because the
+    OpenAlex daily API quota is exhausted — else ``None`` (free to run).
+
+    OpenAlex is the only source that exposes a finite daily pool (its live
+    ``X-RateLimit-Remaining`` header); Semantic Scholar / Crossref are paced by
+    per-second politeness + the idle gate and have no daily cap to hit here, so
+    tasks that don't touch OpenAlex are never blocked by this guard.
+
+    A MANUAL (``user``) run may spend the pool down to the provider's hard zero;
+    a BACKGROUND / ``scheduler`` run must leave the user reserve intact
+    (``provider_budget_ok``) so an idle sweep can't consume the quota the user
+    needs for their own actions.
+    """
+    if task.cost != COST_NETWORK or SOURCE_OPENALEX not in task.sources:
+        return None
+    from alma.core.http_sources import (
+        RESERVED_USER_CALLS,
+        provider_budget_ok,
+        provider_remaining_credits,
+    )
+
+    remaining = provider_remaining_credits("openalex")
+    if remaining is None:
+        # Quota unknown (e.g. no OpenAlex call made yet this process) — don't
+        # pre-emptively block; the run itself will discover the real ceiling.
+        return None
+
+    from alma.api.scheduler import is_user_facing_trigger
+
+    is_user = is_user_facing_trigger(trigger_source)
+    if is_user:
+        if remaining > 0:
+            return None
+        return (
+            f"Skipped — OpenAlex's daily API limit is reached (0 calls left). "
+            f"“{task.label}” needs OpenAlex, so it can't run right now; it will "
+            "work again after the quota resets (around 00:00 UTC)."
+        )
+    # Cost-class awareness: a paid-search task must leave headroom for its
+    # per-run search budget ON TOP of the user reserve — one search costs 10×
+    # a list call, so search-heavy background runs drain the pool fastest.
+    # (Lazy import: maintenance ↔ title_resolution would cycle at module load.)
+    from alma.services.title_resolution import OPENALEX_FALLBACK_PER_RUN_BUDGET
+
+    search_heavy_extra = {
+        "title_resolution": OPENALEX_FALLBACK_PER_RUN_BUDGET,
+        # corpus_metadata's Phase 0 runs the same title-resolution pipeline.
+        "corpus_metadata": OPENALEX_FALLBACK_PER_RUN_BUDGET,
+    }
+    reserve = RESERVED_USER_CALLS + search_heavy_extra.get(task.key, 0)
+    if provider_budget_ok("openalex", reserve=reserve):
+        return None
+    return (
+        f"Skipped “{task.label}” — OpenAlex daily API budget is low "
+        f"({remaining} calls left; holding {reserve} in reserve for "
+        "your manual actions). It resumes automatically after the quota resets "
+        "(around 00:00 UTC)."
+    )
 
 
 def run_task_now(
@@ -1931,6 +2021,15 @@ def run_task_now(
             status="already_running",
             job_id=str(existing.get("job_id") or "") or None,
             plan=plan,
+        )
+
+    # Don't schedule a network op that will only churn against an exhausted daily
+    # quota — stop up front with a clear message the UI can show.
+    cap_message = _provider_daily_cap_block(task, trigger_source="user")
+    if cap_message:
+        logger.info("maintenance run blocked by daily cap: %s", cap_message)
+        return MaintenanceLaunch(
+            status="skipped_daily_cap", job_id=None, plan=plan, message=cap_message
         )
 
     effective = {
@@ -2002,15 +2101,47 @@ def _worst_severity_rank(payload: dict[str, Any], dim_keys: tuple[str, ...]) -> 
     return min(ranks) if ranks else 9
 
 
+def _blocking_prerequisites(
+    conn: sqlite3.Connection, task: MaintenanceTask, payload: dict[str, Any]
+) -> list[MaintenanceTask]:
+    """Required prerequisites of ``task`` that still have pending work — the
+    reason it isn't ready to run yet. Empty ⇒ prerequisites satisfied.
+
+    Same "out of order" condition the operations list applies for its ``blocked``
+    readiness + warning banner (required dependency with pending > 0; there it
+    reads precomputed dependency rows). Manual runs are warned by that banner but
+    never blocked; the idle healer calls THIS as a hard ordering gate so auto runs
+    wait for one another — both share one definition of out-of-order.
+    """
+    blocking: list[MaintenanceTask] = []
+    for key in task.prerequisites:
+        dependency = REGISTRY[key]
+        # Manual-gate deps can never self-resolve — advisory, not blocking
+        # (they would deadlock the auto ordering gate forever).
+        if dependency.optional or dependency.manual_gate:
+            continue
+        if task_pending_count(conn, dependency, payload) > 0:
+            blocking.append(dependency)
+    return blocking
+
+
 def maintenance_repair_periodic() -> None:
     """One healer tick: repair the single highest-severity enabled task that has
-    pending work and remaining daily budget, with a small bounded batch.
+    pending work, remaining daily budget, AND satisfied prerequisites, with a
+    small bounded batch.
 
     Default OFF — a task only runs if it was opted in on the Health page. The
     ``ALMA_DISABLE_IDLE_MAINTENANCE`` env var is a global hard kill. Reads the
     canonical health snapshot (never recomputes), respects in-flight jobs via
     ``find_active_job``, and schedules under ``trigger_source='scheduler'`` so
     chain-suppression is automatic and the run shows up on the Health page.
+
+    **Ordering (auto):** a task whose REQUIRED prerequisite still has pending work
+    is deferred this tick — never run out of order. Because the healer runs one
+    task per tick and re-evaluates the snapshot each time, the upstream step
+    drains first and the dependent becomes eligible on a later tick. This is the
+    auto-side counterpart to the manual ``blocked_by`` warning: manual runs may
+    proceed out of order (warned), auto runs wait.
     """
     if str(os.getenv(ENV_DISABLE, "")).strip().lower() in {"1", "true", "yes", "on"}:
         logger.info("idle maintenance: disabled via %s", ENV_DISABLE)
@@ -2041,6 +2172,23 @@ def maintenance_repair_periodic() -> None:
             remaining = get_task_auto_daily_cap(conn, task) - _healer_used_today(conn, task.operation_key)
             if remaining <= 0:
                 logger.info("idle maintenance: %s hit its daily cap", task.key)
+                continue
+            # Don't queue a network op with no external-API budget left — skip it
+            # this tick with a clear log (another enabled task may still qualify).
+            cap_message = _provider_daily_cap_block(task, trigger_source="scheduler")
+            if cap_message:
+                logger.info("idle maintenance: %s", cap_message)
+                continue
+            # Ordering gate: never auto-run a step ahead of an unfinished required
+            # prerequisite. The upstream step drains on earlier ticks; this one
+            # becomes eligible once it does — so auto ops wait for one another.
+            blocking = _blocking_prerequisites(conn, task, payload)
+            if blocking:
+                logger.info(
+                    "idle maintenance: deferring %s — waiting on prerequisite(s) %s",
+                    task.key,
+                    ", ".join(f"{b.key} ({task_pending_count(conn, b, payload)} pending)" for b in blocking),
+                )
                 continue
             rank = _worst_severity_rank(payload, task.health_dimensions)
             candidates.append((rank, remaining, task))
@@ -2092,6 +2240,259 @@ def maintenance_repair_periodic() -> None:
             pass
 
 
+# ---------------------------------------------------------------------------
+# Onboarding convergence chain (2026-07-04): the MANDATORY full pipeline that
+# runs at onboarding complete. Walks the registry's own dependency order
+# (`list_operations` → `recommended_next`) until nothing actionable remains —
+# identity → metadata → vectors → local embeddings → centroids → reference
+# graph → cluster labels → topic normalization. Safe by construction:
+# destructive / manual-gate / optional ops are never recommended.
+# ---------------------------------------------------------------------------
+
+ONBOARDING_CONVERGE_OPERATION_KEY = "onboarding.converge"
+
+# Between steps the coordinator waits for EVERY related job to finish: the
+# registry ops themselves plus the feeder jobs that create their work
+# (author historical backfills, coalesced per-insert hydration sweeps, and
+# the embedding-chain hops) — so a step never races work still in flight.
+_CONVERGE_WAIT_PREFIXES = (
+    "authors.deep_refresh:",
+    "papers.rehydrate_metadata",
+    "embeddings.",
+)
+_CONVERGE_MAX_STEPS = 30
+_CONVERGE_POLL_SECONDS = 5.0
+
+
+def _converge_related_active(conn: sqlite3.Connection, own_job_id: str) -> list[str]:
+    """Operation keys of live jobs the convergence coordinator must wait on."""
+    registry_keys = {t.operation_key for t in REGISTRY.values()}
+    try:
+        rows = conn.execute(
+            "SELECT job_id, operation_key FROM operation_status "
+            "WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    active: list[str] = []
+    for row in rows:
+        if str(row["job_id"]) == own_job_id:
+            continue
+        key = str(row["operation_key"] or "")
+        if key in registry_keys or key.startswith(_CONVERGE_WAIT_PREFIXES):
+            active.append(key)
+    return active
+
+
+def run_onboarding_convergence(
+    job_id: str,
+    *,
+    set_job_status: Callable[..., None],
+    add_job_log: Callable[..., None],
+    is_cancellation_requested: Callable[[str], bool],
+) -> None:
+    """Run the full maintenance pipeline to convergence after onboarding.
+
+    Loop: wait for all related jobs (backfills, hydration sweeps, chain hops,
+    continuations) to drain → pick the FIRST ready op in the registry's
+    dependency order from live counts → schedule it with the onboarding
+    trigger (user-facing: never yields to the idle gate, fast adaptive
+    order) → repeat. Ends when nothing actionable remains — recomputing each
+    iteration also absorbs work that lands mid-chain (e.g. author backfills
+    finishing late). An op whose count doesn't shrink after its run (e.g.
+    provider quota floor) is marked STALLED and skipped so the rest of the
+    chain still converges; the run reports the stalled set instead of
+    spinning or giving up. Cooperative cancel (incl. graceful stop) honoured
+    at every poll.
+    """
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import ONBOARDING_KICK_TRIGGER
+
+    conn = open_db_connection()
+    steps: list[dict[str, Any]] = []
+    stalled: set[str] = set()
+    last_pending: dict[str, int] = {}
+    stop_reason = "converged"
+    try:
+        set_job_status(
+            job_id, status="running", processed=0, total=0,
+            message="Converging library: waiting for in-flight enrichment to settle",
+        )
+        for step in range(_CONVERGE_MAX_STEPS):
+            # 1) Drain every related in-flight job (feeders + prior step +
+            #    its continuations) before measuring what is still missing.
+            while True:
+                if is_cancellation_requested(job_id):
+                    stop_reason = "cancelled"
+                    break
+                active = _converge_related_active(conn, job_id)
+                if not active:
+                    break
+                time.sleep(_CONVERGE_POLL_SECONDS)
+            if stop_reason == "cancelled":
+                break
+
+            # 2) First READY op in dependency order that hasn't stalled.
+            operations = (list_operations(conn) or {}).get("operations") or []
+            nxt = next(
+                (
+                    o for o in operations
+                    if o.get("readiness") == "ready" and str(o.get("key")) not in stalled
+                ),
+                None,
+            )
+            if nxt is None:
+                break
+            key = str(nxt["key"])
+            task = REGISTRY.get(key)
+            if task is None:
+                stalled.add(key)
+                continue
+            payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
+            try:
+                pending = int(task_pending_count(conn, task, payload) or 0)
+            except Exception:
+                pending = 0
+            if pending <= 0:
+                continue  # count moved since the ops read — re-evaluate
+            # No-progress guard: this op already ran and its count didn't
+            # shrink (e.g. provider quota floor) — mark stalled, move on to
+            # the rest of the chain instead of stopping everything.
+            if key in last_pending and pending >= last_pending[key]:
+                stalled.add(key)
+                add_job_log(
+                    job_id,
+                    f"Onboarding chain: {task.label} stalled at {pending} pending — skipping",
+                    step="converge_stalled",
+                    data={"key": key, "pending": pending},
+                )
+                continue
+            last_pending[key] = pending
+
+            session_limit = max(1, min(pending, _RESUME_SESSION_CAP))
+            step_job = _schedule_task(
+                conn,
+                task,
+                limit=session_limit,
+                trigger_source=ONBOARDING_KICK_TRIGGER,
+                queued_message=f"Onboarding chain: {task.label} ({pending} pending)",
+                log_message="Queued by the onboarding convergence chain",
+                health_payload=payload,
+            )
+            steps.append({"key": key, "job_id": step_job, "pending_before": pending})
+            set_job_status(
+                job_id, status="running", processed=len(steps), total=0,
+                message=f"Onboarding chain step {len(steps)}: {task.label} ({pending} pending)",
+            )
+            add_job_log(
+                job_id,
+                f"Onboarding chain step {len(steps)}: {task.label}",
+                step="converge_step",
+                data={"key": key, "job_id": step_job, "pending": pending},
+            )
+        else:
+            stop_reason = "step_cap"
+
+        if stop_reason == "converged" and stalled:
+            stop_reason = "stalled:" + ",".join(sorted(stalled))
+            # A stall is usually a provider quota floor (OpenAlex resets at
+            # 00:00 UTC) — book one delayed coordinator relaunch so the
+            # MANDATORY chain finishes without the default-OFF idle healer.
+            # Terminates: a converged retry ends "converged" and books nothing.
+            try:
+                _schedule_converge_retry_after_quota_reset(add_job_log, job_id, sorted(stalled))
+            except Exception:
+                logger.debug("converge quota-reset retry not booked", exc_info=True)
+        result = {"steps": steps, "stop_reason": stop_reason, "stalled": sorted(stalled)}
+        if stop_reason == "cancelled":
+            set_job_status(
+                job_id, status="cancelled", processed=len(steps), total=len(steps),
+                message=f"Onboarding convergence stopped after {len(steps)} step(s)",
+                finished_at=datetime.utcnow().isoformat(), result=result,
+            )
+            return
+        message = (
+            f"Library converged after {len(steps)} step(s)"
+            if stop_reason == "converged"
+            else f"Onboarding convergence stopped ({stop_reason}) after {len(steps)} step(s)"
+        )
+        set_job_status(
+            job_id, status="completed", processed=len(steps), total=len(steps),
+            message=message, finished_at=datetime.utcnow().isoformat(), result=result,
+        )
+        add_job_log(job_id, message, step="converge_done", data=result)
+    except Exception as exc:
+        logger.exception("onboarding convergence failed")
+        set_job_status(
+            job_id, status="failed", message=f"Onboarding convergence failed: {exc}",
+            finished_at=datetime.utcnow().isoformat(),
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _schedule_converge_retry_after_quota_reset(
+    add_job_log: Callable[..., None], job_id: str, stalled: list[str]
+) -> None:
+    """Book ONE delayed coordinator relaunch just after the next 00:00 UTC
+    OpenAlex quota reset. `replace_existing` keeps repeated stalls idempotent;
+    the relaunch itself goes through the coordinator's operation-key envelope."""
+    from datetime import timedelta
+
+    from apscheduler.triggers.date import DateTrigger
+
+    from alma.api.scheduler import get_scheduler
+
+    now = datetime.now(timezone.utc)
+    run_at = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+    get_scheduler().add_job(
+        schedule_onboarding_convergence,
+        trigger=DateTrigger(run_date=run_at),
+        id="onboarding_converge_quota_retry",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    add_job_log(
+        job_id,
+        f"Stalled on {', '.join(stalled)} — convergence retry booked for "
+        f"{run_at.isoformat()} (after the OpenAlex daily quota reset)",
+        step="converge_retry_booked",
+        data={"run_at": run_at.isoformat(), "stalled": stalled},
+    )
+
+
+def schedule_onboarding_convergence() -> Optional[str]:
+    """Queue the convergence coordinator (idempotent on its operation key)."""
+    from alma.api.scheduler import ONBOARDING_KICK_TRIGGER
+    from alma.core.job_envelope import schedule_with_envelope
+
+    def _factory(jid: str) -> Callable[[], None]:
+        from alma.api.scheduler import (
+            add_job_log,
+            is_cancellation_requested,
+            set_job_status,
+        )
+
+        return lambda: run_onboarding_convergence(
+            jid,
+            set_job_status=set_job_status,
+            add_job_log=add_job_log,
+            is_cancellation_requested=is_cancellation_requested,
+        )
+
+    return schedule_with_envelope(
+        operation_key=ONBOARDING_CONVERGE_OPERATION_KEY,
+        job_id_prefix="onboarding_converge",
+        trigger_source=ONBOARDING_KICK_TRIGGER,
+        queued_message="Converging your new library to healthy (full enrichment chain)",
+        runner_factory=_factory,
+        log_message="Onboarding convergence chain queued",
+    )
+
+
 # Self-rescheduling sweeps whose backlog the user opted into draining by
 # starting them, and whose runners are idempotent + ledger-gated — so it is
 # safe to auto-resume them after an orphaned restart. NOT the destructive /
@@ -2141,7 +2542,7 @@ def resume_orphaned_sweeps() -> int:
     try:
         rows = conn.execute(
             """
-            SELECT DISTINCT operation_key
+            SELECT operation_key, trigger_source
             FROM operation_status
             WHERE status = 'cancelled'
               AND message = ?
@@ -2149,13 +2550,39 @@ def resume_orphaned_sweeps() -> int:
             """,
             (_ORPHAN_REAP_MESSAGE,),
         ).fetchall()
-        orphaned = {str(r["operation_key"]) for r in rows} & _RESUMABLE_OPERATION_KEYS
+        # Keep the orphan's trigger when it was the ONBOARDING kick: resuming
+        # it as plain `auto:resume` demotes the run to background, which then
+        # yields to its own chain siblings ("another operation is active") and
+        # the onboarding convergence stalls (observed live 2026-07-04). A dead
+        # USER click still resumes as `auto:resume` — its per-button contract
+        # died with the process.
+        from alma.api.scheduler import ONBOARDING_KICK_TRIGGER
+
+        orphaned: dict[str, str] = {}
+        converge_orphaned = False
+        for r in rows:
+            key = str(r["operation_key"])
+            if key == ONBOARDING_CONVERGE_OPERATION_KEY:
+                converge_orphaned = True
+                continue
+            if key not in _RESUMABLE_OPERATION_KEYS:
+                continue
+            trig = str(r["trigger_source"] or "").strip().lower()
+            if orphaned.get(key) != ONBOARDING_KICK_TRIGGER:
+                orphaned[key] = trig
+        # A restart mid-convergence must not silently end the MANDATORY
+        # onboarding chain — relaunch the coordinator; it re-derives its next
+        # step from live counts, so resuming is idempotent.
+        if converge_orphaned and not find_active_job(ONBOARDING_CONVERGE_OPERATION_KEY):
+            if schedule_onboarding_convergence():
+                resumed += 1
+                logger.warning("auto-resume: re-launched onboarding convergence chain")
         if not orphaned:
-            return 0
+            return resumed
 
         payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
         by_opkey = {t.operation_key: t for t in REGISTRY.values()}
-        for opkey in orphaned:
+        for opkey, orphan_trigger in orphaned.items():
             task = by_opkey.get(opkey)
             if task is None or task.destructive:
                 continue
@@ -2170,11 +2597,16 @@ def resume_orphaned_sweeps() -> int:
             # Generous session budget so the continuation chain actually drains
             # the backlog (a small per-tick limit would stop after one chunk).
             session_limit = max(1, min(pending, _RESUME_SESSION_CAP))
+            resume_trigger = (
+                ONBOARDING_KICK_TRIGGER
+                if orphan_trigger == ONBOARDING_KICK_TRIGGER
+                else "auto:resume"
+            )
             job_id = _schedule_task(
                 conn,
                 task,
                 limit=session_limit,
-                trigger_source="auto:resume",
+                trigger_source=resume_trigger,
                 queued_message=f"Resuming orphaned {task.label} ({pending} pending)",
                 log_message=f"Auto-resume of orphaned {task.label} after restart",
                 health_payload=payload,

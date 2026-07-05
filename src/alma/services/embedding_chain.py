@@ -90,6 +90,22 @@ def _new_chain_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
+def chain_trigger_reason(parent_trigger_source: Optional[str], default: str) -> str:
+    """Pick the ``trigger_reason`` for a chain hop scheduled from a parent run.
+
+    Keeps the onboarding-complete kick USER-FACING end-to-end: when the
+    parent was the onboarding kick, every hop re-uses the onboarding reason
+    (child trigger stays ``auto:onboarding_complete`` → never yields to the
+    idle gate while the user watches the wizard finish). Every other parent
+    gets the hop's own default reason (``post_hydration`` / ``post_s2_fetch``).
+    """
+    from alma.api.scheduler import ONBOARDING_KICK_REASON, ONBOARDING_KICK_TRIGGER
+
+    if str(parent_trigger_source or "").strip().lower() == ONBOARDING_KICK_TRIGGER:
+        return ONBOARDING_KICK_REASON
+    return default
+
+
 def mark_post_hydration_chain_pending(conn: sqlite3.Connection) -> None:
     """Remember that a background yield deferred the S2-vector chain (41.2).
 

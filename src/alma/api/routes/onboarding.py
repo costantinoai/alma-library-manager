@@ -186,7 +186,14 @@ def complete_onboarding(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Mark onboarding done so the gate stops showing."""
+    """Mark onboarding done so the gate stops showing, then start the
+    MANDATORY convergence chain (audit 39 finding #4): the coordinator walks
+    the maintenance registry's dependency order — identity → metadata →
+    vectors → local embeddings → centroids → reference graph → cluster
+    labels → topic normalization — until nothing actionable remains, so the
+    fresh library ends healthy, not "queued". Its `auto:onboarding_complete`
+    trigger is user-facing (never yields to the idle gate) and survives
+    restarts via the orphan-resume path."""
     completed_at = datetime.utcnow().isoformat()
 
     def _persist() -> None:
@@ -194,6 +201,19 @@ def complete_onboarding(
         upsert_setting(db, _COMPLETED_AT_KEY, completed_at)
 
     run_write_unit(db, _persist, label="onboarding_complete")
+
+    # Post-commit: scheduling in-transaction self-deadlocks against the
+    # scheduler's own connection (see ingest_owner).
+    try:
+        from alma.services.maintenance import schedule_onboarding_convergence
+
+        job_id = schedule_onboarding_convergence()
+        if job_id:
+            logger.info("onboarding complete: convergence chain queued (job %s)", job_id)
+    except Exception:
+        # Completion itself must never fail on the kick — the durable
+        # pending ledger + idle drain still converge the library later.
+        logger.warning("onboarding-complete convergence kick failed", exc_info=True)
 
 
 @router.post("/reset", status_code=204)

@@ -974,6 +974,13 @@ def _extract_abstract_from_html(text: str) -> str:
     return parser.abstracts[0] if parser.abstracts else ""
 
 
+# Cap on how much publisher HTML we parse for one meta-tag abstract. Landing
+# pages past this are truncated (the <meta> block lives in <head>, always
+# within the first chunk) — protects against multi-MB pages from arbitrary
+# publisher hosts.
+_HTML_ABSTRACT_MAX_BYTES = 2_000_000
+
+
 def _fetch_html_abstract(url: str) -> str:
     raw_url = str(url or "").strip()
     if not raw_url.lower().startswith(("http://", "https://")):
@@ -991,7 +998,9 @@ def _fetch_html_abstract(url: str) -> str:
     if "pdf" in content_type:
         return ""
     try:
-        return _extract_abstract_from_html(resp.text or "")
+        body = resp.content[:_HTML_ABSTRACT_MAX_BYTES]
+        text = body.decode(resp.encoding or "utf-8", errors="replace")
+        return _extract_abstract_from_html(text)
     except Exception:
         return ""
 
@@ -1510,17 +1519,18 @@ def _run_title_resolution_phase(
 
     Decoupled fetch/write via the SAME staged title-resolution pipeline the
     standalone "Resolve missing identity" sweep uses
-    (`title_resolution.run_title_resolution_pipeline`), so OpenAlex and the S2
-    fallback run as two INDEPENDENT concurrent source stages and the single
-    writer batches its `write_section` flushes — one title-resolution engine
-    across both ops (DRY; tasks/11 B5 + tasks/38). Every outcome is stamped in
-    the `title_resolution` ledger, so a stale title leaves the pool. Returns a
-    small summary the parent runner attaches to its own job result.
+    (`title_resolution.run_title_resolution_pipeline`), so the free S2 stage
+    and the paid OpenAlex fallback run as two INDEPENDENT concurrent source
+    stages and the single writer batches its `write_section` flushes — one
+    title-resolution engine across both ops (DRY; tasks/11 B5 + tasks/38).
+    Every outcome is stamped in the `title_resolution` ledger, so a stale
+    title leaves the pool. Returns a small summary the parent runner attaches
+    to its own job result.
     """
     from alma.discovery import semantic_scholar
     from alma.services.title_resolution import (
-        S2_FALLBACK_PER_RUN_BUDGET,
-        _S2FallbackGate,
+        OPENALEX_FALLBACK_PER_RUN_BUDGET,
+        _FallbackGate,
         run_title_resolution_pipeline,
     )
 
@@ -1546,14 +1556,34 @@ def _run_title_resolution_phase(
         "no_match": 0,
         "errors": 0,
     }
-    s2_gate = _S2FallbackGate(S2_FALLBACK_PER_RUN_BUDGET)
+    # Adaptive order, same policy as the standalone sweep: a user-facing
+    # rehydrate (manual click or the onboarding-complete kick) with a healthy
+    # budget resolves OpenAlex-first (~0.3 s/paper, user waiting); background
+    # runs go free-S2-first (~6 s/paper).
+    from alma.api.scheduler import (
+        get_job_trigger_source as _get_trigger,
+        is_user_facing_trigger as _is_user_facing,
+    )
+    from alma.core.http_sources import RESERVED_USER_CALLS as _RESERVED
+    from alma.openalex.http import SEARCH_COST_CREDITS, get_client as _oa_client
+
+    # One candidate = one ?search = SEARCH_COST_CREDITS budget units (see
+    # openalex.http) — reserve in credit units, not paper counts.
+    openalex_first = (
+        _is_user_facing(_get_trigger(job_id))
+        and not _oa_client().budget_drained(
+            reserve=len(candidates) * SEARCH_COST_CREDITS + _RESERVED
+        )
+    )
+    fallback_gate = _FallbackGate(OPENALEX_FALLBACK_PER_RUN_BUDGET)
     result = run_title_resolution_pipeline(
         candidates,
         conn=conn,
         model=model,
         counters=counters,
-        s2_gate=s2_gate,
+        fallback_gate=fallback_gate,
         is_cancelled=lambda: is_cancellation_requested(job_id),
+        openalex_first=openalex_first,
     )
     summary["attempted"] = result.processed
     summary["resolved"] = counters["resolved_via_openalex"] + counters["resolved_via_s2"]
@@ -2082,9 +2112,11 @@ def run_corpus_metadata_rehydration(
                     except Exception as mark_exc:
                         logger.debug("chain-pending marker not set: %s", mark_exc)
             else:
+                from alma.services.embedding_chain import chain_trigger_reason
+
                 chain = schedule_post_hydration_chain(
                     conn,
-                    trigger_reason="post_hydration",
+                    trigger_reason=chain_trigger_reason(trigger_source, "post_hydration"),
                     limit=limit,
                     target_paper_ids=target_ids,
                 )
@@ -2109,6 +2141,48 @@ def run_corpus_metadata_rehydration(
                     )
         except Exception as exc:
             logger.debug("post-hydration chain skipped: %s", exc)
+
+        # Late-arrival follow-up (onboarding race, 2026-07-04): papers inserted
+        # WHILE this sweep ran (e.g. author backfills landing works after the
+        # onboarding kick selected its candidates) enqueued pending ledger rows
+        # whose auto-schedule was coalesced away against THIS active job — with
+        # no re-arm they'd sit "queued" until the 15-min drain. An untargeted,
+        # non-user, non-yield run therefore self-continues while
+        # enqueued-never-attempted rows remain: retire satisfied rows first
+        # (41.4) so the check is truthful, then schedule a fresh sweep carrying
+        # the parent reason (an onboarding-kick continuation stays user-facing
+        # end-to-end; each pass attempts the queued rows, so the set strictly
+        # shrinks and the loop terminates).
+        try:
+            from alma.api.scheduler import get_job_trigger_source as _get_trigger
+
+            followup_trigger = str(_get_trigger(job_id) or "").strip().lower()
+            if not target_ids and not _yield_sink and followup_trigger != "user":
+                reconcile_satisfied_pending(conn)
+                queued_row = conn.execute(
+                    f"SELECT COUNT(*) AS c FROM papers p WHERE {queued_metadata_exists_sql('p')}"
+                ).fetchone()
+                queued_remaining = int((queued_row["c"] if queued_row else 0) or 0)
+                if queued_remaining > 0:
+                    followup_reason = (
+                        followup_trigger.removeprefix("auto:")
+                        if followup_trigger.startswith("auto:")
+                        else "pending_backlog"
+                    )
+                    followup_id = schedule_pending_hydration_sweep(reason=followup_reason)
+                    add_job_log(
+                        job_id,
+                        f"Follow-up sweep scheduled: {queued_remaining} papers were "
+                        "enqueued while this run was in flight",
+                        step="pending_followup",
+                        data={
+                            "queued_remaining": queued_remaining,
+                            "followup_job_id": followup_id,
+                            "reason": followup_reason,
+                        },
+                    )
+        except Exception as exc:
+            logger.debug("pending follow-up check skipped: %s", exc)
 
         return result
     except Exception:
@@ -2496,7 +2570,23 @@ def _resolve_identifiers_via_title(
         # branch S2 is then skipped (the row now has an identifier), so no
         # network follows this write.
         with write_section(conn, label="title-resolution oa fill"):
-            oa_fields = _apply_openalex_title_match(conn, paper_id, best_oa)
+            oa_fields, duplicate_of = _apply_openalex_title_match(conn, paper_id, best_oa)
+        if duplicate_of is not None:
+            # Matched work already belongs to another paper row — duplicate
+            # discovered, not a resolution. Sticky terminal; the filled DOI
+            # surfaces the pair to the dedup health proxy / library.deduplicate.
+            with write_section(conn, label="title-resolution ledger"):
+                _write_ledger(
+                    conn,
+                    paper_id=paper_id,
+                    source=TITLE_RESOLUTION_SOURCE,
+                    lookup_key=lookup_key,
+                    status="terminal_no_match",
+                    reason=f"duplicate_identity:{duplicate_of}",
+                    fields_filled=oa_fields,
+                    fields_key="title_resolution_v1",
+                )
+            return ("terminal_no_match", oa_fields)
         for field in oa_fields:
             if field not in fields_filled:
                 fields_filled.append(field)

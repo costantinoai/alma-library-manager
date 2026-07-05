@@ -233,6 +233,7 @@ def run_operation(
         "key": key,
         "status": outcome.status,
         "job_id": outcome.job_id,
+        "message": outcome.message,
         "plan": outcome.plan.to_wire(),
     }
 

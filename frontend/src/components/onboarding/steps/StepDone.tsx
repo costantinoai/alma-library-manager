@@ -50,10 +50,10 @@ export function StepDone({ state, back, finish, finishing }: StepContext) {
               <li className="flex items-start gap-3">
                 <HeartPulse className="mt-0.5 h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
                 <span>
-                  <span className="font-medium text-alma-800">Health</span> — ALMa is already enriching your
-                  library in the background. It runs whenever the app is idle, so for a while you may see items
-                  marked <span className="font-medium text-alma-800">queued</span> — that's normal, they'll fill
-                  in on their own. Look in now and then to keep your corpus tidy and complete.
+                  <span className="font-medium text-alma-800">Health</span> — ALMa is enriching your library
+                  right now (metadata, abstracts, embeddings), and keeps topping it up in the background
+                  whenever the app is idle. Items marked <span className="font-medium text-alma-800">queued</span>{' '}
+                  are normal — they fill in on their own. Look in now and then to keep your corpus tidy and complete.
                 </span>
               </li>
             </RevealItem>

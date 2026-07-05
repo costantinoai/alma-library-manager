@@ -61,6 +61,13 @@ _job_lock = threading.RLock()
 _ACTIVITY_STATUS_LIMIT = 2000
 _ACTIVE_STATUSES = {"queued", "scheduled", "running", "cancelling"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+_ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
+_ORPHAN_REAP_ERROR = (
+    "Backend process restarted or exited while this job was running; "
+    "ALMa marked the abandoned worker as cancelled on the next startup. "
+    "This is not a job-level exception. Check backend process logs around "
+    "the finish time for the restart, reload, crash, or container-stop cause."
+)
 
 
 class JobCancelled(Exception):
@@ -737,13 +744,33 @@ BG_PAUSED_FOR_USER = "paused_for_user"
 BG_CREDIT_LIMIT = "credit_limit"
 
 
-def is_background_trigger(trigger_source: Optional[str]) -> bool:
-    """A background trigger is anything not explicitly user-initiated.
+# The one-shot enrichment kick scheduled by POST /onboarding/complete (audit
+# 39 finding #4). The user is actively watching the wizard finish, so this
+# trigger is USER-FACING (never yields to the idle gate / credit reserve and
+# takes the fast adaptive source order) — but it is deliberately NOT the
+# literal "user": the chain hooks suppress on == "user" exactly, so the
+# onboarding kick still auto-chains metadata → S2 vectors → local fill.
+ONBOARDING_KICK_REASON = "onboarding_complete"
+ONBOARDING_KICK_TRIGGER = f"auto:{ONBOARDING_KICK_REASON}"
 
-    Only background ops yield to the user / honour the credit reserve; a manual
-    user op runs to completion and may use the full remaining provider quota.
+
+def is_user_facing_trigger(trigger_source: Optional[str]) -> bool:
+    """True when a user is actively waiting on this run: a manual Settings
+    click ("user") or the onboarding-complete kick. User-facing runs never
+    yield to the idle gate, ignore the background credit reserve, and pick
+    the fast (paid OpenAlex-first) adaptive source order."""
+    value = str(trigger_source or "").strip().lower()
+    return value == "user" or value == ONBOARDING_KICK_TRIGGER
+
+
+def is_background_trigger(trigger_source: Optional[str]) -> bool:
+    """A background trigger is anything not user-facing.
+
+    Only background ops yield to the user / honour the credit reserve; a
+    user-facing op (see `is_user_facing_trigger`) runs to completion and may
+    use the full remaining provider quota.
     """
-    return str(trigger_source or "").strip().lower() != "user"
+    return not is_user_facing_trigger(trigger_source)
 
 
 def background_yield_reason(
@@ -900,29 +927,58 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
                 WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')
                 """,
             ).fetchall()
-            stale_job_ids = [
-                str(row["job_id"])
+            stale_jobs = [
+                _row_to_status(row)
                 for row in rows
                 if _is_stale_active_status(_row_to_status(row), stale_after_seconds)
             ]
-            if stale_job_ids:
+            if stale_jobs:
+                now = datetime.utcnow().isoformat()
                 conn.executemany(
                     """
                     UPDATE operation_status
                     SET status = 'cancelled',
                         finished_at = COALESCE(finished_at, ?),
                         updated_at = ?,
-                        message = 'Orphaned across process restart; auto-cancelled',
-                        error = COALESCE(error, 'Worker process exited before this job finished'),
+                        message = ?,
+                        error = COALESCE(error, ?),
                         cancel_requested = 0
                     WHERE job_id = ?
                     """,
                     [
-                        (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), job_id)
-                        for job_id in stale_job_ids
+                        (now, now, _ORPHAN_REAP_MESSAGE, _ORPHAN_REAP_ERROR, str(job["job_id"]))
+                        for job in stale_jobs
                     ],
                 )
-            reaped = len(stale_job_ids)
+                conn.executemany(
+                    """
+                    INSERT INTO operation_logs (job_id, timestamp, level, step, message, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            str(job["job_id"]),
+                            now,
+                            "ERROR",
+                            "orphan_reaped",
+                            _ORPHAN_REAP_ERROR,
+                            _json_dumps_safe(
+                                {
+                                    "status": "cancelled",
+                                    "reason": "process_restart_or_exit",
+                                    "message": _ORPHAN_REAP_MESSAGE,
+                                    "previous_status": job.get("status"),
+                                    "previous_updated_at": job.get("updated_at"),
+                                    "operation_key": job.get("operation_key"),
+                                    "trigger_source": job.get("trigger_source"),
+                                    "stale_after_seconds": stale_after_seconds,
+                                }
+                            ),
+                        )
+                        for job in stale_jobs
+                    ],
+                )
+            reaped = len(stale_jobs)
             conn.commit()
             if reaped > 0:
                 logger.warning(
@@ -1975,13 +2031,20 @@ def is_cancellation_requested(job_id: str) -> bool:
 
 
 def _raise_if_cancel_checkpoint(job_id: str, *, step: Optional[str] = None) -> None:
-    """Stop cooperative runners at the next Activity checkpoint."""
+    """Stop cooperative runners at the next Activity checkpoint.
+
+    Graceful stops (``cancel_mode == "graceful"``) never raise here: the
+    runner keeps control and exits on its own at the next
+    ``is_cancellation_requested`` loop boundary, so in-flight work is
+    finished and committed instead of aborted mid-unit."""
     if not job_id:
         return
     allowed_steps = {"status", "cancel_requested", "cancelled"}
     if step in allowed_steps:
         return
     st = get_job_status(job_id) or {}
+    if str(st.get("cancel_mode") or "hard") == "graceful":
+        return
     if st.get("cancel_requested") and str(st.get("status") or "").lower() not in _TERMINAL_STATUSES:
         raise JobCancelled(str(st.get("message") or "Operation cancelled"))
 
@@ -2090,6 +2153,9 @@ def set_job_status(job_id: str, **kwargs) -> None:
                 status.get("cancel_requested")
                 and not incoming_cancel_request
                 and incoming_status in {"queued", "scheduled", "running"}
+                # Graceful stops never abort the runner from inside a status
+                # write — the runner exits at its own loop boundary instead.
+                and str(status.get("cancel_mode") or "hard") != "graceful"
             ):
                 raise JobCancelled(str(status.get("message") or "Operation cancelled"))
             kwargs["cancel_requested"] = True

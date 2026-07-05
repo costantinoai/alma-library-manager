@@ -939,10 +939,12 @@ def run_s2_vector_backfill(
                         data={"trigger_source": trigger_source},
                     )
                 else:
+                    from alma.services.embedding_chain import chain_trigger_reason
+
                     chain = schedule_post_s2_chain(
                         conn,
                         chain_id=parent_chain_id or None,
-                        trigger_reason="post_s2_fetch",
+                        trigger_reason=chain_trigger_reason(trigger_source, "post_s2_fetch"),
                         limit=remaining_session_budget or limit,
                         target_paper_ids=target_ids,
                     )
