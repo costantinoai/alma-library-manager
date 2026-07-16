@@ -205,8 +205,14 @@ def mark_recommendation_action(
     action: str,
     *,
     rating: Optional[int] = None,
+    collection_ids: Optional[list[str]] = None,
 ) -> Optional[dict]:
-    """Apply user action to recommendation row."""
+    """Apply user action to recommendation row.
+
+    ``collection_ids`` (save action only) also files the saved paper into the
+    given local collections — used by the "add to collection(s)" affordance on
+    paper cards and by a collection lens's "add to this collection" action.
+    """
     row = db.execute("SELECT * FROM recommendations WHERE id = ?", (rec_id,)).fetchone()
     if not row:
         return None
@@ -244,6 +250,12 @@ def mark_recommendation_action(
                     rating=effective_rating,
                     added_from="discovery_save",
                 )
+                # File into any requested collections. The paper is now a
+                # Library row, so this is a plain membership insert (idempotent).
+                for cid in dict.fromkeys(collection_ids or []):
+                    cid = str(cid or "").strip()
+                    if cid:
+                        library_app.insert_collection_item(db, cid, paper_id)
             feedback_action = "save"
         elif action == "read":
             if paper_id:
@@ -960,9 +972,21 @@ def list_lens_recommendations(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
-    """List recommendations for one lens, enriched with paper metadata."""
-    rows = db.execute(
-        """
+    """List recommendations for one lens, enriched with paper metadata.
+
+    A collection-typed lens is *tied* to its collection: it hides only papers
+    already in that collection (and dismissed/removed), and still surfaces
+    Library papers that live in OTHER collections so they can be pulled in. Every
+    other lens keeps the plain "hide anything already in the Library" rule. The
+    two read-time filters here must match the staging filter in
+    ``refresh_lens_recommendations`` or a staged rec would be re-hidden on read.
+    """
+    lens = get_lens(db, lens_id)
+    lens_collection_id = None
+    if lens and lens.get("context_type") == "collection":
+        lens_collection_id = str((lens.get("context_config") or {}).get("collection_id") or "").strip() or None
+
+    select_cols = """
         SELECT r.*,
                p.title AS paper_title,
                p.authors AS paper_authors,
@@ -978,17 +1002,40 @@ def list_lens_recommendations(
                p.openalex_id AS paper_openalex_id,
                p.tldr AS paper_tldr,
                p.influential_citation_count AS paper_influential_citation_count
-        FROM recommendations r
-        LEFT JOIN papers p ON p.id = r.paper_id
-        WHERE r.lens_id = ?
-          AND r.user_action IS NULL
-          AND p.status NOT IN ('library', 'dismissed', 'removed')
-          AND COALESCE(TRIM(p.reading_status), '') = ''
-        ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
-        LIMIT ? OFFSET ?
-        """,
-        (lens_id, limit, offset),
-    ).fetchall()
+    """
+    if lens_collection_id:
+        rows = db.execute(
+            select_cols
+            + """
+            FROM recommendations r
+            LEFT JOIN papers p ON p.id = r.paper_id
+            LEFT JOIN collection_items ci
+              ON ci.paper_id = p.id AND ci.collection_id = ?
+            WHERE r.lens_id = ?
+              AND r.user_action IS NULL
+              AND p.status NOT IN ('dismissed', 'removed')
+              AND ci.paper_id IS NULL
+              AND (p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = '')
+            ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (lens_collection_id, lens_id, limit, offset),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            select_cols
+            + """
+            FROM recommendations r
+            LEFT JOIN papers p ON p.id = r.paper_id
+            WHERE r.lens_id = ?
+              AND r.user_action IS NULL
+              AND p.status NOT IN ('library', 'dismissed', 'removed')
+              AND COALESCE(TRIM(p.reading_status), '') = ''
+            ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            (lens_id, limit, offset),
+        ).fetchall()
     return [_normalize_recommendation(dict(r)) for r in rows]
 
 
@@ -1503,6 +1550,11 @@ def _normalize_recommendation(row: dict) -> dict:
         "paper_id": row["paper_id"],
         "rank": row.get("rank"),
         "score": row.get("score", 0.0),
+        # True when this recommended paper is already a saved Library paper (it
+        # can only appear here for a collection lens, meaning "in the Library but
+        # not in THIS collection"). The UI offers "add to this collection"
+        # instead of "save to library" for these.
+        "in_library": (row.get("paper_status") or "tracked") == "library",
         "score_breakdown": _json_load(row.get("score_breakdown")) if isinstance(row.get("score_breakdown"), str) else row.get("score_breakdown"),
         "user_action": row.get("user_action"),
         "action_at": row.get("action_at"),

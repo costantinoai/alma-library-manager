@@ -87,6 +87,7 @@ def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
         ),
         limits=DiscoveryLimits(
             max_results=int(kv.get("limits.max_results", "50")),
+            min_score=float(kv.get("limits.min_score", "0")),
             max_candidates_per_strategy=int(kv.get("limits.max_candidates_per_strategy", "20")),
             recency_window_years=int(kv.get("limits.recency_window_years", "10")),
             feedback_decay_days_full=int(kv.get("limits.feedback_decay_days_full", "90")),
@@ -185,6 +186,10 @@ class ManualAddRequest(BaseModel):
 
 class RecommendationLibraryActionRequest(BaseModel):
     rating: Optional[int] = Field(default=None, ge=0, le=5)
+    collection_ids: Optional[List[str]] = Field(
+        default=None,
+        description="On save: also file the paper into these local collections (create-then-add is done client-side; ids only here).",
+    )
 
 
 def _parse_breakdown(raw: Optional[str]) -> Optional[dict]:
@@ -328,6 +333,7 @@ def update_discovery_settings(
         if body.limits is not None:
             lim = body.limits
             _upsert_setting(db, "limits.max_results", str(lim.max_results))
+            _upsert_setting(db, "limits.min_score", str(lim.min_score))
             _upsert_setting(db, "limits.max_candidates_per_strategy", str(lim.max_candidates_per_strategy))
             _upsert_setting(db, "limits.recency_window_years", str(lim.recency_window_years))
             _upsert_setting(db, "limits.feedback_decay_days_full", str(lim.feedback_decay_days_full))
@@ -1058,6 +1064,7 @@ def save_recommendation(
             rec_id,
             "save",
             rating=(body.rating if body else None),
+            collection_ids=(body.collection_ids if body else None),
         )
         if out is None:
             return OperationOutcome(status="noop", message="Recommendation not found", result={"id": rec_id})

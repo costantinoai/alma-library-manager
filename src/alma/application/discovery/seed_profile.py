@@ -311,9 +311,34 @@ def _extract_keywords(
     return words[:max_keywords]
 
 
+def split_preference_pubs(pubs: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split a lens's OWN context papers into positive/negative taste documents.
+
+    A context-scoped lens (collection / topic / tag / author) is defined by its
+    seed set: every seed is an endorsement of what the lens is about, so every
+    seed is a positive signal UNLESS the user explicitly disliked it (rating
+    1-2). Crucially this does NOT drop the default-rated (rating 3) papers — a
+    freshly imported collection is almost all rating 3, and treating those as
+    "not a signal" collapses the taste to nothing (the whole-Library heuristic
+    in :func:`_load_library_preference_inputs`, which excludes rating 3, is the
+    wrong rule for a curated set). Used by every non-library lens so each is
+    scoped to its own papers.
+    """
+    negative_pubs = [dict(p) for p in pubs if 1 <= int(p.get("rating") or 0) <= 2]
+    positive_pubs = [dict(p) for p in pubs if not (1 <= int(p.get("rating") or 0) <= 2)]
+    return positive_pubs, negative_pubs
+
+
 def _load_library_preference_inputs(
     db: sqlite3.Connection,
 ) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load the whole-Library taste inputs (used by the ``library_global`` lens).
+
+    Library-wide heuristic: ratings ≥4 (and unrated, 0) are positive, 1-2 are
+    negative, and lukewarm rating-3 papers are excluded so they don't dominate
+    the Library's taste. Context-scoped lenses use :func:`split_preference_pubs`
+    instead — see the caller in ``refresh_lens_recommendations``.
+    """
     rows = db.execute(
         """SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
            FROM papers
@@ -322,15 +347,9 @@ def _load_library_preference_inputs(
     ).fetchall()
     library_pubs = [dict(r) for r in rows]
     positive_pubs = [
-        dict(r)
-        for r in rows
-        if (r["rating"] or 0) >= 4 or (r["rating"] or 0) == 0
+        dict(r) for r in rows if (r["rating"] or 0) >= 4 or (r["rating"] or 0) == 0
     ]
-    negative_pubs = [
-        dict(r)
-        for r in rows
-        if 1 <= int(r["rating"] or 0) <= 2
-    ]
+    negative_pubs = [dict(r) for r in rows if 1 <= int(r["rating"] or 0) <= 2]
     if library_pubs and not any((r["rating"] or 0) >= 4 for r in rows):
         positive_pubs = list(library_pubs)
     return library_pubs, positive_pubs, negative_pubs
@@ -351,11 +370,69 @@ def _top_profile_terms(
     return ranked[: max(1, limit)]
 
 
+def _scoped_top_authors(
+    db: sqlite3.Connection,
+    scope_paper_ids: set[str],
+    *,
+    limit: int,
+    dominance_cap: float,
+) -> list[tuple[str, float]]:
+    """Top taste-author queries confined to a lens's own papers.
+
+    Ranks authors by how many of the lens's context papers they appear on
+    (the same "prevalence" idea the Library path uses for its dominance cap),
+    so a collection / topic / tag / author lens fans its explicit author
+    queries at its OWN authors instead of the global Library's. Authors on more
+    than ``dominance_cap`` of the scoped set are dropped from the explicit-query
+    list (still picked up by author_affinity scoring on retrieved candidates).
+    """
+    ids = [pid for pid in scope_paper_ids if pid]
+    if not ids:
+        return []
+    counts: dict[str, int] = {}
+    display_names: dict[str, str] = {}
+    for start in range(0, len(ids), 400):
+        chunk = ids[start : start + 400]
+        placeholders = ",".join("?" for _ in chunk)
+        try:
+            rows = db.execute(
+                f"""
+                SELECT pa.display_name AS display_name,
+                       COUNT(DISTINCT pa.paper_id) AS n
+                FROM publication_authors pa
+                WHERE pa.paper_id IN ({placeholders})
+                  AND COALESCE(TRIM(pa.display_name), '') != ''
+                GROUP BY LOWER(TRIM(pa.display_name))
+                """,
+                chunk,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        for row in rows:
+            display_name = str(row["display_name"] or "").strip()
+            key = display_name.lower()
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + int(row["n"] or 0)
+            display_names.setdefault(key, display_name)
+    scope_size = len(ids)
+    ranked = [
+        (display_names[key], count / scope_size)
+        for key, count in counts.items()
+        # Drop authors dominating the scoped set (only meaningful once the set
+        # is big enough for a share to be informative).
+        if not (scope_size >= 5 and (count / scope_size) > dominance_cap)
+    ]
+    ranked.sort(key=lambda item: (item[1], item[0]), reverse=True)
+    return ranked[: max(1, limit)]
+
+
 def _top_preferred_authors(
     db: sqlite3.Connection,
     *,
     limit: int,
     library_dominance_cap: float = 0.4,
+    scope_paper_ids: Optional[set[str]] = None,
 ) -> list[tuple[str, float]]:
     """Return the top N authors to fan external taste-author queries
     out to. Excludes authors who appear on more than
@@ -365,7 +442,17 @@ def _top_preferred_authors(
     still picked up by author_affinity scoring on candidates pulled
     via topic / keyword / journal lanes; we just don't make him the
     explicit search query.
+
+    ``scope_paper_ids`` confines the author queries to a specific lens context
+    (collection / topic / tag / author lens) instead of the whole Library, so
+    every lens is scoped to its own authors the same way the library lens is
+    scoped to the Library.
     """
+    if scope_paper_ids is not None:
+        return _scoped_top_authors(
+            db, scope_paper_ids, limit=limit, dominance_cap=library_dominance_cap
+        )
+
     scores: dict[str, float] = {}
     display_names: dict[str, str] = {}
 

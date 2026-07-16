@@ -37,6 +37,12 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "strategies.taste_venues": "true",
     "strategies.recent_wins": "true",
     "limits.max_results": "50",
+    # Minimum recommendation score (0-100 scale, matching the emitted
+    # `score`). Recommendations scoring below this are dropped at staging time
+    # so the feed doesn't pad itself with weak, off-topic matches once the
+    # genuinely relevant neighbours run out. 0 = keep everything (legacy
+    # behaviour); raise it to tighten the relevance floor.
+    "limits.min_score": "0",
     "limits.max_candidates_per_strategy": "20",
     "limits.recency_window_years": "10",
     "limits.feedback_decay_days_full": "90",

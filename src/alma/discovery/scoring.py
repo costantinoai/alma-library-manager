@@ -202,6 +202,8 @@ def compute_preference_profile(
     positive_pubs: List[dict],
     negative_pubs: List[dict],
     settings: Optional[Dict[str, str]] = None,
+    *,
+    scope_paper_ids: Optional[set[str]] = None,
 ) -> Dict:
     """Compute a user preference profile from rated publications.
 
@@ -214,6 +216,14 @@ def compute_preference_profile(
     Returns a dict with topic_weights, author_affinity, journal_affinity,
     feedback positive / negative semantic centroids, and the projected
     paper-feedback graph from `signal_projection`.
+
+    ``scope_paper_ids`` restricts the aggregate signals to a specific set of
+    papers (a collection-typed lens passes its collection's paper ids). When
+    set, the collection-topic and tag signals only count papers in that set,
+    and the followed-author background prior — an explicit Library-expansion
+    signal — is skipped, so a collection lens is not contaminated by topics
+    and authors from the rest of the Library. ``None`` (the default) keeps the
+    Library-wide behaviour used by the ``library_global`` lens.
     """
     if settings is None:
         settings = load_settings(conn)
@@ -257,6 +267,9 @@ def compute_preference_profile(
             c_paper_id = (cr["paper_id"] or "").strip() if isinstance(cr, sqlite3.Row) else ""
             if not c_paper_id:
                 continue
+            if scope_paper_ids is not None and c_paper_id not in scope_paper_ids:
+                # Collection-scoped lens: ignore papers from other collections.
+                continue
             try:
                 c_topics = conn.execute(
                     "SELECT pt.term, pt.score, t.canonical_name "
@@ -278,9 +291,14 @@ def compute_preference_profile(
     # -- Tag signals --
     try:
         tag_rows = conn.execute(
-            "SELECT t.name FROM publication_tags pt JOIN tags t ON pt.tag_id = t.id"
+            "SELECT pt.paper_id, t.name FROM publication_tags pt JOIN tags t ON pt.tag_id = t.id"
         ).fetchall()
         for tr in tag_rows:
+            if scope_paper_ids is not None:
+                tagged_id = (tr["paper_id"] or "").strip() if isinstance(tr, sqlite3.Row) else ""
+                if tagged_id not in scope_paper_ids:
+                    # Collection-scoped lens: only tags on in-collection papers.
+                    continue
             tag_name = (tr["name"] or "").strip().lower()
             if tag_name:
                 topic_weights[tag_name] = topic_weights.get(tag_name, 0) + 2.0
@@ -290,35 +308,40 @@ def compute_preference_profile(
     # -- Followed-author background corpus priors --
     # Followed authors contribute a weak, non-library prior. This expands
     # ranking context without conflating the curated Library with the full
-    # monitored corpus.
+    # monitored corpus. A collection-scoped lens deliberately skips it: the
+    # whole point of the collection scope is to keep the taste narrow, and a
+    # Library-wide monitored-corpus prior would reintroduce off-collection
+    # topics (exactly the contamination the scope is meant to remove).
     try:
-        # Note: the join condition is `lower(...)` only, NOT `lower(trim(...))`.
-        # The redundant `trim()` defeats the expression index
-        # `idx_publication_authors_openalex_norm` and turned this query into a
-        # 12s+ table scan on every Discovery / Find&add request.
-        bg_topic_rows = conn.execute(
-            f"""
-            SELECT COALESCE(t.canonical_name, pt.term, '') AS term, COUNT(DISTINCT pt.paper_id) AS papers
-            FROM papers p
-            JOIN publication_topics pt ON pt.paper_id = p.id
-            JOIN publication_authors pa ON pa.paper_id = p.id
-            JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
-            JOIN followed_authors fa ON fa.author_id = a.id
-            LEFT JOIN topics t ON t.topic_id = pt.topic_id
-            WHERE p.status NOT IN ('library', 'dismissed', 'removed')
-              AND {standalone_paper_sql('p')}
-              AND COALESCE(TRIM(pt.term), '') <> ''
-            GROUP BY COALESCE(t.canonical_name, pt.term, '')
-            ORDER BY papers DESC, term ASC
-            LIMIT 24
-            """
-        ).fetchall()
-        max_bg_topic = max((int(row["papers"] or 0) for row in bg_topic_rows), default=0)
-        for row in bg_topic_rows:
-            term = str(row["term"] or "").strip().lower()
-            papers = int(row["papers"] or 0)
-            if term and max_bg_topic > 0:
-                topic_weights[term] = topic_weights.get(term, 0.0) + (0.22 * (papers / max_bg_topic))
+        # A collection-scoped lens skips this Library-wide prior entirely.
+        if scope_paper_ids is None:
+            # Note: the join condition is `lower(...)` only, NOT `lower(trim(...))`.
+            # The redundant `trim()` defeats the expression index
+            # `idx_publication_authors_openalex_norm` and turned this query into a
+            # 12s+ table scan on every Discovery / Find&add request.
+            bg_topic_rows = conn.execute(
+                f"""
+                SELECT COALESCE(t.canonical_name, pt.term, '') AS term, COUNT(DISTINCT pt.paper_id) AS papers
+                FROM papers p
+                JOIN publication_topics pt ON pt.paper_id = p.id
+                JOIN publication_authors pa ON pa.paper_id = p.id
+                JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
+                JOIN followed_authors fa ON fa.author_id = a.id
+                LEFT JOIN topics t ON t.topic_id = pt.topic_id
+                WHERE p.status NOT IN ('library', 'dismissed', 'removed')
+                  AND {standalone_paper_sql('p')}
+                  AND COALESCE(TRIM(pt.term), '') <> ''
+                GROUP BY COALESCE(t.canonical_name, pt.term, '')
+                ORDER BY papers DESC, term ASC
+                LIMIT 24
+                """
+            ).fetchall()
+            max_bg_topic = max((int(row["papers"] or 0) for row in bg_topic_rows), default=0)
+            for row in bg_topic_rows:
+                term = str(row["term"] or "").strip().lower()
+                papers = int(row["papers"] or 0)
+                if term and max_bg_topic > 0:
+                    topic_weights[term] = topic_weights.get(term, 0.0) + (0.22 * (papers / max_bg_topic))
     except sqlite3.OperationalError:
         logger.debug("followed-author background topic priors unavailable")
 

@@ -133,6 +133,7 @@ from .seed_profile import (
     _top_preferred_authors,
     _top_profile_terms,
     preview_lens_branches,
+    split_preference_pubs,
 )
 
 # --- D-9: re-exported from .retrieval (moved out of this god-module) ---
@@ -294,8 +295,32 @@ def refresh_lens_recommendations(
     channel_weights = _normalize_channel_weights(weights)
 
     scoring_settings = load_scoring_settings(db)
-    _library_pubs, positive_pubs, negative_pubs = _load_library_preference_inputs(db)
-    profile = compute_preference_profile(db, positive_pubs, negative_pubs, scoring_settings)
+    # Every lens computes its taste (preference profile + the scoring
+    # positive/negative documents) from its OWN context papers — exactly the way
+    # the library lens is scoped to the Library. The seeds already ARE that
+    # context set per type (collection / topic_keyword / tag / any future author
+    # or monitor lens), so a non-library lens derives its taste from the seeds
+    # and passes their ids as the profile scope. Without this the profile bleeds
+    # in topics, authors, tags and monitored-corpus priors from the rest of the
+    # Library, which is what makes an off-topic cluster look like it "leaked"
+    # into a focused lens. The library_global lens keeps the full-Library inputs
+    # (and the monitored-corpus prior) because the Library *is* its scope.
+    if lens.get("context_type") == "library_global":
+        _library_pubs, positive_pubs, negative_pubs = _load_library_preference_inputs(db)
+        scope_paper_ids = None
+    else:
+        positive_pubs, negative_pubs = split_preference_pubs(seeds)
+        scope_paper_ids = {str(s["id"]) for s in seeds if s.get("id")}
+    profile = compute_preference_profile(
+        db, positive_pubs, negative_pubs, scoring_settings, scope_paper_ids=scope_paper_ids
+    )
+    # A collection lens is *tied* to its collection: it excludes only papers
+    # already in that collection, and still surfaces Library papers that live in
+    # OTHER collections (so the user can pull them into this one). Non-collection
+    # lenses keep the plain "hide everything already in the Library" rule.
+    lens_collection_id = None
+    if lens.get("context_type") == "collection":
+        lens_collection_id = str((lens.get("context_config") or {}).get("collection_id") or "").strip() or None
     phase_started = perf_counter()
 
     _log("retrieval", f"Lens '{lens_name}': running 4 retrieval channels (lexical, vector, graph, external)")
@@ -1151,6 +1176,9 @@ def refresh_lens_recommendations(
     status_by_paper: dict[str, str] = {}
     reading_status_by_paper: dict[str, str] = {}
     actioned_paper_ids: set[str] = set()
+    # For a collection lens: which candidates are already IN the linked
+    # collection (the only Library papers that stay hidden for this lens).
+    in_linked_collection: set[str] = set()
     unique_paper_ids = [paper_id for paper_id in dict.fromkeys(staged_paper_ids) if str(paper_id).strip()]
     for chunk in _chunked(unique_paper_ids, 200):
         placeholders = ", ".join("?" for _ in chunk)
@@ -1161,6 +1189,14 @@ def refresh_lens_recommendations(
         for row in status_rows:
             status_by_paper[str(row["id"])] = str(row["status"] or "tracked")
             reading_status_by_paper[str(row["id"])] = str(row["reading_status"] or "").strip()
+        if lens_collection_id:
+            member_rows = db.execute(
+                f"""SELECT paper_id FROM collection_items
+                    WHERE collection_id = ? AND paper_id IN ({placeholders})""",
+                (lens_collection_id, *chunk),
+            ).fetchall()
+            for row in member_rows:
+                in_linked_collection.add(str(row["paper_id"]))
         # Only block re-surfacing while paper dismissals are still in their
         # cooldown window. Saves drive status='library'; reading-list handoffs
         # are caught by the reading-status filter; like/love/dislike are
@@ -1184,13 +1220,37 @@ def refresh_lens_recommendations(
     skipped_library = 0
     skipped_actioned = 0
     skipped_duplicate_paper = 0
+    skipped_low_score = 0
+    # Relevance floor (0-100). Recommendations below it are dropped so the feed
+    # doesn't pad with weak, off-topic matches once real neighbours run out.
+    # 0 = keep everything (default). See limits.min_score in discovery settings.
+    try:
+        min_score = max(0.0, float(scoring_settings.get("limits.min_score", "0") or 0))
+    except (TypeError, ValueError):
+        min_score = 0.0
     for idx, candidate, paper_id in staged_candidates:
         paper_status = status_by_paper.get(paper_id, "tracked")
-        if paper_status in ("library", "dismissed", "removed") or reading_status_by_paper.get(paper_id):
+        if lens_collection_id:
+            # Collection lens: hide dismissed/removed and papers already IN this
+            # collection, but KEEP Library papers that live in other collections
+            # so the user can add them here. (reading_status only hides papers
+            # not already in the Library — a saved paper's reading queue state
+            # shouldn't hide it from an "add to this collection" surface.)
+            if (
+                paper_id in in_linked_collection
+                or paper_status in ("dismissed", "removed")
+                or (paper_status != "library" and reading_status_by_paper.get(paper_id))
+            ):
+                skipped_library += 1
+                continue
+        elif paper_status in ("library", "dismissed", "removed") or reading_status_by_paper.get(paper_id):
             skipped_library += 1
             continue
         if paper_id in actioned_paper_ids:
             skipped_actioned += 1
+            continue
+        if min_score > 0 and float(candidate["score"]) < min_score:
+            skipped_low_score += 1
             continue
         # Two distinct candidate keys (e.g. one matched by DOI, another
         # by title) can resolve to the same DB paper_id after the
@@ -1236,6 +1296,8 @@ def refresh_lens_recommendations(
         "skipped_library_or_sunk": skipped_library,
         "skipped_previously_actioned": skipped_actioned,
         "skipped_duplicate_paper": skipped_duplicate_paper,
+        "skipped_low_score": skipped_low_score,
+        "min_score": min_score,
         "insertable": len(rec_rows),
     }
     retrieval_summary["final_mix"] = _recommendation_mix_summary(rec_rows, ranked_by_paper=ranked)

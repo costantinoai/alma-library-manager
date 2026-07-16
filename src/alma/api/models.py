@@ -507,6 +507,10 @@ class RecommendationResponse(BaseModel):
     paper_id: str
     rank: Optional[int] = None
     score: float = Field(..., description="Recommendation score (0-100)")
+    in_library: bool = Field(
+        False,
+        description="Paper is already a saved Library paper (collection lenses surface these so they can be added to the linked collection).",
+    )
     score_breakdown: Optional[dict] = None
     user_action: Optional[str] = None
     action_at: Optional[str] = None
@@ -581,6 +585,7 @@ class DiscoveryLimits(BaseModel):
     """Numeric limits for the discovery engine."""
 
     max_results: int = Field(50, ge=10, le=200)
+    min_score: float = Field(0.0, ge=0.0, le=100.0)
     max_candidates_per_strategy: int = Field(20, ge=5, le=50)
     recency_window_years: int = Field(10, ge=1, le=20)
     feedback_decay_days_full: int = Field(90, ge=1)

@@ -94,9 +94,19 @@ def _retrieve_external_channel(
         dict(profile.get("topic_weights") or {}),
         limit=_setting_int("limits.taste_topic_queries", 3, 1, 6),
     )
+    # A non-library lens scopes its explicit taste-author queries to its own
+    # context papers (the seeds), the same way its preference profile is scoped
+    # — so a collection / topic / tag / author lens queries its OWN authors, not
+    # the whole Library's. The library_global lens keeps the Library-wide path.
+    author_scope_ids = (
+        {str(s["id"]) for s in seeds if s.get("id")}
+        if str(lens.get("context_type") or "") != "library_global"
+        else None
+    )
     preferred_authors = _top_preferred_authors(
         db,
         limit=_setting_int("limits.taste_author_queries", 3, 1, 6),
+        scope_paper_ids=author_scope_ids,
     )
     preferred_venues = _top_profile_terms(
         dict(profile.get("journal_affinity") or {}),
