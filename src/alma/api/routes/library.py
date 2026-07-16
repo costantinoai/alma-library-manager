@@ -523,28 +523,11 @@ def bulk_add_to_collection(
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    placeholders = ",".join("?" for _ in req.paper_ids)
-    library_rows = db.execute(
-        f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = 'library'",
-        req.paper_ids,
-    ).fetchall()
-    now = datetime.utcnow().isoformat()
-
-    def _persist() -> int:
-        added = 0
-        for row in library_rows:
-            pid = str(row["id"])
-            try:
-                db.execute(
-                    "INSERT OR IGNORE INTO collection_items (id, collection_id, paper_id, added_at) VALUES (?, ?, ?, ?)",
-                    (uuid.uuid4().hex, req.collection_id, pid, now),
-                )
-                added += int(db.execute("SELECT changes()").fetchone()[0] or 0)
-            except sqlite3.IntegrityError:
-                pass
-        return added
-
-    added = run_write_unit(db, _persist, label="library_bulk_add_to_collection")
+    added = run_write_unit(
+        db,
+        lambda: library_app.add_papers_to_collection(db, req.collection_id, req.paper_ids),
+        label="library_bulk_add_to_collection",
+    )
     return _BulkActionResponse(affected=added)
 
 
@@ -735,9 +718,8 @@ def add_collection_item(
     try:
         run_write_unit(
             db,
-            lambda: db.execute(
-                "INSERT INTO collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
-                (collection_id, body.paper_id, now),
+            lambda: library_app.insert_collection_item(
+                db, collection_id, body.paper_id, now=now, ignore_existing=False
             ),
             label="collection_add_item",
         )

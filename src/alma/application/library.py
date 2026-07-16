@@ -1121,30 +1121,108 @@ def create_collection(
     return coll_id
 
 
+def find_or_create_collection(
+    db: sqlite3.Connection,
+    name: str,
+    *,
+    color: str = "#3B82F6",
+    description: Optional[str] = None,
+) -> str:
+    """Return the id of the collection named ``name``, creating it if absent.
+
+    ``collections.name`` is UNIQUE, so a name maps to exactly one collection.
+    This is the single public home for the "find-or-create by name" concept
+    used by the importers and the online-search save path — callers must not
+    hand-roll the SELECT-then-INSERT (it drifts and races).
+    """
+    clean = (name or "").strip()
+    if not clean:
+        raise ValueError("Collection name is required")
+    row = db.execute("SELECT id FROM collections WHERE name = ?", (clean,)).fetchone()
+    if row:
+        return str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+    return create_collection(db, clean, description=description, color=color)
+
+
 def list_collections(db: sqlite3.Connection) -> list[dict]:
-    """List all collections with item counts."""
+    """List all collections with item counts.
+
+    Counts only Library papers: a staged import can hold a ``collection_items``
+    row before it is confirmed (deferred membership), and it must not inflate
+    the badge count until it actually becomes a Library paper.
+    """
     rows = db.execute(
         """SELECT c.*, COUNT(ci.paper_id) AS item_count
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
+           LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = ?
            GROUP BY c.id
-           ORDER BY c.name"""
+           ORDER BY c.name""",
+        (LIBRARY_STATUS,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def add_to_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> None:
-    """Add a saved Library paper to a collection."""
+def insert_collection_item(
+    db: sqlite3.Connection,
+    collection_id: str,
+    paper_id: str,
+    *,
+    now: Optional[str] = None,
+    ignore_existing: bool = True,
+) -> bool:
+    """Single source of truth for the ``collection_items`` INSERT.
+
+    Returns True when a new row was actually inserted. This deliberately does
+    NOT validate paper status — the importer adds staged (``tracked``) rows for
+    deferred membership, and callers that require a saved Library paper use
+    :func:`add_to_collection` instead. With ``ignore_existing=False`` a duplicate
+    raises ``sqlite3.IntegrityError`` (used by the single-add route to return a
+    409). Every other collection_items insert in the codebase routes here so the
+    column list lives in exactly one place.
+    """
+    stamp = now or datetime.utcnow().isoformat()
+    verb = "INSERT OR IGNORE INTO" if ignore_existing else "INSERT INTO"
+    cursor = db.execute(
+        f"{verb} collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
+        (collection_id, paper_id, stamp),
+    )
+    return cursor.rowcount > 0
+
+
+def add_to_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
+    """Add a saved Library paper to a collection. Returns True if newly added."""
     paper = get_paper(db, paper_id)
     if paper is None:
         raise ValueError("Paper not found")
     if str(paper.get("status") or "") != LIBRARY_STATUS:
         raise ValueError("Only saved Library papers can be added to collections")
+    return insert_collection_item(db, collection_id, paper_id)
+
+
+def add_papers_to_collection(
+    db: sqlite3.Connection, collection_id: str, paper_ids: list[str]
+) -> int:
+    """Bulk-add saved Library papers to a collection. Returns count newly added.
+
+    Silently skips papers that are not saved Library rows and papers already in
+    the collection — the caller has already validated the collection exists.
+    """
+    ids = [pid for pid in (paper_ids or []) if pid]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    library_rows = db.execute(
+        f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = ?",
+        (*ids, LIBRARY_STATUS),
+    ).fetchall()
     now = datetime.utcnow().isoformat()
-    db.execute(
-        "INSERT OR IGNORE INTO collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
-        (collection_id, paper_id, now),
-    )
+    added = 0
+    for row in library_rows:
+        pid = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+        if insert_collection_item(db, collection_id, pid, now=now):
+            added += 1
+    return added
 
 
 def remove_from_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
