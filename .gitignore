@@ -8,6 +8,12 @@ dist/
 build/
 .eggs/
 
+# frontend/src/build/ is SOURCE (vite chunk-group config), not build output —
+# the generic build/ rule above must not swallow it or the Docker image build
+# fails to resolve ./src/build/chunkGroups.
+!frontend/src/build/
+!frontend/src/build/**
+
 # ── Virtual environments ──
 .venv*/
 venv*/
