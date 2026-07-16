@@ -258,10 +258,10 @@ def import_bibtex(
     if not entries:
         return result
 
-    # Optionally resolve collection
+    # Target collection is created INSIDE the write gate below. `write_section`
+    # does a `conn.rollback()` on entry, so a row inserted here (before the gate)
+    # would be discarded — the collection must be born within the committed unit.
     collection_id: Optional[str] = None
-    if collection_name:
-        collection_id = _find_or_create_collection(conn, collection_name)
 
     postprocess_refs: list[str] = []
 
@@ -287,6 +287,10 @@ def import_bibtex(
     # write window; gate it (BEGIN IMMEDIATE + writer gate) instead of a raw
     # end-of-loop commit.
     with write_section(conn, label="import bibtex"):
+        # Create/find the target collection here (inside the gate) so its row
+        # commits atomically with the imported papers.
+        if collection_name:
+            collection_id = _find_or_create_collection(conn, collection_name)
         for (entry, norm), fuzzy in zip(prepared, fuzzy_matches):
             try:
                 title = norm["title"]
@@ -306,8 +310,11 @@ def import_bibtex(
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
 
-                # Add to collection
-                if collection_id and outcome != "staged":
+                # Add to collection. Staged (low-confidence) rows are included:
+                # collection_items holds the membership as a deferred link and
+                # get_collection_papers hides it until the row is confirmed into
+                # the Library, so the collection target survives staging.
+                if collection_id:
                     _add_to_collection(
                         conn,
                         collection_id,
@@ -529,10 +536,9 @@ def import_zotero(
         result.errors.append(f"Zotero connection error: {exc}")
         return result
 
-    # Resolve local collection
+    # Target collection is created INSIDE the write gate below (see the RDF/BibTeX
+    # importers): `write_section` rolls back on entry, so a pre-gate INSERT is lost.
     local_collection_id: Optional[str] = None
-    if collection_name:
-        local_collection_id = _find_or_create_collection(conn, collection_name)
 
     # Fetch items (paginated -- pyzotero handles pagination with everything())
     try:
@@ -591,6 +597,10 @@ def import_zotero(
     # gate it (BEGIN IMMEDIATE + writer gate) instead of a raw end-of-loop
     # commit.
     with write_section(conn, label="import zotero"):
+        # Create/find the target collection here (inside the gate) so its row
+        # commits atomically with the imported papers.
+        if collection_name:
+            local_collection_id = _find_or_create_collection(conn, collection_name)
         for (item, norm), fuzzy in zip(prepared, fuzzy_matches):
             try:
                 title = norm["title"]
@@ -630,8 +640,9 @@ def import_zotero(
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
 
-                # Add to local collection
-                if local_collection_id and outcome != "staged":
+                # Add to local collection. Staged rows included (deferred
+                # membership, hidden until confirmed — see BibTeX loop above).
+                if local_collection_id:
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -641,16 +652,15 @@ def import_zotero(
                 # Create local collections mirroring Zotero collections. Names
                 # carry the full "Parent / Child" path so the Zotero hierarchy is
                 # preserved (ALMa's collections.name is flat + UNIQUE).
-                if outcome != "staged":
-                    for coll_path in resolved_paths:
-                        mirror_coll_id = _find_or_create_collection(
-                            conn, coll_path, color="#8B5CF6"
-                        )
-                        _add_to_collection(
-                            conn,
-                            mirror_coll_id,
-                            paper_id,
-                        )
+                for coll_path in resolved_paths:
+                    mirror_coll_id = _find_or_create_collection(
+                        conn, coll_path, color="#8B5CF6"
+                    )
+                    _add_to_collection(
+                        conn,
+                        mirror_coll_id,
+                        paper_id,
+                    )
 
                 # Import Zotero tags as local tags
                 if outcome != "staged":
@@ -1264,9 +1274,9 @@ def import_zotero_rdf(
     if not items:
         return result
 
+    # Target collection is created INSIDE the write gate below: `write_section`
+    # rolls back any pending txn on entry, so a pre-gate INSERT would be discarded.
     local_collection_id: Optional[str] = None
-    if collection_name:
-        local_collection_id = _find_or_create_collection(conn, collection_name)
 
     postprocess_refs: list[str] = []
 
@@ -1277,6 +1287,10 @@ def import_zotero_rdf(
     # RDF was parsed locally above (no network); gate the insert loop instead
     # of a raw end-of-loop commit.
     with write_section(conn, label="import zotero rdf"):
+        # Create/find the target collection here (inside the gate) so its row
+        # commits atomically with the imported papers.
+        if collection_name:
+            local_collection_id = _find_or_create_collection(conn, collection_name)
         for item, fuzzy in zip(items, fuzzy_matches):
             try:
                 title = item["title"]
@@ -1295,7 +1309,9 @@ def import_zotero_rdf(
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, item)
 
-                if local_collection_id and outcome != "staged":
+                # Staged rows included (deferred membership, hidden until
+                # confirmed — see BibTeX loop for the rationale).
+                if local_collection_id:
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -1309,18 +1325,17 @@ def import_zotero_rdf(
                 # The single paper_id is reused, so a paper in N Zotero
                 # collections produces 1 papers row + N collection_items rows
                 # (never N papers rows).
-                if outcome != "staged":
-                    for coll_path in item.get("zotero_collections") or []:
-                        if not coll_path:
-                            continue
-                        mirror_coll_id = _find_or_create_collection(
-                            conn, coll_path, color="#8B5CF6"
-                        )
-                        _add_to_collection(
-                            conn,
-                            mirror_coll_id,
-                            paper_id,
-                        )
+                for coll_path in item.get("zotero_collections") or []:
+                    if not coll_path:
+                        continue
+                    mirror_coll_id = _find_or_create_collection(
+                        conn, coll_path, color="#8B5CF6"
+                    )
+                    _add_to_collection(
+                        conn,
+                        mirror_coll_id,
+                        paper_id,
+                    )
 
                 if outcome != "staged":
                     for tag_name in item.get("keywords", []):
@@ -1349,27 +1364,15 @@ def _find_or_create_collection(
 ) -> str:
     """Find an existing collection by name or create a new one.
 
-    Args:
-        conn: SQLite connection.
-        name: Collection name.
-        color: Hex color for the collection badge.
-
-    Returns:
-        Collection ID (UUID hex string).
+    Thin importer-facing wrapper over the single application-layer helper so
+    there is exactly one find-or-create-by-name implementation. Stamps the
+    "Imported collection:" description on newly created rows.
     """
-    row = conn.execute(
-        "SELECT id FROM collections WHERE name = ?", (name,)
-    ).fetchone()
-    if row:
-        return row["id"] if isinstance(row, sqlite3.Row) else row[0]
+    from alma.application import library as library_app
 
-    cid = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
-    conn.execute(
-        "INSERT INTO collections (id, name, description, color, created_at) VALUES (?, ?, ?, ?, ?)",
-        (cid, name, f"Imported collection: {name}", color, now),
+    return library_app.find_or_create_collection(
+        conn, name, color=color, description=f"Imported collection: {name}"
     )
-    return cid
 
 
 def _find_existing_paper(
@@ -1994,16 +1997,17 @@ def _add_to_collection(
     collection_id: str,
     paper_id: str,
 ) -> None:
-    """Add a publication to a collection (ignore if already present)."""
-    now = datetime.utcnow().isoformat()
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO collection_items (collection_id, paper_id, added_at) "
-            "VALUES (?, ?, ?)",
-            (collection_id, paper_id, now),
-        )
-    except sqlite3.IntegrityError:
-        pass  # already there
+    """Add a publication to a collection (ignore if already present).
+
+    Routes through the single collection_items writer in the application layer.
+    Unlike ``library_app.add_to_collection`` this does NOT require the paper to
+    be a saved Library row — the importer adds staged (``tracked``) papers here
+    for deferred membership, and ``get_collection_papers`` hides them until they
+    are confirmed into the Library.
+    """
+    from alma.application import library as library_app
+
+    library_app.insert_collection_item(conn, collection_id, paper_id)
 
 
 def _find_or_create_tag_and_assign(
