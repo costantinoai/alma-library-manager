@@ -1,4 +1,12 @@
 import * as React from 'react'
+import {
+  nextLevel,
+  SURFACE_BG,
+  SURFACE_BORDER,
+  SurfaceLevelContext,
+  useSurfaceLevel,
+  type SurfaceLevel,
+} from '@/components/ui/surface-level'
 import { cn } from '@/lib/utils'
 
 /**
@@ -23,47 +31,6 @@ import { cn } from '@/lib/utils'
  * to a fixed base via `<SurfaceProvider>` so their contents climb from a sane
  * level instead of from 0.
  */
-
-/** Elevation depth on the single neutral paper ladder. */
-export type SurfaceLevel = 0 | 1 | 2 | 3 | 4
-
-/* Context default is 0 (the desk). A surface with no provider above it
- * therefore lifts to level 1 — the common "card on the body" case — with no
- * ceremony. */
-const SurfaceLevelContext = React.createContext<SurfaceLevel>(0)
-
-/** Current elevation level of the surface this component renders inside. */
-export function useSurfaceLevel(): SurfaceLevel {
-  return React.useContext(SurfaceLevelContext)
-}
-
-/** One step lighter, saturating at the top of the ladder. Deep nesting stops
- * at level 4 rather than overflowing into an undefined class. */
-export function nextLevel(n: SurfaceLevel): SurfaceLevel {
-  return Math.min(n + 1, 4) as SurfaceLevel
-}
-
-/* ── Static class maps ────────────────────────────────────────────────────
- * Tailwind v4 only emits a utility whose COMPLETE class string appears in a
- * scanned source file. A template literal like `bg-surface-${level}` is never
- * seen by the scanner, so it gets purged and the element silently renders with
- * no background. Keeping every class a literal here is what makes the ladder
- * actually exist at runtime. Do NOT refactor these into interpolation. */
-export const SURFACE_BG: Record<SurfaceLevel, string> = {
-  0: 'bg-surface-0',
-  1: 'bg-surface-1',
-  2: 'bg-surface-2',
-  3: 'bg-surface-3',
-  4: 'bg-surface-4',
-}
-
-export const SURFACE_BORDER: Record<SurfaceLevel, string> = {
-  0: 'border-edge-0',
-  1: 'border-edge-1',
-  2: 'border-edge-2',
-  3: 'border-edge-3',
-  4: 'border-edge-4',
-}
 
 /**
  * SurfaceProvider — set the elevation level for a subtree WITHOUT painting
@@ -128,3 +95,5 @@ export const Surface = React.forwardRef<HTMLDivElement, SurfaceProps>(
   },
 )
 Surface.displayName = 'Surface'
+
+export type { SurfaceLevel } from '@/components/ui/surface-level'

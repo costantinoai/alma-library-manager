@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
-import { Surface, useSurfaceLevel, nextLevel, type SurfaceLevel } from '@/components/ui/surface'
+import { Surface } from '@/components/ui/surface'
+import { useSurfaceLevel, nextLevel, type SurfaceLevel } from '@/components/ui/surface-level'
 
 /**
  * SubPanel — recessed inner frame on the single neutral ladder.

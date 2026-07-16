@@ -20,6 +20,7 @@ declare module '@tanstack/react-table' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
     cellOverflow?: 'ellipsis' | 'wrap' | 'none'
+    label?: string
   }
 }
 import {
@@ -74,7 +75,7 @@ import { cn } from '@/lib/utils'
 
 interface DataTableProps<T> {
   data: T[]
-  columns: ColumnDef<T, any>[]
+  columns: ColumnDef<T>[]
   storageKey: string
   /** Called when a row body is clicked (not when an inner control is). */
   onRowClick?: (row: T) => void
@@ -141,6 +142,11 @@ function savePersisted(storageKey: string, state: PersistedTableState): void {
   }
 }
 
+function columnKey<T>(column: ColumnDef<T>): string {
+  if (column.id != null) return String(column.id)
+  return 'accessorKey' in column ? String(column.accessorKey ?? '') : ''
+}
+
 export function DataTable<T>({
   data,
   columns,
@@ -174,9 +180,9 @@ export function DataTable<T>({
   // sentinel id (``__select__``) keeps it clear of any user-supplied column
   // keys and the `enable*` flags make it invisible to the column-management
   // toolbar.
-  const augmentedColumns = useMemo<ColumnDef<T, any>[]>(() => {
+  const augmentedColumns = useMemo<ColumnDef<T>[]>(() => {
     if (!selectionEnabled) return columns
-    const selectCol: ColumnDef<T, any> = {
+    const selectCol: ColumnDef<T> = {
       id: '__select__',
       header: () => <span className="sr-only">Select row</span>,
       enableSorting: false,
@@ -208,7 +214,7 @@ export function DataTable<T>({
 
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(persisted.visibility ?? {})
   const [columnOrder, setColumnOrder] = useState<ColumnOrderState>(
-    persisted.order ?? augmentedColumns.map((c) => String(c.id ?? (c as any).accessorKey ?? '')),
+    persisted.order ?? augmentedColumns.map(columnKey),
   )
   const [columnSizing, setColumnSizing] = useState<Record<string, number>>(persisted.sizing ?? {})
   const [internalSorting, setInternalSorting] = useState<SortingState>(persisted.sorting ?? [])
@@ -228,7 +234,7 @@ export function DataTable<T>({
   // sort state on the same table.
   useEffect(() => {
     setColumnOrder((prev) => {
-      const incoming = augmentedColumns.map((c) => String(c.id ?? (c as any).accessorKey ?? ''))
+      const incoming = augmentedColumns.map(columnKey)
       const prevSet = new Set(prev)
       const incomingSet = new Set(incoming)
       const result = prev.filter((id) => incomingSet.has(id))
@@ -326,7 +332,7 @@ export function DataTable<T>({
               .filter((col) => col.getCanHide())
               .map((col) => {
                 const header = col.columnDef.header
-                const label = typeof header === 'string' ? header : (col.columnDef.meta as any)?.label ?? col.id
+                const label = typeof header === 'string' ? header : col.columnDef.meta?.label ?? col.id
                 return (
                   <DropdownMenuCheckboxItem
                     key={col.id}

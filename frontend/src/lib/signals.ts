@@ -37,6 +37,22 @@ export const SIGNAL_DESCRIPTIONS: Record<string, string> = {
   usefulness_boost: 'Rewards timely, credible, and less redundant papers',
 }
 
+/** Compact card wording. Kept separate from the more analytical labels above,
+ * but shared by PaperCard and PaperHoverCard so those two surfaces cannot drift.
+ */
+export const PAPER_SIGNAL_META: Record<string, { label: string; description: string }> = {
+  source_relevance: { label: 'Source Relevance', description: 'Position in retrieval results (1st = highest)' },
+  topic_score: { label: 'Topic Match', description: 'Topic overlap with your rated papers' },
+  text_similarity: { label: 'Text Similarity', description: 'Semantic similarity to your top-rated papers' },
+  author_affinity: { label: 'Author Affinity', description: 'Author overlap with papers you follow' },
+  journal_affinity: { label: 'Journal Affinity', description: 'Published in a journal you read' },
+  recency_boost: { label: 'Recency', description: 'Publication recency (newer = higher)' },
+  citation_quality: { label: 'Citation Quality', description: 'Citation count quality indicator' },
+  feedback_adj: { label: 'Your Feedback', description: 'Adjusted based on your past feedback' },
+  preference_affinity: { label: 'Preference Match', description: 'Affinity learned from your accumulated feedback interactions' },
+  usefulness_boost: { label: 'Usefulness', description: 'Rewards timely, credible, and less redundant papers' },
+}
+
 export const SIGNAL_ORDER = [
   'source_relevance',
   'topic_score',
@@ -50,7 +66,29 @@ export const SIGNAL_ORDER = [
   'usefulness_boost',
 ] as const
 
-import type { ScoreBreakdown } from '@/api/client'
+import type { ScoreBreakdown, ScoreSignalDetail } from '@/api/client'
+
+/** Return only real scoring-signal entries from a mixed breakdown payload.
+ * Backend breakdowns also contain scalar diagnostics such as `final_score`
+ * and `text_similarity_mode`; card renderers must not treat those as signals.
+ */
+export function scoreSignalEntries(
+  breakdown: object | null | undefined,
+): Array<[string, ScoreSignalDetail]> {
+  const signals: Array<[string, ScoreSignalDetail]> = []
+  for (const [key, value] of Object.entries(breakdown ?? {})) {
+    if (
+      typeof value === 'object'
+      && value !== null
+      && typeof value.value === 'number'
+      && typeof value.weight === 'number'
+      && typeof value.weighted === 'number'
+    ) {
+      signals.push([key, value as ScoreSignalDetail])
+    }
+  }
+  return signals
+}
 
 /** Return a mode-aware description for a scoring signal. */
 export function getSignalDescription(key: string, breakdown?: ScoreBreakdown): string {

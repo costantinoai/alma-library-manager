@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import type { LabelMode, ColorBy, SizeBy, AuthorColorBy, AuthorSizeBy } from './GraphPanel'
-import type { GraphPhysicsConfig } from './ForceGraph'
+import type { GraphPhysicsConfig } from './graphConfig'
 
 // Cluster-chip shortcut limits (44.3). The dropdown is the complete control;
 // these only bound the quick-pick toggle row. Corpus maps carry far more

@@ -1719,7 +1719,7 @@ export interface FeedInboxItem {
   status: FeedItemStatus
   is_new?: boolean
   signal_value: number
-  score_breakdown?: Record<string, any> | null
+  score_breakdown?: ScoreBreakdown | null
   paper?: FeedInboxPaper | null
 }
 
@@ -1855,7 +1855,7 @@ export interface LensRecommendation {
   /** Already a saved Library paper — only appears for a collection lens,
    *  meaning "in the Library but not in this lens's collection". */
   in_library?: boolean
-  score_breakdown?: Record<string, unknown> | null
+  score_breakdown?: ScoreBreakdown | null
   user_action?: string | null
   action_at?: string | null
   source_type?: string | null
@@ -1865,6 +1865,7 @@ export interface LensRecommendation {
   branch_label?: string | null
   branch_mode?: string | null
   created_at: string
+  is_new?: boolean
   paper?: Publication | null
 }
 
@@ -1926,7 +1927,7 @@ export interface ManualDiscoveryItem {
   paper_status?: string | null
   in_library: boolean
   like_score: number
-  score_breakdown?: Record<string, unknown>
+  score_breakdown?: ScoreBreakdown
 }
 
 export interface ManualDiscoverySearchResponse {
@@ -2237,6 +2238,11 @@ export interface InsightsDiagnostics {
       status_counts: Record<string, number>
       top_endpoints: Array<{ path: string; count: number }>
       last_error?: string | null
+      // Op timestamps bounding this source's window; last_error_at is the
+      // newest op in which the source had errors (staleness signal).
+      first_seen?: string | null
+      last_seen?: string | null
+      last_error_at?: string | null
     }>
     openalex_usage: {
       refreshes: number
@@ -3889,6 +3895,7 @@ export function onlineImportSave(body: {
    *  (add/like/love), the collection is created/found and the paper added to
    *  it. Ignored for dislike. */
   collection_name?: string
+  collection_ids?: string[]
 }): Promise<OnlineSearchSaveResponse> {
   return api.post('/library/import/search/save', body)
 }
@@ -3994,6 +4001,7 @@ export function getFeedStatus(opts?: { background?: boolean }): Promise<FeedStat
 
 export interface DiscoveryStatusResponse {
   last_refresh_at: string | null
+  new_count: number
 }
 
 export function getDiscoveryStatus(opts?: { background?: boolean }): Promise<DiscoveryStatusResponse> {
@@ -4029,8 +4037,19 @@ export function deleteFeedMonitor(monitorId: string): Promise<{ success: boolean
   return api.delete(`/feed/monitors/${encodeURIComponent(monitorId)}`)
 }
 
-export function feedAdd(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/add`)
+export function feedAdd(feedItemId: string, collectionIds?: string[]): Promise<{ item: FeedInboxItem | null }> {
+  return api.post(`/feed/${encodeURIComponent(feedItemId)}/add`, {
+    collection_ids: collectionIds ?? [],
+  })
+}
+
+export function addPaperToCollections(
+  paperId: string,
+  collectionIds: string[],
+): Promise<{ paper_id: string; collection_ids: string[] }> {
+  return api.post(`/library/papers/${encodeURIComponent(paperId)}/collections`, {
+    collection_ids: collectionIds,
+  })
 }
 
 export function feedLike(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
@@ -4371,7 +4390,7 @@ export interface BootstrapData {
     tags: number
   }
   feed: { unread: number }
-  discovery: { active_lenses: number; pending_recommendations: number }
+  discovery: { active_lenses: number; pending_recommendations: number; new_recommendations: number }
   alerts: { active: number }
   app: { version: string }
   onboarding: { completed: boolean; has_owner: boolean }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { Plus, Users } from 'lucide-react'
@@ -28,8 +28,8 @@ import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
 import {
   AuthorsNeedsAttentionSection,
-  useAuthorAttentionRouter,
 } from '@/components/authors/AuthorsNeedsAttentionSection'
+import { useAuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { cn } from '@/lib/utils'
@@ -127,7 +127,7 @@ export function AuthorsPage() {
   // AuthorDetailPanel; the old header "Resolve IDs" button was removed
   // to keep the Authors page focused on exploration + triage.
 
-  const authors = authorsQuery.data ?? []
+  const authors = useMemo(() => authorsQuery.data ?? [], [authorsQuery.data])
   const followedIds = useMemo(
     () => new Set((followedAuthorsQuery.data ?? []).map((item) => item.author_id)),
     [followedAuthorsQuery.data],
@@ -171,7 +171,10 @@ export function AuthorsPage() {
     return map
   }, [authors])
 
-  const attentionRows = needsAttentionQuery.data?.items ?? []
+  const attentionRows = useMemo(
+    () => needsAttentionQuery.data?.items ?? [],
+    [needsAttentionQuery.data?.items],
+  )
   // Map keyed by `authors.id` so each followed-author card can render
   // its own warning triangle in O(1). Background-author rows from the
   // needs-attention list still appear in the dedicated section below
@@ -200,12 +203,12 @@ export function AuthorsPage() {
   // Drop the ?author deep-link param while preserving the rest, so the same
   // author can be reopened from search later. Shared by the not-found error
   // path (below) and the dialog-close handler (44.6).
-  const clearAuthorDeepLinkParam = () => {
+  const clearAuthorDeepLinkParam = useCallback(() => {
     if (!route.params.get('author')) return
     const nextParams = new URLSearchParams(route.params)
     nextParams.delete('author')
     window.location.hash = buildHashRoute('authors', Object.fromEntries(nextParams))
-  }
+  }, [route.params])
   useEffect(() => {
     if (!requestedAuthorId) {
       handledAuthorParamRef.current = null
@@ -226,7 +229,7 @@ export function AuthorsPage() {
       errorToast('Author not found', 'That author is no longer in your list.')
       clearAuthorDeepLinkParam()
     }
-  }, [requestedAuthorId, authorsById, authorsQuery.isSuccess, authorsQuery.isFetching])
+  }, [requestedAuthorId, authorsById, authorsQuery.isSuccess, authorsQuery.isFetching, clearAuthorDeepLinkParam])
 
   // Single shared router for the needs-attention sub-dialogs. The
   // section's row buttons AND each followed-author card's warning

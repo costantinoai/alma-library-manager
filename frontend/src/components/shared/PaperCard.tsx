@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ExternalLink, HelpCircle, Loader2, Plus, Compass } from 'lucide-react'
 
 import { Card } from '@/components/ui/card'
@@ -7,13 +7,15 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { PaperHoverCard } from './PaperHoverCard'
 import { PaperActionBar, type PaperReaction } from '@/components/discovery/PaperActionBar'
+import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import { StarRating } from '@/components/StarRating'
-import { trackInteraction } from '@/api/client'
+import { addPaperToCollections, trackInteraction, type ScoreBreakdown, type ScoreSignalDetail } from '@/api/client'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
 import { cn, normalizeAuthorName, truncate } from '@/lib/utils'
 import { formatPercent, formatPaperDate } from '@/lib/format'
 import { byWeightedDesc } from '@/lib/sort'
+import { PAPER_SIGNAL_META, scoreSignalEntries } from '@/lib/signals'
 
 export interface PaperCardPaper {
   id: string
@@ -54,18 +56,13 @@ export interface PaperCardPaper {
  */
 export type PaperCardSize = 'compact' | 'default' | 'detailed'
 
-export interface ScoreSignal {
-  value: number
-  weight: number
-  weighted: number
-  description?: string
-}
+export type ScoreSignal = ScoreSignalDetail
 
 interface PaperCardProps {
   paper: PaperCardPaper
   score?: number
   rank?: number
-  scoreBreakdown?: Record<string, ScoreSignal> | null
+  scoreBreakdown?: ScoreBreakdown | null
   explanation?: string | null
   followedAuthorNames?: Set<string>
   followAuthorPendingName?: string | null
@@ -107,6 +104,8 @@ interface PaperCardProps {
   onAddToCollection?: () => void
   addToCollectionLabel?: string
   addToCollectionTitle?: string
+  onAddToCollections?: (collectionIds: string[]) => void | Promise<void>
+  defaultCollectionIds?: string[]
   onExpandBreakdown?: () => void
   quickActions?: React.ReactNode
   /** Provenance chips rendered in the metadata row — one short badge per
@@ -178,24 +177,9 @@ function parseAuthorNames(value?: string | null): string[] {
 
 // ── Signal labels & colors ──
 
-// Label + description only. Dot color comes from the centralized SIGNAL_COLORS
-// palette (44.5) so PaperCard and PaperHoverCard can't drift again.
-const SIGNAL_META: Record<string, { label: string; description: string }> = {
-  source_relevance:    { label: 'Source Relevance',    description: 'Position in retrieval results (1st = highest)' },
-  topic_score:         { label: 'Topic Match',         description: 'Topic overlap with your rated papers' },
-  text_similarity:     { label: 'Text Similarity',     description: 'Semantic similarity to your top-rated papers' },
-  author_affinity:     { label: 'Author Affinity',     description: 'Author overlap with papers you follow' },
-  journal_affinity:    { label: 'Journal Affinity',    description: 'Published in a journal you read' },
-  recency_boost:       { label: 'Recency',             description: 'Publication recency (newer = higher)' },
-  citation_quality:    { label: 'Citation Quality',    description: 'Citation count quality indicator' },
-  feedback_adj:        { label: 'Your Feedback',       description: 'Adjusted based on your past feedback' },
-  preference_affinity: { label: 'Preference Match',    description: 'Affinity learned from your accumulated feedback interactions' },
-  usefulness_boost:    { label: 'Usefulness',          description: 'Rewards timely, credible, and less redundant papers' },
-}
-
 /** Merge a signal key's label/description with its centralized dot color. */
 function signalMeta(key: string): { label: string; color: string; description?: string } {
-  const base = SIGNAL_META[key]
+  const base = PAPER_SIGNAL_META[key]
   const color = SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR
   return base ? { ...base, color } : { label: key.replace(/_/g, ' '), color }
 }
@@ -232,10 +216,10 @@ function ScoreBreakdownTeaser({
   breakdown,
   explanation,
 }: {
-  breakdown?: Record<string, ScoreSignal> | null
+  breakdown?: ScoreBreakdown | null
   explanation?: string | null
 }) {
-  const signals = Object.entries(breakdown ?? {})
+  const signals = scoreSignalEntries(breakdown)
     .map(([key, signal]) => ({
       key,
       meta: signalMeta(key),
@@ -283,11 +267,11 @@ function ScoreBreakdownPanel({
   breakdown,
   explanation,
 }: {
-  breakdown?: Record<string, ScoreSignal> | null
+  breakdown?: ScoreBreakdown | null
   explanation?: string | null
 }) {
   // Sort signals by weighted value (highest first), filter out zero
-  const signals = Object.entries(breakdown ?? {})
+  const signals = scoreSignalEntries(breakdown)
     .map(([key, signal]) => ({
       key,
       meta: signalMeta(key),
@@ -377,6 +361,8 @@ export function PaperCard({
   onAddToCollection,
   addToCollectionLabel,
   addToCollectionTitle,
+  onAddToCollections,
+  defaultCollectionIds,
   onExpandBreakdown,
   quickActions,
   sources,
@@ -407,7 +393,14 @@ export function PaperCard({
     setShowAbstract(showAbstractByDefault)
   }, [showAbstractByDefault])
   const abstractExpandedAt = useRef<number | null>(null)
-  const hasActions = !!(onDismiss || onQueue || onLike || onLove || onAdd || onDislike)
+  const collectionConfirm = onAddToCollections ?? (
+    paper.id
+      ? async (collectionIds: string[]) => {
+          await addPaperToCollections(paper.id, collectionIds)
+        }
+      : undefined
+  )
+  const hasActions = !!(onDismiss || onQueue || onLike || onLove || onAdd || onDislike || collectionConfirm)
 
   // T15 — derived display helpers for the card's metadata strip.
   //
@@ -446,7 +439,7 @@ export function PaperCard({
   const canFollowAuthors = !!(paper.id && onFollowAuthor)
 
   // Track abstract engagement duration on collapse or unmount
-  const flushAbstractEngagement = () => {
+  const flushAbstractEngagement = useCallback(() => {
     if (abstractExpandedAt.current && paper.id) {
       const durationMs = Date.now() - abstractExpandedAt.current
       if (durationMs > ABSTRACT_MIN_DWELL_MS) {
@@ -454,10 +447,10 @@ export function PaperCard({
       }
       abstractExpandedAt.current = null
     }
-  }
+  }, [paper.id])
 
   // Flush on unmount
-  useEffect(() => flushAbstractEngagement, [])
+  useEffect(() => flushAbstractEngagement, [flushAbstractEngagement])
 
   const handleAbstractToggle = () => {
     if (showAbstract) {
@@ -904,6 +897,15 @@ export function PaperCard({
               savedClickRemoves={savedClickRemoves}
               isQueued={isQueued}
               showLabels={showActionLabels}
+              collectionAction={collectionConfirm ? (
+                <AddToCollectionMenu
+                  onConfirm={collectionConfirm}
+                  disabled={actionDisabled}
+                  compact={(isCompact || compactActions) && showActionLabels !== true}
+                  defaultSelectedIds={defaultCollectionIds}
+                  isSaved={isSaved}
+                />
+              ) : undefined}
             />
           </div>
         )}

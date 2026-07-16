@@ -60,6 +60,7 @@ import {
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast, errorToast } from '@/hooks/useToast'
+import { formatPaperDate } from '@/lib/format'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
@@ -130,8 +131,15 @@ interface SourceRow {
   transport_errors?: number
   requests?: number
   operations?: number
+  retries?: number
   status_counts?: Record<string, number>
+  top_endpoints?: { path?: string; count?: number }[]
   last_error?: string
+  /** ISO timestamps of the ops that touched this source (aggregation stamps). */
+  first_seen?: string | null
+  last_seen?: string | null
+  /** Newest op in which this source had errors — the staleness signal. */
+  last_error_at?: string | null
 }
 
 const worstSeverity = (states: OperationalState[], floor: Severity): Severity => {
@@ -152,10 +160,39 @@ const CODE_REASON: Record<string, string> = {
   '504': 'timeout',
 }
 
-// A specific, time-scoped reason for a source's recent HTTP failures, built from
-// the actual status mix — NOT a generic present-tense "is throttling us". Source
-// diagnostics are aggregated across the last feed + discovery refreshes, so this
-// describes what happened "across recent refreshes", not a live probe of "now".
+// Source-specific "what to do about 429s". Only Semantic Scholar has API keys;
+// Crossref's faster polite pool is unlocked by a contact email, not a key; and
+// arXiv has neither — its throttle is purely pace-based, so the only honest
+// advice is "ALMa paces and retries". A single generic "get an API key" line
+// here would be false for every source but Semantic Scholar.
+const RATE_LIMIT_ADVICE: Record<string, string> = {
+  semantic_scholar:
+    'ALMa backs off and retries; a Semantic Scholar API key (Settings → External APIs) moves requests off the shared anonymous pool.',
+  crossref:
+    "ALMa backs off and retries; a contact email (Settings → External APIs) moves requests to Crossref's faster polite pool.",
+  unpaywall:
+    'ALMa backs off and retries; Unpaywall requires a contact email (Settings → External APIs).',
+  arxiv:
+    'ALMa paces arXiv calls (~1 per 3 s) and retries — arXiv has no API keys, so throttling clears on its own.',
+}
+const DEFAULT_RATE_LIMIT_ADVICE = 'ALMa backs off and retries.'
+
+// A source whose newest error is older than this is history, not a live
+// problem: the diagnostics window is count-based (the last 45 feed + 45
+// discovery refreshes, however old), so on a low-traffic instance one old
+// blip would otherwise keep the card "warning" indefinitely. Stale rows stay
+// visible in the popup, clearly dated, but don't color the card.
+const STALE_ERROR_DAYS = 14
+const isFreshError = (s: SourceRow): boolean => {
+  if (!s.last_error_at) return true // no timestamp → don't silently downgrade
+  const age = Date.now() - new Date(s.last_error_at).getTime()
+  return Number.isNaN(age) ? true : age <= STALE_ERROR_DAYS * 86_400_000
+}
+
+// A specific, time-scoped reason for a source's HTTP failures, built from the
+// actual status mix — NOT a generic present-tense "is throttling us". The ops
+// counted here are the recent refreshes that TOUCHED this source (they can all
+// be weeks old), so the window is date-stamped rather than called "the last N".
 const humanizeSourceError = (s: SourceRow): string => {
   const sc = s.status_counts ?? {}
   const breakdown = Object.entries(sc)
@@ -167,12 +204,27 @@ const humanizeSourceError = (s: SourceRow): string => {
   const transportErr = s.transport_errors ?? 0
   const reqs = s.requests ?? httpErr + transportErr
   const ops = s.operations ?? 0
-  const window = ops > 0 ? ` across the last ${ops} refresh${ops === 1 ? '' : 'es'}` : ' recently'
+  const first = formatPaperDate(s.first_seen ?? undefined)
+  const last = formatPaperDate(s.last_seen ?? undefined)
+  const span = first && last ? ` (${first === last ? last : `${first} – ${last}`})` : ''
+  const window = ops > 0 ? ` across ${ops} refresh${ops === 1 ? '' : 'es'}${span}` : ' recently'
+  // Requests are counted per ATTEMPT — a retried call adds a row per try — so
+  // say so when retries are in the mix instead of overstating distinct failures.
+  const retries = s.retries ?? 0
+  const attempts = retries > 0 ? `${httpErr} of ${reqs} attempts failed (${retries} were retries)` : `${httpErr} of ${reqs} requests failed`
   const lead = breakdown
-    ? `${breakdown} — ${httpErr} of ${reqs} requests failed${window}.`
+    ? `${breakdown} — ${attempts}${window}.`
     : `${httpErr} HTTP / ${transportErr} transport error${httpErr + transportErr === 1 ? '' : 's'}${window}.`
-  const why = (sc['429'] ?? 0) > 0 ? ' ALMa backs off and retries; a verified API key raises the 429 limit.' : ''
-  return lead + why
+  const topEndpoint = (s.top_endpoints ?? []).find((e) => e.path)
+  const where = topEndpoint?.path ? ` Mostly ${topEndpoint.path}.` : ''
+  const throttled = (sc['429'] ?? 0) > 0 ? ` ${RATE_LIMIT_ADVICE[s.source ?? ''] ?? DEFAULT_RATE_LIMIT_ADVICE}` : ''
+  const badRequest = (sc['400'] ?? 0) > 0
+    ? ' HTTP 400s mean ALMa sent a malformed request — an app bug, not upstream throttling.'
+    : ''
+  // The status breakdown already names HTTP errors; last_error only adds
+  // information for transport failures (timeouts, DNS…), which have no code.
+  const transport = transportErr > 0 && s.last_error ? ` Last transport error: ${s.last_error}.` : ''
+  return lead + where + throttled + badRequest + transport
 }
 
 // Which component a degraded state belongs to — by remediation kind, falling
@@ -207,7 +259,7 @@ const DOT: Record<Severity, string> = {
 // in the popup when a component has no issues so the user understands the green.
 const HEALTHY_NOTE: Record<string, string> = {
   monitors: 'All feed monitors are refreshing cleanly — new papers are arriving on schedule.',
-  sources: 'OpenAlex, Crossref and Semantic Scholar are reachable and responding without errors.',
+  sources: 'Recent feed and discovery refreshes completed without upstream HTTP errors (Semantic Scholar, Crossref, arXiv and the other enrichment APIs).',
   ai: 'An embedding provider is configured and operational — Discovery similarity and the paper map are powered.',
   authors: 'Every tracked author has a clean identity bridge and an up-to-date historical corpus.',
   alerts: 'Scheduled digests are configured and delivering.',
@@ -382,9 +434,13 @@ export function SystemStatusCards() {
       (m) => m.health && m.health !== 'ready' && m.health !== 'disabled',
     ).length
     const degradedAuthors = (sections.authors.data?.degraded ?? []) as unknown as AuthorRow[]
-    const badSources = ((sections.discovery.data?.source_diagnostics ?? []) as unknown as SourceRow[]).filter(
+    const erroredSources = ((sections.discovery.data?.source_diagnostics ?? []) as unknown as SourceRow[]).filter(
       (s) => (s.http_errors ?? 0) > 0 || (s.transport_errors ?? 0) > 0,
     )
+    // Only sources with a RECENT error color the card; older blips stay
+    // listed in the popup (dated) until newer refreshes displace them.
+    const badSources = erroredSources.filter(isFreshError)
+    const staleSources = erroredSources.filter((s) => !isFreshError(s))
     const disabledSources = summary?.disabled_sources ?? op?.disabled_sources?.length ?? 0
     const unhealthyPlugins = summary?.unhealthy_plugins ?? 0
     const configuredPlugins = (op?.plugins ?? []).filter((p) => p.is_configured).length
@@ -427,21 +483,36 @@ export function SystemStatusCards() {
           id: 'sources',
           name: 'Upstream sources',
           icon: Globe,
-          description: 'OpenAlex, Crossref & Semantic Scholar — the APIs that resolve and enrich papers.',
-          note: 'HTTP behaviour aggregated over recent feed + discovery refreshes — a rolling window, not a live probe of right now.',
+          // Names the sources this card actually observes — OpenAlex goes
+          // through its own client and is tracked by the API budget card, so
+          // claiming it here would be untrue.
+          description: 'Semantic Scholar, Crossref, arXiv & the other enrichment APIs called during feed and discovery refreshes.',
+          note: `HTTP behaviour aggregated over recent feed + discovery refreshes — a dated window, not a live probe of right now. Errors older than ${STALE_ERROR_DAYS} days are listed but don't affect status. OpenAlex is tracked separately in the API budget card.`,
           states: at('sources'),
-          reviewItems: badSources.map((s, i) => ({
-            id: String(i),
-            primary: s.source || 'Source',
-            secondary: humanizeSourceError(s),
-          })),
+          reviewItems: [
+            ...badSources.map((s, i) => ({
+              id: `fresh-${i}`,
+              primary: s.source || 'Source',
+              secondary: humanizeSourceError(s),
+            })),
+            ...staleSources.map((s, i) => ({
+              id: `stale-${i}`,
+              primary: `${s.source || 'Source'} — resolved`,
+              secondary: `${humanizeSourceError(s)} No errors since ${formatPaperDate(s.last_error_at ?? undefined) || 'then'}.`,
+            })),
+          ],
           ownerPage: 'settings',
           ownerParams: { anchor: 'external-apis' },
         },
         {
           count: badSources.length,
           countLabel: 'with errors',
-          healthyLabel: disabledSources > 0 ? `${disabledSources} disabled` : 'all reachable',
+          healthyLabel:
+            staleSources.length > 0
+              ? 'no recent errors'
+              : disabledSources > 0
+                ? `${disabledSources} disabled`
+                : 'all reachable',
         },
       ),
       mk(

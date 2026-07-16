@@ -209,8 +209,8 @@ export function OnlineSearchTab({
   // across saves within the session so a triage run lands in one collection.
   const [collectionName, setCollectionName] = useState('')
   const PAGE_SIZE = 10
-  const INITIAL_VISIBLE = resultPreviewLimit ?? 5
-  const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE)
+  const initialVisible = resultPreviewLimit ?? 5
+  const [visibleCount, setVisibleCount] = useState<number>(initialVisible)
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -260,7 +260,7 @@ export function OnlineSearchTab({
     setAuthorPending({})
     setAuthorRejectPending({})
     setAuthorTitlesLoading(false)
-    setVisibleCount(INITIAL_VISIBLE)
+    setVisibleCount(initialVisible)
     setRowStates({})
     setSourceProgress({})
     setStreamFinalised(false)
@@ -402,7 +402,7 @@ export function OnlineSearchTab({
     } finally {
       setLoading(false)
     }
-  }, [query, yearMin, yearMax])
+  }, [initialVisible, query, yearMin, yearMax])
 
   // Cancel any in-flight stream when the component unmounts.
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -421,7 +421,11 @@ export function OnlineSearchTab({
   }, [autoRun, initialQuery, handleSearch])
 
   const handleAction = useCallback(
-    async (item: OnlineSearchItem, action: 'add' | 'like' | 'love' | 'dislike') => {
+    async (
+      item: OnlineSearchItem,
+      action: 'add' | 'like' | 'love' | 'dislike',
+      collectionIds?: string[],
+    ) => {
       const key = rowKey(item)
       if (!key) return
       setRowStates((prev) => ({
@@ -441,6 +445,7 @@ export function OnlineSearchTab({
           // Group each saved paper into the optional target collection.
           // Backend ignores it for dislike (nothing lands in Library).
           collection_name: collectionName.trim() || undefined,
+          collection_ids: collectionIds,
         })
         setRowStates((prev) => ({
           ...prev,
@@ -464,7 +469,7 @@ export function OnlineSearchTab({
           ['papers'],
         )
         onImportComplete?.()
-      } catch (err) {
+      } catch {
         setRowStates((prev) => ({
           ...prev,
           [key]: { ...(prev[key] ?? IDLE), pending: false },
@@ -912,6 +917,7 @@ export function OnlineSearchTab({
                     onLike={() => void handleAction(item, 'like')}
                     onLove={() => void handleAction(item, 'love')}
                     onDislike={() => void handleAction(item, 'dislike')}
+                    onAddToCollections={(collectionIds) => handleAction(item, 'add', collectionIds)}
                     onUndo={(aspect) => handleUndo(item, aspect)}
                   />
                   <WhyChips score={item.like_score} breakdown={item.score_breakdown} />

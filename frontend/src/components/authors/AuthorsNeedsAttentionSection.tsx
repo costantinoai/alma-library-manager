@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw } from 'lucide-react'
 
@@ -34,122 +34,11 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { SubPanel } from '@/components/ui/sub-panel'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
-import { resolvedBadgeSpec } from '@/components/authors/AuthorResolvedBadge'
+import { resolvedBadgeSpec } from '@/components/authors/authorResolvedBadgeSpec'
+import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatTimestamp } from '@/lib/utils'
-
-/**
- * Router returned by `useAuthorAttentionRouter`. One instance per
- * surface owns all three dialogs + the refresh mutation. Both the
- * needs-attention section and the followed-author warning triangle
- * funnel through `openForRow` so dialog state never duplicates.
- */
-export interface AuthorAttentionRouter {
-  /** Dispatch by `row.suggested_action.code`: opens the matching
-   *  dialog, defers to `onOpenDetail` for review/manual_search, or
-   *  fires the identity/profile refresh mutation as the default. */
-  openForRow: (row: AuthorNeedsAttentionRow) => void
-  /** True while the identity/profile refresh mutation is in flight for `authorId`. */
-  isRefreshingFor: (authorId: string) => boolean
-  /** Render once near the top of the consuming page so the dialogs
-   *  can mount alongside other modals. */
-  dialogs: ReactNode
-}
-
-interface UseAuthorAttentionRouterOpts {
-  /** Map of `authors.id` → `Author` so `review_candidates` /
-   *  `manual_search` can hand off to `AuthorDetailPanel`. */
-  authorsById?: Map<string, Author>
-  onOpenDetail?: (author: Author) => void
-}
-
-/**
- * Centralised router for needs-attention actions. Owns the three
- * sub-dialog states (`reviewRow`, `identifierRow`, `conflictRow`) and
- * the identity/profile refresh mutation so multiple entry points (the
- * needs-attention section AND the per-card warning triangle on
- * `FollowedAuthorCard`) dispatch through one source of truth — no
- * duplicated dialog state, no double mutation queues.
- */
-export function useAuthorAttentionRouter(
-  opts: UseAuthorAttentionRouterOpts = {},
-): AuthorAttentionRouter {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-  const [reviewRow, setReviewRow] = useState<AuthorNeedsAttentionRow | null>(null)
-  const [identifierRow, setIdentifierRow] = useState<AuthorNeedsAttentionRow | null>(null)
-  const [conflictRow, setConflictRow] = useState<AuthorNeedsAttentionRow | null>(null)
-  const [affiliationRow, setAffiliationRow] = useState<AuthorNeedsAttentionRow | null>(null)
-
-  const refreshMutation = useMutation({
-    mutationFn: (authorId: string) =>
-      api.post<{ status?: string; job_id?: string }>(
-        `/authors/${encodeURIComponent(authorId)}/identity-profile-refresh`,
-      ),
-    onSuccess: (data, authorId) => {
-      void invalidateQueries(
-        queryClient,
-        ['authors'],
-        ['authors-needs-attention'],
-        ['activity-operations'],
-        ['author-detail', authorId],
-      )
-      toast({
-        title:
-          data?.status === 'already_running' ? 'Refresh already running' : 'Refresh queued',
-        description: data?.job_id ? `Job ${data.job_id} will update this author.` : undefined,
-      })
-    },
-    onError: () => errorToast('Error', 'Could not queue refresh.'),
-  })
-
-  const openForRow = (row: AuthorNeedsAttentionRow) => {
-    const code = row.suggested_action.code
-    if (code === 'review_profiles') {
-      setReviewRow(row)
-      return
-    }
-    if (code === 'resolve_conflict') {
-      setConflictRow(row)
-      return
-    }
-    if (code === 'pick_affiliation') {
-      setAffiliationRow(row)
-      return
-    }
-    if (code === 'review_candidates') {
-      // Disambiguating among close OpenAlex candidates needs the detail panel's
-      // candidate picker — the right tool for "pick the correct match".
-      const author = opts.authorsById?.get(row.author_id)
-      if (author && opts.onOpenDetail) opts.onOpenDetail(author)
-      return
-    }
-    // Every other identity failure — no_match (manual_search), transient error
-    // (retry_refresh), followed-without-id (resolve_now) — opens the one focused
-    // identity card: retry auto-resolution, paste an authoritative id, or accept
-    // it can't be identified.
-    if (code === 'manual_search' || code === 'resolve_now' || code === 'retry_refresh') {
-      setIdentifierRow(row)
-      return
-    }
-    refreshMutation.mutate(row.author_id)
-  }
-
-  const isRefreshingFor = (authorId: string) =>
-    refreshMutation.isPending && refreshMutation.variables === authorId
-
-  const dialogs = (
-    <>
-      <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
-      <AddIdentifierDialog row={identifierRow} onClose={() => setIdentifierRow(null)} />
-      <ResolveConflictDialog row={conflictRow} onClose={() => setConflictRow(null)} />
-      <AffiliationPickerDialog row={affiliationRow} onClose={() => setAffiliationRow(null)} />
-    </>
-  )
-
-  return { openForRow, isRefreshingFor, dialogs }
-}
 
 interface AuthorsNeedsAttentionSectionProps {
   rows: AuthorNeedsAttentionRow[]
@@ -333,7 +222,7 @@ function NeedsAttentionRow({
  * display name OpenAlex has on file, and an external link to the
  * profile on openalex.org for visual verification.
  */
-function ReviewProfilesDialog({
+export function ReviewProfilesDialog({
   row,
   onClose,
 }: {
@@ -562,7 +451,7 @@ function ProfileRow({
  * All three identifier types are accepted; the backend uses
  * whatever subset arrives. Saved on submit, dialog closes.
  */
-function AddIdentifierDialog({
+export function AddIdentifierDialog({
   row,
   onClose,
 }: {
@@ -579,14 +468,14 @@ function AddIdentifierDialog({
   // Reset draft fields each time the dialog opens for a new row.
   // Without this, switching from author A to author B would
   // pre-fill A's draft into B's form.
-  useMemo(() => {
-    if (open) {
+  const activeAuthorId = row?.author_id
+  useEffect(() => {
+    if (open && activeAuthorId) {
       setOrcid('')
       setOpenalexInput('')
       setScholar('')
     }
-    return null
-  }, [open, row?.author_id])
+  }, [activeAuthorId, open])
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -782,7 +671,7 @@ function groupAffiliationOptions(items: AuthorAffiliationItem[]): AffiliationOpt
  * refreshes, and clears the conflict for good. A free-text fallback covers the
  * case where none of the evidence is the right display name.
  */
-function AffiliationPickerDialog({
+export function AffiliationPickerDialog({
   row,
   onClose,
 }: {
@@ -794,10 +683,10 @@ function AffiliationPickerDialog({
   const { toast } = useToast()
   const [custom, setCustom] = useState('')
 
-  useMemo(() => {
-    if (open) setCustom('')
-    return null
-  }, [open, row?.author_id])
+  const activeAuthorId = row?.author_id
+  useEffect(() => {
+    if (open && activeAuthorId) setCustom('')
+  }, [activeAuthorId, open])
 
   const { data, isLoading } = useQuery({
     queryKey: ['author-affiliations', row?.author_id],
@@ -937,7 +826,7 @@ function AffiliationPickerDialog({
  * semantic_scholar_id) — these are person-level IDs where a
  * disagreement is real evidence that something is wrong.
  */
-function ResolveConflictDialog({
+export function ResolveConflictDialog({
   row,
   onClose,
 }: {

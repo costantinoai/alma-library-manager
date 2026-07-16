@@ -394,7 +394,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
     } finally {
       setSimilarLoading(false)
     }
-  }, [selectedKeys, toast])
+  }, [selectedKeys])
 
   const handleLikeSimilar = useCallback((item: SimilarityResultItem) => {
     api.post('/library/saved', {
@@ -957,7 +957,7 @@ function SavedCompactTable({
         </span>
       ),
       size: 100,
-      meta: { cellOverflow: 'none', label: 'Ranking' } as any,
+      meta: { cellOverflow: 'none', label: 'Ranking' },
       cell: ({ row }) => {
         const raw = row.original.global_signal_score
         if (raw == null || raw <= 0) {

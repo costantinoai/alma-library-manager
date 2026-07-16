@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Heart,
@@ -143,6 +143,14 @@ export function LibraryPage() {
     // Fail fast: a bad `?paper=<id>` should surface, not silently retry (44.6).
     retry: 1,
   })
+  // Drop a deep-link param from the URL while preserving the rest, so the same
+  // item can be reopened from search after the user closes its view.
+  const clearDeepLinkParam = useCallback((key: string) => {
+    if (!route.params.get(key)) return
+    const nextParams = new URLSearchParams(route.params)
+    nextParams.delete(key)
+    window.location.hash = buildHashRoute('library', Object.fromEntries(nextParams))
+  }, [route.params])
   const handledPaperParamRef = useRef<string | null>(null)
   useEffect(() => {
     if (!deepLinkPaperId) {
@@ -163,16 +171,7 @@ export function LibraryPage() {
     handledPaperParamRef.current = deepLinkPaperId
     setSelectedPaper(pub)
     setDetailOpen(true)
-  }, [deepLinkPaperId, deepLinkPaperQuery.data, deepLinkPaperQuery.isError, deepLinkPaperQuery.error])
-
-  // Drop a deep-link param from the URL while preserving the rest, so the same
-  // item can be reopened from search after the user closes its view.
-  const clearDeepLinkParam = (key: string) => {
-    if (!route.params.get(key)) return
-    const nextParams = new URLSearchParams(route.params)
-    nextParams.delete(key)
-    window.location.hash = buildHashRoute('library', Object.fromEntries(nextParams))
-  }
+  }, [deepLinkPaperId, deepLinkPaperQuery.data, deepLinkPaperQuery.isError, deepLinkPaperQuery.error, clearDeepLinkParam])
 
   const workflowQuery = useQuery({
     queryKey: ['library-workflow-summary'],

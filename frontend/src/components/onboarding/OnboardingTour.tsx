@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { SurfaceProvider } from '@/components/ui/surface'
 import { getBootstrap } from '@/api/client'
+import { useFirstVisitTour } from '@/components/onboarding/useFirstVisitTour'
 import { cn } from '@/lib/utils'
 
 const EASE = [0.22, 0.61, 0.36, 1] as const
@@ -189,42 +190,6 @@ export function OnboardingTour({
     </AnimatePresence>,
     document.body,
   )
-}
-
-/**
- * useFirstVisitTour — once-per-page tour state in localStorage. Auto-opens on
- * first visit; `relaunch` reopens on demand; `complete` (Skip or finish) marks
- * it done so it won't auto-show again.
- */
-export function useFirstVisitTour(pageKey: string, enabled = true) {
-  const storageKey = `alma.tour.${pageKey}.completed`
-  const [open, setOpen] = React.useState(false)
-
-  React.useEffect(() => {
-    if (!enabled) return
-    try {
-      if (localStorage.getItem(storageKey) !== 'done') {
-        // Defer so the page has painted its anchors before we measure.
-        const t = window.setTimeout(() => setOpen(true), 600)
-        return () => window.clearTimeout(t)
-      }
-    } catch {
-      /* storage blocked — never auto-show */
-    }
-  }, [storageKey, enabled])
-
-  const complete = React.useCallback(() => {
-    try {
-      localStorage.setItem(storageKey, 'done')
-    } catch {
-      /* ignore */
-    }
-    setOpen(false)
-  }, [storageKey])
-
-  const relaunch = React.useCallback(() => setOpen(true), [])
-
-  return { open, complete, relaunch }
 }
 
 /**

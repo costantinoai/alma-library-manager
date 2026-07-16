@@ -9,12 +9,14 @@ import { ConceptCallout } from '@/components/ui/concept-callout'
 import { api, refreshClusterLabels, type GraphData, type GraphNode } from '@/api/client'
 import {
   ForceGraph,
+} from './ForceGraph'
+import {
   type GraphPhysicsConfig,
   LAYER_COLORS,
   LAYER_LABELS,
   LARGE_GRAPH_THRESHOLD,
   LARGE_GRAPH_EDGE_THRESHOLD,
-} from './ForceGraph'
+} from './graphConfig'
 import { GraphControls } from './GraphControls'
 import { InsightsPaperDrilldown, type DrilldownTarget } from '@/components/insights/InsightsPaperDrilldown'
 import { formatPercent } from '@/lib/format'
@@ -312,7 +314,10 @@ export function GraphPanel() {
   const note = String(data?.metadata?.note || '')
   // Typed edge layers (Phase 3 / I-11): per-layer counts from metadata drive
   // the filter chips; `visibleLayers` is the set NOT toggled off.
-  const edgeLayers = (data?.metadata?.edge_layers || {}) as Record<string, number>
+  const edgeLayers = useMemo(
+    () => (data?.metadata?.edge_layers || {}) as Record<string, number>,
+    [data?.metadata?.edge_layers],
+  )
   // I-14: the clustering method/diagnostics the backend already emits — surfaced
   // in a panel so the projection's honesty (coverage, retained outliers,
   // stability) is visible, not just implied by the dots.

@@ -175,7 +175,7 @@ export function TagsTab() {
   })
 
   const tags = tagsQuery.data ?? []
-  const likes = likesQuery.data ?? []
+  const likes = useMemo(() => likesQuery.data ?? [], [likesQuery.data])
   const selectedPaper = useMemo(
     () => likes.find((paper) => paper.id === (suggestionPaperId || paperSelection)),
     [likes, paperSelection, suggestionPaperId],

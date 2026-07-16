@@ -43,10 +43,12 @@ import {
   type DrilldownTarget,
 } from '@/components/insights/InsightsPaperDrilldown'
 import {
-  PAPERS_AVG_CIT_SERIES,
   SeriesToggleGroup,
-  useSeriesVisibility,
 } from '@/components/insights/ChartSeriesToggle'
+import {
+  PAPERS_AVG_CIT_SERIES,
+  useSeriesVisibility,
+} from '@/components/insights/chartSeries'
 import { formatNumber, truncate } from '@/lib/utils'
 
 interface Palette {

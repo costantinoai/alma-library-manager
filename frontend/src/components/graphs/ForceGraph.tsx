@@ -2,16 +2,13 @@ import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
 import type { GraphData, GraphNode } from '@/api/client'
-
-export interface GraphPhysicsConfig {
-  repulsion: number
-  linkDistance: number
-  linkStrength: number
-  velocityDecay: number
-  cooldownTicks: number
-  nodeScale: number
-  baseSize: number
-}
+import {
+  LARGE_GRAPH_EDGE_THRESHOLD,
+  LARGE_GRAPH_THRESHOLD,
+  LAYER_COLORS,
+  LAYER_FALLBACK_COLOR,
+  type GraphPhysicsConfig,
+} from '@/components/graphs/graphConfig'
 
 interface ClusterSummary {
   id: number
@@ -43,41 +40,11 @@ interface RenderedNode extends Record<string, unknown> {
   _highlighted: boolean
 }
 
-// Above this node count we DON'T run the force simulation — the backend already
-// ships a UMAP layout, so we pin every node to those coordinates and render
-// statically (I-10). Running d3-force charge+link over thousands of nodes for
-// 100 cooldown ticks (each re-rendering every node) was the corpus-graph lag.
-export const LARGE_GRAPH_THRESHOLD = 1200
-// The force simulation's link force is what makes a heavily-edged graph lag, so
-// we also go static (pinned) once there are many edges — even if the node count
-// is modest (e.g. the author network: ~260 nodes but ~1900 typed edges).
-export const LARGE_GRAPH_EDGE_THRESHOLD = 1500
-
 interface RenderedLink extends Record<string, unknown> {
   source: string | RenderedNode
   target: string | RenderedNode
   value: number
   edge_type: string
-}
-
-// Per-layer edge colours (Phase 3 / I-11). Canvas hex strings, not Tailwind
-// classes — the semantic identity is folio-blue (the primary neighbourhood
-// signal), with distinct hues for the corroborating layers. Exported so the
-// GraphPanel legend/filter chips stay in sync (one source of truth).
-export const LAYER_COLORS: Record<string, string> = {
-  semantic: 'rgba(59,130,246,0.45)', // folio blue — the headline neighbourhood
-  bibliographic_coupling: 'rgba(139,92,246,0.38)', // violet — shared literature
-  co_authorship: 'rgba(16,185,129,0.38)', // emerald — shared authors
-  topic: 'rgba(245,158,11,0.35)', // amber — topic overlay
-}
-const LAYER_FALLBACK_COLOR = 'rgba(203,213,225,0.30)'
-
-// Human labels for the typed edge layers, shown in the filter chips + legend.
-export const LAYER_LABELS: Record<string, string> = {
-  semantic: 'Semantic (nearest work)',
-  bibliographic_coupling: 'Shared references',
-  co_authorship: 'Shared authors',
-  topic: 'Topic',
 }
 
 interface ForceGraphProps {

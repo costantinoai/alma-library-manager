@@ -15,9 +15,9 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { getBootstrap } from '@/api/client'
-import type { BootstrapData } from '@/api/client'
 import { BrandRule } from '@/components/ui/brand-rule'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { getNavBadgeCount } from './navBadgeCounts'
 
 export type Page =
   | 'feed'
@@ -68,19 +68,6 @@ const navGroups: NavGroup[] = [
     items: [{ id: 'settings', label: 'Settings', icon: Settings }],
   },
 ]
-
-function getBadgeCount(pageId: Page, data: BootstrapData): number {
-  switch (pageId) {
-    case 'feed':
-      return data.feed.unread
-    case 'discovery':
-      return data.discovery.pending_recommendations
-    case 'alerts':
-      return data.alerts.active
-    default:
-      return 0
-  }
-}
 
 interface SidebarProps {
   currentPage: Page
@@ -206,7 +193,7 @@ export function Sidebar({
                 </EyebrowLabel>
                 {group.items.map((item) => {
                   const isActive = currentPage === item.id
-                  const badge = bootstrap ? getBadgeCount(item.id, bootstrap) : 0
+                  const badge = bootstrap ? getNavBadgeCount(item.id, bootstrap) : 0
                   return (
                     <button
                       key={item.id}

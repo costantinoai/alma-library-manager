@@ -54,6 +54,7 @@ interface PaperActionBarProps {
   isQueued?: boolean
   /** Explicit label-visibility override. When unset, compact hides labels. */
   showLabels?: boolean
+  collectionAction?: ReactNode
 }
 
 /**
@@ -204,10 +205,11 @@ export function PaperActionBar({
   savedClickRemoves = false,
   isQueued = false,
   showLabels,
+  collectionAction,
 }: PaperActionBarProps) {
   const showLabel = showLabels ?? !compact
   const hasRemove = !!onDismiss
-  const hasReactions = !!(onQueue || onAdd || onAddToCollection || onDislike || onLike || onLove)
+  const hasReactions = !!(onQueue || onAdd || onAddToCollection || collectionAction || onDislike || onLike || onLove)
   // Re-clicking an applied action toggles off only that button's effect via
   // `onUndo(aspect)` when a surface supplies it; otherwise it re-fires the
   // original handler.
@@ -218,7 +220,7 @@ export function PaperActionBar({
   const canUndo = !!onUndo
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5" data-testid="paper-actions">
       {onDismiss && (
         <ActionButton
           icon={X}
@@ -283,6 +285,8 @@ export function PaperActionBar({
           onClick={onAddToCollection}
         />
       )}
+
+      {collectionAction}
 
       {onDislike && (
         <ActionButton

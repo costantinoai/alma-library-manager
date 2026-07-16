@@ -26,6 +26,14 @@ vi.mock('@/api/client', () => ({
       created_at: '2026-07-16T12:00:00',
       item_count: 2,
     },
+    {
+      id: 'collection-2',
+      name: 'Reading group',
+      description: null,
+      color: '#654321',
+      created_at: '2026-07-16T12:00:00',
+      item_count: 4,
+    },
   ]),
   createCollection: vi.fn(),
 }))
@@ -45,7 +53,7 @@ describe('AddToCollectionMenu', () => {
     })
     render(
       <QueryClientProvider client={client}>
-        <AddToCollectionMenu onConfirm={onConfirm} />
+        <AddToCollectionMenu onConfirm={onConfirm} isSaved />
       </QueryClientProvider>,
     )
 
@@ -61,5 +69,30 @@ describe('AddToCollectionMenu', () => {
       })
     })
     expect(screen.getByRole('button', { name: 'Add (1)' })).toBeInTheDocument()
+  })
+
+  it('explains compound save semantics and confirms multiple collections', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <AddToCollectionMenu
+          onConfirm={onConfirm}
+          defaultSelectedIds={['collection-1']}
+          isSaved={false}
+        />
+      </QueryClientProvider>,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Collections' }))
+    expect(screen.getByText('Adding to a collection also saves this paper to Library.')).toBeInTheDocument()
+    expect(await screen.findByRole('checkbox', { name: /Methods/ })).toBeChecked()
+    await user.click(screen.getByRole('checkbox', { name: /Reading group/ }))
+    await user.click(screen.getByRole('button', { name: 'Save & add (2)' }))
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(['collection-1', 'collection-2']))
   })
 })

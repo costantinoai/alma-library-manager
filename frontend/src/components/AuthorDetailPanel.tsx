@@ -55,14 +55,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
 import { NeighbourhoodDialog } from '@/components/authors/NeighbourhoodDialog'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
-import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
+import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatNumber, truncate } from '@/lib/utils'
 import { formatPercent, formatYearMonth } from '@/lib/format'
@@ -947,8 +948,3 @@ export function AuthorDetailPanel({
     </>
   )
 }
-
-// buildHashRoute is re-exported here so the caller can deep-link to the
-// dialog if needed; keeping the import prevents tree-shake from removing
-// it when only navigateTo is used above.
-export { buildHashRoute }

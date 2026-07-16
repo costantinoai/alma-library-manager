@@ -1,7 +1,10 @@
 import * as React from 'react'
 import { Slot } from '@radix-ui/react-slot'
-import { cva, type VariantProps } from 'class-variance-authority'
 import { Loader2 } from 'lucide-react'
+import {
+  buttonVariants,
+  type ButtonVariantProps,
+} from '@/components/ui/button-variants'
 import { cn } from '@/lib/utils'
 
 /**
@@ -28,73 +31,9 @@ import { cn } from '@/lib/utils'
  * - Auto-icon sizing + `loading` spinner unchanged from the previous
  *   primitive contract.
  */
-const buttonVariants = cva(
-  [
-    // 2px corner — letterpress / index-card feel, not pill or bubbly.
-    'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-sm text-sm font-medium',
-    'transition-[color,background-color,border-color,box-shadow] duration-200 ease-out',
-    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1',
-    'disabled:pointer-events-none disabled:opacity-50',
-    "[&_svg:not([class*='size-']):not([class*='h-']):not([class*='w-'])]:size-4",
-    '[&_svg]:shrink-0',
-    'cursor-pointer select-none',
-  ].join(' '),
-  {
-    variants: {
-      variant: {
-        // Primary — brand navy, ink-on-paper feel.
-        default:
-          'bg-alma-800 text-alma-cream shadow-paper-sm hover:bg-alma-700 hover:shadow-paper-md active:bg-alma-900',
-        // Accent — Folio binding blue. The affirmative CTA (Follow / Save /
-        // Discover). Hover/active deepen through the folio ramp.
-        accent:
-          'bg-alma-folio text-alma-cream shadow-paper-sm hover:bg-alma-folio-600 hover:shadow-paper-md active:bg-alma-folio-700',
-        // Destructive — critical. Soft red ink, not shouty SaaS-saturation.
-        destructive:
-          'bg-critical-600 text-white shadow-paper-sm hover:bg-critical-700 hover:shadow-paper-md active:bg-critical-700',
-        // Success — confirm / positive commit.
-        success:
-          'bg-success-600 text-white shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
-        // Gold — fine accent / premium actions only. Deep gold on cream;
-        // text is brand ink for legibility.
-        gold:
-          'bg-gold-400 text-alma-900 shadow-paper-sm hover:bg-gold-500 hover:text-alma-cream hover:shadow-paper-md',
-        // Outline — paper surface + warm hairline border + ink text.
-        // Paper bg (not cream) so the button reads as a distinct
-        // surface when sitting inside a cream Card. Hover tints to
-        // soft parchment + deepens border.
-        outline:
-          'border border-[var(--color-border)] bg-surface-0 text-alma-900 shadow-paper-sm hover:border-parchment-400 hover:bg-parchment-100',
-        // Secondary — soft parchment fill.
-        secondary:
-          'bg-parchment-100 text-alma-900 hover:bg-parchment-200',
-        // Ghost — no chrome at rest, parchment tint on hover.
-        ghost:
-          'text-alma-700 hover:bg-parchment-100 hover:text-alma-900',
-        // Link — text-only with teal underline on hover. Drops the radius
-        // and shadow so it can sit inline with prose.
-        link:
-          'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-alma-folio-600',
-      },
-      size: {
-        default: 'h-9 px-4',
-        sm: 'h-8 px-3 text-xs gap-1.5',
-        xs: 'h-7 px-2 text-xs gap-1',
-        lg: 'h-11 px-6 text-base gap-2.5',
-        icon: 'size-9',
-        'icon-sm': 'size-8',
-      },
-    },
-    defaultVariants: {
-      variant: 'default',
-      size: 'default',
-    },
-  },
-)
-
 export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
+    ButtonVariantProps {
   asChild?: boolean
   loading?: boolean
 }
@@ -128,4 +67,4 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 )
 Button.displayName = 'Button'
 
-export { Button, buttonVariants }
+export { Button }

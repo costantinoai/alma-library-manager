@@ -3,27 +3,9 @@ import { ExternalLink } from 'lucide-react'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { byWeightedDesc } from '@/lib/sort'
 import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
-import type { PaperCardPaper, ScoreSignal } from './PaperCard'
-
-// ── Signal palette ─────────────────────────────────────────────────────────
-// Mirrors the PaperCard signal colors. Kept in sync with the card's
-// ScoreBreakdownTeaser so the hover preview and the in-card breakdown feel
-// consistent.
-// Labels only; dot color comes from the centralized SIGNAL_COLORS palette
-// (44.5) — this map used to carry its own color values and had drifted from
-// PaperCard's copy.
-const SIGNAL_LABELS: Record<string, string> = {
-  source_relevance: 'Source Relevance',
-  topic_score: 'Topic Match',
-  text_similarity: 'Text Similarity',
-  author_affinity: 'Author Affinity',
-  journal_affinity: 'Journal Affinity',
-  recency_boost: 'Recency',
-  citation_quality: 'Citation Quality',
-  feedback_adj: 'Your Feedback',
-  preference_affinity: 'Preference Match',
-  usefulness_boost: 'Usefulness',
-}
+import { PAPER_SIGNAL_META, scoreSignalEntries } from '@/lib/signals'
+import type { ScoreBreakdown } from '@/api/client'
+import type { PaperCardPaper } from './PaperCard'
 
 function ScoreBar({ score }: { score: number }) {
   const pct = Math.round(score)
@@ -43,14 +25,14 @@ function TopSignals({
   breakdown,
   explanation,
 }: {
-  breakdown?: Record<string, ScoreSignal> | null
+  breakdown?: ScoreBreakdown | null
   explanation?: string | null
 }) {
-  const signals = Object.entries(breakdown ?? {})
+  const signals = scoreSignalEntries(breakdown)
     .map(([key, signal]) => ({
       key,
       meta: {
-        label: SIGNAL_LABELS[key] ?? key.replace(/_/g, ' '),
+        label: PAPER_SIGNAL_META[key]?.label ?? key.replace(/_/g, ' '),
         color: SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR,
       },
       signal,
@@ -89,7 +71,7 @@ function TopSignals({
 export interface PaperHoverCardProps {
   paper: PaperCardPaper
   score?: number
-  scoreBreakdown?: Record<string, ScoreSignal> | null
+  scoreBreakdown?: ScoreBreakdown | null
   explanation?: string | null
   children: React.ReactNode
 }

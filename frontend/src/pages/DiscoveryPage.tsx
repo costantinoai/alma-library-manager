@@ -47,7 +47,6 @@ import {
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
-import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -401,7 +400,10 @@ export function DiscoveryPage() {
     onError: () => errorToast('Queue failed', 'Could not add to reading list.'),
   })
 
-  const allRecommendations: LensRecommendation[] = lensRecommendationsQuery.data ?? []
+  const allRecommendations = useMemo<LensRecommendation[]>(
+    () => lensRecommendationsQuery.data ?? [],
+    [lensRecommendationsQuery.data],
+  )
   // Filter out actioned papers instantly + apply the user's sort
   // choice. `relevance` sorts by raw score DESC so visible ordering
   // tracks the score bars on each card; the diversity-aware `rank`
@@ -491,8 +493,9 @@ export function DiscoveryPage() {
     (loveMutation.isPending && (loveMutation.variables as string)) ||
     (dislikeMutation.isPending && (dislikeMutation.variables as string)) ||
     (queueMutation.isPending && (queueMutation.variables as string)) ||
+    (addToCollectionsMutation.isPending && addToCollectionsMutation.variables?.recId) ||
     null
-  const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, any> | null) ?? null
+  const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
 
   const renderProfileList = (
     title: string,
@@ -595,7 +598,7 @@ export function DiscoveryPage() {
           doi: item.doi ?? undefined,
         }}
         score={item.score}
-        scoreBreakdown={item.score_breakdown as Record<string, any> | null}
+        scoreBreakdown={item.score_breakdown}
         compact
         onPivot={item.paper_id ? () => navigateTo('discovery', {
           seed: item.paper_id!,
@@ -915,7 +918,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Favorite Topics',
-                    (((selectedLensSummary.taste_profile as Record<string, any> | null)?.topics as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.topics as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.term ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -923,7 +926,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Favorite Authors',
-                    (((selectedLensSummary.taste_profile as Record<string, any> | null)?.authors as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.authors as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.name ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -931,7 +934,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Favorite Venues',
-                    (((selectedLensSummary.taste_profile as Record<string, any> | null)?.venues as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.venues as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.name ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -939,7 +942,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Recent Wins',
-                    (((selectedLensSummary.taste_profile as Record<string, any> | null)?.recent_wins as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.recent_wins as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.query ?? ''),
                       value: Number(item.strength ?? 0),
                     })).filter((item) => item.label),
@@ -947,7 +950,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Suppressed Topics',
-                    (((selectedLensSummary.negative_profile as Record<string, any> | null)?.topics as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.topics as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.term ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -956,7 +959,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Suppressed Authors',
-                    (((selectedLensSummary.negative_profile as Record<string, any> | null)?.authors as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.authors as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.name ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -965,7 +968,7 @@ export function DiscoveryPage() {
 
                   {renderProfileList(
                     'Suppressed Venues',
-                    (((selectedLensSummary.negative_profile as Record<string, any> | null)?.venues as Array<Record<string, any>> | undefined) ?? []).map((item) => ({
+                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.venues as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
                       label: String(item.name ?? ''),
                       value: Number(item.weight ?? 0),
                     })).filter((item) => item.label),
@@ -1125,7 +1128,7 @@ export function DiscoveryPage() {
                   paper={cardPaper}
                   score={rec.score}
                   rank={recIdx + 1}
-                  scoreBreakdown={rec.score_breakdown as Record<string, any> | null}
+                  scoreBreakdown={rec.score_breakdown}
                   explanation={explanations[rec.id]}
                   onExpandBreakdown={() => fetchExplanation(rec.id)}
                   onDetails={() => {
@@ -1144,15 +1147,10 @@ export function DiscoveryPage() {
                     seedTitle: cardPaper.title,
                   })}
                   actionDisabled={pendingRecId === rec.id}
-                  quickActions={
-                    <AddToCollectionMenu
-                      compact
-                      disabled={pendingRecId === rec.id}
-                      onConfirm={async (collectionIds) => {
-                        await addToCollectionsMutation.mutateAsync({ recId: rec.id, collectionIds })
-                      }}
-                    />
-                  }
+                  onAddToCollections={async (collectionIds) => {
+                    await addToCollectionsMutation.mutateAsync({ recId: rec.id, collectionIds })
+                  }}
+                  defaultCollectionIds={selectedLensCollectionId ? [selectedLensCollectionId] : undefined}
                   reaction={deriveDiscoveryReaction(rec)}
                   // Gold ribbon + checked "In library" for a paper already in the
                   // Library. On a collection lens these are papers from OTHER
@@ -1165,21 +1163,7 @@ export function DiscoveryPage() {
                   }
                   savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
                   savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
-                  // Distinct folio-accent "Add to collection" action, shown for a
-                  // collection lens's already-in-Library papers (Save is passive
-                  // for those). Files the paper into the linked collection. For a
-                  // not-yet-saved rec the Save button already saves + files, so no
-                  // separate button is needed there.
-                  onAddToCollection={
-                    selectedLensCollectionId && rec.in_library
-                      ? () =>
-                          addToCollectionsMutation.mutate({
-                            recId: rec.id,
-                            collectionIds: [selectedLensCollectionId],
-                          })
-                      : undefined
-                  }
-                  addToCollectionTitle="Add to this lens's collection"
+                  trailingHeader={rec.is_new ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
                 >
                   {/* Normal view: provenance is folded into the card body
                       as a single chip row (no standalone "Why this surfaced"
@@ -1244,6 +1228,7 @@ interface DiscoveryCompactRow {
   journal: string
   scoreLabel: string
   scoreValue: number
+  isNew: boolean
 }
 
 interface DiscoveryCompactTableProps {
@@ -1279,6 +1264,7 @@ function DiscoveryCompactTable({
           // 2-decimal label so the column stays narrow + tabular-aligns.
           scoreLabel: score.toFixed(2),
           scoreValue: score,
+          isNew: Boolean(rec.is_new),
         }
       }),
     [recommendations],
@@ -1294,6 +1280,7 @@ function DiscoveryCompactTable({
         meta: { cellOverflow: 'none' },
         cell: ({ row }) => (
           <div className="flex min-w-0 items-center gap-1.5">
+            {row.original.isNew && <StatusBadge tone="positive">New</StatusBadge>}
             <span
               className="min-w-0 flex-1 truncate font-medium text-alma-800"
               title={row.original.title}

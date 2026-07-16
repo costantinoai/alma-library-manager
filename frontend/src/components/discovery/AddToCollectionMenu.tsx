@@ -20,6 +20,8 @@ interface AddToCollectionMenuProps {
   disabled?: boolean
   /** Compact icon-only trigger for dense card action rows. */
   compact?: boolean
+  defaultSelectedIds?: string[]
+  isSaved?: boolean
 }
 
 /**
@@ -28,9 +30,17 @@ interface AddToCollectionMenuProps {
  * and lets the user create a new collection inline. Emits the selected
  * collection ids through `onConfirm`; the caller wires the save.
  */
-export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToCollectionMenuProps) {
+export function AddToCollectionMenu({
+  onConfirm,
+  disabled,
+  compact,
+  defaultSelectedIds = [],
+  isSaved = false,
+}: AddToCollectionMenuProps) {
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(defaultSelectedIds.filter(Boolean)),
+  )
   const [newName, setNewName] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const queryClient = useQueryClient()
@@ -65,7 +75,7 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
   }
 
   const reset = () => {
-    setSelected(new Set())
+    setSelected(new Set(defaultSelectedIds.filter(Boolean)))
     setNewName('')
   }
 
@@ -75,6 +85,17 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
     setSubmitting(true)
     try {
       await onConfirm(ids)
+      await invalidateQueries(
+        queryClient,
+        ['library-collections'],
+        ['library-saved'],
+        ['papers'],
+        ['bootstrap'],
+      )
+      toast({
+        title: isSaved ? 'Added to collections' : 'Saved and added to collections',
+        description: `${ids.length} collection${ids.length === 1 ? '' : 's'} updated.`,
+      })
       setOpen(false)
       reset()
     } catch {
@@ -96,7 +117,7 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
-        if (!next) reset()
+        reset()
       }}
     >
       <PopoverTrigger asChild>
@@ -104,8 +125,9 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
           variant="ghost"
           size="sm"
           disabled={disabled}
-          title="Add to collection(s)"
-          className="gap-1.5 text-slate-600"
+          title="Save to Library and add to collections"
+          aria-label={compact ? 'Collections' : undefined}
+          className="gap-1.5 rounded-md border border-[var(--color-border)] bg-surface-1 text-slate-700 hover:bg-accent-soft hover:text-alma-folio"
           onClick={(e) => e.stopPropagation()}
         >
           <FolderPlus className="h-4 w-4" />
@@ -119,6 +141,9 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
       >
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
           Add to collection(s)
+        </p>
+        <p className="mb-2 text-xs text-slate-500">
+          Adding to a collection also saves this paper to Library.
         </p>
 
         {collections.length > 0 ? (
@@ -179,7 +204,9 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
             disabled={selected.size === 0 || submitting}
             onClick={handleConfirm}
           >
-            {submitting ? 'Adding…' : `Add${selected.size ? ` (${selected.size})` : ''}`}
+            {submitting
+              ? 'Adding…'
+              : `${isSaved ? 'Add' : 'Save & add'}${selected.size ? ` (${selected.size})` : ''}`}
           </Button>
         </div>
       </PopoverContent>

@@ -34,6 +34,7 @@ import {
   type FeedInboxItem,
   type FeedItemStatus,
   type Publication,
+  type ScoreBreakdown,
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
@@ -127,12 +128,15 @@ function toPublication(item: FeedInboxItem): Publication | null {
   }
 }
 
-function parseBreakdown(raw: unknown): Record<string, any> | null {
+function parseBreakdown(raw: unknown): ScoreBreakdown | null {
   if (!raw) return null
-  if (typeof raw === 'object') return raw as Record<string, any>
+  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as ScoreBreakdown
   if (typeof raw === 'string') {
     try {
-      return JSON.parse(raw)
+      const parsed: unknown = JSON.parse(raw)
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? parsed as ScoreBreakdown
+        : null
     } catch {
       return null
     }
@@ -298,8 +302,8 @@ export function FeedPage() {
   const undoMutation = usePaperUndo()
 
   const actionMutation = useMutation({
-    mutationFn: async ({ id, action }: { id: string; action: FeedAction }) => {
-      if (action === 'add') return feedAdd(id)
+    mutationFn: async ({ id, action, collectionIds }: { id: string; action: FeedAction; collectionIds?: string[] }) => {
+      if (action === 'add') return feedAdd(id, collectionIds)
       if (action === 'like') return feedLike(id)
       if (action === 'love') return feedLove(id)
       if (action === 'dismiss') return feedDismiss(id)
@@ -795,6 +799,9 @@ export function FeedPage() {
                   onDislike={() => actionMutation.mutate({ id: item.id, action: 'dislike' })}
                   onDismiss={() => actionMutation.mutate({ id: item.id, action: 'dismiss' })}
                   onUndo={(aspect) => item.paper_id && undoMutation.mutate({ paperId: item.paper_id, aspect })}
+                  onAddToCollections={async (collectionIds) => {
+                    await actionMutation.mutateAsync({ id: item.id, action: 'add', collectionIds })
+                  }}
                   dismissLabel="Dismiss"
                   dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"

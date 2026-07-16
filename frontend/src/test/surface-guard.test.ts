@@ -86,7 +86,7 @@ describe('surface-guard: one centralized design system', () => {
   })
 
   it('keeps the SURFACE_BG / SURFACE_BORDER literal maps intact (Tailwind purge safety)', () => {
-    const surface = readFileSync(join(ROOT, 'components/ui/surface.tsx'), 'utf8')
+    const surface = readFileSync(join(ROOT, 'components/ui/surface-level.ts'), 'utf8')
     for (let n = 0; n <= 4; n++) {
       expect(surface).toContain(`bg-surface-${n}`)
       expect(surface).toContain(`border-edge-${n}`)

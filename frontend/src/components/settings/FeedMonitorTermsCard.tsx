@@ -23,7 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { StatusBadge, monitorHealthTone } from '@/components/ui/status-badge'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
@@ -62,12 +63,13 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
   const [label, setLabel] = useState(monitor.label)
   const [query, setQuery] = useState(monitorQuery(monitor))
   const [enabled, setEnabled] = useState(Boolean(monitor.enabled))
+  const savedQuery = useMemo(() => monitorQuery(monitor), [monitor])
 
   useEffect(() => {
     setLabel(monitor.label)
-    setQuery(monitorQuery(monitor))
+    setQuery(savedQuery)
     setEnabled(Boolean(monitor.enabled))
-  }, [monitor.id, monitor.label, monitor.monitor_key, monitor.config, monitor.enabled])
+  }, [monitor.label, monitor.enabled, savedQuery])
 
   const dirty =
     enabled !== Boolean(monitor.enabled) ||
@@ -294,7 +296,7 @@ export function FeedMonitorTermsCard() {
     onError: () => errorToast('Could not create monitor'),
   })
 
-  const monitors = monitorsQuery.data ?? []
+  const monitors = useMemo(() => monitorsQuery.data ?? [], [monitorsQuery.data])
   const authorMonitors = useMemo(
     () => monitors.filter((monitor) => monitor.monitor_type === 'author'),
     [monitors],

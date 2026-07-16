@@ -1,11 +1,31 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import { vendorChunk } from './src/build/chunkGroups'
+
+const MAX_CHUNK_BYTES = 500 * 1024
+
+function enforceChunkBudget(maxBytes: number): Plugin {
+  return {
+    name: 'enforce-chunk-budget',
+    generateBundle(_options, bundle) {
+      const oversized = Object.values(bundle).flatMap((entry) => {
+        if (entry.type !== 'chunk') return []
+        const bytes = Buffer.byteLength(entry.code)
+        return bytes > maxBytes ? [`${entry.fileName} (${(bytes / 1024).toFixed(1)} kB)`] : []
+      })
+
+      if (oversized.length > 0) {
+        this.error(`JavaScript chunk budget exceeded (${maxBytes / 1024} kB): ${oversized.join(', ')}`)
+      }
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), enforceChunkBudget(MAX_CHUNK_BYTES)],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -30,11 +50,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom'],
-          'vendor-query': ['@tanstack/react-query'],
-          'vendor-graph': ['react-force-graph-2d'],
-        },
+        manualChunks: vendorChunk,
       },
     },
   },

@@ -166,7 +166,7 @@ export function AuthorMergeDialog({
     [allowedTargetIds],
   )
   const hasAllowedTargetFilter = allowedTargetIds !== undefined
-  const allAuthors = authorsQuery.data ?? []
+  const allAuthors = useMemo(() => authorsQuery.data ?? [], [authorsQuery.data])
 
   // Direction. Normal mode locks the SURVIVOR (primaryAuthor); the user picks
   // the duplicate to absorb. Absorb mode locks the author to ABSORB

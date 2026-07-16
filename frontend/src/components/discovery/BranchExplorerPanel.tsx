@@ -102,7 +102,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
     setPinned(controls.pinned)
     setMuted(controls.muted)
     setBoosted(controls.boosted)
-  }, [lens?.id, lens?.branch_controls])
+  }, [lens])
 
   const branchQuery = useQuery({
     // `resolution` in the key so dragging the slider re-previews live before the
@@ -140,8 +140,15 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
     },
   })
 
-  const branches = branchQuery.data?.branches ?? []
-  const coldStart = (lens?.last_retrieval_summary as Record<string, any> | null)?.cold_start ?? null
+  const branches = useMemo(() => branchQuery.data?.branches ?? [], [branchQuery.data?.branches])
+  const coldStart = (
+    (lens?.last_retrieval_summary as Record<string, unknown> | null)?.cold_start ?? null
+  ) as {
+    state?: unknown
+    query?: unknown
+    seed_count?: unknown
+    external_results?: unknown
+  } | null
   const savedControls = normalizeControls(lens)
   const isDirty = useMemo(() => {
     const normalizeArray = (values: string[]) => [...values].sort()
