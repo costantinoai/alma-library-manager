@@ -2,55 +2,33 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import sqlite3
 import uuid
 from collections import defaultdict
-from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
 from time import perf_counter
-from typing import Any, Optional
+from typing import Any
 
-from alma.discovery.semantic_scholar import upsert_specter2_embedding
+from alma.core.concurrency import bounded_thread_pool
+from alma.core.db_retry import commit_with_retry
+from alma.core.scoring_math import clamp
 from alma.discovery import similarity as sim_module
 from alma.discovery.scoring import (
     compute_preference_profile,
+)
+from alma.discovery.scoring import (
     load_settings as load_scoring_settings,
 )
-from alma.core.scoring_math import clamp
+from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
-from .scoring_loop import SIGNAL_NAMES, ScoringContext, score_candidates
-
-_clamp = clamp  # D-3: canonical clamp under the legacy local name
-
-
-def _jsonable_numeric(value: Any) -> Any:
-    """json.dumps default for numpy scalars / arrays.
-
-    Score breakdowns are built across many lanes; any numeric path that
-    forgets to call ``float()`` would otherwise crash lens refresh with
-    "Object of type float32 is not JSON serializable" at staging time.
-    """
-    item = getattr(value, "item", None)
-    if callable(item):
-        return item()
-    tolist = getattr(value, "tolist", None)
-    if callable(tolist):
-        return tolist()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 from .. import library as library_app
-from alma.core.db_retry import commit_with_retry
-
 from ..feed import _commit_if_pending
 
 # --- D-9: re-exported from .lens_crud (moved out of this god-module) ---
 from .lens_crud import (
-    DEFAULT_BRANCH_CONTROLS,
-    DEFAULT_CHANNEL_WEIGHTS,
-    VALID_CONTEXT_TYPES,
-    VALID_RECOMMENDATION_ACTIONS,
     _AUTO_WEIGHT_CEIL,
     _AUTO_WEIGHT_FLOOR,
     _AUTO_WEIGHT_HALF_LIFE_DAYS,
@@ -63,6 +41,10 @@ from .lens_crud import (
     _PAPER_DISMISS_SIGNAL_HARD,
     _PAPER_DISMISS_SIGNAL_SOFT,
     _PAPER_DISMISS_SUPPRESSION_THRESHOLD,
+    DEFAULT_BRANCH_CONTROLS,
+    DEFAULT_CHANNEL_WEIGHTS,
+    VALID_CONTEXT_TYPES,
+    VALID_RECOMMENDATION_ACTIONS,
     _aggregate_branch_outcomes,
     _apply_branch_auto_lifecycle,
     _apply_branch_controls,
@@ -87,11 +69,13 @@ from .lens_crud import (
     _table_exists,
     apply_branch_control_action,
     clear_recommendations,
+    count_new_discovery_recommendations,
     create_lens,
     default_channel_weights,
     delete_lens,
     get_lens,
     get_recommendation,
+    latest_discovery_refresh_window,
     list_lens_recommendations,
     list_lens_signals,
     list_lenses,
@@ -104,6 +88,25 @@ from .lens_crud import (
     update_lens,
     upsert_setting,
 )
+
+# --- D-9: re-exported from .retrieval (moved out of this god-module) ---
+from .retrieval import (
+    _GRAPH_FALLBACK_DEADLINE_S,
+    _candidate_author_keys,
+    _candidate_key,
+    _candidate_source_bucket,
+    _candidate_topic_keys,
+    _candidate_venue_key,
+    _drain_futures_within_deadline,
+    _merge_channel_candidates,
+    _recommendation_mix_summary,
+    _retrieve_external_channel,
+    _retrieve_graph_channel,
+    _retrieve_lexical_channel,
+    _retrieve_vector_channel,
+    _select_diverse_recommendation_candidates,
+)
+from .scoring_loop import SIGNAL_NAMES, ScoringContext, score_candidates
 
 # --- D-9: re-exported from .seed_profile (moved out of this god-module) ---
 from .seed_profile import (
@@ -136,23 +139,23 @@ from .seed_profile import (
     split_preference_pubs,
 )
 
-# --- D-9: re-exported from .retrieval (moved out of this god-module) ---
-from .retrieval import (
-    _GRAPH_FALLBACK_DEADLINE_S,
-    _candidate_author_keys,
-    _candidate_key,
-    _candidate_source_bucket,
-    _candidate_topic_keys,
-    _candidate_venue_key,
-    _drain_futures_within_deadline,
-    _merge_channel_candidates,
-    _recommendation_mix_summary,
-    _retrieve_external_channel,
-    _retrieve_graph_channel,
-    _retrieve_lexical_channel,
-    _retrieve_vector_channel,
-    _select_diverse_recommendation_candidates,
-)
+_clamp = clamp  # D-3: canonical clamp under the legacy local name
+
+
+def _jsonable_numeric(value: Any) -> Any:
+    """json.dumps default for numpy scalars / arrays.
+
+    Score breakdowns are built across many lanes; any numeric path that
+    forgets to call ``float()`` would otherwise crash lens refresh with
+    "Object of type float32 is not JSON serializable" at staging time.
+    """
+    item = getattr(value, "item", None)
+    if callable(item):
+        return item()
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return tolist()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def _calibration_block(cal) -> dict:
@@ -180,7 +183,7 @@ def _library_fingerprint(positive_ids: list[str], negative_ids: list[str]) -> st
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-def _cache_get(db: sqlite3.Connection, cache_key: str, fingerprint: str) -> Optional[dict]:
+def _cache_get(db: sqlite3.Connection, cache_key: str, fingerprint: str) -> dict | None:
     """Load a cached artifact if the fingerprint matches."""
     try:
         row = db.execute(
@@ -195,8 +198,8 @@ def _cache_get(db: sqlite3.Connection, cache_key: str, fingerprint: str) -> Opti
 
 
 def _cache_put(db: sqlite3.Connection, cache_key: str, cache_type: str,
-               fingerprint: str, *, value_json: Optional[str] = None,
-               value_blob: Optional[bytes] = None) -> None:
+               fingerprint: str, *, value_json: str | None = None,
+               value_blob: bytes | None = None) -> None:
     """Store a cached artifact."""
     try:
         db.execute(
@@ -261,7 +264,7 @@ def refresh_lens_recommendations(
     trigger_source: str = "user",
     limit: int = 50,
     ctx=None,
-) -> Optional[dict]:
+) -> dict | None:
     """Generate per-lens recommendations using 4 retrieval channels."""
     overall_start = perf_counter()
     phase_started = overall_start
@@ -336,12 +339,13 @@ def refresh_lens_recommendations(
         lane_name: str,
         runner,
         *,
-        label: Optional[str] = None,
+        label: str | None = None,
     ):
         started = perf_counter()
         if not parent_job_id:
             return runner()
-        from alma.api.scheduler import add_job_log as _add_job_log, set_job_status as _set_job_status
+        from alma.api.scheduler import add_job_log as _add_job_log
+        from alma.api.scheduler import set_job_status as _set_job_status
         pretty = label or lane_name
         subtask_id = f"{parent_job_id}_lane_{lane_name}"
         try:
@@ -806,7 +810,7 @@ def refresh_lens_recommendations(
     # embedding provider is configured — the semantic fallback bails
     # out via its existing `provider is None` guard.
     phase_started = perf_counter()
-    user_topic_embeddings: Optional[dict[str, Any]] = None
+    user_topic_embeddings: dict[str, Any] | None = None
     user_topic_weights = profile.get("topic_weights") or {}
     # Resolve the embedding provider ONCE per refresh and reuse it for the
     # whole scoring loop. `get_active_provider()` probes the configured
@@ -890,6 +894,8 @@ def refresh_lens_recommendations(
     phase_started = perf_counter()
     from alma.services.signal_lab import (
         preload_candidate_authors as _preload_authors,
+    )
+    from alma.services.signal_lab import (
         preload_preference_profile_maps as _preload_pref,
     )
     preloaded_preference_profile = _preload_pref(db)
@@ -1381,5 +1387,3 @@ def refresh_lens_recommendations(
 # batch-fetch helper). The lane pool is shut down wait=False so an abandoned
 # lane can't block the refresh.
 _LANE_HARD_CAP_S: float = 60.0
-
-

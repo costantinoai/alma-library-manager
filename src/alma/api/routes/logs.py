@@ -7,7 +7,6 @@ from the Python root logger, plus an endpoint to query them.
 import collections
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -42,7 +41,7 @@ class RingBufferHandler(logging.Handler):
         limit: int = 100,
         level: str | None = None,
         logger_name: str | None = None,
-        since: Optional[str] = None,
+        since: str | None = None,
         operation_id: str | None = None,
     ) -> list[dict]:
         """Return the most recent *limit* entries, optionally filtered by level."""
@@ -81,7 +80,7 @@ def get_log_entries(
     limit: int = 100,
     level: str | None = None,
     logger_name: str | None = None,
-    since: Optional[str] = None,
+    since: str | None = None,
     operation_id: str | None = None,
 ) -> list[dict]:
     """Public accessor for the buffered log entries."""

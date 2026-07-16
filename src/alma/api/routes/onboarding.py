@@ -19,12 +19,11 @@ the frontend against the existing endpoints — see ``tasks/02_ONBOARDING.md``.
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from alma.api.deps import get_db, get_current_user
+from alma.api.deps import get_current_user, get_db
 from alma.application import library as library_app
 from alma.application.discovery.lens_crud import upsert_setting
 from alma.application.followed_authors import (
@@ -57,7 +56,7 @@ _USER_NAME_KEY = "user.name"
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _get_kv(db: sqlite3.Connection, key: str) -> Optional[str]:
+def _get_kv(db: sqlite3.Connection, key: str) -> str | None:
     """Read one raw ``discovery_settings`` value (no default-merge).
 
     ``lens_crud.read_settings`` merges discovery defaults over the row set, so
@@ -76,7 +75,7 @@ def _get_kv(db: sqlite3.Connection, key: str) -> Optional[str]:
     return None if value is None else str(value)
 
 
-def _truthy(value: Optional[str]) -> bool:
+def _truthy(value: str | None) -> bool:
     return bool(value) and str(value).strip().lower() in ("1", "true", "yes")
 
 
@@ -95,7 +94,7 @@ class OnboardingStatusResponse(BaseModel):
     has_owner: bool
     library_count: int
     followed_count: int
-    user_name: Optional[str] = None
+    user_name: str | None = None
 
 
 class ProfileRequest(BaseModel):
@@ -103,28 +102,28 @@ class ProfileRequest(BaseModel):
 
 
 class ResolveOwnerRequest(BaseModel):
-    orcid: Optional[str] = None
-    openalex_id: Optional[str] = None
+    orcid: str | None = None
+    openalex_id: str | None = None
 
 
 class OwnerProfileResponse(BaseModel):
     openalex_id: str
-    name: Optional[str] = None
-    institution: Optional[str] = None
+    name: str | None = None
+    institution: str | None = None
     works_count: int = 0
     cited_by_count: int = 0
-    orcid: Optional[str] = None
+    orcid: str | None = None
 
 
 class IngestOwnerRequest(BaseModel):
     openalex_id: str = Field(min_length=1)
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class IngestOwnerResponse(BaseModel):
     author_id: str
     openalex_id: str
-    job_id: Optional[str] = None
+    job_id: str | None = None
 
 
 class PromoteOwnerResponse(BaseModel):
@@ -143,8 +142,8 @@ class PaperFeedbackRequest(BaseModel):
 class PaperFeedbackResponse(BaseModel):
     paper_id: str
     action: str
-    status: Optional[str] = None
-    rating: Optional[int] = None
+    status: str | None = None
+    rating: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -250,7 +249,7 @@ def resolve_owner_identity(
     affiliation + works count, then calls ``/ingest-owner`` on confirm.
     """
     openalex_id = ""
-    fallback_name: Optional[str] = None
+    fallback_name: str | None = None
 
     raw_openalex = (payload.openalex_id or "").strip()
     raw_orcid = (payload.orcid or "").strip()

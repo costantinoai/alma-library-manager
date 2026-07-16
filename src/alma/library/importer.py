@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
 from alma.core.sql_helpers import standalone_paper_sql
@@ -22,9 +22,11 @@ from alma.core.utils import (
     clean_display_text,
     generate_paper_id,
     normalize_text,
-    normalize_doi as _normalize_doi_core,
     resolve_existing_paper_id,
     strong_identifiers_conflict,
+)
+from alma.core.utils import (
+    normalize_doi as _normalize_doi_core,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,8 +47,8 @@ class ImportResult:
     skipped: int = 0        # Skipped (duplicates)
     failed: int = 0         # Failed to import
     parse_duplicates: int = 0  # Canonical-identity collapses dropped in parsing
-    errors: List[str] = field(default_factory=list)   # Error messages
-    items: List[dict] = field(default_factory=list)    # Imported items
+    errors: list[str] = field(default_factory=list)   # Error messages
+    items: list[dict] = field(default_factory=list)    # Imported items
 
     def to_dict(self) -> dict:
         return {
@@ -65,7 +67,7 @@ class ImportResult:
 # LaTeX special-character map
 # ---------------------------------------------------------------------------
 
-_LATEX_CHARS: List[tuple[str, str]] = [
+_LATEX_CHARS: list[tuple[str, str]] = [
     # Umlauts
     ('{\\"a}', "\u00e4"), ('{\\"o}', "\u00f6"), ('{\\"u}', "\u00fc"),
     ('{\\"A}', "\u00c4"), ('{\\"O}', "\u00d6"), ('{\\"U}', "\u00dc"),
@@ -212,7 +214,7 @@ def _normalize_bibtex_entry(entry: dict) -> dict:
     }
 
 
-def _normalize_doi_value(doi_val: Optional[str]) -> str:
+def _normalize_doi_value(doi_val: str | None) -> str:
     """Normalize a DOI string to bare format, returning empty string if invalid."""
     return _normalize_doi_core(doi_val) or ""
 
@@ -220,7 +222,7 @@ def _normalize_doi_value(doi_val: Optional[str]) -> str:
 def import_bibtex(
     bibtex_content: str,
     conn: sqlite3.Connection,
-    collection_name: Optional[str] = None,
+    collection_name: str | None = None,
 ) -> ImportResult:
     """Parse a BibTeX string and import papers into the library.
 
@@ -261,7 +263,7 @@ def import_bibtex(
     # Target collection is created INSIDE the write gate below. `write_section`
     # does a `conn.rollback()` on entry, so a row inserted here (before the gate)
     # would be discarded — the collection must be born within the committed unit.
-    collection_id: Optional[str] = None
+    collection_id: str | None = None
 
     postprocess_refs: list[str] = []
 
@@ -347,7 +349,7 @@ def import_bibtex(
 def import_bibtex_file(
     file_path: str,
     conn: sqlite3.Connection,
-    collection_name: Optional[str] = None,
+    collection_name: str | None = None,
 ) -> ImportResult:
     """Import papers from a .bib file.
 
@@ -360,7 +362,7 @@ def import_bibtex_file(
         ImportResult.
     """
     try:
-        with open(file_path, "r", encoding="utf-8") as fh:
+        with open(file_path, encoding="utf-8") as fh:
             content = fh.read()
     except Exception as exc:
         result = ImportResult()
@@ -374,8 +376,8 @@ def import_bibtex_file(
 # ---------------------------------------------------------------------------
 
 def _build_zotero_collection_paths(
-    collections: List[Dict[str, Any]],
-) -> Dict[str, str]:
+    collections: list[dict[str, Any]],
+) -> dict[str, str]:
     """Resolve Zotero collection keys to "Parent / Child" path strings.
 
     ALMa's ``collections.name`` column is flat and ``UNIQUE``, so we encode
@@ -393,8 +395,8 @@ def _build_zotero_collection_paths(
         ``" / "`` as the separator. Cycles (malformed inputs) are broken
         defensively so the function never recurses forever.
     """
-    name_by_key: Dict[str, str] = {}
-    parent_by_key: Dict[str, Optional[str]] = {}
+    name_by_key: dict[str, str] = {}
+    parent_by_key: dict[str, str | None] = {}
     for c in collections:
         key = (c.get("key") or "").strip()
         if not key:
@@ -453,7 +455,7 @@ def _normalize_zotero_item(item: dict) -> dict:
 
     # Year
     date_str = data.get("date", "")
-    year: Optional[int] = None
+    year: int | None = None
     if date_str:
         match = re.search(r'(\d{4})', date_str)
         if match:
@@ -508,8 +510,8 @@ def import_zotero(
     api_key: str,
     conn: sqlite3.Connection,
     library_type: str = "user",
-    collection_key: Optional[str] = None,
-    collection_name: Optional[str] = None,
+    collection_key: str | None = None,
+    collection_name: str | None = None,
 ) -> ImportResult:
     """Import papers from a Zotero library.
 
@@ -538,7 +540,7 @@ def import_zotero(
 
     # Target collection is created INSIDE the write gate below (see the RDF/BibTeX
     # importers): `write_section` rolls back on entry, so a pre-gate INSERT is lost.
-    local_collection_id: Optional[str] = None
+    local_collection_id: str | None = None
 
     # Fetch items (paginated -- pyzotero handles pagination with everything())
     try:
@@ -570,7 +572,7 @@ def import_zotero(
             })
     except Exception:
         pass  # non-critical
-    zotero_collection_path_map: Dict[str, str] = _build_zotero_collection_paths(
+    zotero_collection_path_map: dict[str, str] = _build_zotero_collection_paths(
         zotero_collections_meta
     )
 
@@ -690,7 +692,7 @@ def list_zotero_collections(
     library_id: str,
     api_key: str,
     library_type: str = "user",
-) -> List[dict]:
+) -> list[dict]:
     """List collections in a Zotero library.
 
     Args:
@@ -984,7 +986,7 @@ def _rdf_ispartof_container_refs(node: ET.Element) -> list[str]:
 def _rdf_ispartof_metadata(
     node: ET.Element,
     containers_by_uri: dict[str, dict[str, str]],
-    container_ref_counts: Optional[dict[str, int]] = None,
+    container_ref_counts: dict[str, int] | None = None,
 ) -> tuple[str, str, str]:
     """Return ``(journal_or_container, doi, url)`` from dcterms:isPartOf.
 
@@ -1042,7 +1044,7 @@ def _rdf_ispartof_metadata(
     return journal.strip(), _normalize_doi_value(doi), url.strip()
 
 
-def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dict[str, list[str]]]:
+def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[dict[str, str], dict[str, list[str]]]:
     """Extract collection hierarchy + item membership from a Zotero RDF tree.
 
     Zotero's RDF export represents collections as ``<z:Collection>`` elements
@@ -1086,8 +1088,8 @@ def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dic
     # Sub-collection detection: a member URI that is itself a collection key
     # marks a parent/child collection edge; everything else is an item ref.
     collection_keys = {c["key"] for c in raw_collections}
-    parent_by_key: Dict[str, Optional[str]] = {c["key"]: None for c in raw_collections}
-    item_membership: Dict[str, list[str]] = {}
+    parent_by_key: dict[str, str | None] = {c["key"]: None for c in raw_collections}
+    item_membership: dict[str, list[str]] = {}
     for c in raw_collections:
         for ref in c["members"]:
             if ref in collection_keys:
@@ -1102,7 +1104,7 @@ def _parse_zotero_rdf_collections(root: ET.Element) -> tuple[Dict[str, str], Dic
 
     # Convert membership values from collection keys to full path strings,
     # dropping blanks/duplicates so callers can treat the list as canonical.
-    paths_by_item: Dict[str, list[str]] = {}
+    paths_by_item: dict[str, list[str]] = {}
     for item_uri, keys in item_membership.items():
         seen: set[str] = set()
         ordered: list[str] = []
@@ -1161,7 +1163,7 @@ def _parse_zotero_rdf(xml_content: str) -> tuple[list[dict], int]:
             continue
 
         title = ""
-        year: Optional[int] = None
+        year: int | None = None
         journal = ""
         abstract = ""
         keywords: list[str] = []
@@ -1259,7 +1261,7 @@ def _parse_zotero_rdf(xml_content: str) -> tuple[list[dict], int]:
 def import_zotero_rdf(
     rdf_content: str,
     conn: sqlite3.Connection,
-    collection_name: Optional[str] = None,
+    collection_name: str | None = None,
 ) -> ImportResult:
     """Import papers from a Zotero RDF export file content."""
     result = ImportResult()
@@ -1276,7 +1278,7 @@ def import_zotero_rdf(
 
     # Target collection is created INSIDE the write gate below: `write_section`
     # rolls back any pending txn on entry, so a pre-gate INSERT would be discarded.
-    local_collection_id: Optional[str] = None
+    local_collection_id: str | None = None
 
     postprocess_refs: list[str] = []
 
@@ -1380,8 +1382,8 @@ def _find_existing_paper(
     doi: str,
     openalex_id: str,
     title: str,
-    year: Optional[int] = None,
-) -> Optional[str]:
+    year: int | None = None,
+) -> str | None:
     """Find an existing paper row for import dedup.
 
     Delegates to ``resolve_existing_paper_id`` for the canonical triple
@@ -1432,13 +1434,13 @@ class _FuzzyTitleMatch:
     """Closest existing standalone paper to a title-only import candidate."""
 
     confidence: float = 0.0
-    paper_id: Optional[str] = None
+    paper_id: str | None = None
 
 
 def _best_fuzzy_title_match(
     conn: sqlite3.Connection,
     title: str,
-    year: Optional[int] = None,
+    year: int | None = None,
 ) -> _FuzzyTitleMatch:
     """Return the closest existing REAL paper by fuzzy title, with its id (40.4).
 
@@ -1495,8 +1497,8 @@ def _best_fuzzy_title_match(
 
 def _precompute_fuzzy_matches(
     conn: sqlite3.Connection,
-    records: List[dict],
-) -> List[Optional[_FuzzyTitleMatch]]:
+    records: list[dict],
+) -> list[_FuzzyTitleMatch | None]:
     """Fuzzy-match every title-only record BEFORE the gated write section (40.4).
 
     The O(pool·items) ``SequenceMatcher`` scan is read-only + CPU; running it
@@ -1504,7 +1506,7 @@ def _precompute_fuzzy_matches(
     list aligned to ``records``; identified records (DOI or OpenAlex id) map to
     ``None`` because their staging decision never needs a fuzzy score.
     """
-    out: List[Optional[_FuzzyTitleMatch]] = []
+    out: list[_FuzzyTitleMatch | None] = []
     for rec in records:
         doi = _normalize_doi_value(rec.get("doi"))
         openalex_id = str(rec.get("openalex_id") or "").strip()
@@ -1522,8 +1524,8 @@ def _should_stage_import(
     title: str,
     doi: str,
     openalex_id: str = "",
-    year: Optional[int] = None,
-    fuzzy_match: Optional[_FuzzyTitleMatch] = None,
+    year: int | None = None,
+    fuzzy_match: _FuzzyTitleMatch | None = None,
 ) -> tuple[bool, _FuzzyTitleMatch]:
     """Decide whether a title-only import must be STAGED for review.
 
@@ -1551,13 +1553,13 @@ def _create_staged_import_paper(
     title: str,
     authors: str,
     doi: str = "",
-    notes: Optional[str] = None,
-    year: Optional[int] = None,
-    journal: Optional[str] = None,
-    abstract: Optional[str] = None,
-    url: Optional[str] = None,
+    notes: str | None = None,
+    year: int | None = None,
+    journal: str | None = None,
+    abstract: str | None = None,
+    url: str | None = None,
     title_confidence: float = 0.0,
-    matched_paper_id: Optional[str] = None,
+    matched_paper_id: str | None = None,
 ) -> str:
     paper_id = generate_paper_id()
     now = datetime.utcnow().isoformat()
@@ -1604,7 +1606,7 @@ def _create_staged_import_paper(
     return paper_id
 
 
-def _existing_import_row(conn: sqlite3.Connection, paper_id: str) -> Optional[sqlite3.Row]:
+def _existing_import_row(conn: sqlite3.Connection, paper_id: str) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT id, status, added_from, added_at, openalex_resolution_reason,
@@ -1669,10 +1671,10 @@ def _merge_missing_import_metadata(
     *,
     authors: str,
     doi: str = "",
-    year: Optional[int] = None,
-    journal: Optional[str] = None,
-    abstract: Optional[str] = None,
-    url: Optional[str] = None,
+    year: int | None = None,
+    journal: str | None = None,
+    abstract: str | None = None,
+    url: str | None = None,
     openalex_id: str = "",
 ) -> None:
     """Fill blank metadata on an existing non-Library import target."""
@@ -1719,14 +1721,14 @@ def _import_or_stage_paper(
     title: str,
     authors: str,
     doi: str = "",
-    notes: Optional[str] = None,
+    notes: str | None = None,
     rating: int = 3,
-    year: Optional[int] = None,
-    journal: Optional[str] = None,
-    abstract: Optional[str] = None,
-    url: Optional[str] = None,
+    year: int | None = None,
+    journal: str | None = None,
+    abstract: str | None = None,
+    url: str | None = None,
     openalex_id: str = "",
-    fuzzy_match: Optional[_FuzzyTitleMatch] = None,
+    fuzzy_match: _FuzzyTitleMatch | None = None,
 ) -> tuple[str, str]:
     """Apply D4 import semantics and return ``(paper_id, outcome)``.
 
@@ -1873,12 +1875,12 @@ def _create_library_paper(
     authors: str,
     doi: str = "",
     author_id: str = "import",
-    notes: Optional[str] = None,
+    notes: str | None = None,
     rating: int = 3,
-    year: Optional[int] = None,
-    journal: Optional[str] = None,
-    abstract: Optional[str] = None,
-    url: Optional[str] = None,
+    year: int | None = None,
+    journal: str | None = None,
+    abstract: str | None = None,
+    url: str | None = None,
 ) -> str:
     """Create a saved Library paper with import provenance.
 
@@ -2061,7 +2063,7 @@ def _resolve_imported_authors_inline(conn: sqlite3.Connection) -> None:
 def _lookup_import_target(
     conn: sqlite3.Connection,
     paper_id: str,
-) -> Optional[str]:
+) -> str | None:
     """Resolve a post-import publication row even if forms changed.
 
     During post-import processing, owner IDs can be remapped (``import`` ->
@@ -2084,7 +2086,7 @@ def _lookup_import_target(
 
 def _trigger_background_enrichment(
     result: ImportResult,
-    imported_refs: Optional[list[str]] = None,
+    imported_refs: list[str] | None = None,
 ) -> None:
     """Spawn a background thread to enrich newly imported publications.
 
@@ -2201,9 +2203,8 @@ def _trigger_background_enrichment(
             schedule_immediate,
             set_job_status,
         )
-        from alma.library.enrichment import enrich_all_unenriched, enrich_publication
         from alma.library.deduplication import run_deduplication
-        from alma.config import get_db_path
+        from alma.library.enrichment import enrich_all_unenriched, enrich_publication
 
         job_id = f"import_postprocess_{uuid.uuid4().hex[:10]}"
         refs = imported_refs or []

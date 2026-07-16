@@ -35,7 +35,6 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
 
 from alma.application.signal_projection import normalize_feedback_event_value
 from alma.core.scoring_math import age_decay
@@ -75,7 +74,7 @@ class LibraryState:
     """
 
     model: str = ""
-    centroid: Optional["object"] = None  # numpy.ndarray | None
+    centroid: object | None = None  # numpy.ndarray | None
     topic_weights: dict[str, float] = field(default_factory=dict)
     author_centroid_sim: dict[str, float] = field(
         default_factory=dict
@@ -295,9 +294,9 @@ def _redistribute(
 def score_papers_batch(
     db: sqlite3.Connection,
     paper_ids: list[str],
-    state: Optional[LibraryState] = None,
+    state: LibraryState | None = None,
     *,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> dict[str, float]:
     """Composite paper-signal score for each id in `paper_ids`.
 
@@ -504,7 +503,7 @@ def score_papers_batch(
 def compute_paper_signal_score(
     db: sqlite3.Connection,
     paper_id: str,
-    state: Optional[LibraryState] = None,
+    state: LibraryState | None = None,
 ) -> float:
     """Single-paper convenience wrapper over `score_papers_batch`."""
 
@@ -513,7 +512,7 @@ def compute_paper_signal_score(
 
 # -- helpers ----------------------------------------------------------
 
-def _days_since(ts: Optional[str], now: datetime) -> Optional[float]:
+def _days_since(ts: str | None, now: datetime) -> float | None:
     """Return days between `ts` (ISO-ish) and `now`; None if unparseable."""
 
     if not ts:

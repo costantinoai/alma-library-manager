@@ -11,12 +11,11 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from alma.api.deps import get_db, get_current_user
+from alma.api.deps import get_current_user, get_db
 from alma.core.db_write import run_write_unit
 from alma.core.redaction import redact_sensitive_text
 
@@ -64,7 +63,7 @@ def list_topics(
     user: dict = Depends(get_current_user),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    search: Optional[str] = Query(None, description="Filter by topic name"),
+    search: str | None = Query(None, description="Filter by topic name"),
 ):
     try:
         from alma.library.topic_deduplication import _ensure_topic_tables
@@ -201,9 +200,9 @@ def dedup_dry_run(
 ):
     try:
         from alma.library.topic_deduplication import (
-            find_similar_topics,
-            find_ai_merge_candidates,
             _ensure_topic_tables,
+            find_ai_merge_candidates,
+            find_similar_topics,
         )
         _ensure_topic_tables(db)
 

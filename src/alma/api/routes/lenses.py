@@ -9,6 +9,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from alma.api.deps import get_current_user, get_db
+from alma.api.helpers import raise_internal
 from alma.api.models import (
     LensBranchPreviewResponse,
     LensCreate,
@@ -18,7 +19,6 @@ from alma.api.models import (
 )
 from alma.application import discovery as discovery_app
 from alma.core.operations import OperationOutcome, OperationRunner
-from alma.api.helpers import raise_internal
 
 logger = logging.getLogger(__name__)
 

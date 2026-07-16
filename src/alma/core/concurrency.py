@@ -35,21 +35,21 @@ fan-out module without going through here.
 from __future__ import annotations
 
 import contextvars
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from typing import Iterator, Optional
 
 from alma.core.job_policy import policy_for
 
 # The running background job's nested fan-out budget, or None on the interactive
 # request path (where no clamp applies). Default None = "no active job context".
-_job_fanout_budget: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+_job_fanout_budget: contextvars.ContextVar[int | None] = contextvars.ContextVar(
     "alma_job_fanout_budget", default=None
 )
 
 
 @contextmanager
-def enter_job_fanout(operation_key: Optional[str]) -> Iterator[None]:
+def enter_job_fanout(operation_key: str | None) -> Iterator[None]:
     """Bind the current (scheduler worker) thread to its policy's fan-out budget.
 
     Called by the scheduler around a background job's runner. The budget is
@@ -67,7 +67,7 @@ def enter_job_fanout(operation_key: Optional[str]) -> Iterator[None]:
         _job_fanout_budget.reset(token)
 
 
-def current_fanout_budget() -> Optional[int]:
+def current_fanout_budget() -> int | None:
     """The active per-job fan-out budget, or None on the interactive path."""
     return _job_fanout_budget.get()
 
@@ -85,7 +85,7 @@ def bounded_max_workers(requested: int) -> int:
     return max(1, min(requested, int(budget)))
 
 
-def _publish_budget(budget: Optional[int]) -> None:
+def _publish_budget(budget: int | None) -> None:
     """`ThreadPoolExecutor` initializer: re-bind the captured budget in a worker
     thread so a *nested* `bounded_thread_pool` created inside a fanned-out task
     inherits the same ceiling (contextvars don't cross the thread boundary)."""

@@ -5,30 +5,26 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
-from typing import Optional
 from urllib.parse import parse_qs, urlparse
-
-logger = logging.getLogger(__name__)
 
 from alma.application import library as library_app
 from alma.application.feed import _upsert_candidate_paper
+from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_write import run_write_unit
 from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
-from alma.discovery.source_search import (
-    FINDADD_LANE_DEADLINE_S,
-    merge_streamed_results,
-    stream_across_sources,
-)
 from alma.discovery.engine import (
     build_preference_profile,
     get_library_papers,
     get_rated_publications,
     load_settings,
     publication_text,
-    score_discovery_candidate,
+)
+from alma.discovery.source_search import (
+    FINDADD_LANE_DEADLINE_S,
+    merge_streamed_results,
+    stream_across_sources,
 )
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
@@ -39,12 +35,14 @@ from alma.openalex.client import (
 )
 from alma.openalex.http import get_client
 
+logger = logging.getLogger(__name__)
+
 _OA_WORK_RE = re.compile(r"(?:https?://)?(?:www\.)?openalex\.org/(W\d+)", re.IGNORECASE)
 _DOI_RE = re.compile(r"(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 _ARXIV_RE = re.compile(r"(?:arxiv(?:\.org)?(?:/abs|/pdf)?/?)?(\d{4}\.\d{4,5})(?:v\d+)?", re.IGNORECASE)
 
 
-def _extract_openalex_work_id(text: str) -> Optional[str]:
+def _extract_openalex_work_id(text: str) -> str | None:
     raw = (text or "").strip()
     if not raw:
         return None
@@ -56,7 +54,7 @@ def _extract_openalex_work_id(text: str) -> Optional[str]:
     return None
 
 
-def _extract_doi(text: str) -> Optional[str]:
+def _extract_doi(text: str) -> str | None:
     raw = (text or "").strip()
     if not raw:
         return None
@@ -91,7 +89,7 @@ def _extract_doi(text: str) -> Optional[str]:
     return None
 
 
-def _extract_arxiv_doi(text: str) -> Optional[str]:
+def _extract_arxiv_doi(text: str) -> str | None:
     raw = (text or "").strip()
     if not raw:
         return None
@@ -128,7 +126,7 @@ def _seed_sibling_resolve_cache(work: dict, resp) -> None:
         logger.debug("Sibling resolve-cache seed failed: %s", exc)
 
 
-def _fetch_work_by_openalex_id(openalex_work_id: str) -> Optional[dict]:
+def _fetch_work_by_openalex_id(openalex_work_id: str) -> dict | None:
     # Canonicalize to the bare `W…` form: callers hold the id in whatever
     # shape they learned it (the /lookup preview returns the full
     # `https://openalex.org/W…` URL), and the canonical path is also what
@@ -159,7 +157,7 @@ def _fetch_work_by_openalex_id(openalex_work_id: str) -> Optional[dict]:
     return data
 
 
-def _fetch_work_by_doi(doi: str) -> Optional[dict]:
+def _fetch_work_by_doi(doi: str) -> dict | None:
     clean = normalize_doi(doi or "")
     if not clean:
         return None
@@ -424,7 +422,7 @@ def _search_works_raw(query: str, *, limit: int = 20) -> list[dict]:
     return (resp.json() or {}).get("results") or []
 
 
-def _resolve_raw_work_for_query(query: str) -> tuple[Optional[dict], str]:
+def _resolve_raw_work_for_query(query: str) -> tuple[dict | None, str]:
     q = (query or "").strip()
     if not q:
         return None, "empty"
@@ -472,8 +470,8 @@ def _find_existing_paper(
     openalex_id: str,
     doi: str,
     title: str,
-    year: Optional[int] = None,
-) -> Optional[sqlite3.Row]:
+    year: int | None = None,
+) -> sqlite3.Row | None:
     """Locate an existing paper row for search-result decoration.
 
     Tries the canonical triple (openalex_id → doi → year+normalized_title).
@@ -600,7 +598,7 @@ def _score_search_result(
     source_relevance: float,
     source_key: str,
     lexical_profile=None,
-    precomputed_lexical_details: Optional[dict] = None,
+    precomputed_lexical_details: dict | None = None,
 ) -> tuple[float, dict]:
     candidate = {
         "title": item.get("title") or "",
@@ -691,7 +689,7 @@ def search_online_sources(
     query: str,
     *,
     limit: int = 20,
-    from_year: Optional[int] = None,
+    from_year: int | None = None,
 ) -> list[dict]:
     """Run a multi-source online search, ranked by query relevance.
 
@@ -715,7 +713,7 @@ def stream_online_sources(
     query: str,
     *,
     limit: int = 20,
-    from_year: Optional[int] = None,
+    from_year: int | None = None,
 ):
     """Streaming multi-source search for the Find & Add surface.
 
@@ -879,12 +877,12 @@ _ONLINE_SEARCH_ACTION_RATINGS = {"add": 3, "like": 4, "love": 5, "dislike": 1}
 
 def _resolve_work_from_inputs(
     *,
-    openalex_id: Optional[str],
-    doi: Optional[str],
-    link: Optional[str],
-    title: Optional[str],
-    query: Optional[str],
-) -> tuple[Optional[dict], str]:
+    openalex_id: str | None,
+    doi: str | None,
+    link: str | None,
+    title: str | None,
+    query: str | None,
+) -> tuple[dict | None, str]:
     """Return the best OpenAlex work for the given input fields (or None)."""
     if openalex_id and str(openalex_id).strip():
         work = _fetch_work_by_openalex_id(str(openalex_id).strip())
@@ -909,10 +907,10 @@ def _resolve_work_from_inputs(
 
 def resolve_work_metadata(
     *,
-    openalex_id: Optional[str] = None,
-    doi: Optional[str] = None,
-    title: Optional[str] = None,
-) -> Optional[dict]:
+    openalex_id: str | None = None,
+    doi: str | None = None,
+    title: str | None = None,
+) -> dict | None:
     """Resolve display metadata for a work — READ ONLY (no DB, no writes).
 
     Used by the browser connector's ``/lookup`` to show a paper's real
@@ -940,17 +938,18 @@ def resolve_work_metadata(
 def save_online_search_result(
     db: sqlite3.Connection,
     *,
-    openalex_id: Optional[str] = None,
-    doi: Optional[str] = None,
-    link: Optional[str] = None,
-    title: Optional[str] = None,
-    query: Optional[str] = None,
-    candidate: Optional[dict] = None,
+    openalex_id: str | None = None,
+    doi: str | None = None,
+    link: str | None = None,
+    title: str | None = None,
+    query: str | None = None,
+    candidate: dict | None = None,
     action: str = "add",
     added_from: str = "online_search",
-    default_reading_status: Optional[str] = None,
+    default_reading_status: str | None = None,
     override_added_from: bool = False,
-    collection_name: Optional[str] = None,
+    collection_name: str | None = None,
+    collection_ids: list[str] | None = None,
 ) -> dict:
     """Resolve a work + apply the shared add/like/love/dislike contract.
 
@@ -1009,8 +1008,27 @@ def save_online_search_result(
         # All network I/O already happened in `_resolve_work_from_inputs`
         # above; the unit only touches the DB. add_to_library defers its
         # enrichment scheduling past the gate.
+        selected_collection_ids: list[str] = []
+        if collection_ids:
+            # Validate before candidate upsert or Library mutation.
+            selected_collection_ids = list(
+                dict.fromkeys(str(value or "").strip() for value in collection_ids)
+            )
+            selected_collection_ids = [value for value in selected_collection_ids if value]
+            placeholders = ",".join("?" for _ in selected_collection_ids)
+            found = {
+                str(row["id"])
+                for row in db.execute(
+                    f"SELECT id FROM collections WHERE id IN ({placeholders})",
+                    selected_collection_ids,
+                ).fetchall()
+            }
+            missing = [value for value in selected_collection_ids if value not in found]
+            if missing:
+                raise ValueError(f"Collection not found: {', '.join(missing)}")
+
         ms = match_source
-        pid: Optional[str] = None
+        pid: str | None = None
         if raw_work is not None:
             _ensure_schema(db)
             pid = _upsert_single_paper(db, normalized)
@@ -1062,6 +1080,8 @@ def save_online_search_result(
                 default_reading_status=default_reading_status,
                 override_added_from=override_added_from,
             )
+            for collection_id in selected_collection_ids:
+                library_app.insert_collection_item(db, collection_id, pid)
             # Optionally group the newly-saved paper into a local collection.
             # Runs inside this write unit (writer gate held) so the collection
             # row + membership commit atomically with the library save. Uses the
@@ -1131,11 +1151,11 @@ def save_online_search_result(
 def add_work_to_library(
     db: sqlite3.Connection,
     *,
-    openalex_id: Optional[str] = None,
-    doi: Optional[str] = None,
-    link: Optional[str] = None,
-    title: Optional[str] = None,
-    query: Optional[str] = None,
+    openalex_id: str | None = None,
+    doi: str | None = None,
+    link: str | None = None,
+    title: str | None = None,
+    query: str | None = None,
     added_from: str = "discovery_manual",
 ) -> dict:
     sources = [openalex_id, doi, link, title, query]

@@ -12,18 +12,19 @@ deterministic, inspectable, and reusable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 import logging
 import re
 import sqlite3
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from difflib import SequenceMatcher
+from typing import Any
 
 from alma.core.identifier_resolution import (
     normalize_orcid,
     resolve_scholar_candidates_from_sources,
 )
-from alma.core.utils import normalize_doi, normalize_text as _normalize_text
+from alma.core.utils import normalize_doi
+from alma.core.utils import normalize_text as _normalize_text
 from alma.discovery.semantic_scholar import search_papers as search_semantic_papers
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
@@ -313,9 +314,9 @@ def _merge_openalex_candidates(*groups: list[dict[str, Any]]) -> list[dict[str, 
 
             current["_sources"].add(source)
             current["score"] = round(max(float(current.get("score") or 0.0), score) + 1.25, 3)
-            for field in ("display_name", "orcid", "institution", "pub_count"):
-                if not current.get(field) and candidate.get(field):
-                    current[field] = candidate.get(field)
+            for field_name in ("display_name", "orcid", "institution", "pub_count"):
+                if not current.get(field_name) and candidate.get(field_name):
+                    current[field_name] = candidate.get(field_name)
 
     out: list[dict[str, Any]] = []
     for item in merged.values():
@@ -958,7 +959,7 @@ def resolve_paper_openalex_work(
     # user is waiting — and flip to free-S2-first when credits run low.
     top_semantic: dict[str, Any] | None = None
 
-    def _try_semantic_bridge() -> Optional[PaperResolutionResult]:
+    def _try_semantic_bridge() -> PaperResolutionResult | None:
         """Free path: S2 title search, then bridge to OpenAlex via DOI."""
         nonlocal top_semantic
         semantic_candidates = search_semantic_papers(title, limit=8) if title else []
@@ -1004,7 +1005,7 @@ def resolve_paper_openalex_work(
         )
         return None
 
-    def _try_openalex_title_scored() -> Optional[PaperResolutionResult]:
+    def _try_openalex_title_scored() -> PaperResolutionResult | None:
         """Paid path: OpenAlex title-variant searches, scored + margin-gated."""
         openalex_candidates: dict[str, dict[str, Any]] = {}
         for query in _title_variants(title):

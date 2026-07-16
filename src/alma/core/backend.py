@@ -8,23 +8,18 @@ IMPORTANT: All configuration access goes through alma.config module.
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-from typing import List, Tuple
-
-from alma.core.database import get_authors_json, _init_authors_db
-from alma.config import (
-    get_backend,
-    get_all_settings,
-    get_from_year,
-    get_fetch_full_history,
-    get_fetch_year,
-)
-from datetime import datetime
 import importlib
 import sys
-from alma.openalex.client import fetch_works_for_author, upsert_papers
+from datetime import datetime
+
+from alma.config import (
+    get_all_settings,
+    get_backend,
+    get_fetch_year,
+)
+from alma.core.database import _init_authors_db, get_authors_json
 from alma.core.resolution import resolve_author_identity, summarize_author_resolution
+from alma.openalex.client import fetch_works_for_author, upsert_papers
 
 
 def _backend() -> str:
@@ -117,7 +112,7 @@ def fetch_from_json(args, idx=None):  # noqa: ANN001
         authors = authors[:idx]
 
     from_year = get_fetch_year()
-    pubs: List[dict] = []
+    pubs: list[dict] = []
     for name, author_id in authors:
         openalex_id = _resolve_author_openalex_id(
             args.authors_path,
@@ -163,7 +158,6 @@ def fetch_publications_by_id(
             pass
 
     # OpenAlex path
-    cfg = _settings()
     # For scholar backend, default to current year if from_year is None
     if _backend() == "scholar" and from_year is None:
         from_year = datetime.now().year

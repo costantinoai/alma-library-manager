@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from typing import Any, Callable, Iterable, Mapping, Optional
+from collections.abc import Callable, Iterable, Mapping
+from typing import Any
 
 
 def target_scoped_operation_key(
@@ -48,13 +49,13 @@ def schedule_with_envelope(
     trigger_source: str,
     queued_message: str,
     runner_factory: Callable[[str], Callable[..., Any]],
-    chain_id: Optional[str] = None,
-    chain_step: Optional[str] = None,
+    chain_id: str | None = None,
+    chain_step: str | None = None,
     log_step: str = "queued",
-    log_message: Optional[str] = None,
-    log_data: Optional[Mapping[str, Any]] = None,
-    extra_status_fields: Optional[Mapping[str, Any]] = None,
-) -> Optional[str]:
+    log_message: str | None = None,
+    log_data: Mapping[str, Any] | None = None,
+    extra_status_fields: Mapping[str, Any] | None = None,
+) -> str | None:
     """Schedule ``runner_factory(job_id)`` under an idempotent Activity job.
 
     Returns the active or newly-queued ``job_id``; returns ``None`` when

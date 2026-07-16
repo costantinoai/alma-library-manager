@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 import re
+from datetime import datetime
 from time import monotonic
-from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_doi
@@ -38,7 +37,7 @@ _STOPWORDS = {
 }
 
 
-def _year_from_date(value: str) -> Optional[int]:
+def _year_from_date(value: str) -> int | None:
     raw = (value or "").strip()
     if not raw:
         return None
@@ -73,7 +72,7 @@ def _lexical_score(query: str, item: dict) -> float:
     return min(1.0, matches / max(2, len(terms)))
 
 
-def _entry_to_candidate(entry: dict, score: float, *, server: str) -> Optional[dict]:
+def _entry_to_candidate(entry: dict, score: float, *, server: str) -> dict | None:
     title = (entry.get("title") or "").strip()
     if not title:
         return None
@@ -173,7 +172,7 @@ def _lookup_published_record(preprint_doi: str, *, server: str) -> dict[str, str
     return {}
 
 
-def fetch_abstract_by_doi(doi: str, *, server: Optional[str] = None) -> str:
+def fetch_abstract_by_doi(doi: str, *, server: str | None = None) -> str:
     """Return the abstract for a known bioRxiv/medRxiv preprint DOI.
 
     The structured-API recovery path for task 05: when a paywalled paper's
@@ -243,7 +242,7 @@ def reconcile_published_versions(
     return out
 
 
-def _fetch_recent_window(server: str, interval: str) -> List[dict]:
+def _fetch_recent_window(server: str, interval: str) -> list[dict]:
     """Pull (and briefly cache) the recent bioRxiv window for (server, interval).
 
     Returns the ~200 most-recent raw entries for the window. Cached per
@@ -258,7 +257,7 @@ def _fetch_recent_window(server: str, interval: str) -> List[dict]:
     if cached is not None and (now - cached[0]) < _WINDOW_CACHE_TTL_S:
         return cached[1]
 
-    entries: List[dict] = []
+    entries: list[dict] = []
     client = get_source_http_client("biorxiv")
     for cursor in _WINDOW_PAGE_CURSORS:
         try:
@@ -284,9 +283,9 @@ def search_works(
     query: str,
     *,
     limit: int = 20,
-    from_year: Optional[int] = None,
+    from_year: int | None = None,
     server: str = "biorxiv",
-) -> List[dict]:
+) -> list[dict]:
     """Search recent bioRxiv entries by local lexical reranking.
 
     The recent window is fetched once per (server, interval) and shared across

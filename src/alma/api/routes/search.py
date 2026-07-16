@@ -1,9 +1,8 @@
 """Global search endpoint for command palette."""
 
-import json
 import logging
 import sqlite3
-from typing import List, Dict, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
@@ -20,7 +19,7 @@ router = APIRouter(
 class SearchResult:
     """A single search result."""
 
-    def __init__(self, id: str, name: str, type: str, url: str, extra: Dict[str, Any] = None):
+    def __init__(self, id: str, name: str, type: str, url: str, extra: dict[str, Any] = None):
         self.id = id
         self.name = name
         self.type = type

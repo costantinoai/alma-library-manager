@@ -15,8 +15,11 @@ import logging
 import re
 import sqlite3
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
+
+from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +63,8 @@ _LEXICAL_CALIBRATION_POINTS: tuple[tuple[float, float], ...] = (
 class LexicalProfile:
     """Precomputed lexical similarity profile for one scoring run."""
 
-    positive_texts: List[str]
-    negative_texts: List[str] = field(default_factory=list)
+    positive_texts: list[str]
+    negative_texts: list[str] = field(default_factory=list)
     word_vectorizer: Any = None
     word_positive_matrix: Any = None
     word_negative_matrix: Any = None
@@ -84,7 +87,9 @@ except ImportError:
     )
 
 try:
-    import numpy as np
+    import numpy
+
+    np = numpy
 
     _NUMPY_AVAILABLE = True
 except ImportError:
@@ -118,7 +123,7 @@ def has_active_embeddings(conn: sqlite3.Connection, *, min_count: int = 1) -> bo
         return False
 
 
-def compute_tfidf_vectors(texts: List[str]):
+def compute_tfidf_vectors(texts: list[str]):
     """Compute TF-IDF vectors from a list of texts.
 
     Each text is typically a concatenation of a publication's title and abstract.
@@ -231,9 +236,9 @@ def _extract_weighted_terms(text: str) -> Counter:
 
 
 def build_lexical_profile(
-    positive_texts: List[str],
-    negative_texts: Optional[List[str]] = None,
-) -> Optional[LexicalProfile]:
+    positive_texts: list[str],
+    negative_texts: list[str] | None = None,
+) -> LexicalProfile | None:
     """Precompute lexical scorers once for a full candidate-scoring pass."""
     positives = [str(text or "").strip() for text in positive_texts if str(text or "").strip()]
     negatives = [str(text or "").strip() for text in (negative_texts or []) if str(text or "").strip()]
@@ -285,11 +290,11 @@ def build_lexical_profile(
 
 
 def find_similar_publications(
-    liked_texts: List[str],
-    candidate_texts: List[str],
+    liked_texts: list[str],
+    candidate_texts: list[str],
     threshold: float = 0.15,
     top_n: int = 20,
-) -> List[Tuple[int, float]]:
+) -> list[tuple[int, float]]:
     """Find candidate publications similar to liked publications using TF-IDF cosine similarity.
 
     Args:
@@ -325,7 +330,7 @@ def find_similar_publications(
     sim_matrix = cosine_similarity(candidate_vectors, liked_vectors)
 
     # For each candidate, take the maximum similarity to any liked paper
-    results: List[Tuple[int, float]] = []
+    results: list[tuple[int, float]] = []
     for cand_idx in range(sim_matrix.shape[0]):
         max_score = float(sim_matrix[cand_idx].max())
         if max_score >= threshold:
@@ -344,11 +349,11 @@ _PROVIDER_UNSET = object()
 
 
 def compute_topic_overlap(
-    user_topics: Dict[str, float],
-    paper_topics: List[Dict[str, float]],
+    user_topics: dict[str, float],
+    paper_topics: list[dict[str, float]],
     *,
-    conn: Optional[sqlite3.Connection] = None,
-    user_topic_embeddings: Optional[Dict[str, Optional["numpy.ndarray"]]] = None,
+    conn: sqlite3.Connection | None = None,
+    user_topic_embeddings: dict[str, numpy.ndarray | None] | None = None,
     provider: Any = _PROVIDER_UNSET,
 ) -> float:
     """Compute weighted topic overlap between user preferences and a paper.
@@ -425,7 +430,7 @@ def compute_topic_overlap(
                 from alma.ai.providers import get_active_provider
                 provider = get_active_provider(conn)
             if provider is not None:
-                local_ut_embs: Dict[str, Optional["numpy.ndarray"]]
+                local_ut_embs: dict[str, numpy.ndarray | None]
                 if user_topic_embeddings is not None:
                     local_ut_embs = user_topic_embeddings
                 else:
@@ -463,9 +468,9 @@ def compute_topic_overlap(
 
 
 def _get_or_build_user_topic_matrix(
-    user_topic_embeddings: Dict[str, Optional["numpy.ndarray"]],
-    user_topics: Dict[str, float],
-) -> Optional[tuple["numpy.ndarray", "numpy.ndarray"]]:
+    user_topic_embeddings: dict[str, numpy.ndarray | None],
+    user_topics: dict[str, float],
+) -> tuple[numpy.ndarray, numpy.ndarray] | None:
     """Return a pre-normalised stacked matrix of user-topic embeddings.
 
     Cached on the `user_topic_embeddings` dict itself via a magic key so
@@ -480,7 +485,7 @@ def _get_or_build_user_topic_matrix(
     if isinstance(cached, tuple) and len(cached) == 2:
         return cached  # type: ignore[return-value]
 
-    rows: list["numpy.ndarray"] = []
+    rows: list[numpy.ndarray] = []
     weights: list[float] = []
     for ut, weight in user_topics.items():
         emb = user_topic_embeddings.get(ut)
@@ -510,11 +515,11 @@ def _get_or_build_user_topic_matrix(
 # freshly-warmed terms, forcing re-embedding and making per-term SPECTER2
 # inference the dominant scoring cost (task 19 F1: 4.5k batch-size-1
 # forwards, ~96 s/refresh). ~16k × 768 float32 ≈ 50 MB worst case.
-_topic_embedding_cache: Dict[str, Optional["numpy.ndarray"]] = {}
+_topic_embedding_cache: dict[str, numpy.ndarray | None] = {}
 _TOPIC_CACHE_MAX_SIZE = 16384
 
 
-def _get_topic_embedding(provider, term: str) -> Optional["numpy.ndarray"]:
+def _get_topic_embedding(provider, term: str) -> numpy.ndarray | None:
     """Get or compute embedding for a topic term, using module-level cache."""
     if term in _topic_embedding_cache:
         return _topic_embedding_cache[term]
@@ -591,7 +596,7 @@ def _batch_warm_topic_embeddings(provider, terms: list[str]) -> None:
 class SpecterEmbedder:
     """Lazy-loading local SPECTER2 embedder using a named adapter."""
 
-    _instance: Optional[SpecterEmbedder] = None
+    _instance: SpecterEmbedder | None = None
     _model = None
     _tokenizer = None
     _torch = None
@@ -712,7 +717,7 @@ class SpecterEmbedder:
         _ = self._load_model()
         return self._device
 
-    def encode(self, texts: List[str]) -> "numpy.ndarray":
+    def encode(self, texts: list[str]) -> numpy.ndarray:
         """Encode texts to SPECTER2 vectors using [CLS] pooling."""
         model, tokenizer, torch = self._load_model()
         cleaned = [str(text or "").strip() or "empty" for text in texts]
@@ -729,12 +734,12 @@ class SpecterEmbedder:
             vectors = outputs.last_hidden_state[:, 0, :].detach().cpu().numpy()
         return np.asarray(vectors, dtype=np.float32)
 
-    def encode_single(self, text: str) -> "numpy.ndarray":
+    def encode_single(self, text: str) -> numpy.ndarray:
         """Encode a single text string."""
         return self.encode([text])[0]
 
 
-def _normalize_embedding_vector(vec: Optional["numpy.ndarray"]) -> Optional["numpy.ndarray"]:
+def _normalize_embedding_vector(vec: numpy.ndarray | None) -> numpy.ndarray | None:
     if vec is None:
         return None
     try:
@@ -769,8 +774,8 @@ def prepare_text(
     title: str,
     abstract: str,
     *,
-    keywords: Optional[List[str]] = None,
-    topics: Optional[List[str]] = None,
+    keywords: list[str] | None = None,
+    topics: list[str] | None = None,
     max_tokens: int = 256,
     query_prefix: str = "",
     is_query: bool = False,
@@ -832,7 +837,7 @@ def _split_author_names(authors_raw: object, *, limit: int = 4) -> list[str]:
 
 
 def _load_publication_topic_terms(
-    conn: Optional[sqlite3.Connection],
+    conn: sqlite3.Connection | None,
     paper_id: str,
     *,
     limit: int = 8,
@@ -859,8 +864,8 @@ def _load_publication_topic_terms(
 def build_similarity_text(
     pub: dict,
     *,
-    conn: Optional[sqlite3.Connection] = None,
-    paper_topics: Optional[List[Dict[str, float]]] = None,
+    conn: sqlite3.Connection | None = None,
+    paper_topics: list[dict[str, float]] | None = None,
     max_tokens: int = 320,
 ) -> str:
     """Build a richer scholarly text representation for similarity.
@@ -1002,7 +1007,7 @@ def get_active_embedding_model(conn: sqlite3.Connection) -> str:
 def get_cached_embedding(
     paper_id: str,
     conn: sqlite3.Connection,
-) -> Optional["numpy.ndarray"]:
+) -> numpy.ndarray | None:
     """Return the cached active-model embedding for ``paper_id``.
 
     This helper never computes missing vectors. Expensive AI vector work
@@ -1041,9 +1046,9 @@ def get_cached_embedding(
 
 
 def compute_embedding_centroid(
-    pubs: List[dict],
+    pubs: list[dict],
     conn: sqlite3.Connection,
-) -> Optional["numpy.ndarray"]:
+) -> numpy.ndarray | None:
     """Compute the average embedding of a list of publications.
 
     Each publication dict should contain at least ``id`` (paper_id),
@@ -1060,7 +1065,7 @@ def compute_embedding_centroid(
     if not _NUMPY_AVAILABLE:
         return None
 
-    embeddings: List["numpy.ndarray"] = []
+    embeddings: list[numpy.ndarray] = []
     for pub in pubs:
         embedding = get_cached_embedding(pub["id"], conn)
         if embedding is not None:
@@ -1082,16 +1087,16 @@ def compute_embedding_centroid(
 
 
 def load_publication_example_embeddings(
-    pubs: List[dict],
+    pubs: list[dict],
     conn: sqlite3.Connection,
     *,
     limit: int = 12,
-) -> list["numpy.ndarray"]:
+) -> list[numpy.ndarray]:
     """Load a small set of normalized publication embeddings for exemplar matching."""
     if not _NUMPY_AVAILABLE:
         return []
 
-    out: list["numpy.ndarray"] = []
+    out: list[numpy.ndarray] = []
     seen: set[str] = set()
     for pub in pubs:
         if len(out) >= max(1, int(limit or 12)):
@@ -1113,9 +1118,9 @@ def load_publication_example_embeddings(
 
 
 def compute_semantic_similarity(
-    candidate_embedding: Optional["numpy.ndarray"],
-    positive_centroid: Optional["numpy.ndarray"],
-    negative_centroid: Optional["numpy.ndarray"] = None,
+    candidate_embedding: numpy.ndarray | None,
+    positive_centroid: numpy.ndarray | None,
+    negative_centroid: numpy.ndarray | None = None,
 ) -> float:
     """Compute semantic similarity score for a candidate paper.
 
@@ -1149,11 +1154,11 @@ def compute_semantic_similarity(
 
 def compute_semantic_similarity_details(
     *,
-    candidate_embedding: Optional["numpy.ndarray"] = None,
-    positive_centroid: Optional["numpy.ndarray"],
-    negative_centroid: Optional["numpy.ndarray"] = None,
-    positive_examples: Optional[List["numpy.ndarray"]] = None,
-    negative_examples: Optional[List["numpy.ndarray"]] = None,
+    candidate_embedding: numpy.ndarray | None = None,
+    positive_centroid: numpy.ndarray | None,
+    negative_centroid: numpy.ndarray | None = None,
+    positive_examples: list[numpy.ndarray] | None = None,
+    negative_examples: list[numpy.ndarray] | None = None,
 ) -> dict[str, float | bool]:
     """Return richer semantic-similarity diagnostics for one candidate.
 
@@ -1225,10 +1230,10 @@ def compute_semantic_similarity_details(
 
 def compute_lexical_similarity(
     candidate_text: str,
-    positive_texts: List[str],
-    negative_texts: Optional[List[str]] = None,
+    positive_texts: list[str],
+    negative_texts: list[str] | None = None,
     *,
-    profile: Optional[LexicalProfile] = None,
+    profile: LexicalProfile | None = None,
 ) -> float:
     """Compute lexical similarity as a robust fallback when embeddings are unavailable.
 
@@ -1247,10 +1252,10 @@ def compute_lexical_similarity(
 
 def compute_lexical_similarity_details(
     candidate_text: str,
-    positive_texts: List[str],
-    negative_texts: Optional[List[str]] = None,
+    positive_texts: list[str],
+    negative_texts: list[str] | None = None,
     *,
-    profile: Optional[LexicalProfile] = None,
+    profile: LexicalProfile | None = None,
 ) -> dict[str, float]:
     """Return richer lexical similarity diagnostics for one candidate."""
     candidate = (candidate_text or "").strip()
@@ -1320,9 +1325,9 @@ def compute_lexical_similarity_details(
 
 
 def batch_compute_lexical_similarity(
-    candidate_texts: Dict[str, str],
-    profile: Optional[LexicalProfile],
-) -> Dict[str, dict]:
+    candidate_texts: dict[str, str],
+    profile: LexicalProfile | None,
+) -> dict[str, dict]:
     """Batch-compute lexical similarity for all candidates at once.
 
     Instead of calling compute_lexical_similarity_details per candidate
@@ -1385,7 +1390,7 @@ def batch_compute_lexical_similarity(
     # --- Per-candidate term overlap (lightweight, no sklearn) ---
     pos_terms = profile.positive_terms
     neg_terms = profile.negative_terms
-    results: Dict[str, dict] = {}
+    results: dict[str, dict] = {}
     for i, key in enumerate(keys):
         candidate_terms = _extract_weighted_terms(texts[i])
         candidate_term_total = float(sum(candidate_terms.values()) or 1.0)
@@ -1410,6 +1415,3 @@ def batch_compute_lexical_similarity(
         }
 
     return results
-
-
-from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np  # noqa: E402 — hot-path alias to canonical helper

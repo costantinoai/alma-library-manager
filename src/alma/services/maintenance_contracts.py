@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import Lock
-from typing import Any, Callable, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

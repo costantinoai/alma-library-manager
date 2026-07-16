@@ -4,7 +4,6 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -18,25 +17,24 @@ from alma.api.helpers import (
     table_exists,
 )
 from alma.api.models import (
-    PaperResponse,
     CollectionCreate,
     CollectionResponse,
-    TagCreate,
-    TagResponse,
     FollowAuthorRequest,
     FollowedAuthorResponse,
+    PaperResponse,
+    TagCreate,
+    TagResponse,
 )
+from alma.application import library as library_app
 from alma.application.followed_authors import (
     apply_follow_state,
     ensure_followed_author_contract,
     resolve_canonical_author_id,
     schedule_followed_author_historical_backfill,
 )
-from alma.application import library as library_app
 from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
 from alma.services import health as health_service
-
 
 logger = logging.getLogger(__name__)
 MAX_TAGS_PER_PAPER = 5
@@ -132,11 +130,11 @@ class TopicGroupRequest(BaseModel):
 
 @router.get(
     "/saved",
-    response_model=List[PaperResponse],
+    response_model=list[PaperResponse],
     summary="List library papers",
 )
 def list_saved(
-    search: Optional[str] = Query(None, description="Search in title or notes"),
+    search: str | None = Query(None, description="Search in title or notes"),
     order: str = Query(
         "date",
         description=(
@@ -208,18 +206,18 @@ def list_saved(
 
 
 class _SavePaperRequest(BaseModel):
-    paper_id: Optional[str] = None
-    title: Optional[str] = Field(None, min_length=1)
-    authors: Optional[str] = None
-    year: Optional[int] = None
-    journal: Optional[str] = None
-    abstract: Optional[str] = None
-    url: Optional[str] = None
-    doi: Optional[str] = None
-    openalex_id: Optional[str] = None
-    notes: Optional[str] = None
-    rating: Optional[int] = Field(None, ge=0, le=5)
-    added_from: Optional[str] = Field(
+    paper_id: str | None = None
+    title: str | None = Field(None, min_length=1)
+    authors: str | None = None
+    year: int | None = None
+    journal: str | None = None
+    abstract: str | None = None
+    url: str | None = None
+    doi: str | None = None
+    openalex_id: str | None = None
+    notes: str | None = None
+    rating: int | None = Field(None, ge=0, le=5)
+    added_from: str | None = Field(
         None,
         description="Optional provenance override for manual/library-side saves",
     )
@@ -356,11 +354,11 @@ def unsave_publication(
 )
 def update_saved_paper(
     paper_id: str,
-    notes: Optional[str] = None,
-    rating: Optional[int] = None,
-    title: Optional[str] = None,
-    authors: Optional[str] = None,
-    abstract: Optional[str] = None,
+    notes: str | None = None,
+    rating: int | None = None,
+    title: str | None = None,
+    authors: str | None = None,
+    abstract: str | None = None,
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Update editable fields on a library paper.
@@ -447,11 +445,11 @@ def update_saved_paper(
 
 
 class _BulkActionRequest(BaseModel):
-    paper_ids: List[str] = Field(..., min_length=1, max_length=500)
+    paper_ids: list[str] = Field(..., min_length=1, max_length=500)
 
 
 class _BulkAddToCollectionRequest(BaseModel):
-    paper_ids: List[str] = Field(..., min_length=1, max_length=500)
+    paper_ids: list[str] = Field(..., min_length=1, max_length=500)
     collection_id: str
 
 
@@ -537,7 +535,7 @@ def bulk_add_to_collection(
 
 @router.get(
     "/collections",
-    response_model=List[CollectionResponse],
+    response_model=list[CollectionResponse],
     summary="List collections",
 )
 def list_collections(
@@ -652,6 +650,33 @@ class _AddItemBody(BaseModel):
     paper_id: str
 
 
+class _AddPaperToCollectionsBody(BaseModel):
+    collection_ids: list[str]
+
+
+@router.post(
+    "/papers/{paper_id}/collections",
+    summary="Save a paper and add it to selected collections",
+)
+def save_paper_to_collections(
+    paper_id: str,
+    body: _AddPaperToCollectionsBody,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Compound paper-card action: Library promotion plus memberships."""
+    try:
+        collection_ids = run_write_unit(
+            db,
+            lambda: library_app.save_paper_to_collections(
+                db, paper_id, body.collection_ids
+            ),
+            label="paper_save_to_collections",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"paper_id": paper_id, "collection_ids": collection_ids}
+
+
 @router.post(
     "/collections/{collection_id}/items",
     status_code=status.HTTP_201_CREATED,
@@ -705,7 +730,7 @@ def remove_collection_item(
 
 @router.get(
     "/collections/{collection_id}/items",
-    response_model=List[PaperResponse],
+    response_model=list[PaperResponse],
     summary="List papers in a collection",
 )
 def list_collection_items(
@@ -735,7 +760,7 @@ def list_collection_items(
 
 @router.get(
     "/tags",
-    response_model=List[TagResponse],
+    response_model=list[TagResponse],
     summary="List all tags",
 )
 def list_tags(
@@ -938,7 +963,7 @@ def _list_topic_summaries(db: sqlite3.Connection) -> list[TopicSummary]:
 
 @router.get(
     "/topics",
-    response_model=List[TopicSummary],
+    response_model=list[TopicSummary],
     summary="List canonical topics and aliases",
 )
 def list_topics(
@@ -1075,7 +1100,7 @@ def create_topic(
 
     _ensure_topic_alias_table(db)
 
-    from alma.library.topic_deduplication import normalize_topic, _topic_id_from_normalized
+    from alma.library.topic_deduplication import _topic_id_from_normalized, normalize_topic
 
     normalized = normalize_topic(canonical)
     if not normalized:
@@ -1134,7 +1159,7 @@ def create_topic_alias(
 
     _ensure_topic_alias_table(db)
 
-    from alma.library.topic_deduplication import normalize_topic, _topic_id_from_normalized
+    from alma.library.topic_deduplication import _topic_id_from_normalized, normalize_topic
 
     canon_normalized = normalize_topic(canonical)
     alias_normalized = normalize_topic(alias)
@@ -1193,7 +1218,7 @@ def rename_topic(
 
     _ensure_topic_alias_table(db)
 
-    from alma.library.topic_deduplication import normalize_topic, _topic_id_from_normalized
+    from alma.library.topic_deduplication import _topic_id_from_normalized, normalize_topic
 
     old_normalized = normalize_topic(old_name)
     new_normalized = normalize_topic(new_name)
@@ -1254,7 +1279,11 @@ def group_topic(
 
     _ensure_topic_alias_table(db)
 
-    from alma.library.topic_deduplication import normalize_topic, _topic_id_from_normalized, merge_topics
+    from alma.library.topic_deduplication import (
+        _topic_id_from_normalized,
+        merge_topics,
+        normalize_topic,
+    )
 
     target_normalized = normalize_topic(target)
     source_normalized = normalize_topic(source)
@@ -1306,7 +1335,7 @@ def group_topic(
 )
 def delete_topic(
     topic_name: str,
-    replacement: Optional[str] = Query(
+    replacement: str | None = Query(
         None,
         description="Optional replacement canonical topic for existing aliases",
     ),
@@ -1318,7 +1347,11 @@ def delete_topic(
 
     _ensure_topic_alias_table(db)
 
-    from alma.library.topic_deduplication import normalize_topic, _topic_id_from_normalized, merge_topics
+    from alma.library.topic_deduplication import (
+        _topic_id_from_normalized,
+        merge_topics,
+        normalize_topic,
+    )
 
     canon_normalized = normalize_topic(canonical)
     topic_row = db.execute(
@@ -1413,7 +1446,7 @@ def delete_topic_alias(
 
 @router.get(
     "/followed-authors",
-    response_model=List[FollowedAuthorResponse],
+    response_model=list[FollowedAuthorResponse],
     summary="List followed authors",
 )
 def list_followed_authors(
@@ -1620,7 +1653,7 @@ def unfollow_author(
 
 class ReadingStatusUpdateRequest(BaseModel):
     """Request model for updating paper reading status."""
-    reading_status: Optional[str] = Field(
+    reading_status: str | None = Field(
         None,
         description="Reading status: reading | done | excluded | null"
     )
@@ -1679,9 +1712,9 @@ def update_reading_status(
 
 class ReadingQueueResponse(BaseModel):
     """Response model for reading list grouped by status."""
-    reading: List[PaperResponse] = Field(default_factory=list)
-    done: List[PaperResponse] = Field(default_factory=list)
-    excluded: List[PaperResponse] = Field(default_factory=list)
+    reading: list[PaperResponse] = Field(default_factory=list)
+    done: list[PaperResponse] = Field(default_factory=list)
+    excluded: list[PaperResponse] = Field(default_factory=list)
 
 
 @router.get(
@@ -1979,7 +2012,7 @@ def get_library_workflow_summary(
                 })
             return out
         needs_attention_count = int(
-            (
+
                 db.execute(
                     f"""
                     SELECT COUNT(*) AS c
@@ -1991,7 +2024,7 @@ def get_library_workflow_summary(
                     """
                 ).fetchone()["c"]
                 or 0
-            )
+
         )
 
         top_collection_rows = []

@@ -2,9 +2,10 @@
 
 import logging
 import sqlite3
-from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from alma.api.deps import get_db, get_current_user
+from fastapi import APIRouter, Depends
+
+from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal
 
 logger = logging.getLogger(__name__)

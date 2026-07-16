@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 
 from alma.library import importer
 from alma.services.eta import detect_auth, estimate_eta

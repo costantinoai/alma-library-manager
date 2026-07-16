@@ -29,8 +29,8 @@ save/dismiss corroboration that already feeds the signal map.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 from alma.api.helpers import table_exists
 from alma.application.signal_projection import compute_paper_signal_map
@@ -118,16 +118,16 @@ class RecommendationOutcome:
     paper_id: str
     source_type: str
     source_api: str
-    branch_id: Optional[str]
-    branch_label: Optional[str]
-    branch_mode: Optional[str]
-    score: Optional[float]
-    score_breakdown: Optional[str]
-    publication_date: Optional[str]
-    created_at: Optional[str]
-    action_at: Optional[str]
-    day: Optional[str]
-    user_action: Optional[str]
+    branch_id: str | None
+    branch_label: str | None
+    branch_mode: str | None
+    score: float | None
+    score_breakdown: str | None
+    publication_date: str | None
+    created_at: str | None
+    action_at: str | None
+    day: str | None
+    user_action: str | None
     classification: str
 
     @property
@@ -146,7 +146,7 @@ class RecommendationOutcome:
 
 
 def build_recommendation_outcomes(
-    db: sqlite3.Connection, *, since: Optional[str] = None
+    db: sqlite3.Connection, *, since: str | None = None
 ) -> list[RecommendationOutcome]:
     """All recommendations (optionally since an ISO cutoff) with their outcome.
 

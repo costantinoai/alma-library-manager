@@ -10,14 +10,18 @@ as an explicit fallback.
 
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 import logging
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from difflib import SequenceMatcher
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from alma.core.http_sources import get_source_http_client
-from alma.core.utils import normalize_orcid, normalize_text as _normalize_text  # noqa: F401  (normalize_orcid re-exported for back-compat)
+from alma.core.utils import (  # noqa: F401  (normalize_orcid re-exported for back-compat)
+    normalize_orcid,
+)
+from alma.core.utils import normalize_text as _normalize_text
 
 logger = logging.getLogger(__name__)
 

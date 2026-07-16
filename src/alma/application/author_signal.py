@@ -43,12 +43,12 @@ from __future__ import annotations
 import logging
 import math
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
 
+from alma.application.signal_projection import load_projected_paper_signals
 from alma.core.scoring_math import clamp as _clamp
 from alma.core.sql_helpers import standalone_paper_sql
-from alma.application.signal_projection import load_projected_paper_signals
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class AuthorSignalComponent:
     weight: float
     score: float
     tone: str  # "positive" | "negative" | "neutral"
-    detail: Optional[str] = None
+    detail: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -132,7 +132,7 @@ class AuthorSignal:
     affinity: float  # -1..1, discovery
     library_papers: int
     total_papers: int
-    avg_rating: Optional[float]
+    avg_rating: float | None
     components: list[AuthorSignalComponent]
 
     def to_dict(self) -> dict:
@@ -168,7 +168,7 @@ class AuthorSignalContext:
     author centroid in the corpus when only a handful are on screen.
     """
 
-    active_model: Optional[str]
+    active_model: str | None
     library_centroid: object  # np.ndarray | None (lazy numpy import)
     lib_dim: int
     projected_author: dict[str, float]
@@ -182,7 +182,7 @@ class AuthorSignalContext:
     names_by_oid: dict[str, set[str]] = field(default_factory=dict)
     centroid_by_oid: dict[str, object] = field(default_factory=dict)
     neighborhood_by_oid: dict[str, float] = field(default_factory=dict)
-    _db: Optional[sqlite3.Connection] = None
+    _db: sqlite3.Connection | None = None
     _centroids_loaded: set[str] = field(default_factory=set)
     _neighborhood_loaded: bool = False
 
@@ -258,8 +258,8 @@ class AuthorSignalContext:
         *,
         openalex_id: str = "",
         author_name: str = "",
-        exclude: Optional[frozenset[str]] = None,
-    ) -> Optional[AuthorSignal]:
+        exclude: frozenset[str] | None = None,
+    ) -> AuthorSignal | None:
         """Compute the canonical signal for one author, or ``None`` if we have
         no data at all (the caller renders "no signal yet").
 
@@ -293,7 +293,7 @@ class AuthorSignalContext:
             )
 
         # rating — signed: poorly-rated work is a negative preference.
-        avg_rating: Optional[float] = None
+        avg_rating: float | None = None
         if stats and stats.rating_n > 0:
             avg_rating = stats.rating_sum / stats.rating_n
             if "rating" not in exclude:
@@ -345,7 +345,7 @@ class AuthorSignalContext:
             components=components,
         )
 
-    def _similarity_value(self, oid: str) -> Optional[float]:
+    def _similarity_value(self, oid: str) -> float | None:
         if self.library_centroid is None:
             return None
         centroid = self.centroid_by_oid.get(oid)
@@ -358,7 +358,7 @@ class AuthorSignalContext:
 
 
 def _make_component(
-    key: str, value: float, *, detail: Optional[str] = None
+    key: str, value: float, *, detail: str | None = None
 ) -> AuthorSignalComponent:
     tone = (
         "positive"
@@ -378,7 +378,7 @@ def _make_component(
     )
 
 
-def _scale_author_similarity(raw_score: float) -> Optional[float]:
+def _scale_author_similarity(raw_score: float) -> float | None:
     """Map author-centroid cosine into a display/ranking component.
 
     Discovery paper scoring uses a generous calibration curve because raw
@@ -713,8 +713,8 @@ def compute_author_signal(
     author_id: str,
     author_name: str,
     openalex_id: str,
-    ctx: Optional[AuthorSignalContext] = None,
-) -> Optional[dict]:
+    ctx: AuthorSignalContext | None = None,
+) -> dict | None:
     """Canonical signal for a single author, as a JSON-ready dict.
 
     Builds a one-off context when ``ctx`` is omitted (the author-detail popup
@@ -734,8 +734,8 @@ def compute_author_signals(
     db: sqlite3.Connection,
     authors: list[dict],
     *,
-    ctx: Optional[AuthorSignalContext] = None,
-) -> dict[str, Optional[dict]]:
+    ctx: AuthorSignalContext | None = None,
+) -> dict[str, dict | None]:
     """Batch signals keyed by ``authors[i]['id']``.
 
     Each entry needs ``id`` plus ``openalex_id`` / ``name``. Loads every
@@ -748,7 +748,7 @@ def compute_author_signals(
         [a.get("openalex_id") for a in authors if a.get("openalex_id")]
     )
     ctx.ensure_neighborhood()
-    out: dict[str, Optional[dict]] = {}
+    out: dict[str, dict | None] = {}
     for author in authors:
         signal = ctx.signal_for(
             openalex_id=str(author.get("openalex_id") or ""),
@@ -759,7 +759,7 @@ def compute_author_signals(
 
 
 def build_discovery_author_affinity(
-    db: sqlite3.Connection, ctx: Optional[AuthorSignalContext] = None
+    db: sqlite3.Connection, ctx: AuthorSignalContext | None = None
 ) -> dict[str, float]:
     """Author affinity map for the discovery ranker, keyed by name match keys.
 

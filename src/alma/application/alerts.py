@@ -6,10 +6,10 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
-from alma.slack.client import get_slack_notifier
 from alma.mailer.client import get_email_notifier
+from alma.slack.client import get_slack_notifier
 
 VALID_RULE_TYPES = {
     "author",
@@ -38,7 +38,7 @@ def list_rules(db: sqlite3.Connection) -> list[dict]:
     return [_to_rule_dict(r) for r in rows]
 
 
-def get_rule(db: sqlite3.Connection, rule_id: str) -> Optional[dict]:
+def get_rule(db: sqlite3.Connection, rule_id: str) -> dict | None:
     """Fetch one rule by ID."""
     row = db.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
     return _to_rule_dict(row) if row else None
@@ -105,7 +105,7 @@ def update_rule(
     rule_config: dict,
     channels: list[str],
     enabled: bool,
-) -> Optional[dict]:
+) -> dict | None:
     """Update a rule by ID."""
     if rule_type not in VALID_RULE_TYPES:
         raise ValueError(f"Unsupported rule_type: {rule_type}")
@@ -139,7 +139,7 @@ def delete_rule(db: sqlite3.Connection, rule_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def toggle_rule(db: sqlite3.Connection, rule_id: str) -> Optional[dict]:
+def toggle_rule(db: sqlite3.Connection, rule_id: str) -> dict | None:
     """Toggle enabled state for a rule."""
     existing = get_rule(db, rule_id)
     if existing is None:
@@ -195,7 +195,7 @@ def list_history(
     return out
 
 
-def test_fire_rule(db: sqlite3.Connection, rule_id: str) -> Optional[dict]:
+def test_fire_rule(db: sqlite3.Connection, rule_id: str) -> dict | None:
     """Dry-run one rule by querying matching papers only."""
     rule = get_rule(db, rule_id)
     if rule is None:
@@ -433,7 +433,7 @@ def create_alert(
     name: str,
     channels: list[str],
     schedule: str,
-    schedule_config: Optional[dict],
+    schedule_config: dict | None,
     format_value: str,
     enabled: bool,
     rule_ids: list[str],
@@ -471,7 +471,7 @@ def create_alert(
     return build_alert_response(db, dict(row))
 
 
-def get_alert(db: sqlite3.Connection, alert_id: str) -> Optional[dict]:
+def get_alert(db: sqlite3.Connection, alert_id: str) -> dict | None:
     """Get one alert by ID with rule payload."""
     row = db.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
     return build_alert_response(db, dict(row)) if row else None
@@ -481,13 +481,13 @@ def update_alert(
     db: sqlite3.Connection,
     alert_id: str,
     *,
-    name: Optional[str] = None,
-    channels: Optional[list[str]] = None,
-    schedule: Optional[str] = None,
-    schedule_config: Optional[dict] = None,
-    format_value: Optional[str] = None,
-    enabled: Optional[bool] = None,
-) -> Optional[dict]:
+    name: str | None = None,
+    channels: list[str] | None = None,
+    schedule: str | None = None,
+    schedule_config: dict | None = None,
+    format_value: str | None = None,
+    enabled: bool | None = None,
+) -> dict | None:
     """Partially update one alert."""
     row = db.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
     if not row:
@@ -521,7 +521,7 @@ def delete_alert(db: sqlite3.Connection, alert_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def assign_rules(db: sqlite3.Connection, alert_id: str, rule_ids: list[str]) -> Optional[dict]:
+def assign_rules(db: sqlite3.Connection, alert_id: str, rule_ids: list[str]) -> dict | None:
     """Add a set of rules to an alert."""
     row = db.execute("SELECT id FROM alerts WHERE id = ?", (alert_id,)).fetchone()
     if not row:
@@ -553,7 +553,7 @@ async def evaluate_digest(
     digest_id: str,
     *,
     trigger_source: str = "user",
-) -> Optional[dict]:
+) -> dict | None:
     """Evaluate one digest and send notifications."""
     alert_row = db.execute("SELECT * FROM alerts WHERE id = ?", (digest_id,)).fetchone()
     if not alert_row:
@@ -690,7 +690,7 @@ async def evaluate_digest(
     }
 
 
-def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> Optional[dict]:
+def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> dict | None:
     """Evaluate digest without sending or persistence side-effects."""
     alert_row = db.execute("SELECT * FROM alerts WHERE id = ?", (digest_id,)).fetchone()
     if not alert_row:
@@ -850,7 +850,7 @@ def _evaluate_rule(
     rule_row: dict,
     db: sqlite3.Connection,
     *,
-    alert_created_at: Optional[str] = None,
+    alert_created_at: str | None = None,
 ) -> list[dict]:
     """Run a single rule's match query and return the matching paper rows.
 
@@ -952,6 +952,7 @@ def _evaluate_rule(
             FROM collection_items ci
             JOIN papers p ON p.id = ci.paper_id
             WHERE ci.collection_id = ?
+              AND p.status = 'library'
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.added_at, '') DESC
             LIMIT 500
             """,
@@ -1191,7 +1192,7 @@ def _evaluate_rule(
     return []
 
 
-def _loads(value: Optional[str]) -> Optional[object]:
+def _loads(value: str | None) -> object | None:
     if not value:
         return None
     try:

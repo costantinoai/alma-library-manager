@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     )
 
 
-def _resolve_author(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def _resolve_author(db: sqlite3.Connection, author_id: str) -> dict | None:
     row = db.execute(
         "SELECT id, name, openalex_id FROM authors WHERE id = ?",
         (author_id,),
@@ -178,8 +177,6 @@ def _similar_authors(db: sqlite3.Connection, oid: str) -> list[dict]:
     if not _table_exists(db, "author_centroids"):
         return []
     try:
-        import numpy as np
-
         from alma.core.vector_blob import cosine_similarity, decode_vector
         from alma.discovery.similarity import get_active_embedding_model
     except ImportError:
@@ -307,7 +304,7 @@ def _enrich(db: sqlite3.Connection, oids: list[str]) -> dict[str, dict]:
     }
 
 
-def build_author_neighbourhood(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def build_author_neighbourhood(db: sqlite3.Connection, author_id: str) -> dict | None:
     """Ego-network around ``author_id`` for the 3D explorer.
 
     Returns ``{center, nodes, links, counts}`` (react-force-graph shape) or

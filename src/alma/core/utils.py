@@ -11,7 +11,6 @@ import unicodedata
 import urllib.parse
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
 
 from alma.plugins.base import Publication
 
@@ -60,7 +59,7 @@ def normalize_text(value: str) -> str:
 _DOTLESS_I_PLUS_COMBINING_RE = re.compile("ı([̀-ͯ])")
 
 
-def repair_display_text(value: Optional[str]) -> str:
+def repair_display_text(value: str | None) -> str:
     """Repair LaTeX-leaked dotless-ı + combining marks, then NFC-normalize.
 
     The durable, write-time twin of the frontend ``repairDisplayText`` (applied
@@ -89,7 +88,7 @@ def repair_display_text(value: Optional[str]) -> str:
 _HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^<>]*>")
 
 
-def strip_html(value: Optional[str]) -> str:
+def strip_html(value: str | None) -> str:
     """Remove HTML/XML markup + decode entities from a display string.
 
     Source titles for figures / supporting-info arrive wrapped in markup
@@ -112,7 +111,7 @@ def strip_html(value: Optional[str]) -> str:
     return re.sub(r"\s+([.,;:!?])", r"\1", text)
 
 
-def clean_display_text(value: Optional[str]) -> str:
+def clean_display_text(value: str | None) -> str:
     """Write-time cleaner for display fields: ``strip_html`` then diacritic repair.
 
     The canonical composition applied at every paper/author persistence
@@ -125,7 +124,7 @@ def clean_display_text(value: Optional[str]) -> str:
 _TITLE_KEY_NOISE_RE = re.compile(r"[^a-z0-9]+")
 
 
-def normalize_title_key(title: Optional[str]) -> str:
+def normalize_title_key(title: str | None) -> str:
     """Deduplication key for paper titles.
 
     Lowercases and strips every non-alphanumeric character (including
@@ -177,10 +176,10 @@ def candidate_dedup_key(item: dict) -> str:
 
 def strong_identifiers_conflict(
     *,
-    incoming_doi: Optional[str] = None,
-    incoming_openalex_id: Optional[str] = None,
-    candidate_doi: Optional[str] = None,
-    candidate_openalex_id: Optional[str] = None,
+    incoming_doi: str | None = None,
+    incoming_openalex_id: str | None = None,
+    candidate_doi: str | None = None,
+    candidate_openalex_id: str | None = None,
 ) -> bool:
     """True when two records each carry a strong identifier that DISAGREES.
 
@@ -206,7 +205,7 @@ def strong_identifiers_conflict(
     return False
 
 
-def logical_dup_signature(title: Optional[str], year: Optional[object]) -> Optional[str]:
+def logical_dup_signature(title: str | None, year: object | None) -> str | None:
     """Read-time collapse key for "the same paper shown twice" (year + title).
 
     Returns ``"<normalized-title>::<year>"`` or ``None`` when the title is
@@ -233,13 +232,13 @@ def logical_dup_signature(title: Optional[str], year: Optional[object]) -> Optio
 def resolve_existing_paper_id(
     conn: sqlite3.Connection,
     *,
-    openalex_id: Optional[str] = None,
-    doi: Optional[str] = None,
-    title: Optional[str] = None,
-    year: Optional[int] = None,
-    exclude_id: Optional[str] = None,
-    status: Optional[str] = None,
-) -> Optional[str]:
+    openalex_id: str | None = None,
+    doi: str | None = None,
+    title: str | None = None,
+    year: int | None = None,
+    exclude_id: str | None = None,
+    status: str | None = None,
+) -> str | None:
     """Return the `papers.id` of an existing row matching the canonical triple.
 
     The triple, tried in priority order:
@@ -301,7 +300,7 @@ def resolve_existing_paper_id(
     return None
 
 
-def derive_source_id(pub_dict: Dict) -> str:
+def derive_source_id(pub_dict: dict) -> str:
     """Derive a unique source identifier from paper metadata.
 
     Priority: DOI > URL > title
@@ -320,7 +319,7 @@ def derive_source_id(pub_dict: Dict) -> str:
     return doi or url or title
 
 
-def normalize_doi(doi_val: Optional[str]) -> Optional[str]:
+def normalize_doi(doi_val: str | None) -> str | None:
     """Normalize DOI to bare format (strip URL prefixes).
 
     OpenAlex and Scholar may return DOIs in different formats:
@@ -353,7 +352,7 @@ def normalize_doi(doi_val: Optional[str]) -> Optional[str]:
 _DOI_SHAPE_RE = re.compile(r"^10\.\d{4,9}/.+$")
 
 
-def is_doi_shaped(value: Optional[str]) -> bool:
+def is_doi_shaped(value: str | None) -> bool:
     """True when *value* (after `normalize_doi`) is registry-shaped.
 
     `normalize_doi` deliberately does NOT validate shape (it's a cleaner,
@@ -369,7 +368,7 @@ def is_doi_shaped(value: Optional[str]) -> bool:
 _DOI_TRAILING_FRAGMENTS = ("/abstract", "/full", "/pdf", "/epdf", "/meta")
 
 
-def canonical_lookup_doi(doi_val: Optional[str]) -> Optional[str]:
+def canonical_lookup_doi(doi_val: str | None) -> str | None:
     """Return the lowercased, URL-decoded, fragment-stripped DOI for
     external-API lookups.
 
@@ -401,7 +400,7 @@ def canonical_lookup_doi(doi_val: Optional[str]) -> Optional[str]:
     return lowered or None
 
 
-def validate_doi_shape(doi_val: Optional[str]) -> bool:
+def validate_doi_shape(doi_val: str | None) -> bool:
     """Return True iff the DOI matches the registry-shape regex.
 
     Operates on the canonical-lookup form (lowercased + decoded), so
@@ -418,7 +417,7 @@ def validate_doi_shape(doi_val: Optional[str]) -> bool:
 _ORCID_RE = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")
 
 
-def normalize_orcid(orcid_val: Optional[str]) -> Optional[str]:
+def normalize_orcid(orcid_val: str | None) -> str | None:
     """Normalize ORCID to the bare 16-char hyphenated form.
 
     Single chokepoint for every write path that touches an ORCID
@@ -450,7 +449,7 @@ def normalize_orcid(orcid_val: Optional[str]) -> Optional[str]:
     return raw
 
 
-def normalize_openalex_id(value: Optional[str]) -> str:
+def normalize_openalex_id(value: str | None) -> str:
     """Normalize an OpenAlex author ID to the canonical bare ``A…`` form.
 
     The single chokepoint for the OpenAlex author identifier — sibling of
@@ -502,7 +501,7 @@ def normalize_openalex_id(value: Optional[str]) -> str:
     return aid
 
 
-def to_publication_dataclass(pub_dict: Dict) -> Publication:
+def to_publication_dataclass(pub_dict: dict) -> Publication:
     """Convert a publication dictionary to a Publication dataclass."""
     return Publication(
         title=pub_dict.get("title", ""),

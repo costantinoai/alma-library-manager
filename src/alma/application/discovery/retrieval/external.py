@@ -9,17 +9,16 @@ results back through the branch-control lifecycle.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from concurrent.futures import Future
-
-from alma.core.concurrency import bounded_thread_pool
 from datetime import datetime
 from time import perf_counter
 from typing import Any
 
+from alma.core.concurrency import bounded_thread_pool
 from alma.core.scoring_math import clamp
 from alma.discovery import openalex_related, source_search
 
-from ._common import _candidate_key
 from ..lens_crud import (
     _apply_branch_auto_lifecycle,
     _apply_branch_controls,
@@ -40,6 +39,7 @@ from ..seed_profile import (
     _top_preferred_authors,
     _top_profile_terms,
 )
+from ._common import _candidate_key
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ def _retrieve_external_channel(
     seeds: list[dict],
     *,
     limit: int,
-    preference_profile: Optional[dict[str, Any]] = None,
-    positive_pubs: Optional[list[dict]] = None,
+    preference_profile: dict[str, Any] | None = None,
+    positive_pubs: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, Any]]:
     def _setting_bool(key: str, default: bool) -> bool:
         raw = settings.get(key)
@@ -127,7 +127,7 @@ def _retrieve_external_channel(
     # `_lane_diagnostics` captures per-source timing + timeouts so that
     # `lane_runs` can surface a `duration_ms` and `slowest_source` value
     # even though each future was fired concurrently (D-AUDIT-10b / -10c).
-    query_cache: dict[tuple[str, str, int, int], "Future[list[dict]]"] = {}
+    query_cache: dict[tuple[str, str, int, int], Future[list[dict]]] = {}
     _lane_timings: dict[tuple, int] = {}
     _lane_diagnostics: dict[tuple, dict[str, Any]] = {}
     lane_runs: list[dict[str, Any]] = []
@@ -165,7 +165,7 @@ def _retrieve_external_channel(
         from_year: int,
         *,
         mode: str,
-    ) -> "Future[list[dict]]":
+    ) -> Future[list[dict]]:
         """Submit a `search_across_sources` call to the lane executor.
 
         Stores the Future in `query_cache` keyed by `cache_key` so repeat
@@ -203,7 +203,7 @@ def _retrieve_external_channel(
         query_cache[cache_key] = future
         return future
 
-    def _resolve_lane(cache_entry: "Future[list[dict]] | list[dict]") -> list[dict]:
+    def _resolve_lane(cache_entry: Future[list[dict]] | list[dict]) -> list[dict]:
         if isinstance(cache_entry, Future):
             try:
                 return cache_entry.result() or []
@@ -495,7 +495,7 @@ def _retrieve_external_channel(
     # later reads the result and emits the lane_run + `out` entries.
     s2_recommend_enabled = _setting_bool("strategies.s2_recommend", True)
     s2_source_enabled = _setting_bool("sources.semantic_scholar.enabled", True)
-    s2_recommend_future: "Future[list[dict]] | None" = None
+    s2_recommend_future: Future[list[dict]] | None = None
     s2_recommend_budget = 0
     s2_positive_seed_ids: list[str] = []
     s2_negative_seed_ids: list[str] = []
@@ -599,7 +599,7 @@ def _retrieve_external_channel(
         if (row["openalex_id"] or "").strip()
     ]
     followed_author_holder: dict[str, int] = {}
-    followed_author_future: "Future[dict[str, list[dict]]] | None" = None
+    followed_author_future: Future[dict[str, list[dict]]] | None = None
     if followed_author_ids:
 
         def _timed_batch_author_fetch(

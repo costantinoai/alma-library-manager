@@ -20,7 +20,6 @@ new tables. The dedicated Health page (Phase 3) is the primary consumer.
 from __future__ import annotations
 
 import sqlite3
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -154,10 +153,10 @@ def update_governance_settings(
 )
 def estimate_operation(
     key: str,
-    scope: Optional[str] = Query(None),
-    dry_run: Optional[bool] = Query(None),
-    max_items: Optional[int] = Query(None, ge=1),
-    request_batch_size: Optional[int] = Query(None, ge=1),
+    scope: str | None = Query(None),
+    dry_run: bool | None = Query(None),
+    max_items: int | None = Query(None, ge=1),
+    request_batch_size: int | None = Query(None, ge=1),
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
@@ -186,13 +185,13 @@ class RunMaintenanceRequest(BaseModel):
     """Atomic run controls. The visible values travel with the Run click."""
 
     target_ids: list[str] = Field(default_factory=list)
-    max_items: Optional[int] = Field(default=None, ge=1)
-    request_batch_size: Optional[int] = Field(default=None, ge=1)
-    scope: Optional[str] = None
+    max_items: int | None = Field(default=None, ge=1)
+    request_batch_size: int | None = Field(default=None, ge=1)
+    scope: str | None = None
     dry_run: bool = False
     force: bool = False
-    confirmation_token: Optional[str] = None
-    plan_fingerprint: Optional[str] = None
+    confirmation_token: str | None = None
+    plan_fingerprint: str | None = None
 
 
 @router.post(
@@ -206,7 +205,7 @@ class RunMaintenanceRequest(BaseModel):
 )
 def run_operation(
     key: str,
-    body: Optional[RunMaintenanceRequest] = None,
+    body: RunMaintenanceRequest | None = None,
     db: sqlite3.Connection = Depends(get_db),
     _user: dict = Depends(get_current_user),
 ):
@@ -241,10 +240,10 @@ def run_operation(
 class MaintenanceConfigRequest(BaseModel):
     """Partial update — only provided fields change."""
 
-    auto_enabled: Optional[bool] = Field(default=None, description="Allow safe idle repair")
-    auto_daily_cap: Optional[int] = Field(default=None, ge=1)
-    remembered_manual_limit: Optional[int] = Field(default=None, ge=1)
-    request_batch_size: Optional[int] = Field(default=None, ge=1)
+    auto_enabled: bool | None = Field(default=None, description="Allow safe idle repair")
+    auto_daily_cap: int | None = Field(default=None, ge=1)
+    remembered_manual_limit: int | None = Field(default=None, ge=1)
+    request_batch_size: int | None = Field(default=None, ge=1)
 
 
 @router.post(

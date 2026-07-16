@@ -49,8 +49,9 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Callable, Iterator, TypeVar
+from typing import TypeVar
 
 from alma.core.db_retry import commit_with_retry, run_with_lock_retry
 

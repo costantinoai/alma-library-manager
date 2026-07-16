@@ -5,6 +5,7 @@ Split out of the discovery god-module (D-9); pure move.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 from alma.discovery import openalex_related

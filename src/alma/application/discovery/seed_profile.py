@@ -17,7 +17,7 @@ import math
 import sqlite3
 from collections import Counter, defaultdict
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from alma.core.scoring_math import clamp
 from alma.discovery import similarity as sim_module
@@ -175,6 +175,7 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             FROM papers p
             JOIN collection_items ci ON ci.paper_id = p.id
             WHERE ci.collection_id = ?
+              AND p.status = 'library'
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -251,10 +252,10 @@ def _seed_token_set(seed: dict) -> set[str]:
 
 def _extract_keywords(
     seeds: list[dict],
-    explicit: Optional[list[str]] = None,
+    explicit: list[str] | None = None,
     max_keywords: int = 12,
     *,
-    background: Optional[list[dict]] = None,
+    background: list[dict] | None = None,
 ) -> list[str]:
     """Return the top distinctive keywords for `seeds`.
 
@@ -432,7 +433,7 @@ def _top_preferred_authors(
     *,
     limit: int,
     library_dominance_cap: float = 0.4,
-    scope_paper_ids: Optional[set[str]] = None,
+    scope_paper_ids: set[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Return the top N authors to fan external taste-author queries
     out to. Excludes authors who appear on more than
@@ -598,7 +599,7 @@ def _build_recent_win_queries(
 
 def _negative_preference_context(
     db: sqlite3.Connection,
-    preference_profile: Optional[dict[str, Any]],
+    preference_profile: dict[str, Any] | None,
 ) -> dict[str, dict[str, float]]:
     topic_weights = dict((preference_profile or {}).get("topic_weights") or {})
     journal_affinity = dict((preference_profile or {}).get("journal_affinity") or {})
@@ -692,8 +693,8 @@ def _candidate_negative_preference_penalty(
 
 
 def _resolve_branch_temperature(
-    settings: Optional[dict[str, str]] = None,
-    override: Optional[float] = None,
+    settings: dict[str, str] | None = None,
+    override: float | None = None,
 ) -> float:
     if override is not None:
         return _clamp(float(override), 0.0, 1.0)
@@ -720,8 +721,8 @@ BRANCH_RESOLUTION_MAX = 3.0
 
 
 def _resolve_branch_resolution(
-    override: Optional[float] = None,
-    settings: Optional[dict[str, str]] = None,
+    override: float | None = None,
+    settings: dict[str, str] | None = None,
 ) -> float:
     """Resolve the branch cluster-granularity (>1 finer, <1 coarser).
 
@@ -804,7 +805,7 @@ def _attach_signal_scores_to_seeds(
 def _fetch_seed_embedding_vectors(
     db: sqlite3.Connection,
     seeds: list[dict],
-) -> dict[str, "np.ndarray"]:
+) -> dict[str, np.ndarray]:
     if not _NUMPY_AVAILABLE:
         return {}
     seed_ids = [str(seed.get("id") or "").strip() for seed in seeds]
@@ -825,7 +826,7 @@ def _fetch_seed_embedding_vectors(
     except sqlite3.OperationalError:
         return {}
     from alma.core.vector_blob import decode_vector
-    out: dict[str, "np.ndarray"] = {}
+    out: dict[str, np.ndarray] = {}
     for row in rows:
         paper_id = str(row["paper_id"] or "").strip()
         if not paper_id:
@@ -843,7 +844,7 @@ def _fetch_seed_embedding_vectors(
 
 def _cluster_seed_papers_vector(
     seeds: list[dict],
-    vectors: dict[str, "np.ndarray"],
+    vectors: dict[str, np.ndarray],
     max_clusters: int,
     resolution: float = BRANCH_RESOLUTION_DEFAULT,
 ) -> list[dict[str, Any]]:
@@ -874,7 +875,7 @@ def _cluster_seed_papers_vector(
         sid = next(iter(emb))
         return [{"seeds": [seed_by_id[sid]], "centroid": vectors[sid]}]
 
-    def _unit(v: "np.ndarray") -> "np.ndarray":
+    def _unit(v: np.ndarray) -> np.ndarray:
         n = float(np.linalg.norm(v))
         return v / n if n > 0.0 else v
 
@@ -1025,11 +1026,11 @@ def _build_seed_branches(
     db: sqlite3.Connection,
     seeds: list[dict],
     *,
-    settings: Optional[dict[str, str]] = None,
+    settings: dict[str, str] | None = None,
     max_branches: int = 6,
-    temperature: Optional[float] = None,
-    resolution: Optional[float] = None,
-    lens_id: Optional[str] = None,
+    temperature: float | None = None,
+    resolution: float | None = None,
+    lens_id: str | None = None,
 ) -> list[dict]:
     if not seeds:
         return []
@@ -1080,7 +1081,7 @@ def _build_seed_branches(
             core_topics = [f"branch-{i}"]
 
         neighbor_terms: list[str] = []
-        direction_hint: Optional[str] = None
+        direction_hint: str | None = None
 
         # explore_topics neighbour selection is temperature-gated:
         #   - cold lens (temperature < 0.5)  → nearest cluster, gradient
@@ -1094,7 +1095,7 @@ def _build_seed_branches(
         prefer_far_neighbour = effective_temp >= 0.5
         own_centroid = cluster.get("centroid")
         if _NUMPY_AVAILABLE and own_centroid is not None and len(clusters) > 1:
-            best_idx: Optional[int] = None
+            best_idx: int | None = None
             best_sim = -2.0 if prefer_far_neighbour else float("-inf")
             for j, other in enumerate(clusters):
                 if other is cluster:
@@ -1191,9 +1192,9 @@ def preview_lens_branches(
     lens_id: str,
     *,
     max_branches: int = 6,
-    temperature: Optional[float] = None,
-    resolution: Optional[float] = None,
-) -> Optional[dict]:
+    temperature: float | None = None,
+    resolution: float | None = None,
+) -> dict | None:
     """Build an explainable branch map for one lens (for UI visualization).
 
     Each branch carries its `auto_weight` — the continuous multiplier the
@@ -1256,7 +1257,7 @@ def _build_topic_keyword_cold_start_summary(
     lexical_count: int,
     graph_count: int,
     external_lane_counts: dict[str, int],
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     if str(lens.get("context_type") or "") != "topic_keyword":
         return None
     config = lens.get("context_config") or {}

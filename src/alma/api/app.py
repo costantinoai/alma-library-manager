@@ -4,51 +4,52 @@ This module provides the main FastAPI application with all routes,
 middleware, exception handlers, and OpenAPI documentation.
 """
 
+import logging
 import os
 import sqlite3
 import sys
 import time
-import logging
-from contextlib import asynccontextmanager
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from alma.api.models import HealthResponse, VersionResponse, ErrorResponse, StatisticsResponse
-from alma.version import get_app_version
+from alma.api.deps import get_plugin_registry, open_db_connection
+from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.routes import authors_router, papers_router, plugins_router
-from alma.api.routes.settings import router as settings_router
-from alma.api.routes.operations import router as operations_router
-from alma.api.routes.library import router as library_router
-from alma.api.routes.alerts import router as alerts_router
-from alma.api.routes.discovery import router as discovery_router
-from alma.api.routes.feed import router as feed_router
-from alma.api.routes.imports import router as imports_router
-from alma.api.routes.scheduler import router as scheduler_router
-from alma.api.routes.insights import router as insights_router
-from alma.api.routes.health import router as health_router
-from alma.api.routes.library_mgmt import router as library_mgmt_router
-from alma.api.routes.logs import router as logs_router, install_log_handler
 from alma.api.routes.activity import router as activity_router
 from alma.api.routes.ai import router as ai_router
+from alma.api.routes.alerts import router as alerts_router
+from alma.api.routes.backup import router as backup_router
+from alma.api.routes.bootstrap import router as bootstrap_router
+from alma.api.routes.discovery import router as discovery_router
+from alma.api.routes.extension import router as extension_router
+from alma.api.routes.feed import router as feed_router
+from alma.api.routes.feedback import router as feedback_router
 from alma.api.routes.graphs import router as graphs_router
+from alma.api.routes.health import router as health_router
+from alma.api.routes.imports import router as imports_router
+from alma.api.routes.insights import router as insights_router
+from alma.api.routes.lenses import router as lenses_router
+from alma.api.routes.library import router as library_router
+from alma.api.routes.library_mgmt import router as library_mgmt_router
+from alma.api.routes.logs import install_log_handler
+from alma.api.routes.logs import router as logs_router
+from alma.api.routes.onboarding import router as onboarding_router
+from alma.api.routes.operations import router as operations_router
+from alma.api.routes.reports import router as reports_router
+from alma.api.routes.scheduler import router as scheduler_router
+from alma.api.routes.search import router as search_router
+from alma.api.routes.settings import router as settings_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
-from alma.api.routes.feedback import router as feedback_router
-from alma.api.routes.lenses import router as lenses_router
-from alma.api.routes.search import router as search_router
-from alma.api.routes.backup import router as backup_router
-from alma.api.routes.reports import router as reports_router
-from alma.api.routes.bootstrap import router as bootstrap_router
-from alma.api.routes.extension import router as extension_router
-from alma.api.routes.onboarding import router as onboarding_router
-from alma.api.deps import get_db, get_plugin_registry, open_db_connection
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
 from alma.core.logging import setup_logging
+from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
 

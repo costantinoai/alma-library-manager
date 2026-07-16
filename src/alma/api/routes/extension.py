@@ -33,7 +33,6 @@ reads, ``/save`` is the single mutation.
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -78,16 +77,16 @@ class ExtensionSaveRequest(BaseModel):
         description="library (untriaged) | reading_list (reading_status='reading')",
     )
     # Identifiers / resolution inputs (DOI preferred — OpenAlex enriches it).
-    doi: Optional[str] = None
-    openalex_id: Optional[str] = None
-    title: Optional[str] = None
+    doi: str | None = None
+    openalex_id: str | None = None
+    title: str | None = None
     # Scraped metadata — used to build the candidate fallback + as the
     # page link when there's no DOI.
-    url: Optional[str] = None
-    authors: Optional[str] = None
-    year: Optional[int] = None
-    journal: Optional[str] = None
-    abstract: Optional[str] = None
+    url: str | None = None
+    authors: str | None = None
+    year: int | None = None
+    journal: str | None = None
+    abstract: str | None = None
 
 
 @router.get(
@@ -103,13 +102,15 @@ def ping(_user: dict = Depends(get_current_user)):
     # Lazy import to avoid a circular import at module load (app.py
     # imports this router while it is still initializing).
     try:
-        from alma.api.app import API_VERSION
+        from alma.api import app as app_module
+
+        api_version = app_module.API_VERSION
     except Exception:  # pragma: no cover - defensive only
-        API_VERSION = None
+        api_version = None
     return {
         "ok": True,
         "service": "alma",
-        "alma_version": API_VERSION,
+        "alma_version": api_version,
         "connector_version": CONNECTOR_API_VERSION,
         # Stable identity of THIS ALMa instance so the connector can be sure
         # an offline-queued capture is delivered to the database it was meant
@@ -278,10 +279,10 @@ def save_from_extension(
 class ExtensionLookupRequest(BaseModel):
     """Identify a paper to check membership + (optionally) resolve metadata."""
 
-    doi: Optional[str] = None
-    openalex_id: Optional[str] = None
-    title: Optional[str] = None
-    year: Optional[int] = None
+    doi: str | None = None
+    openalex_id: str | None = None
+    title: str | None = None
+    year: int | None = None
     # When True and the paper isn't in the local corpus (or has no title),
     # resolve display metadata from OpenAlex so the popup can show the real
     # title before the user saves. Off by default to keep the call local
@@ -289,7 +290,7 @@ class ExtensionLookupRequest(BaseModel):
     resolve: bool = False
 
 
-def _resolve_preview(req: "ExtensionLookupRequest") -> Optional[dict]:
+def _resolve_preview(req: "ExtensionLookupRequest") -> dict | None:
     """Best-effort upstream metadata resolve for the popup preview."""
     from alma.application.openalex_manual import resolve_work_metadata
 
@@ -337,7 +338,7 @@ def lookup_from_extension(
             (paper_id,),
         ).fetchone()
         if row:
-            status = str((row["status"] or "")).strip().lower()
+            status = str(row["status"] or "").strip().lower()
             out = {
                 "found": True,
                 "paper_id": paper_id,
@@ -383,7 +384,7 @@ class ExtensionUndoRequest(BaseModel):
     paper_id: str
     # The paper's column values before the save, or null if the save created
     # the row (then Undo reverts it to a bare tracked row, out of Library).
-    prior: Optional[dict] = None
+    prior: dict | None = None
 
 
 @router.post(

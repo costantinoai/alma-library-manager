@@ -5,7 +5,8 @@ import sqlite3
 
 from fastapi import APIRouter, Depends
 
-from alma.api.deps import get_db, get_current_user
+from alma.api.deps import get_current_user, get_db
+from alma.application import discovery as discovery_app
 from alma.application import feed as feed_app
 from alma.version import get_app_version
 
@@ -91,12 +92,14 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Pending recommendations
+    # Discovery badge: recommendations created by latest successful refresh.
     pending_recs = 0
+    new_recs = 0
     try:
         pending_recs = db.execute(
             "SELECT COUNT(*) AS c FROM recommendations WHERE user_action IS NULL"
         ).fetchone()["c"]
+        new_recs = discovery_app.count_new_discovery_recommendations(db)
     except Exception:
         pass
 
@@ -141,6 +144,7 @@ def get_bootstrap(
         "discovery": {
             "active_lenses": active_lenses,
             "pending_recommendations": pending_recs,
+            "new_recommendations": new_recs,
         },
         "alerts": {
             "active": active_alerts,

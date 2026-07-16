@@ -36,7 +36,7 @@ forces a fresh refresh.
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -195,7 +195,7 @@ def _silhouette_optimal_k(
     vectors: np.ndarray,
     *,
     min_k: int = 2,
-    max_k: Optional[int] = None,
+    max_k: int | None = None,
     sample_size: int = 2000,
 ) -> int:
     """Pick the number of clusters that maximises the silhouette score.
@@ -254,7 +254,7 @@ class Cluster:
     cluster_id: int
     member_keys: list[str]  # paper_id UUIDs
     label: str = ""
-    centroid: Optional[list[float]] = None
+    centroid: list[float] | None = None
 
 
 @dataclass
@@ -281,7 +281,7 @@ class ClusteringResult:
     probabilities: dict[str, float] = field(default_factory=dict)
     method: str = ""
     params: dict[str, Any] = field(default_factory=dict)
-    stability: Optional[float] = None
+    stability: float | None = None
 
     @property
     def n_clusters(self) -> int:
@@ -301,7 +301,7 @@ def measure_clustering_stability(
     min_cluster_size: int,
     min_samples: int,
     n_seeds: int = 5,
-) -> Optional[float]:
+) -> float | None:
     """Mean pairwise Adjusted Rand Index of the partition across UMAP seeds.
 
     The clustering pipeline's only stochastic stage is the UMAP reduction
@@ -356,8 +356,8 @@ def measure_clustering_stability(
 
 def cluster_publications(
     embeddings: dict[str, list[float]],
-    min_cluster_size: Optional[int] = None,
-    min_samples: Optional[int] = None,
+    min_cluster_size: int | None = None,
+    min_samples: int | None = None,
     *,
     compute_stability: bool = False,
     resolution: float = 1.0,
@@ -539,7 +539,7 @@ def cluster_publications(
         )
 
     # Reproducibility diagnostic (opt-in; re-fits UMAP, so background-only).
-    stability: Optional[float] = None
+    stability: float | None = None
     if compute_stability:
         stability = measure_clustering_stability(
             vectors, min_cluster_size=min_cluster_size, min_samples=min_samples
@@ -600,16 +600,16 @@ def select_representatives(
         return ([key for key, _ in keyed] or list(member_keys))[:k]
 
     keys = [key for key, _ in keyed]
-    X = np.asarray([np.asarray(v, dtype=np.float32) for _, v in keyed], dtype=np.float32)
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    matrix = np.asarray([np.asarray(v, dtype=np.float32) for _, v in keyed], dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    Xn = X / norms  # unit rows → dot product is cosine
-    centroid = Xn.mean(axis=0)
+    normalized = matrix / norms  # unit rows → dot product is cosine
+    centroid = normalized.mean(axis=0)
     cn = float(np.linalg.norm(centroid))
     if cn == 0.0:
         return keys[:k]
     centroid = centroid / cn
-    cos_centroid = Xn @ centroid
+    cos_centroid = normalized @ centroid
 
     n = len(keys)
     k = min(max(1, k), n)
@@ -620,7 +620,9 @@ def select_representatives(
     first = int(np.argmax(cos_centroid))  # most central member seeds the set
     picked.append(first)
     picked_mask[first] = True
-    max_sim_to_picked = np.maximum(max_sim_to_picked, Xn @ Xn[first])
+    max_sim_to_picked = np.maximum(
+        max_sim_to_picked, normalized @ normalized[first]
+    )
 
     while len(picked) < k:
         mmr = (1.0 - diversity) * cos_centroid - diversity * max_sim_to_picked
@@ -630,12 +632,14 @@ def select_representatives(
             break
         picked.append(nxt)
         picked_mask[nxt] = True
-        max_sim_to_picked = np.maximum(max_sim_to_picked, Xn @ Xn[nxt])
+        max_sim_to_picked = np.maximum(
+            max_sim_to_picked, normalized @ normalized[nxt]
+        )
 
     return [keys[i] for i in picked]
 
 
-def cluster_cohesion(member_keys: list[str], vectors: dict[str, Any]) -> Optional[float]:
+def cluster_cohesion(member_keys: list[str], vectors: dict[str, Any]) -> float | None:
     """Mean cosine of a cluster's members to its centroid — a coherence metric.
 
     A real quality signal for the cluster-detail panel (I-13): ~1.0 means a tight,
@@ -645,16 +649,16 @@ def cluster_cohesion(member_keys: list[str], vectors: dict[str, Any]) -> Optiona
     vecs = [np.asarray(vectors[k], dtype=np.float32) for k in member_keys if k in vectors]
     if len(vecs) < 2:
         return None
-    X = np.asarray(vecs, dtype=np.float32)
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    matrix = np.asarray(vecs, dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    Xn = X / norms
-    centroid = Xn.mean(axis=0)
+    normalized = matrix / norms
+    centroid = normalized.mean(axis=0)
     cn = float(np.linalg.norm(centroid))
     if cn == 0.0:
         return None
     centroid = centroid / cn
-    return round(float((Xn @ centroid).mean()), 4)
+    return round(float((normalized @ centroid).mean()), 4)
 
 
 def _select_label_terms(
@@ -814,9 +818,11 @@ def score_cluster_terms(
         )
         idf = np.log1p((bg_n + 1.0) / (bg_df + 1.0))
     else:
-        A = float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
+        average_class_size = (
+            float(class_sizes.mean()) if float(class_sizes.sum()) > 0 else 1.0
+        )
         f_x = np.maximum(class_counts.sum(axis=0), 1.0)
-        idf = np.log1p(A / f_x)
+        idf = np.log1p(average_class_size / f_x)
     cf_idf = tf * idf[None, :]
 
     # Prevalence: fraction of the cluster's papers containing the term.

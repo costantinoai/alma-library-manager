@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
-
 
 DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.source_relevance": "0.15",

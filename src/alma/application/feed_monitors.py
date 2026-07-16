@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import sqlite3
 import uuid
+from datetime import datetime
 from typing import Any
 
 from alma.application.feed_query_language import normalize_keyword_expression
 from alma.core.db_write import commit_unless_gated, run_write_unit
-
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
 AUTHOR_MONITOR_PREFIX = "author:"

@@ -5,15 +5,16 @@ interface for sending messages to Slack channels and direct messages.
 """
 
 import logging
+from typing import Any
+
 import requests
-from typing import List, Dict, Any, Optional
 
 from alma.plugins.base import (
-    MessagingPlugin,
-    Publication,
     Author,
+    MessagingPlugin,
     PluginConfigError,
     PluginConnectionError,
+    Publication,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,14 +39,14 @@ class SlackPlugin(MessagingPlugin):
         >>> plugin.send_message("Hello!", "general")
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         super().__init__(config)
         # Cache: user-supplied name → resolved Slack ID. Avoids re-listing
         # the whole workspace on every send within a single process lifetime
         # (mirrors SlackNotifier._resolved_channel_cache in alma.slack.client).
         # IDs are stable; a process restart clears the cache.
-        self._resolved_channel_cache: Dict[str, str] = {}
-        self._resolved_user_cache: Dict[str, str] = {}
+        self._resolved_channel_cache: dict[str, str] = {}
+        self._resolved_user_cache: dict[str, str] = {}
 
     # Plugin metadata
     @property
@@ -81,7 +82,7 @@ class SlackPlugin(MessagingPlugin):
 
         logger.debug(f"Slack plugin initialized with token: {token[:10]}...")
 
-    def get_config_schema(self) -> Dict[str, Any]:
+    def get_config_schema(self) -> dict[str, Any]:
         """Return JSON schema for Slack configuration."""
         return {
             "type": "object",
@@ -167,7 +168,7 @@ class SlackPlugin(MessagingPlugin):
         logger.error(f"'{target}' is not a valid channel or user in this Slack workspace")
         return False
 
-    def format_publications(self, publications: List[Publication]) -> str:
+    def format_publications(self, publications: list[Publication]) -> str:
         """Format publications for Slack.
 
         Args:
@@ -194,7 +195,7 @@ class SlackPlugin(MessagingPlugin):
 
         return "\n".join(formatted)
 
-    def format_authors(self, authors: List[Author]) -> str:
+    def format_authors(self, authors: list[Author]) -> str:
         """Format authors list for Slack.
 
         Args:
@@ -255,7 +256,7 @@ class SlackPlugin(MessagingPlugin):
 
         return "\n".join(details)
 
-    def _get_channel_id_by_name(self, channel_name: str, token: str) -> Optional[str]:
+    def _get_channel_id_by_name(self, channel_name: str, token: str) -> str | None:
         """Get channel ID by name."""
         cached = self._resolved_channel_cache.get(channel_name)
         if cached:
@@ -296,7 +297,7 @@ class SlackPlugin(MessagingPlugin):
 
         return None
 
-    def _get_user_id_by_name(self, user_name: str, token: str) -> Optional[str]:
+    def _get_user_id_by_name(self, user_name: str, token: str) -> str | None:
         """Get user ID by name."""
         cached = self._resolved_user_cache.get(user_name)
         if cached:
@@ -337,7 +338,7 @@ class SlackPlugin(MessagingPlugin):
 
         return None
 
-    def _open_im_channel(self, user_id: str, token: str) -> Optional[str]:
+    def _open_im_channel(self, user_id: str, token: str) -> str | None:
         """Open or retrieve a DM channel with a user."""
         url = "https://slack.com/api/conversations.open"
         headers = {

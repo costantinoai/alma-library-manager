@@ -11,15 +11,14 @@ Provider selection is stored in discovery_settings (key: ai.provider).
 import logging
 import sqlite3
 import time
-from typing import Optional, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from alma.ai.environment import activate_dependency_environment
 from alma.ai.import_state import module_available
 from alma.config import get_openai_api_key
 
 logger = logging.getLogger(__name__)
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -266,7 +265,7 @@ def _read_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     return default
 
 
-def get_active_provider(conn: sqlite3.Connection) -> Optional[EmbeddingProvider]:
+def get_active_provider(conn: sqlite3.Connection) -> EmbeddingProvider | None:
     """Return the embedding provider selected in discovery_settings.
 
     Reads ``ai.provider`` from the database and instantiates the matching
@@ -310,7 +309,7 @@ def get_active_provider(conn: sqlite3.Connection) -> Optional[EmbeddingProvider]
 
 
 def list_available_providers(
-    conn: Optional[sqlite3.Connection] = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[dict]:
     """Return information about each known embedding provider.
 
@@ -339,7 +338,7 @@ def list_available_providers(
     # Match SpecterEmbedder._resolve_device() exactly: prefer CUDA when
     # torch sees an available GPU, otherwise CPU. Done with a small
     # try/except so missing torch (lite variant) just reports None.
-    local_device: Optional[str] = None
+    local_device: str | None = None
     if local_available:
         try:
             import torch  # type: ignore

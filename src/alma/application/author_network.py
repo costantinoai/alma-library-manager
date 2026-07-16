@@ -32,13 +32,12 @@ import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 from alma.application import paper_signal
 from alma.core.db_write import write_section
 from alma.core.http_sources import get_source_http_client
 from alma.core.utils import normalize_doi
-from alma.discovery import semantic_scholar
 from alma.discovery.defaults import merge_discovery_defaults
 from alma.openalex import client as openalex_client
 
@@ -100,7 +99,7 @@ def load_cached_candidates(
     db: sqlite3.Connection,
     source: str,
     cache_key: str = _CACHE_SLOT,
-) -> Optional[dict]:
+) -> dict | None:
     """Return the cached payload dict (fresh OR stale), or None if absent.
 
     O(1) single-row lookup — keeps the GET handler cheap. The `cache_key`
@@ -457,7 +456,7 @@ def _library_venue_set(db: sqlite3.Connection) -> set[str]:
 # -- OpenAlex runner -------------------------------------------------
 
 def refresh_openalex_related_network(
-    db_path: str, *, ctx: Optional[Any] = None
+    db_path: str, *, ctx: Any | None = None
 ) -> dict:
     """Populate the `openalex_related` cache; stream progress per seed.
 
@@ -600,7 +599,7 @@ def _accumulate_openalex_coauthors(
 # -- Semantic Scholar runner ----------------------------------------
 
 def refresh_s2_related_network(
-    db_path: str, *, ctx: Optional[Any] = None
+    db_path: str, *, ctx: Any | None = None
 ) -> dict:
     """Populate the `s2_related` cache; stream progress per DOI.
 
@@ -769,7 +768,6 @@ def _accumulate_s2_native_authors(
     """
 
     for paper in recs:
-        title = str(paper.get("title") or "").strip()
         year = paper.get("year")
         venue = str(paper.get("venue") or "").strip().lower()
         pub_date = str(paper.get("publicationDate") or "")
@@ -813,7 +811,7 @@ def _openalex_works_by_dois(dois: list[str]) -> list[dict]:
     if not dois:
         return []
     try:
-        from alma.openalex.client import batch_fetch_works_by_dois, _normalize_work
+        from alma.openalex.client import _normalize_work, batch_fetch_works_by_dois
 
         raw = batch_fetch_works_by_dois(dois)
     except Exception as exc:
@@ -922,8 +920,8 @@ def _is_recent(pub_date: str, now: datetime, *, years: int = 2) -> bool:
 
 
 def _log_step(
-    ctx: Optional[Any], step: str, message: str,
-    processed: Optional[int] = None, total: Optional[int] = None,
+    ctx: Any | None, step: str, message: str,
+    processed: int | None = None, total: int | None = None,
 ) -> None:
     if ctx is None:
         return

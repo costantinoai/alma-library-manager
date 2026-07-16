@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -88,7 +87,7 @@ CLUSTER_EPOCHS_LARGE_N = 300
 LAYOUT_EPOCHS_LARGE_N = 200
 
 
-def large_n_epochs(n: int, large_value: int) -> Optional[int]:
+def large_n_epochs(n: int, large_value: int) -> int | None:
     """Epoch budget for a fit: ``large_value`` at corpus scale, else None (umap default).
 
     Small libraries keep umap-learn's default (500) — they're fast regardless and
@@ -102,7 +101,7 @@ KnnGraph = tuple[np.ndarray, np.ndarray]
 
 # ── GPU capability probe ────────────────────────────────────────────────────
 
-_GPU_PROBE: Optional[bool] = None
+_GPU_PROBE: bool | None = None
 
 
 def gpu_available() -> bool:
@@ -142,7 +141,7 @@ def cosine_knn(
     n_neighbors: int = SHARED_KNN_NEIGHBORS,
     *,
     random_state: int = 42,
-) -> Optional[KnnGraph]:
+) -> KnnGraph | None:
     """Compute the cosine k-NN graph once for reuse across multiple UMAP fits.
 
     Returns ``(knn_indices, knn_dists)`` aligned to the row order of ``vectors``,
@@ -183,7 +182,7 @@ def cosine_knn(
         return None
 
 
-def shared_cosine_knn(embeddings: dict, keys: Optional[list] = None) -> Optional[KnnGraph]:
+def shared_cosine_knn(embeddings: dict, keys: list | None = None) -> KnnGraph | None:
     """The ONE cosine kNN graph to share across a cluster+project pair on the same
     embeddings — the DRY fixture used by BOTH the paper map and the author network.
 
@@ -210,7 +209,7 @@ def _gpu_umap_fit(
     min_dist: float,
     metric: str,
     random_state: int,
-    n_epochs: Optional[int],
+    n_epochs: int | None,
 ) -> np.ndarray:
     """Fit UMAP on the GPU via cuML. Raises on any GPU failure (caller falls back).
 
@@ -218,7 +217,7 @@ def _gpu_umap_fit(
     as L2-normalise + euclidean (rank-equivalent and supported on every cuML).
     Output forced to a host numpy float32 array regardless of cuML's output type.
     """
-    from cuml.manifold import UMAP as _CuUMAP
+    import cuml.manifold
 
     if metric == "cosine":
         gpu_input = _l2_normalize(vectors)
@@ -227,7 +226,7 @@ def _gpu_umap_fit(
         gpu_input = np.ascontiguousarray(vectors, dtype=np.float32)
         gpu_metric = metric
 
-    reducer = _CuUMAP(
+    reducer = cuml.manifold.UMAP(
         n_components=n_components,
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -248,8 +247,8 @@ def umap_fit(
     min_dist: float,
     metric: str = "cosine",
     random_state: int = 42,
-    n_epochs: Optional[int] = None,
-    precomputed_knn: Optional[KnnGraph] = None,
+    n_epochs: int | None = None,
+    precomputed_knn: KnnGraph | None = None,
 ) -> np.ndarray:
     """Fit UMAP and return the ``(n, n_components)`` embedding as float32.
 

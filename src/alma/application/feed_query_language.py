@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from functools import lru_cache
-import re
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -43,17 +43,17 @@ class _Literal:
 
 @dataclass(frozen=True)
 class _And:
-    children: tuple["_Expr", ...]
+    children: tuple[_Expr, ...]
 
 
 @dataclass(frozen=True)
 class _Or:
-    children: tuple["_Expr", ...]
+    children: tuple[_Expr, ...]
 
 
 @dataclass(frozen=True)
 class _Not:
-    child: "_Expr"
+    child: _Expr
 
 
 _Expr = _Literal | _And | _Or | _Not

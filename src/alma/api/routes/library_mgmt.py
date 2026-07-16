@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from alma.api.deps import get_db, get_current_user, open_db_connection
+from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit, write_section
@@ -641,7 +641,12 @@ def deduplicate_database(
     user: dict = Depends(get_current_user),
 ):
     """Schedule a background deduplication + stable ID pass."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = "library.deduplicate"
     existing = find_active_job(operation_key)
@@ -664,8 +669,8 @@ def deduplicate_database(
     )
 
     def _runner():
-        from alma.library.deduplication import run_deduplication
         from alma.api.scheduler import set_job_status
+        from alma.library.deduplication import run_deduplication
 
         try:
             conn = open_db_connection()
@@ -713,7 +718,12 @@ def backfill_components_route(
     user: dict = Depends(get_current_user),
 ):
     """Schedule a background one-time component reconcile (see alma.core.components)."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = "library.backfill_components"
     existing = find_active_job(operation_key)

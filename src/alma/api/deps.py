@@ -18,24 +18,24 @@ v3 Schema: UUID-based papers table, discovery lenses, feed items,
 digest-based alerts.  Clean reset — no migration code.
 """
 
+import logging
 import os
 import sqlite3
-import logging
 import stat
 import threading
-from typing import Generator, Optional
+from collections.abc import Generator
 from pathlib import Path
 
-from fastapi import Depends, HTTPException, status, Header
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, Header, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from alma.plugins.registry import PluginRegistry, get_global_registry
 from alma.config import (
     get_data_dir,
     get_db_path,
 )
 from alma.core.migrations import apply_pending_migrations, stamp_schema_version
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+from alma.plugins.registry import PluginRegistry, get_global_registry
 
 logger = logging.getLogger(__name__)
 _schema_init_lock = threading.Lock()
@@ -1466,8 +1466,8 @@ def get_plugin_registry() -> PluginRegistry:
 # ============================================================================
 
 def verify_api_key(
-    x_api_key: Optional[str] = Header(None),
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
+    x_api_key: str | None = Header(None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security)
 ) -> bool:
     """Verify API key from header or bearer token."""
     if API_KEY is None:

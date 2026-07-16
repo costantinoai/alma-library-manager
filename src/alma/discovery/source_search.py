@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import as_completed, wait
+from time import perf_counter
+from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
-import logging
-from time import perf_counter
-from typing import Any, Dict, Optional
-
 from alma.core.http_sources import bind_source_diagnostics, get_source_http_client
 from alma.core.scoring_math import clamp as _clamp
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
+)
+from alma.core.settings_helpers import (
     setting_float as _setting_float,
 )
 from alma.core.utils import (
     candidate_dedup_key as _candidate_key,
-    normalize_doi,
+)
+from alma.core.utils import (
     normalize_text as _normalize_text,
 )
 from alma.discovery import arxiv, biorxiv, crossref, openalex_related, semantic_scholar
@@ -160,7 +162,7 @@ def _merge_candidate_metadata(best: dict, other: dict) -> dict:
 
 
 
-def _split_csv_setting(settings: Optional[dict[str, str]], key: str) -> list[str]:
+def _split_csv_setting(settings: dict[str, str] | None, key: str) -> list[str]:
     """Parse a comma-separated setting into a trimmed-non-empty list.
 
     Returns ``[]`` when the setting is missing or all whitespace so the
@@ -173,7 +175,7 @@ def _split_csv_setting(settings: Optional[dict[str, str]], key: str) -> list[str
 
 
 def resolve_source_policy(
-    settings: Optional[dict[str, str]],
+    settings: dict[str, str] | None,
 ) -> tuple[dict[str, bool], dict[str, float]]:
     """Resolve source enable flags and normalized source weights."""
     cfg = settings or {}
@@ -294,7 +296,7 @@ def _merge_candidates_from_sources(items_by_source, query, *, limit, source_weig
     """Dedup + personal-rescore candidates from ``(source_name, items)`` pairs.
     Shared by ``search_across_sources`` + ``merge_streamed_results``; ``enabled``
     filters sources when provided (the streamed path passes it)."""
-    merged: Dict[str, dict] = {}
+    merged: dict[str, dict] = {}
     for source_name, items in items_by_source:
         if enabled is not None and not enabled.get(source_name):
             continue
@@ -394,8 +396,8 @@ def rank_by_query_relevance(items_by_source, query, *, limit, enabled=None):
     # Drop glue words unless the query is nothing but glue words.
     query_tokens = [t for t in all_tokens if t not in _QUERY_STOPWORDS] or all_tokens
 
-    merged: Dict[str, dict] = {}
-    rrf_by_key: Dict[str, float] = {}
+    merged: dict[str, dict] = {}
+    rrf_by_key: dict[str, float] = {}
     for source_name, items in items_by_source:
         if enabled is not None and not enabled.get(source_name):
             continue
@@ -426,13 +428,13 @@ def search_across_sources(
     query: str,
     *,
     limit: int,
-    from_year: Optional[int],
-    settings: Optional[dict[str, str]] = None,
+    from_year: int | None,
+    settings: dict[str, str] | None = None,
     mode: str = "core",
     temperature: float = 0.28,
     semantic_scholar_mode: str = "interactive",
-    lane_deadline_s: Optional[float] = None,
-    diagnostics: Optional[dict[str, Any]] = None,
+    lane_deadline_s: float | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[dict]:
     """Run one query across enabled discovery sources and merge candidates.
 
@@ -557,10 +559,10 @@ def stream_across_sources(
     query: str,
     *,
     limit: int,
-    from_year: Optional[int],
-    settings: Optional[dict[str, str]] = None,
+    from_year: int | None,
+    settings: dict[str, str] | None = None,
     semantic_scholar_mode: str = "interactive",
-    lane_deadline_s: Optional[float] = None,
+    lane_deadline_s: float | None = None,
     s2_fail_fast: bool = False,
 ):
     """Yield per-source results as each lane completes.
@@ -655,7 +657,7 @@ def merge_streamed_results(
     query: str,
     *,
     limit: int,
-    settings: Optional[dict[str, str]] = None,
+    settings: dict[str, str] | None = None,
 ) -> list[dict]:
     """Dedup + rank per-source raw items collected via
     `stream_across_sources` by query relevance (RRF + query-text match).

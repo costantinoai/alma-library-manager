@@ -29,27 +29,24 @@ import sqlite3
 import uuid
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
-from alma.discovery import openalex_related
-from alma.discovery.semantic_scholar import upsert_specter2_embedding
-from alma.discovery import similarity as sim_module
-from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
-from alma.discovery.scoring import (
-    parse_author_names as _parse_author_names,
-    author_affinity_keys as _author_affinity_keys,
-    compute_centroid_from_ids as _compute_centroid_from_ids,
-    compute_preference_profile,
-    score_candidate,
-)
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
+from alma.discovery import openalex_related
+from alma.discovery import similarity as sim_module
+from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+from alma.discovery.scoring import (
+    compute_preference_profile,
+    score_candidate,
+)
+from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 logger = logging.getLogger(__name__)
 
 
-DEFAULTS: Dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
+DEFAULTS: dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -66,9 +63,9 @@ def connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def load_settings(conn: sqlite3.Connection) -> Dict[str, str]:
+def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
     """Read discovery settings, falling back to defaults when needed."""
-    kv: Dict[str, str] = dict(DEFAULTS)
+    kv: dict[str, str] = dict(DEFAULTS)
     try:
         rows = conn.execute("SELECT key, value FROM discovery_settings").fetchall()
         for r in rows:
@@ -78,7 +75,7 @@ def load_settings(conn: sqlite3.Connection) -> Dict[str, str]:
     return kv
 
 
-def get_library_papers(conn: sqlite3.Connection) -> List[dict]:
+def get_library_papers(conn: sqlite3.Connection) -> list[dict]:
     """Fetch all papers with status='library' (saved papers)."""
     try:
         rows = conn.execute(
@@ -94,10 +91,10 @@ def get_library_papers(conn: sqlite3.Connection) -> List[dict]:
         return []
 
 
-def get_rated_publications(conn: sqlite3.Connection) -> Tuple[List[dict], List[dict]]:
+def get_rated_publications(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
     """Fetch rated papers and split into positive and negative groups."""
-    positive: List[dict] = []
-    negative: List[dict] = []
+    positive: list[dict] = []
+    negative: list[dict] = []
 
     try:
         rows = conn.execute(
@@ -121,24 +118,24 @@ def get_rated_publications(conn: sqlite3.Connection) -> Tuple[List[dict], List[d
 
 def build_preference_profile(
     conn: sqlite3.Connection,
-    positive_pubs: List[dict],
-    negative_pubs: List[dict],
-    settings: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    positive_pubs: list[dict],
+    negative_pubs: list[dict],
+    settings: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Build the discovery preference profile via scoring.py."""
     return compute_preference_profile(conn, positive_pubs, negative_pubs, settings)
 
 
 def score_discovery_candidate(
     candidate: dict,
-    preference_profile: Dict[str, Any],
+    preference_profile: dict[str, Any],
     positive_centroid,
     negative_centroid,
-    positive_texts: Optional[List[str]],
-    negative_texts: Optional[List[str]],
+    positive_texts: list[str] | None,
+    negative_texts: list[str] | None,
     conn: sqlite3.Connection,
-    settings: Optional[Dict[str, str]] = None,
-) -> Tuple[float, Dict[str, Any]]:
+    settings: dict[str, str] | None = None,
+) -> tuple[float, dict[str, Any]]:
     """Score one discovery candidate via scoring.py."""
     return score_candidate(
         candidate,
@@ -177,12 +174,12 @@ def _candidate_authors_for_diversity(candidate: dict) -> set[str]:
 
 
 def diversity_interleave(
-    candidates: List[dict],
+    candidates: list[dict],
     max_results: int,
     *,
     max_per_author: int = 2,
     max_per_source_key: int | None = None,
-) -> List[dict]:
+) -> list[dict]:
     """Interleave candidates from different source types for diversity,
     then apply author and per-source-key caps so no single dominant
     author or external query oversaturates the staged top-K. Candidates
@@ -198,7 +195,7 @@ def diversity_interleave(
     if max_per_source_key is None:
         max_per_source_key = max(1, (max_results + 3) // 4)
 
-    groups: Dict[str, List[dict]] = defaultdict(list)
+    groups: dict[str, list[dict]] = defaultdict(list)
     for c in candidates:
         groups[c.get("source_type", "unknown")].append(c)
 
@@ -211,11 +208,11 @@ def diversity_interleave(
         reverse=True,
     )
 
-    primary: List[dict] = []
-    overflow: List[dict] = []
-    group_idx: Dict[str, int] = {k: 0 for k in group_order}
-    author_counts: Dict[str, int] = {}
-    source_key_counts: Dict[str, int] = {}
+    primary: list[dict] = []
+    overflow: list[dict] = []
+    group_idx: dict[str, int] = {k: 0 for k in group_order}
+    author_counts: dict[str, int] = {}
+    source_key_counts: dict[str, int] = {}
 
     def _accept(cand: dict) -> bool:
         # Per-author cap (first OR last author exceeding the cap blocks).
@@ -271,7 +268,7 @@ def diversity_interleave(
     return primary
 
 
-def get_existing_recommendation_titles(conn: sqlite3.Connection) -> Set[str]:
+def get_existing_recommendation_titles(conn: sqlite3.Connection) -> set[str]:
     """Return titles already present in the recommendations table."""
     try:
         rows = conn.execute(
@@ -291,7 +288,7 @@ def get_existing_recommendation_titles(conn: sqlite3.Connection) -> Set[str]:
 canonical_candidate_key = candidate_dedup_key
 
 
-def get_existing_recommendation_keys(conn: sqlite3.Connection) -> Set[str]:
+def get_existing_recommendation_keys(conn: sqlite3.Connection) -> set[str]:
     """Return canonical identity keys from existing recommendations."""
     try:
         rows = conn.execute(
@@ -322,7 +319,7 @@ def publication_text(pub: dict) -> str:
     return f"{title} {abstract}".strip()
 
 
-def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
+def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
     """Insert recommendation dicts into the database.
 
     Persists every field the source candidate carries (abstract, journal,
@@ -474,7 +471,7 @@ def insert_recommendations(conn: sqlite3.Connection, recs: List[dict]) -> int:
     return count
 
 
-def get_local_titles(conn: sqlite3.Connection) -> Set[str]:
+def get_local_titles(conn: sqlite3.Connection) -> set[str]:
     """Return lowercased titles of all papers already in the DB."""
     try:
         rows = conn.execute("SELECT title FROM papers").fetchall()
@@ -483,7 +480,7 @@ def get_local_titles(conn: sqlite3.Connection) -> Set[str]:
         return set()
 
 
-def get_local_keys(conn: sqlite3.Connection) -> Set[str]:
+def get_local_keys(conn: sqlite3.Connection) -> set[str]:
     """Return canonical identity keys from local papers."""
     try:
         rows = conn.execute(
@@ -506,14 +503,14 @@ def get_local_keys(conn: sqlite3.Connection) -> Set[str]:
 
 
 def merge_candidate(
-    merged: Dict[str, dict],
-    skip_titles: Set[str],
-    skip_keys: Set[str],
+    merged: dict[str, dict],
+    skip_titles: set[str],
+    skip_keys: set[str],
     candidate: dict,
     source_type: str,
     source_key: str,
     now: str,
-    score_override: Optional[float] = None,
+    score_override: float | None = None,
 ) -> None:
     """Merge one candidate into the result set, preferring higher scores."""
     title_lower = (candidate.get("title") or "").strip().lower()
@@ -552,7 +549,7 @@ def merge_candidate(
         }
 
 
-def _recommendation_skip_sets(conn: sqlite3.Connection) -> Tuple[Set[str], Set[str]]:
+def _recommendation_skip_sets(conn: sqlite3.Connection) -> tuple[set[str], set[str]]:
     """Build deduplication sets for recommendation generation."""
     existing_titles = get_existing_recommendation_titles(conn)
     local_titles = get_local_titles(conn)
@@ -561,7 +558,7 @@ def _recommendation_skip_sets(conn: sqlite3.Connection) -> Tuple[Set[str], Set[s
     return existing_titles | local_titles, existing_keys | local_keys
 
 
-def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict]:
+def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> list[dict]:
     """Core recommendation logic for a live DB connection."""
     settings = load_settings(conn)
     effective_max = int(settings.get("limits.max_results", "50"))
@@ -606,10 +603,10 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
 
     skip_titles, skip_keys = _recommendation_skip_sets(conn)
     now = datetime.utcnow().isoformat()
-    merged: Dict[str, dict] = {}
+    merged: dict[str, dict] = {}
     current_year = datetime.utcnow().year
 
-    followed_author_ids: List[Tuple[str, str]] = []
+    followed_author_ids: list[tuple[str, str]] = []
     if strat_followed:
         try:
             for row in conn.execute("SELECT author_id FROM followed_authors").fetchall():
@@ -628,11 +625,11 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
         except Exception:
             pass
 
-    coauthor_data: Optional[Tuple[str, Any]] = None
+    coauthor_data: tuple[str, Any] | None = None
     if strat_coauthor:
         try:
-            tracked_oa_ids: Set[str] = set()
-            tracked_author_ids: Set[str] = set()
+            tracked_oa_ids: set[str] = set()
+            tracked_author_ids: set[str] = set()
             for pub in positive:
                 author_id = (pub.get("author_id") or "").strip()
                 if author_id:
@@ -665,7 +662,7 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
             if coauthors_with_ids:
                 coauthor_data = ("ids", coauthors_with_ids)
             else:
-                coauthor_names: Set[str] = set()
+                coauthor_names: set[str] = set()
                 for pub in positive:
                     authors_str = (pub.get("authors") or "").strip()
                     if not authors_str:
@@ -680,9 +677,9 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
         except Exception:
             pass
 
-    def _strat_related() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
-        dois_tried: Set[str] = set()
+    def _strat_related() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
+        dois_tried: set[str] = set()
         for pub in positive:
             doi = (pub.get("doi") or "").strip()
             if not doi or doi in dois_tried:
@@ -705,8 +702,8 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
                 break
         return local_merged
 
-    def _strat_topic() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
+    def _strat_topic() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
         topics = [
             topic
             for topic in preference_profile.get("topic_weights", {})
@@ -731,12 +728,12 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
             )
         return local_merged
 
-    def _strat_followed() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
+    def _strat_followed() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
         if not followed_author_ids:
             return local_merged
-        openalex_to_author_id: Dict[str, str] = {}
-        all_openalex_ids: List[str] = []
+        openalex_to_author_id: dict[str, str] = {}
+        all_openalex_ids: list[str] = []
         for author_table_id, openalex_id in followed_author_ids:
             openalex_to_author_id[openalex_id] = author_table_id
             all_openalex_ids.append(openalex_id)
@@ -768,7 +765,7 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
             from_year=current_year - 2,
             per_author_limit=per_strategy,
         )
-        seen_openalex_ids: Set[str] = set()
+        seen_openalex_ids: set[str] = set()
         for openalex_id, works in batch_results.items():
             seen_openalex_ids.add(openalex_id)
             author_table_id = openalex_to_author_id.get(openalex_id, openalex_id)
@@ -806,8 +803,8 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
                 )
         return local_merged
 
-    def _strat_coauthor() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
+    def _strat_coauthor() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
         if not coauthor_data:
             return local_merged
         if coauthor_data[0] == "ids":
@@ -847,9 +844,9 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
                 )
         return local_merged
 
-    def _strat_citation() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
-        five_star_dois: Set[str] = set()
+    def _strat_citation() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
+        five_star_dois: set[str] = set()
         for pub in positive:
             rating = pub.get("rating", 0)
             if rating and rating >= 5:
@@ -872,8 +869,8 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
                 )
         return local_merged
 
-    def _strat_semantic_scholar() -> Dict[str, dict]:
-        local_merged: Dict[str, dict] = {}
+    def _strat_semantic_scholar() -> dict[str, dict]:
+        local_merged: dict[str, dict] = {}
         try:
             from alma.discovery import semantic_scholar as s2
 
@@ -904,10 +901,10 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
     # (each otherwise does its own GET /works/{doi} resolve) into ONE OR-filter
     # call, then hand each strategy its pre-resolved W-id. Best-effort: DOIs
     # absent from the batch fall back to the per-call resolve in the fetch helpers.
-    resolved_doi_map: Dict[str, str] = {}
+    resolved_doi_map: dict[str, str] = {}
     if strat_related or strat_citation:
-        seed_dois: List[str] = []
-        _seen_doi: Set[str] = set()
+        seed_dois: list[str] = []
+        _seen_doi: set[str] = set()
         for pub in positive:
             _nd = normalize_doi((pub.get("doi") or "").strip())
             if _nd and _nd.lower() not in _seen_doi:
@@ -959,7 +956,7 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
         logger.info("No new recommendations generated")
         return []
 
-    scored_candidates: List[dict] = []
+    scored_candidates: list[dict] = []
     for candidate in merged.values():
         full_score, breakdown = score_discovery_candidate(
             candidate,
@@ -988,12 +985,12 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> List[dict
 
 def _dense_fallback_candidates(
     conn: sqlite3.Connection,
-    seed_papers: List[dict],
+    seed_papers: list[dict],
     *,
-    skip_titles: Set[str],
-    skip_keys: Set[str],
+    skip_titles: set[str],
+    skip_keys: set[str],
     limit: int,
-) -> List[dict]:
+) -> list[dict]:
     """Nearest-neighbour fallback over `publication_embeddings`.
 
     Used when the network channels (OpenAlex + S2) all return empty for
@@ -1039,7 +1036,7 @@ def _dense_fallback_candidates(
         logger.debug("dense_fallback: embedding join failed: %s", exc)
         return []
 
-    ranked: List[Tuple[float, dict]] = []
+    ranked: list[tuple[float, dict]] = []
     for row in rows:
         paper_id = str(row["id"] or "")
         if not paper_id or paper_id in seed_ids:
@@ -1063,7 +1060,7 @@ def _dense_fallback_candidates(
 
     ranked.sort(key=lambda pair: pair[0], reverse=True)
     now = datetime.utcnow().isoformat()
-    out: List[dict] = []
+    out: list[dict] = []
     for score, row_dict in ranked[:limit]:
         real_paper_id = str(row_dict.get("id") or "").strip()
         out.append(
@@ -1097,9 +1094,9 @@ def _dense_fallback_candidates(
 
 def _discover_similar_with_conn(
     conn: sqlite3.Connection,
-    paper_ids: List[str],
+    paper_ids: list[str],
     limit: int,
-) -> List[dict]:
+) -> list[dict]:
     """Core discover-similar logic — list-only backward-compat wrapper."""
     candidates, _meta = _discover_similar_with_meta_and_conn(conn, paper_ids, limit)
     return candidates
@@ -1107,9 +1104,9 @@ def _discover_similar_with_conn(
 
 def _discover_similar_with_meta_and_conn(
     conn: sqlite3.Connection,
-    paper_ids: List[str],
+    paper_ids: list[str],
     limit: int,
-) -> Tuple[List[dict], Dict[str, Any]]:
+) -> tuple[list[dict], dict[str, Any]]:
     """Core discover-similar logic returning both candidates and channel meta.
 
     Meta dict shape:
@@ -1132,7 +1129,7 @@ def _discover_similar_with_meta_and_conn(
         settings.get("sources.semantic_scholar.enabled", "true").lower() == "true"
     )
 
-    seed_papers: List[dict] = []
+    seed_papers: list[dict] = []
     for paper_id in paper_ids:
         try:
             row = conn.execute(
@@ -1148,7 +1145,7 @@ def _discover_similar_with_meta_and_conn(
         except sqlite3.OperationalError as exc:
             logger.debug("Failed to look up seed paper '%s': %s", paper_id, exc)
 
-    meta: Dict[str, Any] = {
+    meta: dict[str, Any] = {
         "channels": [],
         "dense_fallback_used": False,
         "seeds_with_doi": 0,
@@ -1172,14 +1169,14 @@ def _discover_similar_with_meta_and_conn(
 
     skip_titles, skip_keys = _recommendation_skip_sets(conn)
     now = datetime.utcnow().isoformat()
-    merged: Dict[str, dict] = {}
+    merged: dict[str, dict] = {}
 
     def _merge_batch(
-        works: List[dict],
+        works: list[dict],
         *,
         source_type: str,
         source_key: str,
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
         fetched = 0
         skipped = 0
         for work in works:
@@ -1209,7 +1206,7 @@ def _discover_similar_with_meta_and_conn(
     openalex_citing_skipped = 0
     s2_forpaper_fetched = 0
     s2_forpaper_skipped = 0
-    s2_forpaper_error: Optional[str] = None
+    s2_forpaper_error: str | None = None
 
     for seed in seed_papers:
         doi = (seed.get("doi") or "").strip()
@@ -1333,14 +1330,14 @@ def _discover_similar_with_meta_and_conn(
     negative_centroid = None
     positive_texts = [publication_text(pub) for pub in seed_papers]
     positive_texts = [text for text in positive_texts if text]
-    negative_texts: List[str] = []
+    negative_texts: list[str] = []
     if sim_module.has_active_embeddings(conn):
         try:
             positive_centroid = sim_module.compute_embedding_centroid(seed_papers, conn)
         except Exception as exc:
             logger.debug("discover_similar: failed to compute seed centroid: %s", exc)
 
-    scored_candidates: List[dict] = []
+    scored_candidates: list[dict] = []
     for candidate in merged.values():
         full_score, breakdown = score_discovery_candidate(
             candidate,
@@ -1366,7 +1363,7 @@ def _discover_similar_with_meta_and_conn(
     return interleaved, meta
 
 
-def _generate_recommendations_for_db_path(db_path: str, max_results: int) -> List[dict]:
+def _generate_recommendations_for_db_path(db_path: str, max_results: int) -> list[dict]:
     conn = connect(db_path)
     try:
         return _generate_with_conn(conn, max_results)
@@ -1377,12 +1374,12 @@ def _generate_recommendations_for_db_path(db_path: str, max_results: int) -> Lis
         conn.close()
 
 
-def generate_recommendations(db_path: str, max_results: int = 50) -> List[dict]:
+def generate_recommendations(db_path: str, max_results: int = 50) -> list[dict]:
     """Generate new global recommendations for the legacy discovery endpoint."""
     return _generate_recommendations_for_db_path(db_path, max_results)
 
 
-def _refresh_recommendations_for_db_path(db_path: str) -> List[dict]:
+def _refresh_recommendations_for_db_path(db_path: str) -> list[dict]:
     conn = connect(db_path)
     try:
         settings = load_settings(conn)
@@ -1398,12 +1395,12 @@ def _refresh_recommendations_for_db_path(db_path: str) -> List[dict]:
         conn.close()
 
 
-def refresh_recommendations(db_path: str) -> List[dict]:
+def refresh_recommendations(db_path: str) -> list[dict]:
     """Refresh legacy global recommendations for one database path."""
     return _refresh_recommendations_for_db_path(db_path)
 
 
-def _discover_similar_for_db_path(db_path: str, paper_ids: List[str], limit: int) -> List[dict]:
+def _discover_similar_for_db_path(db_path: str, paper_ids: list[str], limit: int) -> list[dict]:
     conn = connect(db_path)
     try:
         return _discover_similar_with_conn(conn, paper_ids, limit)
@@ -1414,14 +1411,14 @@ def _discover_similar_for_db_path(db_path: str, paper_ids: List[str], limit: int
         conn.close()
 
 
-def discover_similar(db_path: str, paper_ids: List[str], limit: int = 20) -> List[dict]:
+def discover_similar(db_path: str, paper_ids: list[str], limit: int = 20) -> list[dict]:
     """Discover candidates similar to a set of seed papers (list-only form)."""
     return _discover_similar_for_db_path(db_path, paper_ids, limit)
 
 
 def discover_similar_with_meta(
-    db_path: str, paper_ids: List[str], limit: int = 20
-) -> Tuple[List[dict], Dict[str, Any]]:
+    db_path: str, paper_ids: list[str], limit: int = 20
+) -> tuple[list[dict], dict[str, Any]]:
     """Discover candidates + channel metadata (new form used by the route).
 
     Returns ``(candidates, meta)`` where ``meta`` exposes per-channel
@@ -1461,7 +1458,7 @@ class DiscoveryEngine:
 
     # Default settings used when the discovery_settings table is missing
     # or has missing keys.
-    DEFAULTS: Dict[str, str] = dict(DEFAULTS)
+    DEFAULTS: dict[str, str] = dict(DEFAULTS)
 
     def __init__(self, db_path: str) -> None:
         """Initialize the discovery engine.
@@ -1482,7 +1479,7 @@ class DiscoveryEngine:
         return connect(self.db_path)
 
     @staticmethod
-    def _load_settings(conn: sqlite3.Connection) -> Dict[str, str]:
+    def _load_settings(conn: sqlite3.Connection) -> dict[str, str]:
         """Read all rows from the ``discovery_settings`` table.
 
         Returns a flat ``{key: value}`` dict, falling back to class-level
@@ -1492,13 +1489,13 @@ class DiscoveryEngine:
         """
         return load_settings(conn)
 
-    def _get_library_papers(self, conn: sqlite3.Connection) -> List[dict]:
+    def _get_library_papers(self, conn: sqlite3.Connection) -> list[dict]:
         """Fetch all papers with status='library' (saved papers)."""
         return get_library_papers(conn)
 
     def _get_rated_publications(
         self, conn: sqlite3.Connection
-    ) -> Tuple[List[dict], List[dict]]:
+    ) -> tuple[list[dict], list[dict]]:
         """Fetch papers with ratings and split into positive / negative.
 
         Positive: rating 4-5 (show more like this)
@@ -1517,10 +1514,10 @@ class DiscoveryEngine:
     def _compute_preference_profile(
         self,
         conn: sqlite3.Connection,
-        positive_pubs: List[dict],
-        negative_pubs: List[dict],
-        settings: Optional[Dict[str, str]] = None,
-    ) -> Dict:
+        positive_pubs: list[dict],
+        negative_pubs: list[dict],
+        settings: dict[str, str] | None = None,
+    ) -> dict:
         """Compute a user preference profile. Delegates to scoring.py."""
         return build_preference_profile(conn, positive_pubs, negative_pubs, settings)
 
@@ -1531,14 +1528,14 @@ class DiscoveryEngine:
     def _score_candidate_full(
         self,
         candidate: dict,
-        preference_profile: Dict,
+        preference_profile: dict,
         positive_centroid,
         negative_centroid,
-        positive_texts: Optional[List[str]],
-        negative_texts: Optional[List[str]],
+        positive_texts: list[str] | None,
+        negative_texts: list[str] | None,
         conn: sqlite3.Connection,
-        settings: Optional[Dict[str, str]] = None,
-    ) -> Tuple[float, Dict[str, Any]]:
+        settings: dict[str, str] | None = None,
+    ) -> tuple[float, dict[str, Any]]:
         """Score a candidate paper. Delegates to scoring.py."""
         return score_discovery_candidate(
             candidate,
@@ -1556,7 +1553,7 @@ class DiscoveryEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _diversity_interleave(candidates: List[dict], max_results: int) -> List[dict]:
+    def _diversity_interleave(candidates: list[dict], max_results: int) -> list[dict]:
         """Interleave candidates from different source types for diversity.
 
         Groups candidates by ``source_type``, sorts each group by score
@@ -1577,7 +1574,7 @@ class DiscoveryEngine:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _get_existing_recommendation_titles(self, conn: sqlite3.Connection) -> Set[str]:
+    def _get_existing_recommendation_titles(self, conn: sqlite3.Connection) -> set[str]:
         """Return the set of titles already in the recommendations table (lowercased)."""
         return get_existing_recommendation_titles(conn)
 
@@ -1586,7 +1583,7 @@ class DiscoveryEngine:
         """Canonical recommendation identity key: DOI -> URL -> title."""
         return canonical_candidate_key(candidate)
 
-    def _get_existing_recommendation_keys(self, conn: sqlite3.Connection) -> Set[str]:
+    def _get_existing_recommendation_keys(self, conn: sqlite3.Connection) -> set[str]:
         """Return canonical identity keys from existing recommendations."""
         return get_existing_recommendation_keys(conn)
 
@@ -1596,7 +1593,7 @@ class DiscoveryEngine:
         return publication_text(pub)
 
     def _insert_recommendations(
-        self, conn: sqlite3.Connection, recs: List[dict]
+        self, conn: sqlite3.Connection, recs: list[dict]
     ) -> int:
         """Insert recommendation dicts into the database.
 
@@ -1613,11 +1610,11 @@ class DiscoveryEngine:
         """
         return insert_recommendations(conn, recs)
 
-    def _get_local_titles(self, conn: sqlite3.Connection) -> Set[str]:
+    def _get_local_titles(self, conn: sqlite3.Connection) -> set[str]:
         """Return lowercased titles of all papers already in the DB."""
         return get_local_titles(conn)
 
-    def _get_local_keys(self, conn: sqlite3.Connection) -> Set[str]:
+    def _get_local_keys(self, conn: sqlite3.Connection) -> set[str]:
         """Return canonical identity keys from local papers."""
         return get_local_keys(conn)
 
@@ -1627,14 +1624,14 @@ class DiscoveryEngine:
 
     def _merge_candidate(
         self,
-        merged: Dict[str, dict],
-        skip_titles: Set[str],
-        skip_keys: Set[str],
+        merged: dict[str, dict],
+        skip_titles: set[str],
+        skip_keys: set[str],
         candidate: dict,
         source_type: str,
         source_key: str,
         now: str,
-        score_override: Optional[float] = None,
+        score_override: float | None = None,
     ) -> None:
         """Merge a single candidate into the merged dict, skipping known titles.
 
@@ -1655,7 +1652,7 @@ class DiscoveryEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def generate_recommendations(self, max_results: int = 50) -> List[dict]:
+    def generate_recommendations(self, max_results: int = 50) -> list[dict]:
         """Generate new recommendations based on liked publications.
 
         Pipeline:
@@ -1678,7 +1675,7 @@ class DiscoveryEngine:
         """
         return generate_recommendations(self.db_path, max_results)
 
-    def _generate(self, conn: sqlite3.Connection, max_results: int) -> List[dict]:
+    def _generate(self, conn: sqlite3.Connection, max_results: int) -> list[dict]:
         """Core recommendation logic (called within a connection context).
 
         Reads configurable settings from the ``discovery_settings`` table.
@@ -1691,7 +1688,7 @@ class DiscoveryEngine:
         """
         return _generate_with_conn(conn, max_results)
 
-    def refresh_recommendations(self) -> List[dict]:
+    def refresh_recommendations(self) -> list[dict]:
         """Clear existing neutral recommendations and regenerate.
 
         Keeps recommendations that the user has explicitly acted upon
@@ -1705,8 +1702,8 @@ class DiscoveryEngine:
         return refresh_recommendations(self.db_path)
 
     def discover_similar(
-        self, paper_ids: List[str], limit: int = 20
-    ) -> List[dict]:
+        self, paper_ids: list[str], limit: int = 20
+    ) -> list[dict]:
         """Find papers similar to a set of seed papers.
 
         Uses only DOI-based retrieval strategies (related works and citation
@@ -1731,8 +1728,8 @@ class DiscoveryEngine:
     def _discover_similar_impl(
         self,
         conn: sqlite3.Connection,
-        paper_ids: List[str],
+        paper_ids: list[str],
         limit: int,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """Core logic for ``discover_similar`` (called within a connection context)."""
         return _discover_similar_with_conn(conn, paper_ids, limit)

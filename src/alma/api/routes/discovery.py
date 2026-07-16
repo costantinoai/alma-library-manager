@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -34,13 +34,13 @@ from alma.api.models import (
 )
 from alma.application import discovery as discovery_app
 from alma.config import get_db_path
+from alma.core.db_write import run_write_unit
 from alma.core.http_sources import (
     openalex_usage_delta,
     openalex_usage_snapshot,
     source_diagnostics_scope,
 )
 from alma.core.operations import OperationOutcome, OperationRunner
-from alma.core.db_write import run_write_unit
 from alma.core.redaction import redact_sensitive_text
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
@@ -57,7 +57,7 @@ router = APIRouter(
 
 def _read_settings(db: sqlite3.Connection) -> DiscoverySettingsResponse:
     """Read all discovery_settings rows and return a structured response."""
-    kv: Dict[str, str] = discovery_app.read_settings(db)
+    kv: dict[str, str] = discovery_app.read_settings(db)
 
     return DiscoverySettingsResponse(
         weights=DiscoveryWeights(
@@ -153,7 +153,7 @@ def _upsert_setting(db: sqlite3.Connection, key: str, value: str) -> None:
 
 
 # Human-readable descriptions for each scoring signal
-_SIGNAL_DESCRIPTIONS: Dict[str, str] = {
+_SIGNAL_DESCRIPTIONS: dict[str, str] = {
     "source_relevance": "Position in retrieval results (1st = highest)",
     "topic_score": "Topic overlap with your rated papers",
     "text_similarity": "Semantic similarity to your top-rated papers",
@@ -177,22 +177,22 @@ class ManualSearchRequest(BaseModel):
 
 
 class ManualAddRequest(BaseModel):
-    openalex_id: Optional[str] = None
-    doi: Optional[str] = None
-    link: Optional[str] = None
-    title: Optional[str] = None
-    query: Optional[str] = None
+    openalex_id: str | None = None
+    doi: str | None = None
+    link: str | None = None
+    title: str | None = None
+    query: str | None = None
 
 
 class RecommendationLibraryActionRequest(BaseModel):
-    rating: Optional[int] = Field(default=None, ge=0, le=5)
-    collection_ids: Optional[List[str]] = Field(
+    rating: int | None = Field(default=None, ge=0, le=5)
+    collection_ids: list[str] | None = Field(
         default=None,
         description="On save: also file the paper into these local collections (create-then-add is done client-side; ids only here).",
     )
 
 
-def _parse_breakdown(raw: Optional[str]) -> Optional[dict]:
+def _parse_breakdown(raw: str | None) -> dict | None:
     """Parse a JSON score_breakdown string into a dict, returning None on failure."""
     if not raw:
         return None
@@ -202,7 +202,7 @@ def _parse_breakdown(raw: Optional[str]) -> Optional[dict]:
         return None
 
 
-def _build_explain_breakdown(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+def _build_explain_breakdown(raw: str | None) -> dict[str, Any] | None:
     """Parse the stored JSON score breakdown and return it as-is.
 
     Different ranker versions emit different signal taxonomies — v1
@@ -222,7 +222,7 @@ def _build_explain_breakdown(raw: Optional[str]) -> Optional[Dict[str, Any]]:
     if not data:
         return None
 
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     for name, value in data.items():
         if (
             isinstance(value, dict)
@@ -252,26 +252,14 @@ def get_discovery_status(
 ):
     """Return lightweight discovery status, including the last successful refresh.
 
-    ``last_refresh_at`` is the latest ``finished_at`` across the two operation
-    keys the system actually writes for a recommendation refresh: per-lens
-    user-triggered refreshes (``discovery.lens.refresh:<lens_id>``) and the
-    periodic scheduler job (``discovery.refresh_periodic``). Returns ``None``
-    only when neither has ever completed.
+    ``new_count`` and recommendation ``is_new`` use this same refresh window.
     """
     try:
-        row = db.execute(
-            """
-            SELECT MAX(finished_at)
-            FROM operation_status
-            WHERE status = 'completed'
-              AND (
-                operation_key LIKE 'discovery.lens.refresh:%'
-                OR operation_key = 'discovery.refresh_periodic'
-              )
-            """
-        ).fetchone()
-        last = row[0] if row and row[0] else None
-        return {"last_refresh_at": str(last) if last else None}
+        _, last = discovery_app.latest_discovery_refresh_window(db)
+        return {
+            "last_refresh_at": last,
+            "new_count": discovery_app.count_new_discovery_recommendations(db),
+        }
     except Exception as exc:
         raise_internal("Failed to read discovery status", exc)
 
@@ -470,7 +458,6 @@ def refresh_recommendations(
     Returns:
         Dict with the count of new recommendations generated.
     """
-    from alma.discovery.engine import refresh_recommendations as refresh_global_recommendations
     from alma.api.scheduler import (
         activity_envelope,
         add_job_log,
@@ -478,6 +465,7 @@ def refresh_recommendations(
         schedule_immediate,
         set_job_status,
     )
+    from alma.discovery.engine import refresh_recommendations as refresh_global_recommendations
 
     db_path = str(get_db_path())
     operation_key = "discovery.refresh_recommendations"
@@ -656,7 +644,8 @@ def _write_similarity_cache(
 ) -> None:
     """Persist similarity results into the cache with settings-driven TTL."""
     try:
-        from datetime import datetime as _dt, timedelta
+        from datetime import datetime as _dt
+        from datetime import timedelta
         ttl_row = db.execute(
             "SELECT value FROM discovery_settings WHERE key = 'cache.similarity_ttl_hours'"
         ).fetchone()
@@ -763,10 +752,10 @@ def discover_similar(
 
     def _runner():
         try:
+            from alma.api.models import SimilarityChannelStat
             from alma.discovery.engine import (
                 discover_similar_with_meta as discover_similar_candidates_with_meta,
             )
-            from alma.api.models import SimilarityChannelStat
 
             db_path = str(get_db_path())
             raw_results, meta = discover_similar_candidates_with_meta(
@@ -1021,13 +1010,13 @@ def manual_discovery_add(
 
 @router.get(
     "/recommendations",
-    response_model=List[RecommendationResponse],
+    response_model=list[RecommendationResponse],
     summary="List recommendations",
 )
 def list_recommendations(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
-    search: Optional[str] = Query(None, description="Filter by title/authors/source key"),
+    search: str | None = Query(None, description="Filter by title/authors/source key"),
     semantic: bool = Query(False, description="Reserved semantic filter toggle"),
     db: sqlite3.Connection = Depends(get_db),
 ):

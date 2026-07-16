@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 import sqlite3
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import ActivityJobContext, background_mode_requested, raise_internal
-from alma.api.models import FeedItemResponse, FeedMonitorCreateRequest, FeedMonitorResponse, FeedMonitorUpdateRequest
+from alma.api.models import (
+    FeedItemResponse,
+    FeedMonitorCreateRequest,
+    FeedMonitorResponse,
+    FeedMonitorUpdateRequest,
+)
 from alma.application import feed as feed_app
 from alma.application import feed_monitors as monitor_app
 from alma.application.discovery import lens_crud
@@ -30,6 +35,10 @@ router = APIRouter(
 class FeedBulkActionRequest(BaseModel):
     feed_item_ids: list[str]
     action: str
+
+
+class FeedAddRequest(BaseModel):
+    collection_ids: list[str] = Field(default_factory=list)
 
 
 class FeedSettings(BaseModel):
@@ -306,6 +315,7 @@ def _run_feed_action(
     action: str,
     db: sqlite3.Connection,
     user: dict,
+    collection_ids: list[str] | None = None,
 ) -> dict:
     existing = feed_app.get_feed_item(db, feed_item_id)
     if not existing:
@@ -314,7 +324,9 @@ def _run_feed_action(
     runner = OperationRunner(db)
 
     def _handler(_ctx):
-        result = feed_app.apply_feed_action(db, feed_item_id, action)
+        result = feed_app.apply_feed_action(
+            db, feed_item_id, action, collection_ids=collection_ids
+        )
         if result is None:
             return OperationOutcome(
                 status="noop",
@@ -364,7 +376,13 @@ def refresh_feed_inbox(
         if not active_monitors:
             return _run_feed_refresh_sync(db=db, user=user)
 
-        from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+        from alma.api.scheduler import (
+            activity_envelope,
+            add_job_log,
+            find_active_job,
+            schedule_immediate,
+            set_job_status,
+        )
 
         operation_key = "feed.refresh_inbox"
         existing = find_active_job(operation_key)
@@ -465,7 +483,13 @@ def refresh_feed_monitor(
         if not monitor.get("enabled", True):
             return _run_feed_monitor_refresh_sync(db=db, user=user, monitor_id=monitor_id)
 
-        from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+        from alma.api.scheduler import (
+            activity_envelope,
+            add_job_log,
+            find_active_job,
+            schedule_immediate,
+            set_job_status,
+        )
 
         operation_key = f"feed.monitor.refresh:{monitor_id}"
         existing = find_active_job(operation_key)
@@ -556,11 +580,18 @@ def refresh_feed_monitor(
 @router.post("/{feed_item_id}/add", summary="Add feed paper to library")
 def add_feed_item(
     feed_item_id: str,
+    body: FeedAddRequest | None = None,
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     try:
-        return _run_feed_action(feed_item_id=feed_item_id, action="add", db=db, user=user)
+        return _run_feed_action(
+            feed_item_id=feed_item_id,
+            action="add",
+            db=db,
+            user=user,
+            collection_ids=body.collection_ids if body else None,
+        )
     except HTTPException:
         raise
     except Exception as exc:

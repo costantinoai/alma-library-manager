@@ -6,7 +6,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from alma.core.scoring_math import age_decay
 from alma.core.utils import utcnow as _utcnow
@@ -22,7 +22,7 @@ _HARD_REMOVE_THRESHOLD = 3
 _SUPPRESSION_THRESHOLD = -0.18
 
 
-def _parse_dt(raw: Any) -> Optional[datetime]:
+def _parse_dt(raw: Any) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
         return None
@@ -127,7 +127,7 @@ def get_missing_author_feedback_state(
     now = _utcnow()
     score = 0.0
     consecutive_removes = 0
-    last_removed_at: Optional[str] = None
+    last_removed_at: str | None = None
 
     for idx, row in enumerate(rows):
         created = _parse_dt(row["created_at"])

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Fri Oct 20 17:02:03 2023
 
 @author: costantino_ai
 """
+import logging
 import os
 import shutil
-import logging
+
+from alma.core.backend import fetch_from_json
 from alma.core.database import (
-    confirm_temp_cache,
     add_new_author_to_json,
+    confirm_temp_cache,
     convert_json_to_tuple,
 )
-from alma.core.backend import fetch_from_json
 from alma.plugins.registry import get_global_registry
 from alma.plugins.slack.plugin import SlackPlugin
 

@@ -20,13 +20,13 @@ import sqlite3
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 from alma.application import library as library_app
 from alma.core.components import not_component_sql
 from alma.core.db_write import run_write_unit
-from alma.core.sql_helpers import canonical_paper_filter
 from alma.core.scoring_math import age_decay, clamp
+from alma.core.sql_helpers import canonical_paper_filter
 from alma.discovery.defaults import (
     DISCOVERY_SETTINGS_DEFAULTS,
     merge_discovery_defaults,
@@ -51,6 +51,60 @@ DEFAULT_CHANNEL_WEIGHTS: dict[str, dict[str, float]] = {
     "topic_keyword": {"lexical": 0.45, "vector": 0.25, "graph": 0.10, "external": 0.20},
     "tag": {"lexical": 0.35, "vector": 0.30, "graph": 0.15, "external": 0.20},
 }
+
+
+def latest_discovery_refresh_window(
+    db: sqlite3.Connection,
+) -> tuple[str | None, str | None]:
+    """Return window for latest successful Discovery refresh."""
+    try:
+        row = db.execute(
+            """
+            SELECT started_at, finished_at
+            FROM operation_status
+            WHERE status IN ('completed', 'noop')
+              AND COALESCE(started_at, '') <> ''
+              AND COALESCE(finished_at, '') <> ''
+              AND (
+                operation_key LIKE 'discovery.lens.refresh:%'
+                OR operation_key IN (
+                  'discovery.refresh_periodic',
+                  'discovery.refresh_recommendations'
+                )
+              )
+            ORDER BY finished_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None, None
+    if not row:
+        return None, None
+    return str(row["started_at"] or "").strip() or None, str(row["finished_at"] or "").strip() or None
+
+
+def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
+    """Count visible, unacted recommendations created by latest refresh."""
+    start, finish = latest_discovery_refresh_window(db)
+    if not start or not finish:
+        return 0
+    try:
+        row = db.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE r.user_action IS NULL
+              AND r.created_at >= ?
+              AND r.created_at <= ?
+              AND p.status NOT IN ('dismissed', 'removed')
+              AND COALESCE(TRIM(p.component_type), '') = ''
+            """,
+            (start, finish),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int((row["c"] if row else 0) or 0)
 
 
 VALID_RECOMMENDATION_ACTIONS = {"save", "read", "like", "love", "dismiss", "dislike", "seen"}
@@ -125,7 +179,7 @@ def list_recommendations(
     *,
     limit: int = 50,
     offset: int = 0,
-    search: Optional[str] = None,
+    search: str | None = None,
     semantic: bool = False,
 ) -> list[dict]:
     """List recommendations with optional lexical search, enriched with paper data."""
@@ -196,7 +250,8 @@ def list_recommendations(
         if sig is not None:
             seen[sig] = {"doi": r["paper_doi"], "openalex_id": r["paper_openalex_id"]}
         deduped.append(r)
-    return [_normalize_recommendation(dict(r)) for r in deduped]
+    refresh_window = latest_discovery_refresh_window(db)
+    return [_normalize_recommendation(dict(r), refresh_window) for r in deduped]
 
 
 def mark_recommendation_action(
@@ -204,9 +259,9 @@ def mark_recommendation_action(
     rec_id: str,
     action: str,
     *,
-    rating: Optional[int] = None,
-    collection_ids: Optional[list[str]] = None,
-) -> Optional[dict]:
+    rating: int | None = None,
+    collection_ids: list[str] | None = None,
+) -> dict | None:
     """Apply user action to recommendation row.
 
     ``collection_ids`` (save action only) also files the saved paper into the
@@ -244,18 +299,21 @@ def mark_recommendation_action(
         if action == "save":
             effective_rating = max(current_rating, int(rating or 3), 3)
             if paper_id:
-                library_app.add_to_library(
-                    db,
-                    paper_id,
-                    rating=effective_rating,
-                    added_from="discovery_save",
-                )
-                # File into any requested collections. The paper is now a
-                # Library row, so this is a plain membership insert (idempotent).
-                for cid in dict.fromkeys(collection_ids or []):
-                    cid = str(cid or "").strip()
-                    if cid:
-                        library_app.insert_collection_item(db, cid, paper_id)
+                if collection_ids:
+                    library_app.save_paper_to_collections(
+                        db,
+                        paper_id,
+                        collection_ids,
+                        rating=effective_rating,
+                        added_from="discovery_save",
+                    )
+                else:
+                    library_app.add_to_library(
+                        db,
+                        paper_id,
+                        rating=effective_rating,
+                        added_from="discovery_save",
+                    )
             feedback_action = "save"
         elif action == "read":
             if paper_id:
@@ -433,7 +491,7 @@ def recommendation_stats(db: sqlite3.Connection) -> dict:
     }
 
 
-def get_recommendation(db: sqlite3.Connection, rec_id: str) -> Optional[dict]:
+def get_recommendation(db: sqlite3.Connection, rec_id: str) -> dict | None:
     """Get one recommendation row."""
     row = db.execute("SELECT * FROM recommendations WHERE id = ?", (rec_id,)).fetchone()
     return _normalize_recommendation(dict(row)) if row else None
@@ -442,7 +500,7 @@ def get_recommendation(db: sqlite3.Connection, rec_id: str) -> Optional[dict]:
 def list_lenses(
     db: sqlite3.Connection,
     *,
-    is_active: Optional[bool] = None,
+    is_active: bool | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
@@ -500,7 +558,7 @@ def list_lenses(
     return [_map_lens_row(r) for r in rows]
 
 
-def get_lens(db: sqlite3.Connection, lens_id: str) -> Optional[dict]:
+def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
     """Fetch one lens by ID."""
     rows = db.execute(
         """
@@ -554,9 +612,9 @@ def create_lens(
     *,
     name: str,
     context_type: str,
-    context_config: Optional[dict] = None,
-    weights: Optional[dict] = None,
-    branch_controls: Optional[dict] = None,
+    context_config: dict | None = None,
+    weights: dict | None = None,
+    branch_controls: dict | None = None,
 ) -> dict:
     """Create a new discovery lens."""
     if context_type not in VALID_CONTEXT_TYPES:
@@ -592,12 +650,12 @@ def update_lens(
     db: sqlite3.Connection,
     lens_id: str,
     *,
-    name: Optional[str] = None,
-    context_config: Optional[dict] = None,
-    weights: Optional[dict] = None,
-    branch_controls: Optional[dict] = None,
-    is_active: Optional[bool] = None,
-) -> Optional[dict]:
+    name: str | None = None,
+    context_config: dict | None = None,
+    weights: dict | None = None,
+    branch_controls: dict | None = None,
+    is_active: bool | None = None,
+) -> dict | None:
     """Partially update a discovery lens."""
     updates: list[str] = []
     params: list[object] = []
@@ -800,7 +858,7 @@ def _decay_factor(action_iso: str, *, today_julian: float, half_life: float) -> 
 def _aggregate_branch_outcomes(
     db: sqlite3.Connection,
     *,
-    lens_id: Optional[str] = None,
+    lens_id: str | None = None,
     days: int = 60,
 ) -> dict[str, dict[str, Any]]:
     """Walk the recommendations table once, returning per-branch outcome stats.
@@ -878,7 +936,7 @@ def _aggregate_branch_outcomes(
 def _load_branch_outcome_map(
     db: sqlite3.Connection,
     *,
-    lens_id: Optional[str] = None,
+    lens_id: str | None = None,
     days: int = 60,
 ) -> dict[str, dict[str, Any]]:
     """Per-branch outcome dict consumed by the branch tile API + budget allocator.
@@ -1036,7 +1094,8 @@ def list_lens_recommendations(
             """,
             (lens_id, limit, offset),
         ).fetchall()
-    return [_normalize_recommendation(dict(r)) for r in rows]
+    refresh_window = latest_discovery_refresh_window(db)
+    return [_normalize_recommendation(dict(r), refresh_window) for r in rows]
 
 
 def default_channel_weights(context_type: str) -> dict[str, float]:
@@ -1103,13 +1162,13 @@ def _map_lens_row(row: sqlite3.Row) -> dict:
     }
 
 
-def _json_dump(value: Optional[dict]) -> Optional[str]:
+def _json_dump(value: dict | None) -> str | None:
     if value is None:
         return None
     return json.dumps(value)
 
 
-def _json_load(value: Optional[str]) -> Optional[dict]:
+def _json_load(value: str | None) -> dict | None:
     if not value:
         return None
     try:
@@ -1119,7 +1178,7 @@ def _json_load(value: Optional[str]) -> Optional[dict]:
         return None
 
 
-def _normalize_branch_controls(raw: Optional[dict]) -> dict[str, Any]:
+def _normalize_branch_controls(raw: dict | None) -> dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
     out: dict[str, Any] = dict(DEFAULT_BRANCH_CONTROLS)
 
@@ -1159,7 +1218,7 @@ def _normalize_branch_controls(raw: Optional[dict]) -> dict[str, Any]:
     return out
 
 
-def _resolve_lens_branch_controls(lens: Optional[dict]) -> dict[str, Any]:
+def _resolve_lens_branch_controls(lens: dict | None) -> dict[str, Any]:
     return _normalize_branch_controls((lens or {}).get("branch_controls"))
 
 
@@ -1167,8 +1226,8 @@ def _enrich_branches_with_outcomes(
     branches: list[dict],
     outcome_map: dict[str, dict[str, Any]],
     *,
-    db: Optional[sqlite3.Connection] = None,
-    lens_id: Optional[str] = None,
+    db: sqlite3.Connection | None = None,
+    lens_id: str | None = None,
 ) -> list[dict]:
     """Merge per-branch outcome stats (incl. auto_weight) into each branch dict.
 
@@ -1187,8 +1246,8 @@ def _enrich_branches_with_outcomes(
        branch got a new id, calibration reset" failure mode.
     """
     enriched: list[dict] = []
-    lineage_lookup_cache: Optional[list[dict]] = None
-    LINEAGE_OVERLAP_THRESHOLD = 0.70
+    lineage_lookup_cache: list[dict] | None = None
+    lineage_overlap_threshold = 0.70
     for branch in branches:
         branch_id = str(branch.get("id") or "").strip()
         branch_label = str(branch.get("label") or "").strip()
@@ -1215,7 +1274,7 @@ def _enrich_branches_with_outcomes(
                     overlap = len(current_seed_ids & prior_seed_ids) / max(
                         len(current_seed_ids | prior_seed_ids), 1
                     )
-                    if overlap >= LINEAGE_OVERLAP_THRESHOLD and overlap > best_overlap:
+                    if overlap >= lineage_overlap_threshold and overlap > best_overlap:
                         prior_id = prior.get("branch_id") or ""
                         prior_label = prior.get("branch_label") or ""
                         candidate_outcome = (
@@ -1379,7 +1438,7 @@ def _resolve_branch_control_via_lineage(
     }
     if not current_seed_ids:
         return False, False, False
-    LINEAGE_OVERLAP_THRESHOLD = 0.70
+    lineage_overlap_threshold = 0.70
     out_pinned = out_boosted = out_muted = False
     for prior in history:
         prior_seed_ids = prior.get("seed_ids") or set()
@@ -1388,7 +1447,7 @@ def _resolve_branch_control_via_lineage(
         overlap = len(current_seed_ids & prior_seed_ids) / max(
             len(current_seed_ids | prior_seed_ids), 1
         )
-        if overlap < LINEAGE_OVERLAP_THRESHOLD:
+        if overlap < lineage_overlap_threshold:
             continue
         prior_id = prior.get("branch_id") or ""
         if not prior_id:
@@ -1406,8 +1465,8 @@ def _apply_branch_controls(
     branches: list[dict],
     controls: dict[str, Any],
     *,
-    db: Optional[sqlite3.Connection] = None,
-    lens_id: Optional[str] = None,
+    db: sqlite3.Connection | None = None,
+    lens_id: str | None = None,
 ) -> list[dict]:
     pinned = set(controls.get("pinned") or [])
     muted = set(controls.get("muted") or [])
@@ -1466,7 +1525,7 @@ def _apply_branch_controls(
 
 
 def _make_branch_id(
-    lens_id: Optional[str],
+    lens_id: str | None,
     cluster_seed_ids: list[str],
     core_topics: list[str],
 ) -> str:
@@ -1515,7 +1574,10 @@ def _make_branch_id(
     return f"branch-{slug[:36]}-{digest}"
 
 
-def _normalize_recommendation(row: dict) -> dict:
+def _normalize_recommendation(
+    row: dict,
+    refresh_window: tuple[str | None, str | None] = (None, None),
+) -> dict:
     if "paper_id" not in row:
         raise ValueError("Recommendation row missing required v3 field: paper_id")
 
@@ -1543,6 +1605,15 @@ def _normalize_recommendation(row: dict) -> dict:
             "influential_citation_count": row.get("paper_influential_citation_count") or 0,
         }
 
+    start, finish = refresh_window
+    created_at = str(row.get("created_at") or "").strip()
+    is_new = bool(
+        row.get("user_action") is None
+        and start
+        and finish
+        and created_at
+        and start <= created_at <= finish
+    )
     return {
         "id": row["id"],
         "suggestion_set_id": row.get("suggestion_set_id"),
@@ -1565,5 +1636,6 @@ def _normalize_recommendation(row: dict) -> dict:
         "branch_label": row.get("branch_label"),
         "branch_mode": row.get("branch_mode"),
         "created_at": row.get("created_at"),
+        "is_new": is_new,
         "paper": paper,
     }

@@ -35,7 +35,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from alma.core.db_write import commit_unless_gated
 from alma.core.resolution import (
@@ -64,11 +64,11 @@ class IdentityEvidence:
 class HierarchicalIdentity:
     """Scored identity bundle ready for persistence."""
 
-    author_name: Optional[str] = None
-    openalex_id: Optional[str] = None
-    scholar_id: Optional[str] = None
-    orcid: Optional[str] = None
-    semantic_scholar_id: Optional[str] = None
+    author_name: str | None = None
+    openalex_id: str | None = None
+    scholar_id: str | None = None
+    orcid: str | None = None
+    semantic_scholar_id: str | None = None
     preprint_ids: dict[str, str] = field(default_factory=dict)  # {"arxiv": "...", "biorxiv": "..."}
     method: str = "none"
     confidence: float = 0.0
@@ -224,12 +224,12 @@ def _tier_from_core_result(result: AuthorResolutionResult) -> tuple[str, float]:
 def resolve_identity_hierarchical(
     db: sqlite3.Connection,
     *,
-    author_id: Optional[str] = None,
-    author_name: Optional[str] = None,
-    openalex_id: Optional[str] = None,
-    scholar_id: Optional[str] = None,
-    orcid: Optional[str] = None,
-    sample_titles: Optional[list[str]] = None,
+    author_id: str | None = None,
+    author_name: str | None = None,
+    openalex_id: str | None = None,
+    scholar_id: str | None = None,
+    orcid: str | None = None,
+    sample_titles: list[str] | None = None,
     use_semantic_scholar: bool = True,
     use_orcid: bool = True,
     use_preprints: bool = True,
@@ -350,7 +350,7 @@ def resolve_identity_hierarchical(
     return bundle
 
 
-def _lookup_s2_author_id(author_name: str, sample_titles: list[str]) -> Optional[str]:
+def _lookup_s2_author_id(author_name: str, sample_titles: list[str]) -> str | None:
     """Best-effort S2 authorId lookup from a paper-title round-trip."""
     if not author_name or not sample_titles:
         return None
@@ -382,7 +382,7 @@ def persist_identity_result(
     author_id: str,
     result: HierarchicalIdentity,
     *,
-    now: Optional[str] = None,
+    now: str | None = None,
 ) -> None:
     """Write the tier + confidence + evidence onto the ``authors`` row.
 

@@ -8,11 +8,10 @@ and the graph channel import from here.
 
 from __future__ import annotations
 
-from concurrent.futures import as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from alma.core.utils import normalize_doi
 from alma.discovery.scoring import parse_author_names
-
 
 # Wall-clock cap on the graph lane's external citation fallbacks (OpenAlex
 # related/citing/referenced + S2 related). The graph lane previously had NO

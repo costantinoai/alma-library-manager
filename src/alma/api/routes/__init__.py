@@ -9,9 +9,9 @@ from .feed import router as feed_router
 from .graphs import router as graphs_router
 from .imports import router as imports_router
 from .insights import router as insights_router
+from .lenses import router as lenses_router
 from .library import router as library_router
 from .library_mgmt import router as library_mgmt_router
-from .lenses import router as lenses_router
 from .logs import router as logs_router
 from .operations import router as operations_router
 from .plugins import router as plugins_router

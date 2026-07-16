@@ -3,23 +3,22 @@
 import asyncio
 import logging
 import sqlite3
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from alma.api.deps import get_current_user, get_db
+from alma.api.helpers import raise_internal
 from alma.api.models import (
     AlertAutomationTemplate,
+    AlertCreate,
+    AlertEvaluationResult,
+    AlertHistoryResponse,
+    AlertResponse,
+    AlertRuleAssignment,
     AlertRuleCreate,
     AlertRuleResponse,
-    AlertRuleAssignment,
-    AlertHistoryResponse,
-    AlertCreate,
     AlertUpdate,
-    AlertResponse,
-    AlertEvaluationResult,
 )
-from alma.api.helpers import raise_internal
 from alma.application import alerts as alerts_app
 from alma.core.operations import OperationOutcome, OperationRunner
 
@@ -37,7 +36,7 @@ router = APIRouter(
 
 @router.get(
     "/rules",
-    response_model=List[AlertRuleResponse],
+    response_model=list[AlertRuleResponse],
     summary="List alert rules",
 )
 def list_rules(
@@ -217,12 +216,12 @@ def toggle_rule(
 
 @router.get(
     "/history",
-    response_model=List[AlertHistoryResponse],
+    response_model=list[AlertHistoryResponse],
     summary="List alert history",
 )
 def list_history(
-    rule_id: Optional[str] = Query(None, description="Filter by rule ID"),
-    alert_id: Optional[str] = Query(None, description="Filter by alert ID"),
+    rule_id: str | None = Query(None, description="Filter by rule ID"),
+    alert_id: str | None = Query(None, description="Filter by alert ID"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db),
@@ -270,7 +269,7 @@ def test_fire_rule(
 
 @router.get(
     "/templates",
-    response_model=List[AlertAutomationTemplate],
+    response_model=list[AlertAutomationTemplate],
     summary="List suggested alert automations",
 )
 def list_alert_templates(
@@ -291,7 +290,7 @@ def _build_alert_response(alert_dict: dict, db: sqlite3.Connection) -> AlertResp
 
 @router.get(
     "/",
-    response_model=List[AlertResponse],
+    response_model=list[AlertResponse],
     summary="List all alerts",
 )
 def list_alerts(

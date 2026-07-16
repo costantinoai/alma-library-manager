@@ -9,12 +9,11 @@ import re
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from alma.api.deps import get_db, get_current_user, open_db_connection
+from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.core.db_write import run_write_unit
 
@@ -37,11 +36,11 @@ class TagSuggestionResponse(BaseModel):
 
     paper_id: str = Field(..., description="Paper UUID")
     tag: str = Field(..., description="Suggested tag name")
-    tag_id: Optional[str] = Field(None, description="Tag UUID (if tag already exists)")
+    tag_id: str | None = Field(None, description="Tag UUID (if tag already exists)")
     confidence: float = Field(..., description="Confidence score (0-1)")
     source: str = Field(..., description="Suggestion source: embedding, tfidf, topic, or rule")
     accepted: bool = Field(False, description="Whether the suggestion has been accepted")
-    created_at: Optional[str] = Field(None, description="When the suggestion was created")
+    created_at: str | None = Field(None, description="When the suggestion was created")
 
 
 class TagSuggestionsResponse(BaseModel):
@@ -51,7 +50,7 @@ class TagSuggestionsResponse(BaseModel):
         default_factory=list,
         description="Tag suggestions for the requested publication",
     )
-    paper_title: Optional[str] = Field(
+    paper_title: str | None = Field(
         None,
         description="Publication title when available",
     )
@@ -67,10 +66,10 @@ class BulkSuggestResponse(BaseModel):
     """Response for bulk tag suggestion generation."""
 
     job_id: str = Field(..., description="Background job identifier")
-    operation_id: Optional[str] = Field(None, description="Canonical operation identifier")
-    status: Optional[str] = Field(None, description="Operation enqueue status")
-    activity_url: Optional[str] = Field(None, description="Activity log URL")
-    operation_key: Optional[str] = Field(None, description="Operation dedupe key")
+    operation_id: str | None = Field(None, description="Canonical operation identifier")
+    status: str | None = Field(None, description="Operation enqueue status")
+    activity_url: str | None = Field(None, description="Activity log URL")
+    operation_key: str | None = Field(None, description="Operation dedupe key")
     message: str = Field(..., description="Status message")
 
 
@@ -222,8 +221,12 @@ def bulk_generate_suggestions(
     Returns:
         Job ID and status message.
     """
-    from alma.api.scheduler import set_job_status, schedule_immediate
-    from alma.api.scheduler import activity_envelope, find_active_job
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = "tags.bulk_generate_suggestions"
     existing = find_active_job(operation_key)
@@ -568,7 +571,7 @@ def _run_bulk_tag_suggestions(job_id: str) -> None:
     try:
         from alma.config import get_db_path
 
-        db_path = str(get_db_path())
+        get_db_path()
     except Exception as exc:
         set_job_status(
             job_id,

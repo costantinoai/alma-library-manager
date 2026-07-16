@@ -20,12 +20,12 @@ and the next vector sweep picks the paper up cleanly.
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
@@ -353,6 +353,8 @@ def run_s2_vector_backfill(
         # "Fetch missing S2 vectors" clicks run to completion as before.
         from alma.api.scheduler import (
             BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+        )
+        from alma.api.scheduler import (
             get_job_trigger_source,
             make_background_cancel_check,
         )
@@ -868,15 +870,17 @@ def run_s2_vector_backfill(
             # chain remains a single logical user click.
             from uuid import uuid4
 
+            # Lazy import the wrapper to avoid the routes ↔ services
+            # cycle (routes/ai.py imports this module).
+            from alma.api.routes.ai import _run_s2_vector_backfill
             from alma.api.scheduler import (
                 get_job_status,
                 get_job_trigger_source,
                 schedule_immediate,
+            )
+            from alma.api.scheduler import (
                 set_job_status as _set_job_status,
             )
-            # Lazy import the wrapper to avoid the routes ↔ services
-            # cycle (routes/ai.py imports this module).
-            from alma.api.routes.ai import _run_s2_vector_backfill
 
             parent_source = get_job_trigger_source(job_id) or "auto:continuation"
             parent_status = get_job_status(job_id) or {}

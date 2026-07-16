@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 # Surname particles (tussenvoegsels / nobiliary particles) that bind to the
 # surname rather than standing as a given name. Lower-cased, diacritics stripped.
@@ -53,7 +53,7 @@ def _normalize(value: str) -> str:
     return " ".join(text.split())
 
 
-def parse_person_name(name: str) -> Optional[ParsedName]:
+def parse_person_name(name: str) -> ParsedName | None:
     """Parse a display name into (given tokens, surname).
 
     Handles "Given Surname", "Surname, Given", multi-token surnames with
@@ -112,7 +112,7 @@ CONFIDENCE_MEDIUM = "medium"  # initial ↔ full first name (E. ↔ Emily)
 CONFIDENCE_LOW = "low"        # initials only / weak
 
 
-def name_match_confidence(name_a: str, name_b: str) -> Optional[str]:
+def name_match_confidence(name_a: str, name_b: str) -> str | None:
     """Confidence that two display names are the same person, or None if not a
     candidate at all.
 
@@ -162,7 +162,7 @@ _AFFILIATION_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-def _significant_tokens(affiliation: Optional[str]) -> set[str]:
+def _significant_tokens(affiliation: str | None) -> set[str]:
     """Discriminating affiliation tokens (≥3 chars, not a generic institution
     word). "KU Leuven" → {leuven}; "Katholieke Universiteit Leuven" → {katholieke,
     leuven}; "Department of Physics, MIT" → {physics, mit}."""
@@ -171,7 +171,7 @@ def _significant_tokens(affiliation: Optional[str]) -> set[str]:
     return {t for t in tokens if len(t) >= 3 and t not in _AFFILIATION_STOPWORDS}
 
 
-def affiliations_corroborate(aff_a: Optional[str], aff_b: Optional[str]) -> bool:
+def affiliations_corroborate(aff_a: str | None, aff_b: str | None) -> bool:
     """Do two affiliations share a discriminating token? Used to gate AUTO-merging
     a name·high match: "María González" and "Maria Gonzalez" both at "KU Leuven"
     are safe to auto-merge; two "John Smith" at different (or unknown) institutions

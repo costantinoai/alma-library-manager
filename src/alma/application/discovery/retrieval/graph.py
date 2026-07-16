@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from alma.core.concurrency import bounded_thread_pool
 from typing import Any
 
+from alma.core.concurrency import bounded_thread_pool
 from alma.core.scoring_math import clamp
 from alma.discovery import openalex_related
 from alma.openalex.client import (

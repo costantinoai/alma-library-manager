@@ -1,22 +1,22 @@
 """Paper query API endpoints."""
 
 import hashlib
+import json
 import logging
 import sqlite3
 import uuid
-import json
 from datetime import datetime, timedelta
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from alma.api.deps import get_db, get_current_user
+from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal, row_to_paper_response
-from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
-from alma.api.models import PaperResponse, ErrorResponse
-from alma.application import library as library_app
+from alma.api.models import ErrorResponse, PaperResponse
 from alma.application import authors as authors_app
+from alma.application import library as library_app
 from alma.core.db_write import run_write_unit
+from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -41,29 +41,29 @@ class SemanticPaperSearchRequest(BaseModel):
 
 @router.get(
     "",
-    response_model=List[PaperResponse],
+    response_model=list[PaperResponse],
     summary="Query papers",
     description="Search and filter papers across all authors.",
 )
 def query_publications(
-    scope: Optional[str] = Query(None, description="Paper scope: all | library | background | followed_corpus"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Membership status: tracked | library | dismissed | removed"),
-    added_from: Optional[str] = Query(None, description="Filter by acquisition/provenance value"),
-    openalex_resolution_status: Optional[str] = Query(None, description="Filter by OpenAlex resolution status"),
-    has_topics: Optional[bool] = Query(None, description="Filter by presence of publication_topics rows"),
-    has_tags: Optional[bool] = Query(None, description="Filter by presence of publication_tags rows"),
-    author_id: Optional[str] = Query(None, description="Optional author ID to constrain results to one author corpus"),
-    year: Optional[int] = Query(None, description="Filter by specific year"),
-    min_year: Optional[int] = Query(None, description="Minimum year (inclusive)"),
-    max_year: Optional[int] = Query(None, description="Maximum year (inclusive)"),
-    min_citations: Optional[int] = Query(None, description="Minimum citations"),
-    search: Optional[str] = Query(None, description="Search in title and abstract"),
+    scope: str | None = Query(None, description="Paper scope: all | library | background | followed_corpus"),
+    status_filter: str | None = Query(None, alias="status", description="Membership status: tracked | library | dismissed | removed"),
+    added_from: str | None = Query(None, description="Filter by acquisition/provenance value"),
+    openalex_resolution_status: str | None = Query(None, description="Filter by OpenAlex resolution status"),
+    has_topics: bool | None = Query(None, description="Filter by presence of publication_topics rows"),
+    has_tags: bool | None = Query(None, description="Filter by presence of publication_tags rows"),
+    author_id: str | None = Query(None, description="Optional author ID to constrain results to one author corpus"),
+    year: int | None = Query(None, description="Filter by specific year"),
+    min_year: int | None = Query(None, description="Minimum year (inclusive)"),
+    max_year: int | None = Query(None, description="Maximum year (inclusive)"),
+    min_citations: int | None = Query(None, description="Minimum citations"),
+    search: str | None = Query(None, description="Search in title and abstract"),
     semantic: bool = Query(False, description="Enable semantic search (requires AI provider)"),
-    order: Optional[str] = Query(
+    order: str | None = Query(
         None,
         description="Sort order: citations | recent | title | rating | authors | journal | status | added_at",
     ),
-    order_dir: Optional[str] = Query(
+    order_dir: str | None = Query(
         None,
         description="Sort direction: asc | desc",
     ),
@@ -263,7 +263,12 @@ def semantic_paper_search(
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Queue an explicit SPECTER2 semantic search job."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     query = " ".join(str(body.query or "").strip().split())
     if not query:
@@ -273,7 +278,7 @@ def semantic_paper_search(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope must be 'library' or 'all'")
     limit = max(1, min(int(body.limit or 20), 100))
 
-    key_hash = hashlib.sha1(f"{scope}|{limit}|{query.lower()}".encode("utf-8")).hexdigest()[:16]
+    key_hash = hashlib.sha1(f"{scope}|{limit}|{query.lower()}".encode()).hexdigest()[:16]
     operation_key = f"papers.semantic_search.{key_hash}"
     existing = find_active_job(operation_key)
     if existing:
@@ -438,8 +443,8 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
 def get_paper_enrichment_status(
     source: str = Query("openalex", description="Enrichment source; currently only openalex"),
     purpose: str = Query("metadata", description="Enrichment purpose; currently only metadata"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Optional ledger status filter"),
-    paper_id: Optional[str] = Query(None, description="Optional paper id to inspect"),
+    status_filter: str | None = Query(None, alias="status", description="Optional ledger status filter"),
+    paper_id: str | None = Query(None, description="Optional paper id to inspect"),
     limit: int = Query(20, ge=0, le=500, description="Number of per-paper ledger rows to include"),
     offset: int = Query(0, ge=0, description="Per-paper ledger row offset"),
     db: sqlite3.Connection = Depends(get_db),
@@ -481,7 +486,7 @@ def get_paper_enrichment_status(
     ),
 )
 def rehydrate_paper_metadata(
-    limit: Optional[int] = Query(None, ge=1, le=100_000, description="Maximum papers to inspect in this run; omit to process all eligible papers"),
+    limit: int | None = Query(None, ge=1, le=100_000, description="Maximum papers to inspect in this run; omit to process all eligible papers"),
     force: bool = Query(False, description="Ignore terminal ledger rows and refetch matching lookup/projection pairs"),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
@@ -558,8 +563,8 @@ def rehydrate_paper_metadata(
     description="Get aggregate statistics about papers in the database.",
 )
 def get_publication_stats(
-    min_year: Optional[int] = Query(None, description="Minimum publication year to include"),
-    max_year: Optional[int] = Query(None, description="Maximum publication year to include"),
+    min_year: int | None = Query(None, description="Minimum publication year to include"),
+    max_year: int | None = Query(None, description="Maximum publication year to include"),
     top_limit: int = Query(10, ge=1, le=100, description="Top authors/papers limit"),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
@@ -680,28 +685,6 @@ def get_publication_stats(
             {"journal": row["journal"], "publications": row["publications"], "citations": row["citations"]}
             for row in cursor.fetchall()
         ]
-
-        # Institutions by country (geo stats)
-        countries = []
-        try:
-            # Only if institutions table exists
-            chk = db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='publication_institutions'").fetchone()
-            if chk:
-                cursor = db.execute(
-                    f"""
-                       SELECT TRIM(UPPER(pi.country_code)) AS country_code, COUNT(*) AS publications
-                       FROM publication_institutions pi
-                       JOIN papers p ON pi.paper_id = p.id
-                       WHERE {where} AND pi.country_code IS NOT NULL AND TRIM(pi.country_code) <> ''
-                       GROUP BY TRIM(UPPER(pi.country_code))
-                       ORDER BY publications DESC
-                       LIMIT ?
-                    """,
-                    [*params, top_limit],
-                )
-                countries = [ {"country_code": r["country_code"], "publications": r["publications"]} for r in cursor.fetchall() ]
-        except Exception:
-            countries = []
 
         # Shape response to a simpler schema expected by tests/consumers
         return {
@@ -884,7 +867,7 @@ _NETWORK_CACHE_TTL_HOURS = 24
 
 def _network_cache_read(
     db: sqlite3.Connection, paper_id: str, direction: str
-) -> Optional[dict]:
+) -> dict | None:
     """Return the fresh cached T6b payload, or None when missing/stale."""
     try:
         row = db.execute(
@@ -1252,7 +1235,7 @@ def delete_publication(
         if not paper:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Paper not found"
+                detail="Paper not found"
             )
 
         run_write_unit(
@@ -1288,13 +1271,13 @@ def delete_publication(
 )
 def dedup_preprint_twins(
     scope: str = Query("corpus", description="library | corpus"),
-    limit: Optional[int] = Query(None, description="Cap the number of pairs to merge"),
+    limit: int | None = Query(None, description="Cap the number of pairs to merge"),
     background: bool = Query(True, description="Queue via Activity envelope"),
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
     """Activity-envelope runner for preprint↔journal dedup."""
-    from alma.api.deps import _db_path, open_db_connection
+    from alma.api.deps import _db_path
     from alma.api.scheduler import (
         activity_envelope,
         add_job_log,

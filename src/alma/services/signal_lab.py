@@ -13,7 +13,7 @@ import math
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ MIN_INTERACTIONS_FOR_SCORING = 2
 # audit which bucket is driving signal (`mode_breakdown` companion metric).
 # Weights can be overridden at call time — callers should only do that
 # deliberately (e.g. a future "only suggestions" lens-tuning mode).
-SIGNAL_LAB_BUCKET_WEIGHTS: Dict[str, float] = {
+SIGNAL_LAB_BUCKET_WEIGHTS: dict[str, float] = {
     "suggestion": 0.60,
     "library": 0.30,
     "corpus": 0.10,
@@ -40,7 +40,7 @@ SIGNAL_LAB_BUCKET_WEIGHTS: Dict[str, float] = {
 SIGNAL_LAB_BUCKETS = tuple(SIGNAL_LAB_BUCKET_WEIGHTS.keys())
 
 # Simple gamification tuning for Signal Lab.
-_CHALLENGE_CONFIG: Dict[str, Dict[str, Any]] = {
+_CHALLENGE_CONFIG: dict[str, dict[str, Any]] = {
     "interactions": {"goal": 12, "xp_reward": 20, "label": "12 interactions"},
     "tier": {"goal": 8, "xp_reward": 22, "label": "sort 8 cards into tiers"},
     "swipes": {"goal": 10, "xp_reward": 20, "label": "10 swipes"},
@@ -48,7 +48,7 @@ _CHALLENGE_CONFIG: Dict[str, Dict[str, Any]] = {
     "superlikes": {"goal": 2, "xp_reward": 12, "label": "2 superlikes"},
 }
 
-_SWIPE_XP: Dict[str, int] = {"pass": 3, "like": 8, "superlike": 12}
+_SWIPE_XP: dict[str, int] = {"pass": 3, "like": 8, "superlike": 12}
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +60,8 @@ def record_feedback(
     event_type: str,
     entity_type: str,
     entity_id: str,
-    value: Optional[Dict[str, Any]] = None,
-    context: Optional[Dict[str, Any]] = None,
+    value: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> str:
     """Insert a feedback event and update preference_profiles.
 
@@ -84,8 +84,8 @@ def record_feedback(
     # N+1 weekly source-diversity lookup in compute_signal_stats /
     # get_signal_results_summary — read paths just read context.
     rec_target = None
-    paper_target_id: Optional[str] = None
-    enriched_context: Optional[Dict[str, Any]] = dict(context) if context else None
+    paper_target_id: str | None = None
+    enriched_context: dict[str, Any] | None = dict(context) if context else None
     if entity_type == "publication":
         rec_target = _resolve_recommendation_target(conn, entity_id)
         if rec_target is not None:
@@ -177,7 +177,7 @@ def record_feedback(
 def _resolve_recommendation_target(
     conn: sqlite3.Connection,
     recommendation_id: str,
-) -> Optional[sqlite3.Row]:
+) -> sqlite3.Row | None:
     rid = str(recommendation_id or "").strip()
     if not rid:
         return None
@@ -196,7 +196,7 @@ def _resolve_recommendation_target(
         return None
 
 
-def _derive_source_fields(rec_row: Optional[sqlite3.Row]) -> tuple[str, str]:
+def _derive_source_fields(rec_row: sqlite3.Row | None) -> tuple[str, str]:
     """Derive (source_key, source_label) from a recommendation row.
 
     The source_key is the stable identifier used for grouping / dedup in
@@ -227,9 +227,9 @@ def _derive_source_fields(rec_row: Optional[sqlite3.Row]) -> tuple[str, str]:
 
 def _resolve_source_breakdown(
     conn: sqlite3.Connection,
-    raw_counts: Dict[str, int],
-    stamped_labels: Dict[str, str],
-) -> Dict[str, int]:
+    raw_counts: dict[str, int],
+    stamped_labels: dict[str, str],
+) -> dict[str, int]:
     """Merge raw source_key counts into a {label: count} dict.
 
     Labels come from (in priority order):
@@ -243,7 +243,7 @@ def _resolve_source_breakdown(
         return {}
 
     unresolved = [k for k in raw_counts.keys() if k not in stamped_labels]
-    resolved: Dict[str, str] = {}
+    resolved: dict[str, str] = {}
 
     # Batch-resolve import_author_* keys in one IN query.
     import_keys = [k for k in unresolved if k.startswith("import_author_")]
@@ -279,7 +279,7 @@ def _resolve_source_breakdown(
             if name:
                 resolved[key] = name
 
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for source_key, count in raw_counts.items():
         label = (
             stamped_labels.get(source_key)
@@ -291,7 +291,7 @@ def _resolve_source_breakdown(
     return out
 
 
-def _resolve_author_label(conn: sqlite3.Connection, source_key: str) -> Optional[str]:
+def _resolve_author_label(conn: sqlite3.Connection, source_key: str) -> str | None:
     """Resolve an OpenAlex-author-shaped (A12345) or import_author_* key to a display name."""
     key = (source_key or "").strip()
     if not key:
@@ -321,8 +321,8 @@ def _resolve_author_label(conn: sqlite3.Connection, source_key: str) -> Optional
 def _apply_recommendation_feedback(
     conn: sqlite3.Connection,
     event_type: str,
-    recommendation_row: Optional[sqlite3.Row],
-    value: Dict[str, Any],
+    recommendation_row: sqlite3.Row | None,
+    value: dict[str, Any],
 ) -> None:
     """Update recommendations.user_action/action_at based on gameplay feedback."""
     if recommendation_row is None:
@@ -332,7 +332,7 @@ def _apply_recommendation_feedback(
     if not recommendation_id:
         return
 
-    action: Optional[str] = None
+    action: str | None = None
     if event_type == "swipe":
         choice = str(value.get("choice") or "").strip().lower()
         if choice in {"like", "superlike"}:
@@ -364,9 +364,9 @@ def _apply_recommendation_feedback(
 
 def _record_publication_lens_signal(
     conn: sqlite3.Connection,
-    recommendation_row: Optional[sqlite3.Row],
+    recommendation_row: sqlite3.Row | None,
     event_type: str,
-    value: Dict[str, Any],
+    value: dict[str, Any],
     delta: float,
 ) -> None:
     """Write per-lens publication feedback to lens_signals."""
@@ -437,8 +437,8 @@ def _reaction_multiplier(reaction_ms_raw: Any) -> float:
 
 def _affinity_delta(
     event_type: str,
-    value: Optional[Dict[str, Any]],
-    context: Optional[Dict[str, Any]] = None,
+    value: dict[str, Any] | None,
+    context: dict[str, Any] | None = None,
 ) -> float:
     """Compute affinity weight delta from an event + optional behavior context."""
     if value is None:
@@ -603,7 +603,7 @@ def _propagate_to_topics_and_authors(
 # Triage set selection
 # ---------------------------------------------------------------------------
 
-def _safe_parse_created_at(raw: Any) -> Optional[datetime]:
+def _safe_parse_created_at(raw: Any) -> datetime | None:
     if raw is None:
         return None
     s = str(raw).strip()
@@ -622,10 +622,10 @@ def _safe_parse_created_at(raw: Any) -> Optional[datetime]:
         return None
 
 
-def _recent_source_counts(conn: sqlite3.Connection, days: int = 7) -> Dict[str, int]:
+def _recent_source_counts(conn: sqlite3.Connection, days: int = 7) -> dict[str, int]:
     """Count recent publication-feedback interactions per recommendation source."""
     cutoff_dt = datetime.utcnow() - timedelta(days=max(1, days))
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for ev in _iter_feedback_events(conn):
         if ev.get("entity_type") != "publication":
             continue
@@ -660,7 +660,7 @@ def _recent_source_counts(conn: sqlite3.Connection, days: int = 7) -> Dict[str, 
     return counts
 
 
-def _session_source_counts(conn: sqlite3.Connection, session_id: str) -> Dict[str, int]:
+def _session_source_counts(conn: sqlite3.Connection, session_id: str) -> dict[str, int]:
     """Count source exposure in the current gameplay session."""
     sid = (session_id or "").strip()
     if not sid:
@@ -678,7 +678,7 @@ def _session_source_counts(conn: sqlite3.Connection, session_id: str) -> Dict[st
     except sqlite3.OperationalError:
         return {}
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for row in rows:
         ctx = _safe_json_loads(row["context_json"])
         if str(ctx.get("session_id") or "") != sid:
@@ -710,7 +710,7 @@ def _session_source_counts(conn: sqlite3.Connection, session_id: str) -> Dict[st
     return counts
 
 
-def _parse_score_breakdown(raw: Any) -> Dict[str, Any]:
+def _parse_score_breakdown(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
     if raw is None:
@@ -725,7 +725,7 @@ def _parse_score_breakdown(raw: Any) -> Dict[str, Any]:
 def _active_recommendation_candidates(
     conn: sqlite3.Connection,
     *,
-    lens_id: Optional[str] = None,
+    lens_id: str | None = None,
     limit: int = 240,
 ) -> list[dict]:
     where = ["r.user_action IS NULL"]
@@ -775,7 +775,7 @@ def _library_candidates(
     conn: sqlite3.Connection,
     *,
     limit: int = 80,
-    exclude_paper_ids: Optional[set[str]] = None,
+    exclude_paper_ids: set[str] | None = None,
 ) -> list[dict]:
     """Return Library-paper candidates for the Signal Lab blend (D11 bucket 2).
 
@@ -861,7 +861,7 @@ def _corpus_candidates(
     conn: sqlite3.Connection,
     *,
     limit: int = 30,
-    exclude_paper_ids: Optional[set[str]] = None,
+    exclude_paper_ids: set[str] | None = None,
 ) -> list[dict]:
     """Return tracked-but-not-recommended papers for the blend (D11 bucket 3).
 
@@ -932,9 +932,9 @@ def _corpus_candidates(
 def _signal_lab_candidates(
     conn: sqlite3.Connection,
     *,
-    lens_id: Optional[str] = None,
+    lens_id: str | None = None,
     recommendation_limit: int = 240,
-    bucket_weights: Optional[Dict[str, float]] = None,
+    bucket_weights: dict[str, float] | None = None,
 ) -> list[dict]:
     """Return a blended candidate pool for Signal Lab gameplay (D11).
 
@@ -1053,8 +1053,8 @@ def _recommendation_payload(row: dict) -> dict:
 
 def _candidate_priority(
     row: dict,
-    recent_counts: Dict[str, int],
-    session_counts: Optional[Dict[str, int]] = None,
+    recent_counts: dict[str, int],
+    session_counts: dict[str, int] | None = None,
 ) -> float:
     """Coverage-aware priority for recommendation gameplay candidates."""
     source_key = (
@@ -1082,9 +1082,9 @@ def get_triage_set(
     conn: sqlite3.Connection,
     count: int = 3,
     *,
-    exclude_ids: Optional[set[str]] = None,
-    lens_id: Optional[str] = None,
-) -> List[dict]:
+    exclude_ids: set[str] | None = None,
+    lens_id: str | None = None,
+) -> list[dict]:
     """Select diverse papers for forced-choice triage.
 
     Picks from recent unseen recommendations, maximising source diversity.
@@ -1113,7 +1113,7 @@ def get_triage_set(
 
     candidates.sort(key=lambda x: float(x.get("_priority") or 0.0), reverse=True)
 
-    result: List[dict] = []
+    result: list[dict] = []
     used_sources: set[str] = set()
     while candidates and len(result) < count:
         best_idx = 0
@@ -1150,10 +1150,10 @@ def get_triage_set(
 def get_next_swipe(
     conn: sqlite3.Connection,
     *,
-    exclude_ids: Optional[set[str]] = None,
-    session_id: Optional[str] = None,
-    lens_id: Optional[str] = None,
-) -> Optional[dict]:
+    exclude_ids: set[str] | None = None,
+    session_id: str | None = None,
+    lens_id: str | None = None,
+) -> dict | None:
     """Get the next paper for swipe mode (highest scoring unseen).
 
     Returns:
@@ -1167,7 +1167,7 @@ def get_next_swipe(
     recent_counts = _recent_source_counts(conn, days=7)
     session_counts = _session_source_counts(conn, session_id or "")
 
-    best: Optional[dict] = None
+    best: dict | None = None
     best_score = -10_000.0
     for cand in rows:
         rec_id = str(cand.get("recommendation_id") or "")
@@ -1180,7 +1180,7 @@ def get_next_swipe(
     return _recommendation_payload(best) if best else None
 
 
-def _recent_entity_counts(conn: sqlite3.Connection, entity_type: str, days: int = 30) -> Dict[str, int]:
+def _recent_entity_counts(conn: sqlite3.Connection, entity_type: str, days: int = 30) -> dict[str, int]:
     """Count recent interactions for an entity type from feedback_events."""
     cutoff = (datetime.utcnow() - timedelta(days=max(1, days))).strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -1202,9 +1202,9 @@ def get_author_duel(
     conn: sqlite3.Connection,
     count: int = 2,
     *,
-    exclude_authors: Optional[set[str]] = None,
-    lens_id: Optional[str] = None,
-) -> List[dict]:
+    exclude_authors: set[str] | None = None,
+    lens_id: str | None = None,
+) -> list[dict]:
     """Return an author-focused duel set from active recommendations."""
     rows = _signal_lab_candidates(conn, lens_id=lens_id, recommendation_limit=260)
     if not rows:
@@ -1213,7 +1213,7 @@ def get_author_duel(
     excluded = {a.lower().strip() for a in (exclude_authors or set()) if a and a.strip()}
     recent_counts = _recent_entity_counts(conn, "author", days=30)
 
-    candidates: Dict[str, dict] = {}
+    candidates: dict[str, dict] = {}
     for row in rows:
         rec_id = str(row.get("recommendation_id") or "").strip()
         row_lens = str(row.get("lens_id") or "unknown")
@@ -1265,7 +1265,7 @@ def get_author_duel(
         )
 
     prepared.sort(key=lambda x: float(x.get("_priority") or 0.0), reverse=True)
-    out: List[dict] = []
+    out: list[dict] = []
     for item in prepared:
         item.pop("_priority", None)
         out.append(item)
@@ -1285,7 +1285,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
         Dict with total_interactions, event_breakdown, topic_coverage,
         streak_days, top_topics, top_authors.
     """
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "total_interactions": 0,
         "today_interactions": 0,
         "week_interactions": 0,
@@ -1344,7 +1344,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
             ).fetchone()["c"]
             or 0
         )
-        event_breakdown: Dict[str, int] = {
+        event_breakdown: dict[str, int] = {
             str(r["event_type"]): int(r["c"] or 0)
             for r in conn.execute(
                 "SELECT event_type, COUNT(*) AS c FROM feedback_events GROUP BY event_type"
@@ -1352,7 +1352,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
         }
         stats["event_breakdown"] = event_breakdown
 
-        mode_breakdown: Dict[str, int] = {
+        mode_breakdown: dict[str, int] = {
             str(r["mode"]): int(r["c"] or 0)
             for r in conn.execute(
                 """
@@ -1550,11 +1550,11 @@ def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict
     events = _iter_feedback_events(conn)
     period_events = [ev for ev in events if ev.get("dt") and ev["dt"] >= cutoff_dt]
 
-    mode_breakdown: Dict[str, int] = {}
+    mode_breakdown: dict[str, int] = {}
     # Collect (source_key, source_label?) per period event so we can resolve
     # legacy events (written before S-AUDIT-5) in a single batch pass.
-    raw_source_counts: Dict[str, int] = {}
-    stamped_labels: Dict[str, str] = {}
+    raw_source_counts: dict[str, int] = {}
+    stamped_labels: dict[str, str] = {}
     reaction_samples: list[float] = []
     for ev in period_events:
         ctx = ev.get("context") or {}
@@ -1698,7 +1698,7 @@ def _compute_streak(conn: sqlite3.Connection) -> int:
     return streak
 
 
-def _parse_event_datetime(raw: Any) -> Optional[datetime]:
+def _parse_event_datetime(raw: Any) -> datetime | None:
     """Parse feedback event timestamp from SQLite string formats."""
     if raw is None:
         return None
@@ -1719,7 +1719,7 @@ def _parse_event_datetime(raw: Any) -> Optional[datetime]:
     return None
 
 
-def _safe_json_loads(raw: Any) -> Dict[str, Any]:
+def _safe_json_loads(raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
     try:
@@ -1835,7 +1835,7 @@ def _level_from_xp(total_xp: int) -> tuple[int, int, int]:
     return level, _xp_for_level(level), _xp_for_level(level + 1)
 
 
-def _median(values: list[float]) -> Optional[float]:
+def _median(values: list[float]) -> float | None:
     if not values:
         return None
     vals = sorted(values)
@@ -1849,13 +1849,13 @@ def _median(values: list[float]) -> Optional[float]:
 # Topic preferences
 # ---------------------------------------------------------------------------
 
-def get_topic_preferences(conn: sqlite3.Connection) -> List[dict]:
+def get_topic_preferences(conn: sqlite3.Connection) -> list[dict]:
     """Get all topics with their preference state.
 
     Returns topic prefs from preference_profiles enriched with
     publication_topics data.
     """
-    topics: Dict[str, dict] = {}
+    topics: dict[str, dict] = {}
 
     # Seed from publication_topics (all known topics)
     try:
@@ -1919,7 +1919,7 @@ def update_topic_preference(
     conn: sqlite3.Connection,
     topic: str,
     pref: str,
-    context: Optional[Dict[str, Any]] = None,
+    context: dict[str, Any] | None = None,
 ) -> None:
     """Record a topic preference change (more/less/mute/neutral).
 
@@ -1941,7 +1941,7 @@ def update_topic_preference(
 
 def preload_preference_profile_maps(
     conn: sqlite3.Connection,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """One-pass prefetch for `get_preference_affinity_signal` hot-loop callers.
 
     D-AUDIT-10a (2026-04-24). `get_preference_affinity_signal` issues
@@ -1975,7 +1975,7 @@ def preload_preference_profile_maps(
     if total < MIN_INTERACTIONS_FOR_SCORING:
         return {"total": total, "profiles": {}, "authors_by_paper": {}}
 
-    profiles: Dict[Tuple[str, str], Tuple[float, float]] = {}
+    profiles: dict[tuple[str, str], tuple[float, float]] = {}
     try:
         prof_rows = conn.execute(
             "SELECT entity_type, entity_id, affinity_weight, confidence "
@@ -2001,8 +2001,8 @@ def preload_preference_profile_maps(
 
 def preload_candidate_authors(
     conn: sqlite3.Connection,
-    paper_ids: List[str],
-) -> Dict[str, List[str]]:
+    paper_ids: list[str],
+) -> dict[str, list[str]]:
     """Batch-fetch `publication_authors.display_name` for many papers.
 
     Pairs with `preload_preference_profile_maps` as part of D-AUDIT-10a.
@@ -2012,7 +2012,7 @@ def preload_candidate_authors(
     are absent from the dict (caller falls back to the comma-separated
     `candidate.authors` string).
     """
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     clean_ids = [pid for pid in (str(p).strip() for p in paper_ids) if pid]
     if not clean_ids:
         return out
@@ -2041,7 +2041,7 @@ def get_preference_affinity_signal(
     conn: sqlite3.Connection,
     candidate: dict,
     *,
-    preloaded: Optional[Dict[str, Any]] = None,
+    preloaded: dict[str, Any] | None = None,
 ) -> float:
     """Compute a preference affinity score for a discovery candidate.
 
@@ -2080,7 +2080,7 @@ def get_preference_affinity_signal(
     score = 0.0
     components = 0
 
-    profiles_map: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = (
+    profiles_map: dict[tuple[str, str], tuple[float, float]] | None = (
         preloaded.get("profiles") if preloaded is not None else None
     )
 

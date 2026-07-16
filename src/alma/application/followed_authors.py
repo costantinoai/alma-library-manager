@@ -7,7 +7,7 @@ import math
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 _AUTHOR_BACKFILL_STALE_AFTER_DAYS = 45
@@ -36,7 +36,7 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
-def _parse_iso_datetime(value: object) -> Optional[datetime]:
+def _parse_iso_datetime(value: object) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
@@ -51,7 +51,7 @@ def _insert_author_row(
     *,
     author_id: str,
     name: str,
-    openalex_id: Optional[str] = None,
+    openalex_id: str | None = None,
 ) -> None:
     payload: dict[str, object] = {
         "id": author_id,
@@ -78,8 +78,8 @@ def resolve_canonical_author_id(
     author_ref: str,
     *,
     create_if_missing: bool = False,
-    fallback_name: Optional[str] = None,
-) -> Optional[str]:
+    fallback_name: str | None = None,
+) -> str | None:
     """Resolve any author reference to the canonical ``authors.id`` contract."""
     if not _table_exists(db, "authors"):
         return str(author_ref or "").strip() or None
@@ -304,7 +304,7 @@ def schedule_followed_author_historical_backfill(
     author_id: str,
     *,
     trigger: str = "follow",
-) -> Optional[dict]:
+) -> dict | None:
     """Queue a full-history author refresh for a followed author.
 
     Consolidated 2026-04-24: this used to create an `authors.history_backfill`
@@ -319,6 +319,7 @@ def schedule_followed_author_historical_backfill(
     if not author_key:
         return None
 
+    from alma.api.deps import open_db_connection
     from alma.api.scheduler import (
         activity_envelope,
         add_job_log,
@@ -326,7 +327,6 @@ def schedule_followed_author_historical_backfill(
         schedule_immediate,
         set_job_status,
     )
-    from alma.api.deps import open_db_connection
 
     operation_key = f"authors.deep_refresh:{author_key}"
     existing = find_active_job(operation_key)
@@ -392,8 +392,8 @@ def get_followed_author_backfill_status(
     db: sqlite3.Connection,
     author_id: str,
     *,
-    background_publications: Optional[int] = None,
-    works_count: Optional[int] = None,
+    background_publications: int | None = None,
+    works_count: int | None = None,
 ) -> dict[str, Any]:
     """Return freshness and maintenance status for a followed-author corpus."""
     author_key = str(author_id or "").strip()
@@ -533,9 +533,9 @@ def _backfill_status_from_inputs(
 
     latest = operation_rows[0] if operation_rows else None
     recent_runs: list[dict[str, Any]] = []
-    latest_success: Optional[sqlite3.Row] = None
-    latest_failure: Optional[sqlite3.Row] = None
-    active_run: Optional[sqlite3.Row] = None
+    latest_success: sqlite3.Row | None = None
+    latest_failure: sqlite3.Row | None = None
+    active_run: sqlite3.Row | None = None
     for row in operation_rows:
         status = str(row["status"] or "").strip().lower()
         if active_run is None and status in {"queued", "running", "cancelling"}:
@@ -557,7 +557,7 @@ def _backfill_status_from_inputs(
         )
 
     success_at = _parse_iso_datetime((latest_success["finished_at"] if latest_success else None) or (latest_success["updated_at"] if latest_success else None))
-    age_days: Optional[int] = None
+    age_days: int | None = None
     if success_at is not None:
         age_days = max(0, int((datetime.utcnow() - success_at).total_seconds() // 86400))
 

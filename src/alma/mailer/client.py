@@ -20,7 +20,6 @@ import ssl
 from email.message import EmailMessage
 from email.utils import formataddr
 from html import escape
-from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +34,12 @@ class EmailNotifier:
     def __init__(
         self,
         *,
-        host: Optional[str] = None,
+        host: str | None = None,
         port: int = 587,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        from_addr: Optional[str] = None,
-        recipients: Optional[List[str]] = None,
+        username: str | None = None,
+        password: str | None = None,
+        from_addr: str | None = None,
+        recipients: list[str] | None = None,
         use_tls: bool = True,
         timeout: float = 20.0,
     ) -> None:
@@ -62,7 +61,7 @@ class EmailNotifier:
         """
         return bool(self._host and self._from and self._recipients)
 
-    def resolve_recipients(self, recipients: Optional[List[str]] = None) -> List[str]:
+    def resolve_recipients(self, recipients: list[str] | None = None) -> list[str]:
         resolved = [r for r in (recipients or self._recipients) if r]
         if not resolved:
             raise ValueError("No email recipients configured")
@@ -71,8 +70,8 @@ class EmailNotifier:
     # ---- Public send API (async, mirrors SlackNotifier) ------------------
     async def send_paper_alert(
         self,
-        recipients: Optional[List[str]],
-        papers: List[dict],
+        recipients: list[str] | None,
+        papers: list[dict],
         alert_name: str,
     ) -> bool:
         """Render *papers* as an HTML+text digest and email it.
@@ -96,7 +95,7 @@ class EmailNotifier:
         text = self._build_text(capped, alert_name, total=total, shown=shown)
         return await asyncio.to_thread(self._send, to, subject, html, text)
 
-    async def send_test_message(self, recipients: Optional[List[str]] = None) -> bool:
+    async def send_test_message(self, recipients: list[str] | None = None) -> bool:
         if not self.is_configured:
             logger.warning("Email/SMTP not configured; cannot send test email")
             return False
@@ -137,7 +136,7 @@ class EmailNotifier:
             server.ehlo()
         return server
 
-    def _send(self, to: List[str], subject: str, html: str, text: str) -> bool:
+    def _send(self, to: list[str], subject: str, html: str, text: str) -> bool:
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = formataddr(("ALMa", self._from)) if self._from else ""
@@ -173,7 +172,7 @@ class EmailNotifier:
 
     @staticmethod
     def _meta_text(paper: dict) -> str:
-        bits: List[str] = []
+        bits: list[str] = []
         pub_date = str(paper.get("publication_date") or "").strip()
         year = str(paper.get("year") or "").strip()
         journal = str(paper.get("journal") or paper.get("venue") or "").strip()
@@ -185,8 +184,8 @@ class EmailNotifier:
             bits.append(journal)
         return " · ".join(bits)
 
-    def _build_html(self, papers: List[dict], alert_name: str, *, total: int, shown: int) -> str:
-        rows: List[str] = []
+    def _build_html(self, papers: list[dict], alert_name: str, *, total: int, shown: int) -> str:
+        rows: list[str] = []
         for paper in papers:
             title = escape(str(paper.get("title") or "Untitled"))
             url = self._paper_url(paper)
@@ -238,7 +237,7 @@ class EmailNotifier:
             '</div>'
         )
 
-    def _build_text(self, papers: List[dict], alert_name: str, *, total: int, shown: int) -> str:
+    def _build_text(self, papers: list[dict], alert_name: str, *, total: int, shown: int) -> str:
         lines = [f"ALMa — {alert_name} — {total} new paper(s)", ""]
         for paper in papers:
             lines.append(str(paper.get("title") or "Untitled"))

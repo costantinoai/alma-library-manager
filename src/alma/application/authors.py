@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 import sqlite3
 import unicodedata
 from datetime import datetime, timedelta
-from typing import Optional
 
+from alma.application.author_signal import (
+    compute_author_signal,
+)
+from alma.application.author_signal import (
+    library_centroid as _library_centroid,
+)
 from alma.application.followed_authors import (
     get_followed_author_backfill_status,
     get_followed_author_backfill_status_map,
-)
-from alma.application.author_signal import (
-    compute_author_signal,
-    library_centroid as _library_centroid,
 )
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
@@ -26,11 +26,14 @@ from alma.application.signal_projection import (
 from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import (
     consensus_bonus as _shared_consensus_bonus,
+)
+from alma.core.scoring_math import (
     log_prevalence_weights,
 )
 from alma.core.sql_helpers import paper_date_sort_expr
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
+
 from . import feed_monitors as monitor_app
 
 logger = logging.getLogger(__name__)
@@ -505,7 +508,7 @@ def list_author_publications(
     order: str = "citations",
     limit: int = 100,
     offset: int = 0,
-) -> Optional[list[dict]]:
+) -> list[dict] | None:
     author = db.execute(
         "SELECT id, name, openalex_id FROM authors WHERE id = ?",
         (author_id,),
@@ -552,7 +555,7 @@ def list_author_publications(
 def list_authors(
     db: sqlite3.Connection,
     *,
-    search: Optional[str] = None,
+    search: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[dict], int]:
@@ -609,7 +612,7 @@ def list_authors(
     return out, total
 
 
-def lookup_author_by_name(db: sqlite3.Connection, name: str) -> Optional[dict]:
+def lookup_author_by_name(db: sqlite3.Connection, name: str) -> dict | None:
     """Return a compact author record matched by normalized display name.
 
     Used by the author-name hover preview on paper cards. The match is
@@ -655,7 +658,7 @@ def lookup_author_by_name(db: sqlite3.Connection, name: str) -> Optional[dict]:
     return data
 
 
-def get_author(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def get_author(db: sqlite3.Connection, author_id: str) -> dict | None:
     """Get one author with publication count."""
     row = db.execute(
         """
@@ -690,7 +693,7 @@ def get_author(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
     return data
 
 
-def get_author_detail(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def get_author_detail(db: sqlite3.Connection, author_id: str) -> dict | None:
     """Lightweight detail bundle for the author popup.
 
     Returns profile + signal + top_topics + followed-author backfill state in
@@ -761,7 +764,7 @@ def get_author_detail(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
     }
 
 
-def get_author_dossier(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def get_author_dossier(db: sqlite3.Connection, author_id: str) -> dict | None:
     author = get_author(db, author_id)
     if author is None:
         return None
@@ -1188,8 +1191,8 @@ def _sample_titles_for_openalex_author(
     openalex_id: str,
     *,
     limit: int = 3,
-    topic_whitelist: Optional[set[str]] = None,
-    venue_whitelist: Optional[set[str]] = None,
+    topic_whitelist: set[str] | None = None,
+    venue_whitelist: set[str] | None = None,
 ) -> list[str]:
     if not _table_exists(db, "publication_authors"):
         return []
@@ -1211,7 +1214,7 @@ def _sample_titles_for_openalex_author(
     if not rows:
         return []
 
-    allowed_paper_ids: Optional[set[str]] = None
+    allowed_paper_ids: set[str] | None = None
     if topic_whitelist and _table_exists(db, "publication_topics"):
         topic_rows = db.execute(
             """
@@ -3079,6 +3082,8 @@ def list_author_suggestions(
     # adjacent already fill the limit.
     from alma.application.author_network import (
         _openalex_related_candidates as _oa_rel,
+    )
+    from alma.application.author_network import (
         _s2_related_candidates as _s2_rel,
     )
 
@@ -3499,7 +3504,7 @@ def _load_author_suggestion_weights(db: sqlite3.Connection) -> dict[str, float]:
     return out
 
 
-def delete_author(db: sqlite3.Connection, author_id: str) -> Optional[dict]:
+def delete_author(db: sqlite3.Connection, author_id: str) -> dict | None:
     """Delete one author and orphaned papers linked only to them.
 
     Side effect: writes a hard `missing_author_feedback` remove signal

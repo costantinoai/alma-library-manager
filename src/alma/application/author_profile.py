@@ -25,14 +25,14 @@ import json
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from alma.core.db_write import commit_unless_gated
 
 logger = logging.getLogger(__name__)
 
 
-def _json_or_none(value: Any) -> Optional[str]:
+def _json_or_none(value: Any) -> str | None:
     if value is None:
         return None
     try:
@@ -200,7 +200,7 @@ def apply_author_profile_update(
 
 def refresh_author_centroid_safe(
     db: sqlite3.Connection,
-    openalex_id: Optional[str],
+    openalex_id: str | None,
 ) -> bool:
     """Convenience wrapper that swallows import/DB errors.
 

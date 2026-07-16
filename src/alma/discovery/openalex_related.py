@@ -8,17 +8,18 @@ recommendations beyond local TF-IDF similarity.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
 
-from alma.openalex.http import get_client
+from alma.core.scoring_math import rank_score
+from alma.core.utils import normalize_doi
 from alma.openalex.client import (
     _WORKS_SELECT_FIELDS,
     _normalize_work,
     batch_fetch_works_by_openalex_ids,
+)
+from alma.openalex.client import (
     batch_fetch_recent_works_for_authors as _client_batch_author_works,
 )
-from alma.core.scoring_math import rank_score
-from alma.core.utils import normalize_doi
+from alma.openalex.http import get_client
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ def _normalize_doi_url(doi_raw: str) -> str:
     return doi or (doi_raw or "")
 
 
-def _work_to_result(work: dict, score: float) -> Optional[Dict]:
+def _work_to_result(work: dict, score: float) -> dict | None:
     normalized = _normalize_work(work)
     title = str(normalized.get("title") or "").strip()
     if not title:
@@ -98,8 +99,8 @@ def fetch_related_works(
     doi_or_openalex_id: str,
     limit: int = 10,
     *,
-    resolved_id: Optional[str] = None,
-) -> List[Dict]:
+    resolved_id: str | None = None,
+) -> list[dict]:
     """Fetch related works for a given publication from OpenAlex.
 
     Calls GET /works/{id} to obtain the ``related_works`` field, then
@@ -159,7 +160,7 @@ def fetch_related_works(
         )
         if related_resp.status_code == 200:
             works = (related_resp.json() or {}).get("results") or []
-            results: List[Dict] = []
+            results: list[dict] = []
             for i, w in enumerate(works[:limit]):
                 mapped = _work_to_result(w, rank_score(i, len(works)))
                 if mapped:
@@ -223,7 +224,7 @@ def fetch_related_works(
 
         # Build an ordering map so we can assign position-based scores
         id_order = {bid: idx for idx, bid in enumerate(bare_ids)}
-        results: List[Dict] = []
+        results: list[dict] = []
 
         for w_id in bare_ids:
             w = work_map.get(w_id)
@@ -247,7 +248,7 @@ def fetch_related_works(
 def fetch_referenced_works(
     doi_or_openalex_id: str,
     limit: int = 10,
-) -> List[Dict]:
+) -> list[dict]:
     """Fetch works referenced by a source publication from OpenAlex."""
     if not doi_or_openalex_id or not doi_or_openalex_id.strip():
         return []
@@ -277,7 +278,7 @@ def fetch_referenced_works(
     if not referenced_ids:
         return []
 
-    bare_ids: List[str] = []
+    bare_ids: list[str] = []
     for rid in referenced_ids[:limit]:
         if not isinstance(rid, str):
             continue
@@ -296,7 +297,7 @@ def fetch_referenced_works(
         logger.warning("OpenAlex referenced works batch fetch failed: %s", exc)
         return []
 
-    results: List[Dict] = []
+    results: list[dict] = []
     for idx, work_id in enumerate(bare_ids):
         work = work_map.get(work_id)
         if not work:
@@ -308,10 +309,10 @@ def fetch_referenced_works(
 
 
 def search_works_by_topics(
-    topics: List[str],
+    topics: list[str],
     limit: int = 20,
-    from_year: Optional[int] = None,
-) -> List[Dict]:
+    from_year: int | None = None,
+) -> list[dict]:
     """Search OpenAlex for recent works matching the given topic keywords.
 
     Uses the OpenAlex search endpoint to find papers related to
@@ -335,8 +336,8 @@ def search_works_by_topics(
 def search_works(
     query: str,
     limit: int = 20,
-    from_year: Optional[int] = None,
-) -> List[Dict]:
+    from_year: int | None = None,
+) -> list[dict]:
     """Search OpenAlex works by free-text query.
 
     Args:
@@ -352,7 +353,7 @@ def search_works(
         return []
 
     client = get_client()
-    params: Dict[str, object] = {
+    params: dict[str, object] = {
         "search": query,
         "per-page": min(limit, 100),
         "sort": "relevance_score:desc",
@@ -368,7 +369,7 @@ def search_works(
             return []
 
         works = (resp.json() or {}).get("results") or []
-        results: List[Dict] = []
+        results: list[dict] = []
         total = max(len(works), 1)
         for i, w in enumerate(works):
             mapped = _work_to_result(w, rank_score(i, total))
@@ -383,8 +384,8 @@ def search_works(
 def search_works_hybrid(
     query: str,
     limit: int = 20,
-    from_year: Optional[int] = None,
-) -> List[Dict]:
+    from_year: int | None = None,
+) -> list[dict]:
     """Lexical OpenAlex work search for new-paper retrieval.
 
     Note (2026-06-01, verified live): the former "semantic" blend called
@@ -404,8 +405,8 @@ def fetch_citing_works(
     doi_or_openalex_id: str,
     limit: int = 10,
     *,
-    resolved_id: Optional[str] = None,
-) -> List[Dict]:
+    resolved_id: str | None = None,
+) -> list[dict]:
     """Fetch works that cite a given publication from OpenAlex.
 
     Uses the OpenAlex filter ``cites:{work_id}`` to find papers that reference
@@ -474,7 +475,7 @@ def fetch_citing_works(
             return []
 
         works = (resp.json() or {}).get("results") or []
-        results: List[Dict] = []
+        results: list[dict] = []
 
         for i, w in enumerate(works):
             mapped = _work_to_result(w, rank_score(i, len(works)))
@@ -493,9 +494,9 @@ def fetch_citing_works(
 
 def fetch_recent_works_for_author(
     openalex_author_id: str,
-    from_year: Optional[int] = None,
+    from_year: int | None = None,
     limit: int = 20,
-) -> List[Dict]:
+) -> list[dict]:
     """Fetch recent works by a specific author from OpenAlex.
 
     Used by the recommendation engine to find papers from followed authors
@@ -546,7 +547,7 @@ def fetch_recent_works_for_author(
             return []
 
         works = (resp.json() or {}).get("results") or []
-        results: List[Dict] = []
+        results: list[dict] = []
 
         for i, w in enumerate(works):
             mapped = _work_to_result(w, rank_score(i, len(works)))
@@ -564,10 +565,10 @@ def fetch_recent_works_for_author(
 
 
 def batch_fetch_recent_works_for_authors(
-    author_ids: List[str],
-    from_year: Optional[int] = None,
+    author_ids: list[str],
+    from_year: int | None = None,
     per_author_limit: int = 10,
-) -> Dict[str, List[Dict]]:
+) -> dict[str, list[dict]]:
     """Fetch recent works for multiple authors in a single batched operation.
 
     Wraps :func:`alma.openalex.client.batch_fetch_recent_works_for_authors`
@@ -597,9 +598,9 @@ def batch_fetch_recent_works_for_authors(
         logger.warning("Batch author works fetch failed: %s", exc)
         return {}
 
-    result: Dict[str, List[Dict]] = {}
+    result: dict[str, list[dict]] = {}
     for aid, works in raw_map.items():
-        mapped: List[Dict] = []
+        mapped: list[dict] = []
         for i, w in enumerate(works):
             item = _work_to_result(w, rank_score(i, len(works)))
             if item:

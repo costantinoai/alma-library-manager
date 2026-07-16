@@ -24,8 +24,8 @@ import hashlib
 import json
 import logging
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from alma.core.db_write import commit_unless_gated
 

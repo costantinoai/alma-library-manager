@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
 from alma.ai.embedding_sources import source_for_provider_name
 from alma.core.db_write import write_section

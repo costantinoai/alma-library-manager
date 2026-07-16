@@ -8,23 +8,28 @@ from __future__ import annotations
 
 import hashlib
 import html
-from html.parser import HTMLParser
 import json
 import logging
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from html.parser import HTMLParser
+from typing import Any
 
 from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
 from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
 from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
 from alma.core.utils import (
-    normalize_id_list,
     normalize_doi,
+    normalize_id_list,
     normalize_title_key,
+)
+from alma.core.utils import (
     utcnow as _utcnow,
+)
+from alma.core.utils import (
     utcnow_iso as _utcnow_iso,
 )
 from alma.openalex.client import (
@@ -509,13 +514,13 @@ def _run_s2_batched_phase(
     (which also persists `tldr` + `influential_citation_count`).
     Writes an S2 ledger row per paper so reruns skip covered work.
     """
+    from alma.discovery import semantic_scholar
     from alma.services.s2_vectors import (
         _clear_fetch_status,
         _fetch_lookup_ids_resilient,
         _lookup_ids_for_row,
         _lookup_key_for_row,
     )
-    from alma.discovery import semantic_scholar
 
     summary: Counter[str] = Counter()
     rows = _select_s2_candidates(conn, limit=limit, target_paper_ids=target_paper_ids)
@@ -564,7 +569,7 @@ def _run_s2_batched_phase(
                 fetched_by_s2[pid] = paper
             doi = ""
             try:
-                doi = str(((paper.get("externalIds") or {}).get("DOI") or "")).strip().lower()
+                doi = str((paper.get("externalIds") or {}).get("DOI") or "").strip().lower()
             except Exception:
                 doi = ""
             if doi:
@@ -1562,10 +1567,13 @@ def _run_title_resolution_phase(
     # runs go free-S2-first (~6 s/paper).
     from alma.api.scheduler import (
         get_job_trigger_source as _get_trigger,
+    )
+    from alma.api.scheduler import (
         is_user_facing_trigger as _is_user_facing,
     )
     from alma.core.http_sources import RESERVED_USER_CALLS as _RESERVED
-    from alma.openalex.http import SEARCH_COST_CREDITS, get_client as _oa_client
+    from alma.openalex.http import SEARCH_COST_CREDITS
+    from alma.openalex.http import get_client as _oa_client
 
     # One candidate = one ?search = SEARCH_COST_CREDITS budget units (see
     # openalex.http) — reserve in credit units, not paper counts.
@@ -1657,8 +1665,14 @@ def run_corpus_metadata_rehydration(
         # reason is captured in `_yield_sink` for the result + chain-skip below.
         from alma.api.scheduler import (
             BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+        )
+        from alma.api.scheduler import (
             get_job_status as _get_job_status,
+        )
+        from alma.api.scheduler import (
             get_job_trigger_source as _get_trigger_source,
+        )
+        from alma.api.scheduler import (
             make_background_cancel_check,
         )
 
@@ -2257,6 +2271,8 @@ def _apply_s2_paper(
     from alma.discovery import semantic_scholar
     from alma.services.s2_vectors import (
         _apply_s2_metadata as _s2_apply,
+    )
+    from alma.services.s2_vectors import (
         _clear_fetch_status,
     )
 
@@ -2792,7 +2808,7 @@ def _hydrate_via_s2(conn: sqlite3.Connection, paper_id: str, row: sqlite3.Row) -
         cand_paper_id = str(candidate.get("paperId") or "").strip()
         cand_doi = ""
         try:
-            cand_doi = str(((candidate.get("externalIds") or {}).get("DOI") or "")).strip()
+            cand_doi = str((candidate.get("externalIds") or {}).get("DOI") or "").strip()
         except Exception:
             cand_doi = ""
         if s2_id and cand_paper_id == s2_id:

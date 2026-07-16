@@ -7,15 +7,16 @@ handling.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass
-from email.utils import parsedate_to_datetime
 import logging
 import random
 import threading
 import time
-from typing import Any, Callable, Iterator, Optional
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from typing import Any
 
 import requests
 
@@ -35,7 +36,7 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 # longer than this, or it sleeps past its own deadline. Bounded → worst-case
 # overshoot is one cap, then the between-fetch deadline check stops the run.
 MAX_RETRY_AFTER_SECONDS = 60.0
-_ACTIVE_DIAGNOSTICS: ContextVar["SourceDiagnosticsCollector | None"] = ContextVar(
+_ACTIVE_DIAGNOSTICS: ContextVar[SourceDiagnosticsCollector | None] = ContextVar(
     "alma_active_source_diagnostics",
     default=None,
 )
@@ -50,14 +51,14 @@ class SourcePolicy:
     max_retries: int = 3
     default_timeout: float = 20.0
     default_headers: tuple[tuple[str, str], ...] = ()
-    auth_header_factory: Optional[Callable[[], dict[str, str]]] = None
-    auth_param_factory: Optional[Callable[[], dict[str, str]]] = None
+    auth_header_factory: Callable[[], dict[str, str]] | None = None
+    auth_param_factory: Callable[[], dict[str, str]] | None = None
     # Factories return the *current* rate budget per request. They let
     # polite-pool eligibility (e.g. a contact email added through the
     # Settings UI after startup) take effect immediately, instead of
     # being frozen at import time.
-    min_interval_factory: Optional[Callable[[], float]] = None
-    max_concurrency_factory: Optional[Callable[[], int]] = None
+    min_interval_factory: Callable[[], float] | None = None
+    max_concurrency_factory: Callable[[], int] | None = None
     # Cap on the per-attempt retry backoff. Some sources (Semantic
     # Scholar's anonymous shared pool, Crossref under load) can stay
     # 429-blocked for tens of seconds; an 8 s cap means we give up
@@ -156,7 +157,7 @@ class SourceDiagnosticsCollector:
             return out
 
 
-def get_active_source_diagnostics() -> "SourceDiagnosticsCollector | None":
+def get_active_source_diagnostics() -> SourceDiagnosticsCollector | None:
     """Return the active diagnostics collector for the current execution context."""
     return _ACTIVE_DIAGNOSTICS.get()
 
@@ -350,13 +351,13 @@ class SourceHttpClient:
             return raw
         return f"{self._policy.base_url.rstrip('/')}/{raw.lstrip('/')}"
 
-    def _apply_auth_headers(self, headers: Optional[dict[str, str]]) -> dict[str, str]:
+    def _apply_auth_headers(self, headers: dict[str, str] | None) -> dict[str, str]:
         merged = dict(headers or {})
         if self._policy.auth_header_factory:
             merged.update(self._policy.auth_header_factory() or {})
         return merged
 
-    def _apply_auth_params(self, params: Optional[dict[str, Any]]) -> dict[str, Any]:
+    def _apply_auth_params(self, params: dict[str, Any] | None) -> dict[str, Any]:
         merged = dict(params or {})
         if self._policy.auth_param_factory:
             merged.update(self._policy.auth_param_factory() or {})
@@ -438,7 +439,7 @@ class SourceHttpClient:
                 time.sleep(wait)
             self._next_request_at = time.monotonic() + interval
 
-    def _retry_wait(self, response: Optional[requests.Response], attempt: int) -> float:
+    def _retry_wait(self, response: requests.Response | None, attempt: int) -> float:
         if response is not None:
             retry_after = response.headers.get("retry-after")
             if retry_after:
@@ -468,11 +469,11 @@ class SourceHttpClient:
         method: str,
         path_or_url: str,
         *,
-        params: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        json: Optional[dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> requests.Response:
         """Issue one rate-limited, retried request.
 
@@ -491,8 +492,8 @@ class SourceHttpClient:
         diagnostics = get_active_source_diagnostics()
         path_label = path_or_url if path_or_url.startswith("/") else url.replace(self._policy.base_url, "", 1) or "/"
 
-        last_exc: Optional[Exception] = None
-        last_resp: Optional[requests.Response] = None
+        last_exc: Exception | None = None
+        last_resp: requests.Response | None = None
         for attempt in range(retry_budget + 1):
             with self._concurrency_slot():
                 self._wait_for_slot()
@@ -579,10 +580,10 @@ class SourceHttpClient:
         self,
         path_or_url: str,
         *,
-        params: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        timeout: Optional[float] = None,
-        max_retries: Optional[int] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
     ) -> requests.Response:
         return self.request(
             "GET",
@@ -597,10 +598,10 @@ class SourceHttpClient:
         self,
         path_or_url: str,
         *,
-        params: Optional[dict[str, Any]] = None,
-        headers: Optional[dict[str, str]] = None,
-        json: Optional[dict[str, Any]] = None,
-        timeout: Optional[float] = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        timeout: float | None = None,
     ) -> requests.Response:
         return self.request("POST", path_or_url, params=params, headers=headers, json=json, timeout=timeout)
 

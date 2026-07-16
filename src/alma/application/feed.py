@@ -6,45 +6,46 @@ import json
 import logging
 import re
 import sqlite3
-from concurrent.futures import as_completed
-
-from alma.core.concurrency import bounded_thread_pool
-from datetime import datetime, timedelta
 import uuid
-from typing import Optional
+from concurrent.futures import as_completed
+from datetime import datetime, timedelta
 
 from alma.application.feed_query_language import (
     FeedQuerySyntaxError,
     keyword_expression_matches,
     keyword_retrieval_query,
 )
-from . import feed_monitors as monitor_app
-from . import library as library_app
+from alma.core.components import (
+    link_orphan_components,
+    not_component_sql,
+    resolve_component,
+)
+from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
 from alma.core.db_write import run_write_unit, write_section
-from alma.core.scoring_math import clamp
-from alma.core.settings_helpers import (
-    setting_bool as _setting_bool,
-    setting_float as _setting_float,
-    setting_int as _setting_int,
-)
 from alma.core.http_sources import (
     openalex_usage_delta,
     openalex_usage_snapshot,
     source_diagnostics_scope,
 )
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.components import (
-    link_orphan_components,
-    not_component_sql,
-    resolve_component,
+from alma.core.settings_helpers import (
+    setting_bool as _setting_bool,
+)
+from alma.core.settings_helpers import (
+    setting_float as _setting_float,
+)
+from alma.core.settings_helpers import (
+    setting_int as _setting_int,
 )
 from alma.core.utils import (
     clean_display_text,
     normalize_doi,
-    normalize_title_key,
     resolve_existing_paper_id,
 )
+
+from . import feed_monitors as monitor_app
+from . import library as library_app
 
 logger = logging.getLogger(__name__)
 
@@ -630,13 +631,13 @@ def _insert_feed_item(
 
 
 def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | None]:
-    """Return the started/finished window for the latest completed Feed fetch."""
+    """Return window for latest successful Feed fetch, including no-op runs."""
     try:
         row = db.execute(
             """
             SELECT started_at, finished_at
             FROM operation_status
-            WHERE status = 'completed'
+            WHERE status IN ('completed', 'noop')
               AND (
                 operation_key = 'feed.refresh_inbox'
                 OR operation_key LIKE 'feed.monitor.refresh:%'
@@ -710,11 +711,11 @@ def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_day
 def list_feed_items(
     db: sqlite3.Connection,
     *,
-    status: Optional[str] = None,
+    status: str | None = None,
     sort: str = "chronological",
     limit: int = 50,
     offset: int = 0,
-    since_days: Optional[int] = None,
+    since_days: int | None = None,
 ) -> tuple[list[dict], int]:
     """List feed inbox items with joined paper/author data.
 
@@ -836,7 +837,7 @@ def list_feed_items(
     return aggregated[offset:offset + limit], total
 
 
-def get_feed_item(db: sqlite3.Connection, feed_item_id: str) -> Optional[dict]:
+def get_feed_item(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
     """Get one feed item by ID with joined paper details."""
     items, _ = list_feed_items_for_ids(db, [feed_item_id])
     return items[0] if items else None
@@ -898,7 +899,9 @@ def apply_feed_action(
     db: sqlite3.Connection,
     feed_item_id: str,
     action: str,
-) -> Optional[dict]:
+    *,
+    collection_ids: list[str] | None = None,
+) -> dict | None:
     """Apply a feed action and mutate both feed item and paper status."""
     if action not in VALID_FEED_ACTIONS:
         raise ValueError(f"Invalid feed action: {action}")
@@ -930,12 +933,21 @@ def apply_feed_action(
             current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
             # Monotonic upgrade — never downgrade a paper already rated higher.
             next_rating = max(current_rating, target_rating)
-            library_app.add_to_library(
-                db,
-                paper_id,
-                rating=next_rating,
-                added_from="feed",
-            )
+            if action == "add" and collection_ids:
+                library_app.save_paper_to_collections(
+                    db,
+                    paper_id,
+                    collection_ids,
+                    rating=next_rating,
+                    added_from="feed",
+                )
+            else:
+                library_app.add_to_library(
+                    db,
+                    paper_id,
+                    rating=next_rating,
+                    added_from="feed",
+                )
         elif action == "dislike":
             library_app.sink_disliked_paper(db, paper_id)
         elif action == "dismiss":
@@ -1012,7 +1024,7 @@ def apply_feed_action(
     }
 
 
-def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> Optional[dict]:
+def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
     """Reverse a Feed ``dismiss``: restore the paper to the inbox and drop the
     small negative signal the dismissal recorded.
 
@@ -1090,9 +1102,11 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
 
     try:
         from alma.discovery.scoring import (
+            compute_centroid_from_ids,
             compute_preference_profile,
             score_candidate,
-            compute_centroid_from_ids,
+        )
+        from alma.discovery.scoring import (
             load_settings as load_scoring_settings,
         )
     except Exception:
@@ -1239,10 +1253,10 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     # bounded chunk keeps the lock window short and mid-run visibility for other
     # readers while cutting WAL fsyncs vs per-item commits. The scoring above is
     # already done, so the gate is held only for the short batch of UPDATEs.
-    _SCORE_COMMIT_BATCH = 50
+    score_commit_batch = 50
     scored = 0
-    for start in range(0, len(scored_updates), _SCORE_COMMIT_BATCH):
-        chunk = scored_updates[start:start + _SCORE_COMMIT_BATCH]
+    for start in range(0, len(scored_updates), score_commit_batch):
+        chunk = scored_updates[start:start + score_commit_batch]
         with write_section(db, label="feed score batch"):
             for signal_value, breakdown_json, feed_item_id in chunk:
                 db.execute(
@@ -1605,7 +1619,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         # their per-source SourceHttpClient gates, so concurrency never exceeds
         # any documented rate limit — the win is wall-clock, not call volume.
         # Phase B keeps every write on the single SQLite writer, original order.
-        _FEED_MONITOR_CONCURRENCY = 3
+        feed_monitor_concurrency = 3
 
         def _plan_and_search(monitor: dict) -> dict:
             """DB-FREE worker: resolve the search plan, run the remote
@@ -1657,7 +1671,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         plan_by_monitor: dict[str, dict] = {}
         if non_author_monitors:
             with bounded_thread_pool(
-                max(1, min(_FEED_MONITOR_CONCURRENCY, len(non_author_monitors))),
+                max(1, min(feed_monitor_concurrency, len(non_author_monitors))),
                 thread_name_prefix="feed-monitor",
             ) as monitor_pool:
                 future_map = {

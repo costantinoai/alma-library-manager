@@ -34,13 +34,14 @@ import logging
 import os
 import sqlite3
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any
 
-from alma.services import health as health_service
 from alma.application import materialized_views as mv
+from alma.services import health as health_service
 from alma.services.maintenance_contracts import (
     BatchSpec,
     MaintenanceRunPlan,
@@ -283,7 +284,7 @@ class _ProgressCtx:
         self._set = set_job_status
         self._log = add_job_log
 
-    def log_step(self, step: str, *, message: Optional[str] = None, processed=None, total=None, **_: Any) -> None:
+    def log_step(self, step: str, *, message: str | None = None, processed=None, total=None, **_: Any) -> None:
         fields = {k: v for k, v in {"processed": processed, "total": total}.items() if v is not None}
         if fields:
             self._set(self._job_id, **fields)
@@ -1142,7 +1143,7 @@ def _setting_key(task_key: str, suffix: str) -> str:
     return f"maintenance.{task_key}.{suffix}"
 
 
-def _read_raw_setting(conn: sqlite3.Connection, key: str) -> Optional[str]:
+def _read_raw_setting(conn: sqlite3.Connection, key: str) -> str | None:
     try:
         row = conn.execute(
             "SELECT value FROM discovery_settings WHERE key = ?", (key,)
@@ -1205,7 +1206,7 @@ def get_task_manual_limit(conn: sqlite3.Connection, task: MaintenanceTask) -> in
 
 def get_task_request_batch_size(
     conn: sqlite3.Connection, task: MaintenanceTask
-) -> Optional[int]:
+) -> int | None:
     """The exact upstream lookup-ID payload size used by ETA and runner.
 
     Invalid persisted values are not clamped. Startup migration corrects legacy
@@ -1226,10 +1227,10 @@ def set_task_config(
     conn: sqlite3.Connection,
     task: MaintenanceTask,
     *,
-    auto_enabled: Optional[bool] = None,
-    auto_daily_cap: Optional[int] = None,
-    remembered_manual_limit: Optional[int] = None,
-    request_batch_size: Optional[int] = None,
+    auto_enabled: bool | None = None,
+    auto_daily_cap: int | None = None,
+    remembered_manual_limit: int | None = None,
+    request_batch_size: int | None = None,
 ) -> None:
     """Persist only validated values; impossible intent is rejected, never clamped."""
     from alma.application.discovery import upsert_setting
@@ -1369,7 +1370,7 @@ def task_pending_count(
     task: MaintenanceTask,
     health_payload: dict[str, Any],
     *,
-    params: Optional[dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
 ) -> int:
     """Pending-work count for a task: its ``count_fn`` (author / dedup backlogs)
     when present, else the canonical health-payload path. Never raises — a broken
@@ -1414,7 +1415,7 @@ def plan_task(
     task: MaintenanceTask,
     spec: MaintenanceRunSpec,
     *,
-    health_payload: Optional[dict[str, Any]] = None,
+    health_payload: dict[str, Any] | None = None,
 ) -> MaintenanceRunPlan:
     """Build the one plan consumed by estimate, launch, Activity, and UI."""
     validated = _validated_spec(task, spec)
@@ -1501,11 +1502,11 @@ def _task_budget(
     conn: sqlite3.Connection,
     task: MaintenanceTask,
     *,
-    health_payload: Optional[dict[str, Any]] = None,
-    params: Optional[dict[str, Any]] = None,
-    batch_size: Optional[int] = None,
-    target_paper_ids: Optional[list[str]] = None,
-    limit: Optional[int] = None,
+    health_payload: dict[str, Any] | None = None,
+    params: dict[str, Any] | None = None,
+    batch_size: int | None = None,
+    target_paper_ids: list[str] | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     """Canonical pending/batch/ETA budget for maintenance UI and launches."""
     from alma.services.eta import detect_auth, estimate_eta
@@ -1548,7 +1549,7 @@ def _task_budget(
     }
 
 
-def _last_run(conn: sqlite3.Connection, operation_key: str) -> Optional[dict[str, Any]]:
+def _last_run(conn: sqlite3.Connection, operation_key: str) -> dict[str, Any] | None:
     """Most-recent operation_status row for ``operation_key`` (any trigger)."""
     try:
         row = conn.execute(
@@ -1568,7 +1569,7 @@ def _last_run(conn: sqlite3.Connection, operation_key: str) -> Optional[dict[str
         return None
     started = str(row["started_at"] or "")
     finished = str(row["finished_at"] or "")
-    duration_seconds: Optional[float] = None
+    duration_seconds: float | None = None
     if started and finished:
         try:
             d = datetime.fromisoformat(finished) - datetime.fromisoformat(started)
@@ -1590,7 +1591,7 @@ def _last_run(conn: sqlite3.Connection, operation_key: str) -> Optional[dict[str
     }
 
 
-def _last_success_at(conn: sqlite3.Connection, operation_key: str) -> Optional[str]:
+def _last_success_at(conn: sqlite3.Connection, operation_key: str) -> str | None:
     """Finished-at of the most recent *successful* run for ``operation_key``.
 
     Distinct from ``last_run`` (any status): this is "when did this function
@@ -1688,8 +1689,8 @@ def estimate_task(
     task: MaintenanceTask,
     health_payload: dict[str, Any],
     *,
-    params: Optional[dict[str, Any]] = None,
-    batch_size: Optional[int] = None,
+    params: dict[str, Any] | None = None,
+    batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Recompute just the pending count + ETA for chosen ``params`` / ``batch_size``
     (e.g. a different scope or a dragged batch slider), so the UI can refresh the
@@ -1731,8 +1732,8 @@ def background_api_budget(conn: sqlite3.Connection) -> dict[str, Any]:
     from alma.core.http_sources import provider_remaining_credits
     from alma.services.background_settings import get_reserved_api_calls
 
-    last_abort: Optional[dict[str, Any]] = None
-    last_pause: Optional[dict[str, Any]] = None
+    last_abort: dict[str, Any] | None = None
+    last_pause: dict[str, Any] | None = None
     try:
         rows = conn.execute(
             """
@@ -1778,7 +1779,7 @@ def list_operations(conn: sqlite3.Connection) -> dict[str, Any]:
     """Backend-owned order, stage grouping, readiness, and operation state."""
     payload = (mv.get(conn, health_service.HEALTH_CORPUS_VIEW_KEY).get("payload")) or {}
     operations = [describe_task(conn, task, payload) for task in REGISTRY.values()]
-    recommended: Optional[dict[str, Any]] = None
+    recommended: dict[str, Any] | None = None
     for operation in operations:
         blocked_by = [
             row
@@ -1853,10 +1854,10 @@ def _maintenance_preflight_payload(
     *,
     limit: int,
     trigger_source: str,
-    target_paper_ids: Optional[list[str]] = None,
-    params: Optional[dict[str, Any]] = None,
-    health_payload: Optional[dict[str, Any]] = None,
-    plan_fingerprint: Optional[str] = None,
+    target_paper_ids: list[str] | None = None,
+    params: dict[str, Any] | None = None,
+    health_payload: dict[str, Any] | None = None,
+    plan_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Activity payload describing the bounded work selected for this run."""
     budget = _task_budget(
@@ -1899,11 +1900,11 @@ def _schedule_task(
     trigger_source: str,
     queued_message: str,
     log_message: str,
-    target_paper_ids: Optional[list[str]] = None,
-    params: Optional[dict[str, Any]] = None,
-    health_payload: Optional[dict[str, Any]] = None,
-    plan_fingerprint: Optional[str] = None,
-) -> Optional[str]:
+    target_paper_ids: list[str] | None = None,
+    params: dict[str, Any] | None = None,
+    health_payload: dict[str, Any] | None = None,
+    plan_fingerprint: str | None = None,
+) -> str | None:
     """Schedule one bounded run of ``task`` (shared by run-now + the healer).
 
     Idempotent: ``schedule_with_envelope`` returns the in-flight job_id if a job
@@ -1950,16 +1951,16 @@ def _schedule_task(
 @dataclass(frozen=True, slots=True)
 class MaintenanceLaunch:
     status: str
-    job_id: Optional[str]
+    job_id: str | None
     plan: MaintenanceRunPlan
     # Human-readable reason surfaced to the UI for non-launch outcomes (today:
     # status="skipped_daily_cap" carries the provider daily-cap explanation).
-    message: Optional[str] = None
+    message: str | None = None
 
 
 def _provider_daily_cap_block(
     task: MaintenanceTask, *, trigger_source: str
-) -> Optional[str]:
+) -> str | None:
     """Clear, informative message when a network task can't run because the
     OpenAlex daily API quota is exhausted — else ``None`` (free to run).
 
@@ -2024,9 +2025,9 @@ def run_task_now(
     conn: sqlite3.Connection,
     task: MaintenanceTask,
     *,
-    spec: Optional[MaintenanceRunSpec] = None,
-    target_paper_ids: Optional[list[str]] = None,
-    params: Optional[dict[str, Any]] = None,
+    spec: MaintenanceRunSpec | None = None,
+    target_paper_ids: list[str] | None = None,
+    params: dict[str, Any] | None = None,
 ) -> MaintenanceLaunch:
     """Plan and schedule one atomic, bounded user run.
 
@@ -2512,7 +2513,7 @@ def _schedule_converge_retry_after_quota_reset(
     )
 
 
-def schedule_onboarding_convergence() -> Optional[str]:
+def schedule_onboarding_convergence() -> str | None:
     """Queue the convergence coordinator (idempotent on its operation key)."""
     from alma.api.scheduler import ONBOARDING_KICK_TRIGGER
     from alma.core.job_envelope import schedule_with_envelope

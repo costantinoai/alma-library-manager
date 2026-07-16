@@ -97,10 +97,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from contextlib import ExitStack
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterable, Optional
+from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.http_sources import bind_source_diagnostics
@@ -136,7 +137,7 @@ class PipelineResult:
     dropped: int = 0
 
 
-def _always_terminal(item: Any, result: Any) -> Optional[Any]:
+def _always_terminal(item: Any, result: Any) -> Any | None:
     """Default ``advance_on``: every result is terminal (single-stage shape)."""
     return None
 
@@ -160,10 +161,10 @@ class FetchStage:
     # Miss router: ``(item, result) -> next_item | None``. Non-None advances
     # the item to the NEXT stage; None makes ``result`` terminal (→ writer).
     # Ignored for the last stage (everything terminal there). Default: terminal.
-    advance_on: Callable[[Any, Any], Optional[Any]] = field(default=_always_terminal)
+    advance_on: Callable[[Any, Any], Any | None] = field(default=_always_terminal)
 
 
-def make_deadline(seconds: Optional[float]) -> Optional[float]:
+def make_deadline(seconds: float | None) -> float | None:
     """Return a ``time.monotonic`` deadline ``seconds`` from now (or None)."""
     if seconds is None or seconds <= 0:
         return None
@@ -192,10 +193,10 @@ def run_staged_fetch_pipeline(
     write_batch: Callable[[list[Any]], None],
     batch_size: int = 100,
     flush_interval_s: float = 2.0,
-    deadline: Optional[float] = None,
-    is_cancelled: Optional[Callable[[], bool]] = None,
-    on_progress: Optional[Callable[[int, int], None]] = None,
-    in_flight_cap: Optional[int] = None,
+    deadline: float | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    in_flight_cap: int | None = None,
 ) -> PipelineResult:
     """Run ``items`` through a DAG of independent fetch ``stages``, draining
     terminal results into ``write_batch`` (the single writer) on the caller's
@@ -343,10 +344,10 @@ def run_fetch_write_pipeline(
     fetch_workers: int = 6,
     batch_size: int = 100,
     flush_interval_s: float = 2.0,
-    deadline: Optional[float] = None,
-    is_cancelled: Optional[Callable[[], bool]] = None,
-    on_progress: Optional[Callable[[int, int], None]] = None,
-    in_flight_cap: Optional[int] = None,
+    deadline: float | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    in_flight_cap: int | None = None,
     thread_name_prefix: str = "alma-fetch",
 ) -> PipelineResult:
     """Single-stage fetch→write pipeline (the task-11 shape).

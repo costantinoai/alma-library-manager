@@ -12,8 +12,8 @@ default) takes effect everywhere by construction.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Mapping, Optional
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
@@ -94,7 +94,7 @@ def log_prevalence_weights(counts: Mapping[str, float]) -> dict[str, float]:
     }
 
 
-def days_since(raw, now: datetime) -> Optional[float]:
+def days_since(raw, now: datetime) -> float | None:
     """Whole-day age of an ISO timestamp ``raw`` relative to ``now`` (made
     UTC-aware), clamped to >= 0; ``None`` when missing/unparseable. Uses
     ``datetime.fromisoformat`` (+ trailing-Z handling). The more permissive

@@ -23,21 +23,21 @@ AUTHOR_REFRESH_HOUR         -- UTC hour for the daily author refresh cron (defau
 
 import asyncio
 import base64
+import collections
 import json
 import logging
 import os
 import sqlite3
 import threading
-import uuid
-import collections
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+
 from alma.core.concurrency import enter_job_fanout
 from alma.core.db_retry import commit_with_retry
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Module-level state
 # ---------------------------------------------------------------------------
 
-_scheduler: Optional[BackgroundScheduler] = None
+_scheduler: BackgroundScheduler | None = None
 _job_meta: dict[str, dict] = {}
 _job_status: dict[str, dict] = {}
 _job_logs: dict[str, collections.deque[dict]] = {}
@@ -70,8 +70,12 @@ _ORPHAN_REAP_ERROR = (
 )
 
 
-class JobCancelled(Exception):
+class JobCancelledError(Exception):
     """Raised at a cooperative Activity checkpoint after user cancellation."""
+
+
+# Backward-compatible public name used by existing plugins and tests.
+JobCancelled = JobCancelledError
 
 
 def _register_running_thread(job_id: str) -> None:
@@ -178,7 +182,7 @@ def _json_dumps_safe(value: object) -> str:
         return json.dumps(str(value), ensure_ascii=False)
 
 
-def _parse_activity_time(value: object) -> Optional[datetime]:
+def _parse_activity_time(value: object) -> datetime | None:
     """Parse an Activity timestamp to naive UTC.
 
     ALMa stores every `operation_status` / `operation_logs` timestamp as
@@ -361,11 +365,11 @@ def _status_sort_key(st: dict) -> tuple[str, str]:
 
 
 def _encode_status_cursor(updated_at: str, job_id: str) -> str:
-    raw = f"{updated_at}|{job_id}".encode("utf-8")
+    raw = f"{updated_at}|{job_id}".encode()
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
-def _decode_status_cursor(cursor: Optional[str]) -> Optional[tuple[str, str]]:
+def _decode_status_cursor(cursor: str | None) -> tuple[str, str] | None:
     if not cursor:
         return None
     try:
@@ -381,7 +385,7 @@ def _encode_log_cursor(log_id: int) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii")
 
 
-def _decode_log_cursor(cursor: Optional[str]) -> Optional[int]:
+def _decode_log_cursor(cursor: str | None) -> int | None:
     if not cursor:
         return None
     try:
@@ -391,7 +395,7 @@ def _decode_log_cursor(cursor: Optional[str]) -> Optional[int]:
         return None
 
 
-def get_job_trigger_source(job_id: str) -> Optional[str]:
+def get_job_trigger_source(job_id: str) -> str | None:
     """Return the recorded ``trigger_source`` for ``job_id``, if any.
 
     Used by chain coordinators to decide whether to auto-queue the
@@ -413,7 +417,7 @@ def get_job_trigger_source(job_id: str) -> Optional[str]:
     return None
 
 
-def _load_job_status_from_db(job_id: str) -> Optional[dict]:
+def _load_job_status_from_db(job_id: str) -> dict | None:
     try:
         conn = _activity_conn()
         try:
@@ -490,8 +494,8 @@ def _load_job_logs_page_from_db(
     job_id: str,
     *,
     limit: int = 100,
-    before_id: Optional[int] = None,
-) -> Optional[tuple[list[dict], Optional[str], bool]]:
+    before_id: int | None = None,
+) -> tuple[list[dict], str | None, bool] | None:
     safe_limit = max(1, min(limit, 500))
     try:
         conn = _activity_conn()
@@ -754,7 +758,7 @@ ONBOARDING_KICK_REASON = "onboarding_complete"
 ONBOARDING_KICK_TRIGGER = f"auto:{ONBOARDING_KICK_REASON}"
 
 
-def is_user_facing_trigger(trigger_source: Optional[str]) -> bool:
+def is_user_facing_trigger(trigger_source: str | None) -> bool:
     """True when a user is actively waiting on this run: a manual Settings
     click ("user") or the onboarding-complete kick. User-facing runs never
     yield to the idle gate, ignore the background credit reserve, and pick
@@ -763,7 +767,7 @@ def is_user_facing_trigger(trigger_source: Optional[str]) -> bool:
     return value == "user" or value == ONBOARDING_KICK_TRIGGER
 
 
-def is_background_trigger(trigger_source: Optional[str]) -> bool:
+def is_background_trigger(trigger_source: str | None) -> bool:
     """A background trigger is anything not user-facing.
 
     Only background ops yield to the user / honour the credit reserve; a
@@ -777,9 +781,9 @@ def background_yield_reason(
     conn: sqlite3.Connection,
     operation_key: str,
     *,
-    trigger_source: Optional[str],
+    trigger_source: str | None,
     budget_source: str = "openalex",
-) -> Optional[tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Should a running BACKGROUND sweep stop NOW, and why? (task 37 A pause + C abort).
 
     Returns ``None`` to keep going, else ``(reason_code, human_message)``:
@@ -817,7 +821,7 @@ def make_background_cancel_check(
     operation_key: str,
     original: Callable[[str], bool],
     *,
-    trigger_source: Optional[str],
+    trigger_source: str | None,
     sink: dict,
     budget_source: str = "openalex",
     min_interval_s: float = 2.0,
@@ -1226,8 +1230,8 @@ def evaluate_scheduled_alerts() -> None:
     )
     logger.info("Starting scheduled alert evaluation sweep")
     try:
-        from alma.application import alerts as alerts_app
         from alma.api.deps import open_db_connection
+        from alma.application import alerts as alerts_app
 
         conn = open_db_connection()
 
@@ -1410,12 +1414,12 @@ def refresh_recommendations_periodic() -> None:
     )
     logger.info("Starting periodic recommendation refresh via lens system")
     try:
+        from alma.api.deps import open_db_connection
         from alma.application.discovery import (
-            list_lenses,
             create_lens,
+            list_lenses,
             refresh_lens_recommendations,
         )
-        from alma.api.deps import open_db_connection
 
         conn = open_db_connection()
 
@@ -1437,8 +1441,8 @@ def refresh_recommendations_periodic() -> None:
                     "Default lens bootstrap failed (%s); falling back to legacy discovery refresh",
                     exc,
                 )
-                from alma.discovery.engine import DiscoveryEngine
                 from alma.config import get_db_path
+                from alma.discovery.engine import DiscoveryEngine
 
                 legacy_recs = DiscoveryEngine(get_db_path()).refresh_recommendations()
                 conn.close()
@@ -1551,9 +1555,9 @@ def refresh_feed_inbox_periodic() -> None:
     )
     logger.info("Starting periodic feed inbox refresh")
     try:
-        from alma.application import feed as feed_app
-        from alma.api.helpers import ActivityJobContext
         from alma.api.deps import open_db_connection
+        from alma.api.helpers import ActivityJobContext
+        from alma.application import feed as feed_app
 
         conn = open_db_connection()
         try:
@@ -1809,12 +1813,12 @@ def drain_pending_hydration_periodic() -> None:
     # after the metadata sweeps above have drained (an active sweep counts as
     # activity), so S2 runs AFTER metadata, never in competition with it.
     try:
+        from alma.core.db_write import run_write_unit
         from alma.services.embedding_chain import (
             clear_post_hydration_chain_pending,
             is_post_hydration_chain_pending,
             schedule_post_hydration_chain,
         )
-        from alma.core.db_write import run_write_unit
 
         conn2 = open_db_connection()
         try:
@@ -1845,8 +1849,8 @@ def drain_pending_hydration_periodic() -> None:
 def _is_due(
     *,
     schedule: str,
-    schedule_config: Optional[dict],
-    last_evaluated_at: Optional[str],
+    schedule_config: dict | None,
+    last_evaluated_at: str | None,
     now: datetime,
 ) -> bool:
     """Return True when the current schedule slot has not been processed."""
@@ -1906,7 +1910,7 @@ def add_cron_job(
     cron_expr: str,
     func: Callable,
     args: tuple = (),
-    meta: Optional[dict] = None,
+    meta: dict | None = None,
 ) -> str:
     """Add a cron job to the scheduler."""
     sched = get_scheduler()
@@ -1978,7 +1982,7 @@ def run_job(job_id: str) -> bool:
         return False
 
 
-def get_job_status(job_id: str) -> Optional[dict]:
+def get_job_status(job_id: str) -> dict | None:
     """Get the latest status dict for a job."""
     with _job_lock:
         status = _job_status.get(job_id)
@@ -1992,7 +1996,7 @@ def get_job_status(job_id: str) -> Optional[dict]:
     return None
 
 
-def find_active_job(operation_key: str) -> Optional[dict]:
+def find_active_job(operation_key: str) -> dict | None:
     """Find an active job by operation key.
 
     Active statuses are ``queued``, ``scheduled``, and ``running``.
@@ -2030,7 +2034,7 @@ def is_cancellation_requested(job_id: str) -> bool:
     return bool(st.get("cancel_requested"))
 
 
-def _raise_if_cancel_checkpoint(job_id: str, *, step: Optional[str] = None) -> None:
+def _raise_if_cancel_checkpoint(job_id: str, *, step: str | None = None) -> None:
     """Stop cooperative runners at the next Activity checkpoint.
 
     Graceful stops (``cancel_mode == "graceful"``) never raise here: the
@@ -2054,8 +2058,8 @@ def add_job_log(
     message: str,
     *,
     level: str = "INFO",
-    step: Optional[str] = None,
-    data: Optional[dict] = None,
+    step: str | None = None,
+    data: dict | None = None,
 ) -> None:
     """Append a structured log entry for a job."""
     _raise_if_cancel_checkpoint(job_id, step=step)
@@ -2098,8 +2102,8 @@ def get_job_logs_page(
     job_id: str,
     *,
     limit: int = 100,
-    cursor: Optional[str] = None,
-) -> tuple[list[dict], Optional[str], bool]:
+    cursor: str | None = None,
+) -> tuple[list[dict], str | None, bool]:
     """Return one page of structured logs for a job."""
     safe_limit = max(1, min(limit, 500))
     before_id = _decode_log_cursor(cursor)
@@ -2197,9 +2201,9 @@ def set_job_status(job_id: str, **kwargs) -> None:
 
 def list_all_job_statuses(
     *,
-    status: Optional[str] = None,
-    trigger_source: Optional[str] = None,
-    since: Optional[str] = None,
+    status: str | None = None,
+    trigger_source: str | None = None,
+    since: str | None = None,
     limit: int = _ACTIVITY_STATUS_LIMIT,
 ) -> list[dict]:
     """Return job statuses with optional filtering."""
@@ -2234,12 +2238,12 @@ def list_all_job_statuses(
 
 def list_all_job_statuses_page(
     *,
-    status: Optional[str] = None,
-    trigger_source: Optional[str] = None,
-    since: Optional[str] = None,
+    status: str | None = None,
+    trigger_source: str | None = None,
+    since: str | None = None,
     limit: int = 200,
-    cursor: Optional[str] = None,
-) -> tuple[list[dict], Optional[str], bool]:
+    cursor: str | None = None,
+) -> tuple[list[dict], str | None, bool]:
     """Return one page of job statuses with a cursor for older results."""
     safe_limit = max(1, min(limit, _ACTIVITY_STATUS_LIMIT))
     items = list_all_job_statuses(
@@ -2255,7 +2259,7 @@ def list_all_job_statuses_page(
     page = items[: safe_limit + 1]
     has_more = len(page) > safe_limit
     page = page[:safe_limit]
-    next_cursor: Optional[str] = None
+    next_cursor: str | None = None
     if has_more and page:
         last = page[-1]
         next_cursor = _encode_status_cursor(
@@ -2283,8 +2287,8 @@ def activity_envelope(
     job_id: str,
     *,
     status: str,
-    operation_key: Optional[str] = None,
-    message: Optional[str] = None,
+    operation_key: str | None = None,
+    message: str | None = None,
     **extra,
 ) -> dict:
     """Build a canonical async operation response envelope."""
@@ -2404,7 +2408,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             # even though the job had moved on.  Runners that want a
             # specific terminal message return
             # `{..., "message": "Refreshed N → M new"}`.
-            done_message: Optional[str] = None
+            done_message: str | None = None
             if isinstance(result, dict):
                 candidate = result.get("message")
                 if isinstance(candidate, str) and candidate.strip():
@@ -2449,9 +2453,9 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
 def schedule_alert(
     alert_id: str,
     schedule: str,
-    schedule_config: Optional[dict],
+    schedule_config: dict | None,
     evaluate_func: Callable,
-) -> Optional[str]:
+) -> str | None:
     """Register or update a scheduled job for an alert.
 
     Args:

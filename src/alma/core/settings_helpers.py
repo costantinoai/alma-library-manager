@@ -11,14 +11,12 @@ weight behaviour).
 
 from __future__ import annotations
 
-from typing import Optional
-
 from alma.core.scoring_math import clamp
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
-def setting_bool(settings: Optional[dict], key: str, default: bool) -> bool:
+def setting_bool(settings: dict | None, key: str, default: bool) -> bool:
     raw = (settings or {}).get(key)
     if raw is None:
         return default
@@ -26,8 +24,8 @@ def setting_bool(settings: Optional[dict], key: str, default: bool) -> bool:
 
 
 def setting_int(
-    settings: Optional[dict], key: str, default: int,
-    lo: Optional[int] = None, hi: Optional[int] = None,
+    settings: dict | None, key: str, default: int,
+    lo: int | None = None, hi: int | None = None,
 ) -> int:
     raw = (settings or {}).get(key)
     if raw is None:
@@ -42,8 +40,8 @@ def setting_int(
 
 
 def setting_float(
-    settings: Optional[dict], key: str, default: float,
-    lo: Optional[float] = None, hi: Optional[float] = None,
+    settings: dict | None, key: str, default: float,
+    lo: float | None = None, hi: float | None = None,
 ) -> float:
     raw = (settings or {}).get(key)
     if raw is None:

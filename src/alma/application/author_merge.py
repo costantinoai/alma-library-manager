@@ -39,8 +39,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from typing import Iterable, Mapping, Optional
 
 from alma.core.author_names import (
     affiliations_corroborate,
@@ -153,7 +153,7 @@ def record_author_alias(
     primary_author_id: str,
     alt_openalex_id: str,
     *,
-    alt_author_id: Optional[str] = None,
+    alt_author_id: str | None = None,
     source: str,
 ) -> bool:
     """Record one ``author_alt_identifiers`` row; return True if newly inserted.
@@ -184,7 +184,7 @@ def record_author_alias(
     return bool(cur.rowcount)
 
 
-def _union_json_list(primary_raw: object, alt_raw: object) -> Optional[str]:
+def _union_json_list(primary_raw: object, alt_raw: object) -> str | None:
     """Merge two JSON-list-shaped strings, preserving primary's order."""
     import json as _json
 
@@ -452,7 +452,7 @@ def merge_author_profiles(
     *,
     alt_openalex_ids: Iterable[str] | None = None,
     field_choices: Mapping[str, Mapping[str, str]] | None = None,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> dict:
     """Collapse `alt_author_ids` into `primary_author_id`.
 
@@ -544,7 +544,6 @@ def merge_author_profiles(
     }
 
     choices_by_alt = field_choices or {}
-    now = datetime.utcnow().isoformat()
     # Audit-log payloads collected during the loop and flushed AFTER commit
     # (each add_job_log opens its own connection — keep it out of our open
     # write transaction). Tuples of (message, data).
@@ -819,9 +818,9 @@ def merge_author_profiles(
 def discover_aliases_via_orcid(
     primary_openalex_id: str,
     *,
-    mailto: Optional[str] = None,
+    mailto: str | None = None,
     limit: int = 10,
-    known_orcid: Optional[str] = None,
+    known_orcid: str | None = None,
 ) -> dict:
     """Look up every OpenAlex author profile sharing the primary's ORCID.
 
@@ -958,8 +957,8 @@ def record_orcid_aliases(
     db: sqlite3.Connection,
     primary_author_id: str,
     *,
-    mailto: Optional[str] = None,
-    known_orcid: Optional[str] = None,
+    mailto: str | None = None,
+    known_orcid: str | None = None,
 ) -> dict:
     """Preventive ORCID-based alias recording.
 
@@ -1082,7 +1081,7 @@ def count_dedup_orcid_candidates(db: sqlite3.Connection) -> int:
         return 0
 
 
-def _papers_for_oid(db: sqlite3.Connection, openalex_id: Optional[str]) -> int:
+def _papers_for_oid(db: sqlite3.Connection, openalex_id: str | None) -> int:
     """Read-only count of authorship rows for an OpenAlex id — the papers a merge
     would reassign. 0 when the row has no usable openalex_id."""
     oid = (openalex_id or "").strip()
@@ -1111,7 +1110,7 @@ def _pick_primary(a: dict, b: dict) -> tuple[dict, dict]:
     return a, b
 
 
-def _is_auto_mergeable(source: str, confidence: Optional[str], primary: dict, alt: dict) -> bool:
+def _is_auto_mergeable(source: str, confidence: str | None, primary: dict, alt: dict) -> bool:
     """Confidence policy for AUTOMATIC resolution (D-decision 2026-06-28):
       - ORCID is authoritative → always auto-merge;
       - a name·high match (same full name, modulo case/diacritics) auto-merges ONLY
@@ -1133,12 +1132,12 @@ def _consider_merge_pair(
     other: dict,
     *,
     source: str,
-    confidence: Optional[str],
-    shared_orcid: Optional[str],
+    confidence: str | None,
+    shared_orcid: str | None,
     dry_run: bool,
     summary: dict,
     merged_away: set[str],
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> None:
     """Shared pair → resolution path for BOTH detectors (ORCID + name): pick the
     primary/alt, skip self / already-merged-away / any user-REJECTED pair (never
@@ -1230,8 +1229,8 @@ def _detect_name_match_candidates(
     *,
     dry_run: bool,
     summary: dict,
-    merged_away: Optional[set[str]] = None,
-    job_id: Optional[str] = None,
+    merged_away: set[str] | None = None,
+    job_id: str | None = None,
 ) -> None:
     """Network-free pass: flag pairs of authors with compatible names (same
     surname, given names that line up allowing initials — "E. van Hove" ≈ "Emily
@@ -1271,10 +1270,10 @@ def _detect_name_match_candidates(
 def scan_duplicate_candidates(
     db: sqlite3.Connection,
     *,
-    mailto: Optional[str] = None,
+    mailto: str | None = None,
     sleep_between_calls: float = 0.05,
     limit: int,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
     dry_run: bool = False,
 ) -> dict:
     """SCAN followed authors for duplicate profiles and RECORD what to merge.
@@ -1522,7 +1521,7 @@ _SOURCE_RANK = {
 }
 
 
-def _candidate_rank(source: Optional[str], confidence: Optional[str]) -> int:
+def _candidate_rank(source: str | None, confidence: str | None) -> int:
     if source == "orcid":
         return 100
     return _SOURCE_RANK.get((source or "name", confidence), 1)
@@ -1533,11 +1532,11 @@ def _record_merge_candidate(
     primary_author_id: str,
     alt_author_id: str,
     *,
-    alt_openalex_id: Optional[str],
-    shared_orcid: Optional[str],
+    alt_openalex_id: str | None,
+    shared_orcid: str | None,
     papers_estimate: int,
     source: str,
-    confidence: Optional[str] = None,
+    confidence: str | None = None,
 ) -> bool:
     """UPSERT one pending merge pair into ``author_merge_candidates``.
 
@@ -1606,8 +1605,8 @@ def record_merge_rejection(
     author_id_a: str,
     author_id_b: str,
     *,
-    source: Optional[str] = None,
-    reason: Optional[str] = None,
+    source: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """Persist a permanent "these two are NOT the same person" verdict. Idempotent
     (UNIQUE on the canonical pair). Caller holds the writer gate."""
@@ -1751,7 +1750,7 @@ def list_merge_candidates(
 
 
 def _apply_one_candidate(
-    db: sqlite3.Connection, cand: Mapping, *, job_id: Optional[str] = None
+    db: sqlite3.Connection, cand: Mapping, *, job_id: str | None = None
 ) -> dict:
     """Merge a candidate's alt → primary and consume the candidate row.
 
@@ -1781,8 +1780,8 @@ def apply_merge_candidates(
     db: sqlite3.Connection,
     *,
     limit: int,
-    candidate_ids: Optional[Iterable[str]] = None,
-    job_id: Optional[str] = None,
+    candidate_ids: Iterable[str] | None = None,
+    job_id: str | None = None,
 ) -> dict:
     """Apply pending merge candidates — the DESTRUCTIVE half (any source), gated
     behind the Health review dialog. For each candidate (both rows still active)

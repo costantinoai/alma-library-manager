@@ -13,7 +13,6 @@ untagged publications.
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Optional
 
 from alma.core.db_write import write_section
 

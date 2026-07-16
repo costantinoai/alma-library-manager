@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -67,7 +67,7 @@ def encode_vector(vec) -> bytes:
     return np.asarray(vec, dtype=STORAGE_DTYPE).tobytes()
 
 
-def decode_vector(blob: bytes, *, expected_dim: Optional[int] = None) -> np.ndarray:
+def decode_vector(blob: bytes, *, expected_dim: int | None = None) -> np.ndarray:
     """Decode one stored blob into a 1-D float32 array.
 
     Two-level robustness:
@@ -130,7 +130,7 @@ def decode_vectors(blobs: Iterable[bytes]) -> np.ndarray:
 def decode_vectors_uniform(
     blobs: Iterable[bytes],
     *,
-    expected_dim: Optional[int] = None,
+    expected_dim: int | None = None,
 ) -> tuple[np.ndarray, list[bool]]:
     """Decode blobs to a uniform-dim float32 matrix, rescuing legacy rows.
 
@@ -233,7 +233,7 @@ def migrate_blob_column_to_float16(
     blob_col: str,
     *,
     key_cols: tuple[str, ...],
-    model_col: Optional[str] = "model",
+    model_col: str | None = "model",
 ) -> int:
     """Re-encode any legacy float32 blobs in a vector column as float16.
 

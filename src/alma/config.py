@@ -18,13 +18,13 @@ Key principles:
   authors.db + publications.db layout.
 """
 
-import os
 import json
 import logging
+import os
 import re
-from pathlib import Path
-from typing import Optional, Dict, Any
 from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 import platformdirs
 
@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 # Project root is discovered from settings.json when present, otherwise
 # from other repo-root markers so a missing settings file does not break
 # bootstrap.
-_PROJECT_ROOT: Optional[Path] = None
+_PROJECT_ROOT: Path | None = None
 _PROJECT_ROOT_MARKERS = ("settings.json", "pyproject.toml", "docker-compose.yml", ".git")
 
-DEFAULT_SETTINGS: Dict[str, Any] = {
+DEFAULT_SETTINGS: dict[str, Any] = {
     # NOTE: `database` is deliberately NOT defaulted here. The DB location
     # is a computed path (DB_PATH env → explicit settings value →
     # get_data_dir()/scholar.db), so a fresh install resolves to the
@@ -194,7 +194,7 @@ def ensure_settings_file() -> Path:
 
 
 @lru_cache(maxsize=1)
-def _load_settings() -> Dict[str, Any]:
+def _load_settings() -> dict[str, Any]:
     """Load settings from settings.json with caching.
 
     Returns:
@@ -203,7 +203,7 @@ def _load_settings() -> Dict[str, Any]:
     settings_path = ensure_settings_file()
 
     try:
-        with open(settings_path, 'r', encoding="utf-8") as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
         logger.debug(f"Loaded settings from {settings_path}")
         return settings
@@ -406,7 +406,7 @@ def get_slack_config_path() -> Path:
     return _resolve_path("./config/slack.config")
 
 
-def update_settings(updates: Dict[str, Any]) -> None:
+def update_settings(updates: dict[str, Any]) -> None:
     """Update settings.json with new values.
 
     This is the ONLY function that should modify settings.json.
@@ -429,7 +429,7 @@ def update_settings(updates: Dict[str, Any]) -> None:
     # Load current settings
     settings_path = ensure_settings_file()
     try:
-        with open(settings_path, 'r', encoding="utf-8") as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
     except Exception:
         settings = {}
@@ -453,7 +453,7 @@ def delete_settings_keys(keys: list[str]) -> None:
         return
     settings_path = ensure_settings_file()
     try:
-        with open(settings_path, "r", encoding="utf-8") as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
     except Exception:
         settings = {}
@@ -479,7 +479,7 @@ def get_backend() -> str:
     return get_setting("backend", "openalex").lower()
 
 
-def get_from_year() -> Optional[int]:
+def get_from_year() -> int | None:
     """Get the configured from_year for publication filtering.
 
     Returns:
@@ -504,7 +504,7 @@ def get_fetch_full_history() -> bool:
     return bool(get_setting("fetch_full_history", False))
 
 
-def get_fetch_year() -> Optional[int]:
+def get_fetch_year() -> int | None:
     """Compute the effective from_year for publication fetching.
 
     Combines backend, fetch_full_history, and from_year settings into a single
@@ -542,7 +542,7 @@ def get_api_call_delay() -> float:
         return 1.0
 
 
-def get_openalex_email() -> Optional[str]:
+def get_openalex_email() -> str | None:
     """Get the OpenAlex API email for polite pool access.
 
     Priority:
@@ -559,7 +559,7 @@ def get_openalex_email() -> Optional[str]:
     return get_setting("openalex_email")
 
 
-def get_openalex_api_key() -> Optional[str]:
+def get_openalex_api_key() -> str | None:
     """Get the OpenAlex API key.
 
     Resolution order:
@@ -590,7 +590,7 @@ def get_openalex_api_key() -> Optional[str]:
         return None
 
 
-def get_contact_email() -> Optional[str]:
+def get_contact_email() -> str | None:
     """Get the best contact email for third-party API identification."""
     for env_key in ("ALMA_CONTACT_EMAIL", "CONTACT_EMAIL", "CROSSREF_MAILTO", "OPENALEX_EMAIL"):
         raw = os.getenv(env_key)
@@ -617,7 +617,7 @@ def get_app_user_agent() -> str:
     return "ALMa/3.0"
 
 
-def get_crossref_mailto() -> Optional[str]:
+def get_crossref_mailto() -> str | None:
     """Get the Crossref mailto contact parameter."""
     raw = os.getenv("CROSSREF_MAILTO")
     if raw and raw.strip():
@@ -628,20 +628,20 @@ def get_crossref_mailto() -> Optional[str]:
     return get_contact_email()
 
 
-def get_semantic_scholar_api_key() -> Optional[str]:
+def get_semantic_scholar_api_key() -> str | None:
     """Get the Semantic Scholar API key, if configured."""
     env_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
     if env_key:
         return env_key
     try:
-        from alma.core.secrets import get_secret, SECRET_SEMANTIC_SCHOLAR_API_KEY
+        from alma.core.secrets import SECRET_SEMANTIC_SCHOLAR_API_KEY, get_secret
 
         return get_secret(SECRET_SEMANTIC_SCHOLAR_API_KEY)
     except Exception:
         return None
 
 
-def get_slack_token() -> Optional[str]:
+def get_slack_token() -> str | None:
     """Get the Slack Bot User OAuth Token.
 
     Priority:
@@ -655,13 +655,13 @@ def get_slack_token() -> Optional[str]:
     if token:
         return token
     try:
-        from alma.core.secrets import get_secret, SECRET_SLACK_BOT_TOKEN
+        from alma.core.secrets import SECRET_SLACK_BOT_TOKEN, get_secret
         return get_secret(SECRET_SLACK_BOT_TOKEN)
     except Exception:
         return None
 
 
-def get_slack_channel() -> Optional[str]:
+def get_slack_channel() -> str | None:
     """Get the default Slack channel for notifications.
 
     Priority:
@@ -683,7 +683,7 @@ def get_slack_channel() -> Optional[str]:
 
 
 # ── Email / SMTP (the email-digest channel, sibling of Slack) ──────────────
-def get_smtp_host() -> Optional[str]:
+def get_smtp_host() -> str | None:
     """SMTP server host. Env ``SMTP_HOST`` → ``smtp_host`` setting."""
     return os.getenv("SMTP_HOST") or get_setting("smtp_host") or None
 
@@ -697,12 +697,12 @@ def get_smtp_port() -> int:
         return 587
 
 
-def get_smtp_username() -> Optional[str]:
+def get_smtp_username() -> str | None:
     """SMTP auth username. Env ``SMTP_USERNAME`` → ``smtp_username`` setting."""
     return os.getenv("SMTP_USERNAME") or get_setting("smtp_username") or None
 
 
-def get_smtp_from() -> Optional[str]:
+def get_smtp_from() -> str | None:
     """From address. Env ``SMTP_FROM`` → ``smtp_from`` setting → username."""
     return (
         os.getenv("SMTP_FROM")
@@ -730,19 +730,19 @@ def get_smtp_use_tls() -> bool:
     return bool(val)
 
 
-def get_smtp_password() -> Optional[str]:
+def get_smtp_password() -> str | None:
     """SMTP password. Env ``SMTP_PASSWORD`` → unified secret store."""
     env_pw = os.getenv("SMTP_PASSWORD")
     if env_pw:
         return env_pw
     try:
-        from alma.core.secrets import get_secret, SECRET_SMTP_PASSWORD
+        from alma.core.secrets import SECRET_SMTP_PASSWORD, get_secret
         return get_secret(SECRET_SMTP_PASSWORD)
     except Exception:
         return None
 
 
-def get_openai_api_key() -> Optional[str]:
+def get_openai_api_key() -> str | None:
     """Get the OpenAI API key.
 
     Priority:
@@ -753,14 +753,14 @@ def get_openai_api_key() -> Optional[str]:
     if env_key:
         return env_key
     try:
-        from alma.core.secrets import get_secret, SECRET_OPENAI_API_KEY
+        from alma.core.secrets import SECRET_OPENAI_API_KEY, get_secret
         return get_secret(SECRET_OPENAI_API_KEY)
     except Exception:
         return None
 
 
 # Expose a dict-like interface for backward compatibility
-def get_all_settings() -> Dict[str, Any]:
+def get_all_settings() -> dict[str, Any]:
     """Get all settings as a dictionary.
 
     Returns:

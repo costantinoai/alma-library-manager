@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from typing import Optional, Tuple
 
 from alma.core.utils import (
     clean_display_text,
@@ -85,8 +84,8 @@ _TRAILING_VERSION_RE = re.compile(r"\.\d{1,3}$")
 
 
 def classify_component(
-    doi: Optional[str], work_type: Optional[str] = None
-) -> Tuple[Optional[str], Optional[str]]:
+    doi: str | None, work_type: str | None = None
+) -> tuple[str | None, str | None]:
     """Classify a work as a paper or a component.
 
     Returns ``(component_type, parent_doi)``:
@@ -121,10 +120,10 @@ def classify_component(
 def resolve_component(
     conn: sqlite3.Connection,
     *,
-    doi: Optional[str],
-    work_type: Optional[str] = None,
-    relation_parent_doi: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+    doi: str | None,
+    work_type: str | None = None,
+    relation_parent_doi: str | None = None,
+) -> tuple[str | None, str | None]:
     """Classify, then resolve the parent DOI to an existing ``papers.id``.
 
     Returns ``(component_type, parent_paper_id)``. ``component_type`` is set for
@@ -146,14 +145,14 @@ def resolve_component(
     if component_type is None:
         return None, None
     parent_doi = parent_doi or rel_parent
-    parent_paper_id: Optional[str] = None
+    parent_paper_id: str | None = None
     if parent_doi:
         parent_paper_id = resolve_existing_paper_id(conn, doi=parent_doi)
     return component_type, parent_paper_id
 
 
 def link_orphan_components(
-    conn: sqlite3.Connection, *, parent_paper_id: str, parent_doi: Optional[str]
+    conn: sqlite3.Connection, *, parent_paper_id: str, parent_doi: str | None
 ) -> int:
     """Adopt unlinked DOI-suffix components of a just-upserted parent paper.
 

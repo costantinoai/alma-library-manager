@@ -9,22 +9,24 @@ rate-limit tracking, automatic retries).
 from __future__ import annotations
 
 import logging
-import sqlite3
 import re
-from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar
-from datetime import datetime
+import sqlite3
+from collections.abc import Callable, Iterable
 from difflib import SequenceMatcher
-
-import requests
+from pathlib import Path
+from typing import Any, TypeVar
 
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
     normalize_doi as _normalize_doi,
+)
+from alma.core.utils import (
     normalize_openalex_id,
-    normalize_text as _normalize_text,
     utcnow_iso,
+)
+from alma.core.utils import (
+    normalize_text as _normalize_text,
 )
 from alma.openalex.http import get_client
 
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
-def find_author_id_by_name(name: str, mailto: Optional[str] = None) -> Optional[str]:
+def find_author_id_by_name(name: str, mailto: str | None = None) -> str | None:
     try:
         client = get_client()
         resp = client.get("/authors", params={"search": name, "per-page": 1}, timeout=20)
@@ -45,7 +47,7 @@ def find_author_id_by_name(name: str, mailto: Optional[str] = None) -> Optional[
     return None
 
 
-def get_author_name_by_id(author_openalex_id: str, mailto: Optional[str] = None) -> Optional[str]:
+def get_author_name_by_id(author_openalex_id: str, mailto: str | None = None) -> str | None:
     """Fetch an OpenAlex author's display name by ID.
 
     Returns the display name or None if not found.
@@ -65,7 +67,7 @@ def get_author_name_by_id(author_openalex_id: str, mailto: Optional[str] = None)
         return None
 
 
-def find_author_by_orcid(orcid: str, mailto: Optional[str] = None) -> Optional[Dict[str, str]]:
+def find_author_by_orcid(orcid: str, mailto: str | None = None) -> dict[str, str] | None:
     """Resolve an ORCID to an OpenAlex author record.
 
     Returns dict with keys {"id", "display_name"} if found, else None.
@@ -140,9 +142,9 @@ def _work_id_to_int(work_id: str) -> int | None:
 
 def fetch_works_for_author(
     author_openalex_id: str,
-    from_year: Optional[int] = None,
-    mailto: Optional[str] = None,
-) -> List[Dict]:
+    from_year: int | None = None,
+    mailto: str | None = None,
+) -> list[dict]:
     """Fetch all works for an OpenAlex author using cursor pagination.
 
     This uses the official Works endpoint with the `author.id:A...` filter,
@@ -156,7 +158,7 @@ def fetch_works_for_author(
         List of normalized work dicts with keys:
         title, authors, abstract, year, num_citations, journal, pub_url, doi
     """
-    works: List[Dict] = []
+    works: list[dict] = []
     try:
         client = get_client()
         # Use official works API filter: author.id:A... (recommended by OpenAlex)
@@ -286,8 +288,8 @@ def fetch_works_page_for_author(
     cursor: str = "*",
     per_page: int = 50,
     sort: str = "cited_by_count:desc",
-    mailto: Optional[str] = None,
-) -> Dict:
+    mailto: str | None = None,
+) -> dict:
     """Fetch one page of an author's works from OpenAlex.
 
     Mirrors ``fetch_works_for_author`` but returns one cursor-paged batch
@@ -318,7 +320,7 @@ def fetch_works_page_for_author(
         return {"results": [], "next_cursor": None, "total": None, "error": str(exc)}
 
     batch = data.get("results", []) or []
-    results: List[Dict] = []
+    results: list[dict] = []
     for w in batch:
         title = (w or {}).get("display_name") or ""
         if _looks_like_file_title(title):
@@ -360,7 +362,7 @@ _AUTHOR_PROFILE_SELECT_FIELDS = ",".join([
 ])
 
 
-def _shape_author_profile(data: Dict) -> Dict:
+def _shape_author_profile(data: dict) -> dict:
     """Reshape a raw OpenAlex `/authors/{id}` JSON dict into the curated
     profile shape that callers consume.
 
@@ -410,8 +412,8 @@ def _shape_author_profile(data: Dict) -> Dict:
 
 def fetch_author_profile(
     author_openalex_id: str,
-    mailto: Optional[str] = None,
-) -> Optional[Dict]:
+    mailto: str | None = None,
+) -> dict | None:
     """Fetch full author profile from OpenAlex.
 
     Returns dict with: display_name, affiliation, citedby, h_index, interests/topics,
@@ -434,8 +436,8 @@ def batch_get_author_profiles(
     openalex_author_ids: list[str],
     batch_size: int = 50,
     max_workers: int = 4,
-    mailto: Optional[str] = None,
-) -> Dict[str, Dict]:
+    mailto: str | None = None,
+) -> dict[str, dict]:
     """Batched form of `fetch_author_profile`.
 
     Uses ``GET /authors?filter=openalex_id:A1|A2|...&select=...`` to
@@ -461,9 +463,9 @@ def batch_get_author_profiles(
     max_workers = max(1, int(max_workers or 1))
     chunks = [raw_ids[i : i + batch_size] for i in range(0, len(raw_ids), batch_size)]
 
-    def _fetch_chunk(chunk_idx: int, chunk_ids: list[str]) -> Dict[str, Dict]:
+    def _fetch_chunk(chunk_idx: int, chunk_ids: list[str]) -> dict[str, dict]:
         """Fetch one pipe-filter chunk; halves on 400 / 414 (URL too long)."""
-        def _request(ids: list[str]) -> Dict[str, Dict]:
+        def _request(ids: list[str]) -> dict[str, dict]:
             pipe_filter = "openalex_id:" + "|".join(
                 f"https://openalex.org/{aid}" for aid in ids
             )
@@ -481,7 +483,7 @@ def batch_get_author_profiles(
                 logger.warning("Batch profile fetch errored for chunk %d: %s", chunk_idx, exc)
                 return {}
             if resp.status_code == 200:
-                out: Dict[str, Dict] = {}
+                out: dict[str, dict] = {}
                 for item in (resp.json() or {}).get("results") or []:
                     aid_raw = (item.get("id") or "").strip()
                     if not aid_raw:
@@ -516,8 +518,8 @@ def batch_get_author_profiles(
 
 def get_author_metrics(
     author_openalex_id: str,
-    mailto: Optional[str] = None,
-) -> Optional[Dict[str, object]]:
+    mailto: str | None = None,
+) -> dict[str, object] | None:
     """Fetch summary metrics for an author from OpenAlex.
 
     Retrieves `works_count`, `cited_by_count`, and `summary_stats` (e.g., `h_index`)
@@ -561,7 +563,7 @@ def get_author_metrics(
         return None
 
 
-def _decode_abstract(inv_index: Optional[Dict[str, List[int]]]) -> Optional[str]:
+def _decode_abstract(inv_index: dict[str, list[int]] | None) -> str | None:
     # OpenAlex stores abstracts as inverted indices; reconstruct string
     if not inv_index:
         return None
@@ -581,7 +583,6 @@ def _looks_like_file_title(title: str) -> bool:
     if not title:
         return False
     t = title.strip().lower()
-    import re
     # Typical file extensions
     if re.search(r"\.(zip|tar|tar\.gz|gz|bz2|7z|rar|mat|csv|tsv|xlsx|xls|docx?|pptx?|txt)$", t):
         return True
@@ -612,7 +613,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         ) from e
 
 
-def _upsert_topics(conn: sqlite3.Connection, paper_id: str, topics: List[Dict]) -> None:
+def _upsert_topics(conn: sqlite3.Connection, paper_id: str, topics: list[dict]) -> None:
     """Replace topic rows for a paper (v3 schema).
 
     When canonical topic dedup data is available (``topic_aliases`` table),
@@ -661,7 +662,7 @@ def _upsert_topics(conn: sqlite3.Connection, paper_id: str, topics: List[Dict]) 
         logger.warning("Failed to upsert topics for paper %s: %s", paper_id, e)
 
 
-def _upsert_institutions(conn: sqlite3.Connection, paper_id: str, institutions: List[Dict]) -> None:
+def _upsert_institutions(conn: sqlite3.Connection, paper_id: str, institutions: list[dict]) -> None:
     """Replace institution rows for a paper (v3 schema)."""
     if not institutions:
         return
@@ -692,7 +693,7 @@ def _upsert_institutions(conn: sqlite3.Connection, paper_id: str, institutions: 
 def _upsert_referenced_works(
     conn: sqlite3.Connection,
     paper_id: str,
-    referenced_work_ids: List[str],
+    referenced_work_ids: list[str],
 ) -> int:
     """Replace local reference rows for one paper.
 
@@ -731,7 +732,7 @@ def _upsert_referenced_works(
 def _upsert_authorships(
     conn: sqlite3.Connection,
     paper_id: str,
-    authorships: List[Dict],
+    authorships: list[dict],
 ) -> int:
     """Replace structured authorship rows for one paper."""
     if not paper_id:
@@ -769,10 +770,10 @@ def upsert_work_sidecars(
     conn: sqlite3.Connection,
     paper_id: str,
     *,
-    topics: Optional[List[Dict]] = None,
-    institutions: Optional[List[Dict]] = None,
-    authorships: Optional[List[Dict]] = None,
-    referenced_works: Optional[List[str]] = None,
+    topics: list[dict] | None = None,
+    institutions: list[dict] | None = None,
+    authorships: list[dict] | None = None,
+    referenced_works: list[str] | None = None,
 ) -> dict[str, int]:
     """Persist structured per-paper enrichment sidecars when available."""
     summary = {
@@ -794,7 +795,7 @@ def upsert_work_sidecars(
     return summary
 
 
-def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
+def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
     """Upsert a single paper (v3 schema). Returns paper_id (UUID) if successful.
 
     Collision-safe since 2026-04-24: resolves existing rows via the canonical
@@ -804,7 +805,6 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     IntegrityError so a single collision doesn't abort multi-hour jobs.
     """
     import uuid
-    from datetime import datetime
 
     from alma.core.utils import clean_display_text, normalize_doi, resolve_existing_paper_id
 
@@ -980,13 +980,13 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: Dict) -> Optional[str]:
     return paper_id
 
 
-def upsert_one_normalized_work(conn: sqlite3.Connection, work: Dict) -> Optional[str]:
+def upsert_one_normalized_work(conn: sqlite3.Connection, work: dict) -> str | None:
     """Upsert one already-normalized work into an open SQLite connection."""
     _ensure_schema(conn)
     return _upsert_single_paper(conn, work)
 
 
-def upsert_papers(works: Iterable[Dict], db_path: Path = Path("./data/scholar.db")) -> int:
+def upsert_papers(works: Iterable[dict], db_path: Path = Path("./data/scholar.db")) -> int:
     """Insert/replace works into papers DB (v3 schema).
 
     Args:
@@ -1008,8 +1008,8 @@ def upsert_papers(works: Iterable[Dict], db_path: Path = Path("./data/scholar.db
 
 def _get_author_details(
     openalex_author_id: str,
-    mailto: Optional[str] = None,
-) -> Optional[Dict[str, object]]:
+    mailto: str | None = None,
+) -> dict[str, object] | None:
     """Fetch minimal details for an OpenAlex author (display_name, orcid, last_known_institution).
 
     Returns None on failure.
@@ -1229,7 +1229,7 @@ def batch_get_author_details(
     return result
 
 
-def get_author_details_singleton(author_openalex_id: str) -> Optional[dict]:
+def get_author_details_singleton(author_openalex_id: str) -> dict | None:
     """Fetch ONE author's normalized detail dict via the free singleton
     endpoint (``GET /authors/{id}``, $0) — same shape as one entry of
     `batch_get_author_details`'s result. The right call for per-author
@@ -1309,7 +1309,7 @@ def batch_fetch_recent_works_for_authors(
     # upsert only persists minimal metadata and "No abstract available" shows
     # up on every feed card. Adding these fields stays within OpenAlex's
     # free tier — it just widens the select on the same request.
-    _DISCOVERY_SELECT = (
+    discovery_select = (
         "id,doi,display_name,authorships,primary_location,"
         "publication_year,publication_date,cited_by_count,"
         "abstract_inverted_index,topics,concepts,keywords,"
@@ -1339,7 +1339,7 @@ def batch_fetch_recent_works_for_authors(
                         "sort": "publication_date:desc",
                         "per-page": 100,
                         "cursor": cursor,
-                        "select": _DISCOVERY_SELECT,
+                        "select": discovery_select,
                     },
                     timeout=30,
                 )
@@ -1957,8 +1957,8 @@ def materialize_missing_referenced_works(
 
 def resolve_openalex_candidates_from_scholar(
     scholar_id: str,
-    mailto: Optional[str] = None,
-) -> List[Dict[str, object]]:
+    mailto: str | None = None,
+) -> list[dict[str, object]]:
     """Resolve OpenAlex author candidates using Google Scholar metadata (name, affiliation, and one work).
 
     Strategy:
@@ -1973,7 +1973,7 @@ def resolve_openalex_candidates_from_scholar(
     name = None
     affiliation = None
     sample_title = None
-    candidates: Dict[str, Dict[str, object]] = {}
+    candidates: dict[str, dict[str, object]] = {}
 
     # Step 1: fetch from Scholar
     try:
@@ -2102,7 +2102,7 @@ def resolve_openalex_candidates_from_scholar(
         except Exception as e:
             logger.warning(f"OpenAlex author search failed for '{name}': {e}")
 
-    out: List[Dict[str, object]] = []
+    out: list[dict[str, object]] = []
     for aid, cand in candidates.items():
         if not cand.get("orcid") or not cand.get("institution"):
             try:
@@ -2233,7 +2233,7 @@ def fetch_referenced_works_for_openalex_id(
     ]
 
 
-def _normalize_work(w: Dict) -> Dict:
+def _normalize_work(w: dict) -> dict:
     """Normalize a raw OpenAlex work dict into a standard internal format.
 
     Extracts title, authors, year, abstract, citations, journal, doi, url,
@@ -2404,11 +2404,11 @@ def _normalize_work(w: Dict) -> Dict:
 
 def resolve_openalex_candidates_from_metadata(
     author_name: str,
-    sample_titles: List[str],
+    sample_titles: list[str],
     per_title: int = 5,
-    prefetched_title_results: Optional[Dict[str, List[Dict[str, object]]]] = None,
-    prefetched_author_details: Optional[Dict[str, Dict[str, object]]] = None,
-) -> List[Dict[str, object]]:
+    prefetched_title_results: dict[str, list[dict[str, object]]] | None = None,
+    prefetched_author_details: dict[str, dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
     """Resolve OpenAlex author candidates from local author name + paper titles."""
     name = (author_name or "").strip()
     titles = [t.strip() for t in (sample_titles or []) if (t or "").strip()][:3]
@@ -2449,11 +2449,11 @@ def resolve_openalex_candidates_from_metadata(
             return 0.7
         return 0.55
 
-    candidates: Dict[str, Dict[str, object]] = {}
+    candidates: dict[str, dict[str, object]] = {}
     try:
         client = None
         for title in titles:
-            works: List[Dict[str, object]] = []
+            works: list[dict[str, object]] = []
             if prefetched_title_results is not None:
                 works = prefetched_title_results.get(title) or []
             else:
@@ -2477,7 +2477,7 @@ def resolve_openalex_candidates_from_metadata(
                 if sim < 0.55:
                     continue
                 title_points = max(1.0, round(sim * 6, 2))
-                cites = int((work.get("cited_by_count") or 0))
+                cites = int(work.get("cited_by_count") or 0)
                 cite_points = min(2.0, cites / 400.0)
                 for auth in (work.get("authorships") or []):
                     author = (auth or {}).get("author") or {}

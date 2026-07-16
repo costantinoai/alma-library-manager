@@ -7,6 +7,8 @@ gracefully when numpy is unavailable.
 
 from __future__ import annotations
 
+import sqlite3
+
 from alma.core.components import not_component_sql
 from alma.discovery import similarity as sim_module
 
@@ -48,7 +50,7 @@ def _retrieve_vector_channel(
         return []
 
     from alma.core.vector_blob import decode_vector
-    seed_vecs: list["np.ndarray"] = []
+    seed_vecs: list[np.ndarray] = []
     for row in seed_rows:
         try:
             vec = decode_vector(row["embedding"])

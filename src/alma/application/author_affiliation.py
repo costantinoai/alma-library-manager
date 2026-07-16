@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-
 _NAME_RE = re.compile(r"[^a-z0-9]+")
 
 

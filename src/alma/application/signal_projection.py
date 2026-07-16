@@ -12,15 +12,17 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
 from alma.core.keywords import parse_keywords
-from alma.core.scoring_math import age_decay, clamp as _clamp, days_since as _days_since
+from alma.core.scoring_math import age_decay
+from alma.core.scoring_math import clamp as _clamp
+from alma.core.scoring_math import days_since as _days_since
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.topics import DEFAULT_TOPIC_SCORE, topic_relevance
-
 
 _POSITIVE_ACTIONS = {
     "add",

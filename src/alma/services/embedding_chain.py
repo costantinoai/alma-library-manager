@@ -44,7 +44,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from alma.core.job_envelope import target_scoped_operation_key
 from alma.core.sql_helpers import standalone_paper_sql
@@ -90,7 +91,7 @@ def _new_chain_id() -> str:
     return uuid.uuid4().hex[:10]
 
 
-def chain_trigger_reason(parent_trigger_source: Optional[str], default: str) -> str:
+def chain_trigger_reason(parent_trigger_source: str | None, default: str) -> str:
     """Pick the ``trigger_reason`` for a chain hop scheduled from a parent run.
 
     Keeps the onboarding-complete kick USER-FACING end-to-end: when the
@@ -296,8 +297,8 @@ def _schedule_with_envelope(
     trigger_source: str,
     queued_message: str,
     runner_factory: Callable[[str], Callable[..., Any]],
-    log_data: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
+    log_data: dict[str, Any] | None = None,
+) -> str | None:
     """Chain-coordinator wrapper around :func:`core.job_envelope.schedule_with_envelope`.
 
     Always stamps ``chain_id`` / ``chain_step`` on the Activity row and
@@ -322,7 +323,7 @@ def _schedule_with_envelope(
 def schedule_post_hydration_chain(
     conn: sqlite3.Connection,
     *,
-    chain_id: Optional[str] = None,
+    chain_id: str | None = None,
     trigger_reason: str = "post_hydration",
     limit: int | None = None,
     target_paper_ids: list[str] | tuple[str, ...] | None = None,
@@ -403,7 +404,7 @@ def schedule_post_hydration_chain(
 def schedule_post_s2_chain(
     conn: sqlite3.Connection,
     *,
-    chain_id: Optional[str] = None,
+    chain_id: str | None = None,
     trigger_reason: str = "post_s2_fetch",
     limit: int | None = None,
     target_paper_ids: list[str] | tuple[str, ...] | None = None,

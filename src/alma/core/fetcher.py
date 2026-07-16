@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Google Scholar fetcher module.
 
 IMPORTANT: All path resolution uses alma.config module.
@@ -8,23 +7,23 @@ Do not add hardcoded paths here.
 @author: costantino_ai
 """
 
+import logging
 import os
 import platform
 import sqlite3
-from scholarly import scholarly
-import logging
+import threading
 import time
 from concurrent.futures import as_completed
 
-from alma.core.concurrency import bounded_thread_pool
-import threading
+from scholarly import scholarly
 from tqdm import tqdm
 
+from alma.core.concurrency import bounded_thread_pool
 from alma.core.database import (
     clean_pubs,
-    get_authors_json,
     convert_json_to_tuple,
     ensure_output_folder,
+    get_authors_json,
 )
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import generate_paper_id
@@ -443,7 +442,7 @@ def save_updated_cache(
         # Commit every N papers so a collision on pub 350 of 400 doesn't
         # roll back the previous 349 upserts. Consolidated Phase B
         # 2026-04-24 — previously this whole loop ran under one transaction.
-        _COMMIT_BATCH = 25
+        commit_batch = 25
         processed = 0
 
         for pub in fetched_pubs:
@@ -535,7 +534,7 @@ def save_updated_cache(
             )
 
             processed += 1
-            if processed % _COMMIT_BATCH == 0:
+            if processed % commit_batch == 0:
                 conn.commit()
 
         conn.commit()

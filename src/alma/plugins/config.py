@@ -4,11 +4,11 @@ This module provides utilities for loading and managing plugin configurations
 from various sources (files, environment variables, etc.).
 """
 
-import json
 import configparser
+import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,8 @@ class PluginConfigLoader:
     def load_from_ini(
         file_path: str,
         section: str = "slack",
-        required_keys: Optional[list] = None
-    ) -> Dict[str, Any]:
+        required_keys: list | None = None
+    ) -> dict[str, Any]:
         """Load configuration from an INI/config file.
 
         Args:
@@ -74,8 +74,8 @@ class PluginConfigLoader:
     @staticmethod
     def load_from_json(
         file_path: str,
-        required_keys: Optional[list] = None
-    ) -> Dict[str, Any]:
+        required_keys: list | None = None
+    ) -> dict[str, Any]:
         """Load configuration from a JSON file.
 
         Args:
@@ -94,7 +94,7 @@ class PluginConfigLoader:
         if not path.exists():
             raise FileNotFoundError(f"Config file not found: {file_path}")
 
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             config_dict = json.load(f)
 
         # Validate required keys
@@ -110,7 +110,7 @@ class PluginConfigLoader:
 
     @staticmethod
     def save_to_ini(
-        config: Dict[str, Any],
+        config: dict[str, Any],
         file_path: str,
         section: str = "slack"
     ) -> None:
@@ -134,7 +134,7 @@ class PluginConfigLoader:
 
     @staticmethod
     def save_to_json(
-        config: Dict[str, Any],
+        config: dict[str, Any],
         file_path: str,
         indent: int = 2
     ) -> None:
@@ -154,7 +154,7 @@ class PluginConfigLoader:
         logger.info(f"Saved config to {file_path}")
 
 
-def load_slack_config_from_file(file_path: str = "./config/slack.config") -> Dict[str, Any]:
+def load_slack_config_from_file(file_path: str = "./config/slack.config") -> dict[str, Any]:
     """Convenience function to load Slack configuration.
 
     This helper mirrors legacy loading behavior while returning a plugin-friendly schema.
@@ -225,7 +225,7 @@ def create_plugin_config_template(plugin_name: str, output_file: str) -> None:
     logger.info(f"Created config template: {output_file}")
 
 
-def load_plugin_config(plugin_name: str) -> Optional[Dict[str, Any]]:
+def load_plugin_config(plugin_name: str) -> dict[str, Any] | None:
     """Load configuration for a specific plugin.
 
     Attempts to load configuration from multiple sources:
@@ -282,7 +282,7 @@ def load_plugin_config(plugin_name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def save_plugin_config(plugin_name: str, config: Dict[str, Any]) -> None:
+def save_plugin_config(plugin_name: str, config: dict[str, Any]) -> None:
     """Save configuration for a specific plugin.
 
     Saves configuration to JSON format: ./config/{plugin_name}.json
@@ -304,4 +304,4 @@ def save_plugin_config(plugin_name: str, config: Dict[str, Any]) -> None:
 
 
 # Backward compatibility alias
-    
+

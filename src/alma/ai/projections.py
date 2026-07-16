@@ -1,11 +1,11 @@
 """2D projection of publication embeddings for visualization."""
 
-from collections import defaultdict
 import json
 import logging
 import math
 import sqlite3
-from typing import Any, Optional
+from collections import defaultdict
+from typing import Any
 
 import numpy as np
 
@@ -126,7 +126,7 @@ def fuse_layout(
     bib_pairs: dict[tuple[str, str], int],
     *,
     weights: dict[str, float],
-    init_coords: Optional[dict[str, tuple[float, float]]] = None,
+    init_coords: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, tuple[float, float]]:
     """PROTOTYPE multi-view layout (task 19) — fuse several relationship signals
     into ONE 2-D layout so the *geometry* reflects the chosen blend.
@@ -160,12 +160,16 @@ def fuse_layout(
         w_sem = 1.0  # all-zero is degenerate → pure semantic
 
     idx = {pid: i for i, pid in enumerate(ids)}
-    X = np.asarray([embeddings[pid] for pid in ids], dtype=np.float64)
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
+    matrix = np.asarray([embeddings[pid] for pid in ids], dtype=np.float64)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
-    Xn = X / norms
+    normalized = matrix / norms
     # Semantic distance in [0, 1] (cosine sim → distance).
-    d_sem = np.clip((1.0 - np.clip(Xn @ Xn.T, -1.0, 1.0)) / 2.0, 0.0, 1.0)
+    d_sem = np.clip(
+        (1.0 - np.clip(normalized @ normalized.T, -1.0, 1.0)) / 2.0,
+        0.0,
+        1.0,
+    )
 
     def _pair_distance(pairs: dict[tuple[str, str], int]) -> np.ndarray:
         # Affinity (shared count, normalized to the strongest pair) → distance.
@@ -252,7 +256,7 @@ def build_coauthor_network(
     *,
     scope: str = "library",
     cluster_resolution: float = 1.0,
-    layout_weights: Optional[dict[str, float]] = None,
+    layout_weights: dict[str, float] | None = None,
 ) -> dict:
     """Build a multi-signal "research neighbourhood" author network (I-11).
 
@@ -710,6 +714,7 @@ def _author_mean_embeddings(
     # float32 rows because byte length is exactly 2× there), then
     # decode each blob with `expected_dim` so legacy rows auto-rescue.
     from collections import Counter
+
     from alma.core.vector_blob import decode_vector
 
     pairs: list[tuple[str, bytes]] = []

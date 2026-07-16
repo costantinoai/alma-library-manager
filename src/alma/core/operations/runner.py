@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, Callable
 import uuid
+from collections.abc import Callable
+from typing import Any
 
 from .activity import persist_operation_log, persist_operation_status
 from .models import OperationContext, OperationOutcome, utc_now_iso
-
 
 OperationCallable = Callable[[OperationContext], dict[str, Any] | OperationOutcome | None]
 

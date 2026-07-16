@@ -5,7 +5,6 @@ pattern used across API route files.
 """
 
 import logging
-from typing import Optional
 
 from alma.plugins.config import load_plugin_config
 from alma.plugins.registry import PluginRegistry, get_global_registry
@@ -13,7 +12,7 @@ from alma.plugins.registry import PluginRegistry, get_global_registry
 logger = logging.getLogger(__name__)
 
 
-def get_slack_plugin(registry: Optional[PluginRegistry] = None, required: bool = True):
+def get_slack_plugin(registry: PluginRegistry | None = None, required: bool = True):
     """Load, register (if needed), and return a configured Slack plugin instance.
 
     Args:

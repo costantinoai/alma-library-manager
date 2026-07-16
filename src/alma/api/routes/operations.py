@@ -1,41 +1,45 @@
 """Operational API endpoints for bulk fetch/update actions."""
 
+import hashlib
 import logging
 import sqlite3
 import uuid
-import hashlib
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
-from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from alma.api.deps import get_current_user, get_db, open_db_connection
-from alma.api.deps import _data_dir, _db_path  # internal helpers for path resolution
-from alma.plugins.registry import get_global_registry
-from alma.plugins.slack import SlackPlugin
-from alma.plugins.config import load_plugin_config
-from alma.plugins.base import Publication
-from alma.plugins.helpers import get_slack_plugin
-from alma.core.backend import fetch_from_json, fetch_publications_by_id, _settings as _fb_settings
-from alma.config import get_fetch_year
+from alma.api.deps import (  # internal helpers for path resolution
+    _data_dir,
+    _db_path,
+    get_current_user,
+    get_db,
+    open_db_connection,
+)
+from alma.api.helpers import raise_internal
+from alma.api.models import JobCreate, JobResponse, SavePublicationsRequest, SendPublicationsRequest
 from alma.api.scheduler import (
     activity_envelope,
     add_cron_job,
+    add_job_log,
+    find_active_job,
+    is_cancellation_requested,
     list_jobs,
     remove_job,
     run_job,
     schedule_immediate,
     set_job_status,
-    find_active_job,
-    is_cancellation_requested,
-    add_job_log,
 )
-from alma.api.models import JobCreate, JobResponse, SendPublicationsRequest, SavePublicationsRequest
+from alma.config import get_fetch_year
+from alma.core.backend import _settings as _fb_settings
+from alma.core.backend import fetch_from_json, fetch_publications_by_id
 from alma.core.utils import derive_source_id, to_publication_dataclass
-from alma.api.helpers import raise_internal
-import os
-from pathlib import Path
+from alma.plugins.base import Publication
+from alma.plugins.config import load_plugin_config
+from alma.plugins.helpers import get_slack_plugin
+from alma.plugins.registry import get_global_registry
+from alma.plugins.slack import SlackPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +104,6 @@ def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = No
         processed += 1
         if job_id:
             try:
-                from alma.api.scheduler import set_job_status  # local import to avoid cycles
                 set_job_status(job_id, status="running", processed=processed, total=len(authors), current_author=author_name)
             except Exception:
                 pass
@@ -155,7 +158,6 @@ def do_fetch_and_send_all_progress(job_id: str | None = None) -> dict:
         processed += 1
         if job_id:
             try:
-                from alma.api.scheduler import set_job_status
                 set_job_status(job_id, status="running", processed=processed, total=total, current_author=author_name)
             except Exception:
                 pass
@@ -377,6 +379,7 @@ def save_preview_publications_bulk(
     def _runner():
         from collections import defaultdict
         from pathlib import Path as _Path
+
         from alma.openalex.client import upsert_papers as _upsert
 
         try:
@@ -490,7 +493,7 @@ def send_publications(req: SendPublicationsRequest):
         else:
             raise HTTPException(status_code=404, detail=f"Plugin '{plugin_name}' not available")
 
-    publications: List[Publication] = [
+    publications: list[Publication] = [
         Publication(
             title=it.title,
             authors=it.authors or "",
@@ -703,7 +706,6 @@ def do_fetch_and_send_all() -> dict:
     plugin, config = get_slack_plugin(required=True)
 
     # Fetch publications for all authors (use the configured data dir)
-    data_base = _data_dir()
     args = SimpleNamespace(authors_path=_db_path(), update_cache=False, test_fetching=False)
     result = fetch_from_json(args)
     if not result:

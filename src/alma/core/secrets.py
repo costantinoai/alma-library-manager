@@ -11,7 +11,6 @@ import os
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +108,7 @@ def _write_store(data: dict[str, str]) -> None:
         pass
 
 
-def get_secret(secret_key: str) -> Optional[str]:
+def get_secret(secret_key: str) -> str | None:
     """Read a namespaced secret."""
     key = (secret_key or "").strip()
     if not key:
@@ -150,7 +149,7 @@ def delete_secret(secret_key: str) -> None:
             _write_store(data)
 
 
-def mask_secret(value: Optional[str], prefix: int = 0, suffix: int = 4) -> Optional[str]:
+def mask_secret(value: str | None, prefix: int = 0, suffix: int = 4) -> str | None:
     """Return a masked representation for UI responses."""
     if not value:
         return None
@@ -167,7 +166,7 @@ def mask_secret(value: Optional[str], prefix: int = 0, suffix: int = 4) -> Optio
 def bootstrap_secret_store(conn: sqlite3.Connection) -> None:
     """One-time migration from legacy plaintext secret locations."""
     try:
-        from alma.config import get_all_settings, delete_settings_keys
+        from alma.config import delete_settings_keys, get_all_settings
     except Exception:
         return
 

@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Optional
 
 from alma.application.preprint_dedup import classify_preprint_source
 from alma.core.utils import normalize_doi
@@ -47,7 +46,7 @@ _BIORXIV_URL_RE = re.compile(
 )
 
 
-def _arxiv_id_from_doi(doi: Optional[str]) -> Optional[str]:
+def _arxiv_id_from_doi(doi: str | None) -> str | None:
     """Extract the bare arXiv id from a `10.48550/arXiv.<id>` DOI, else None."""
     if classify_preprint_source(doi) != "arxiv":
         return None
@@ -56,7 +55,7 @@ def _arxiv_id_from_doi(doi: Optional[str]) -> Optional[str]:
     return rest or None
 
 
-def _arxiv_id_from_url(url: str) -> Optional[str]:
+def _arxiv_id_from_url(url: str) -> str | None:
     """Extract the arXiv id from an `arxiv.org/abs|pdf/<id>` URL, else None."""
     match = _ARXIV_URL_RE.search(url or "")
     if not match:
@@ -67,7 +66,7 @@ def _arxiv_id_from_url(url: str) -> Optional[str]:
     return raw.strip("/") or None
 
 
-def _biorxiv_ref_from_url(url: str) -> Optional[tuple[str, str]]:
+def _biorxiv_ref_from_url(url: str) -> tuple[str, str] | None:
     """Extract `(server, doi)` from a bioRxiv/medRxiv content URL, else None."""
     match = _BIORXIV_URL_RE.search(url or "")
     if not match:
@@ -81,7 +80,7 @@ def _biorxiv_ref_from_url(url: str) -> Optional[tuple[str, str]]:
     return (server, doi)
 
 
-def _arxiv_id_from_identifiers(doi: Optional[str], urls: list[str]) -> Optional[str]:
+def _arxiv_id_from_identifiers(doi: str | None, urls: list[str]) -> str | None:
     """First arXiv id found across the DOI and the OA URLs."""
     from_doi = _arxiv_id_from_doi(doi)
     if from_doi:
@@ -94,8 +93,8 @@ def _arxiv_id_from_identifiers(doi: Optional[str], urls: list[str]) -> Optional[
 
 
 def _biorxiv_ref_from_identifiers(
-    doi: Optional[str], urls: list[str]
-) -> Optional[tuple[Optional[str], str]]:
+    doi: str | None, urls: list[str]
+) -> tuple[str | None, str] | None:
     """First `(server, doi)` bioRxiv/medRxiv ref across the DOI and OA URLs.
 
     A bare `10.1101/*` DOI doesn't reveal the server (both share the
@@ -115,10 +114,10 @@ def _biorxiv_ref_from_identifiers(
 
 def recover_preprint_abstract(
     *,
-    title: Optional[str],
-    year: Optional[int],
-    doi: Optional[str],
-    urls: Optional[list[str]] = None,
+    title: str | None,
+    year: int | None,
+    doi: str | None,
+    urls: list[str] | None = None,
 ) -> tuple[str, str]:
     """Recover a missing abstract from the paper's preprint twin.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.http_sources import get_source_http_client
@@ -244,7 +244,7 @@ def fetch_authors_batch(
     return out
 
 
-def _s2_to_candidate(paper: dict, score: float = 0.5) -> Optional[dict]:
+def _s2_to_candidate(paper: dict, score: float = 0.5) -> dict | None:
     """Convert a Semantic Scholar paper dict to the ALMa candidate format.
 
     Returns ``None`` when the paper lacks a title (skip silently).
@@ -317,8 +317,8 @@ def search_papers(
     limit: int = 20,
     *,
     raise_on_rate_limit: bool = False,
-    max_retries: Optional[int] = None,
-) -> List[dict]:
+    max_retries: int | None = None,
+) -> list[dict]:
     """Search Semantic Scholar by free-text query.
 
     Args:
@@ -370,7 +370,7 @@ def search_papers(
             return []
 
         papers = (resp.json() or {}).get("data") or []
-        results: List[dict] = []
+        results: list[dict] = []
         total = max(len(papers), 1)
         for i, p in enumerate(papers):
             score = rank_score(i, total)
@@ -391,10 +391,10 @@ def search_papers_bulk(
     *,
     limit: int = 20,
     from_year: int | None = None,
-    fields_of_study: Optional[list[str]] = None,
-    publication_types: Optional[list[str]] = None,
+    fields_of_study: list[str] | None = None,
+    publication_types: list[str] | None = None,
     open_access_pdf: bool = False,
-) -> List[dict]:
+) -> list[dict]:
     """Search Semantic Scholar using the bulk search endpoint.
 
     This path is intended for monitor refreshes and other non-interactive
@@ -466,7 +466,7 @@ def search_papers_bulk(
             ],
             fields=FIELDS,
         )
-        filtered: List[dict] = []
+        filtered: list[dict] = []
         total = max(len(papers), 1)
         for i, paper in enumerate(papers):
             paper_id = str((paper or {}).get("paperId") or "").strip()
@@ -489,7 +489,7 @@ def search_papers_bulk(
         return search_papers(query, limit=limit)
 
 
-def fetch_related_papers(doi: str, limit: int = 20) -> List[dict]:
+def fetch_related_papers(doi: str, limit: int = 20) -> list[dict]:
     """Fetch papers that cite or are referenced by a paper identified by DOI.
 
     First resolves the DOI to a Semantic Scholar paper ID, then fetches
@@ -560,7 +560,7 @@ def fetch_related_papers(doi: str, limit: int = 20) -> List[dict]:
         return []
 
     hydrated = fetch_papers_batch([paper_id for paper_id, _ in relation_items], fields=FIELDS)
-    results: List[dict] = []
+    results: list[dict] = []
     seen: set[str] = set()
     for candidate_id, score in relation_items:
         paper = hydrated.get(candidate_id)
@@ -578,7 +578,7 @@ def recommend_for_paper(
     *,
     limit: int = 20,
     fields: str = FIELDS,
-) -> List[dict]:
+) -> list[dict]:
     """Call S2 `GET /recommendations/v1/papers/forpaper/{id}` (single-seed).
 
     ``seed_id`` may be a bare paperId, a `DOI:{doi}` string, a
@@ -610,7 +610,7 @@ def recommend_for_paper(
         logger.warning("Semantic Scholar recommend-for-paper failed: %s", exc)
         return []
 
-    results: List[dict] = []
+    results: list[dict] = []
     total = max(len(papers), 1)
     for idx, paper in enumerate(papers):
         score = rank_score(idx, total)
@@ -626,7 +626,7 @@ def recommend_from_seeds(
     *,
     limit: int = 50,
     fields: str = FIELDS,
-) -> List[dict]:
+) -> list[dict]:
     """Call S2 `POST /recommendations/v1/papers` with positive + negative seeds.
 
     Each seed id may be a bare S2 `paperId`, a `DOI:{doi}` string, a
@@ -673,7 +673,7 @@ def recommend_from_seeds(
         logger.warning("Semantic Scholar recommend-from-seeds failed: %s", exc)
         return []
 
-    results: List[dict] = []
+    results: list[dict] = []
     total = max(len(papers), 1)
     for idx, paper in enumerate(papers):
         # Rank-based descending score (same convention as search_papers);

@@ -33,10 +33,11 @@ import json
 import logging
 import sqlite3
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import Any, Callable, Optional
+from typing import Any
 
 from alma.core.db_write import commit_unless_gated, run_write_unit
 
@@ -137,7 +138,7 @@ def _compute_fingerprint(conn: sqlite3.Connection, view: View) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_row(conn: sqlite3.Connection, view_key: str) -> Optional[dict]:
+def _read_row(conn: sqlite3.Connection, view_key: str) -> dict | None:
     try:
         row = conn.execute(
             "SELECT view_key, fingerprint, payload, computed_at, compute_ms, "
@@ -175,8 +176,8 @@ def _write_row(
     payload: dict,
     compute_ms: int,
     build_status: str = "ok",
-    build_error: Optional[str] = None,
-    rebuild_job_id: Optional[str] = None,
+    build_error: str | None = None,
+    rebuild_job_id: str | None = None,
 ) -> None:
     conn.execute(
         """
@@ -212,7 +213,7 @@ def _write_row(
 def _set_rebuild_job_id(
     conn: sqlite3.Connection,
     view_key: str,
-    job_id: Optional[str],
+    job_id: str | None,
 ) -> None:
     """Record / clear the in-flight rebuild job id without disturbing payload."""
     try:
@@ -321,7 +322,7 @@ def rebuild(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     return _run_build(conn, view, fingerprint=fp)
 
 
-def enqueue_rebuild(view_key: str) -> Optional[str]:
+def enqueue_rebuild(view_key: str) -> str | None:
     """Schedule a rebuild of ``view_key`` to run in the background.
 
     Returns the scheduled ``job_id``, or ``None`` if a rebuild is
@@ -486,7 +487,7 @@ def _envelope(
     }
 
 
-def _decode_payload(raw: Any) -> Optional[dict]:
+def _decode_payload(raw: Any) -> dict | None:
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -546,7 +547,7 @@ def _has_active_job(view: View) -> bool:
 def _enqueue_rebuild_internal(
     conn: sqlite3.Connection,
     view: View,
-) -> Optional[str]:
+) -> str | None:
     """Schedule the rebuild via APScheduler with operation_key dedup.
 
     Returns the new job_id, or ``None`` if a rebuild is already running

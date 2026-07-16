@@ -7,8 +7,8 @@ across different platforms while maintaining platform-specific formatting.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -30,7 +30,7 @@ class Publication:
     abstract: str
     pub_url: str
     journal: str
-    citations: Optional[int] = None
+    citations: int | None = None
 
 
 @dataclass
@@ -70,7 +70,7 @@ class MessagingPlugin(ABC):
     5. Check health (via get_health_status)
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """Initialize the plugin with configuration.
 
         Args:
@@ -81,7 +81,7 @@ class MessagingPlugin(ABC):
         """
         self.config = config
         self._validate_config()
-        self._last_test: Optional[datetime] = None
+        self._last_test: datetime | None = None
         self._last_test_success: bool = False
 
     @abstractmethod
@@ -110,7 +110,7 @@ class MessagingPlugin(ABC):
         pass
 
     @abstractmethod
-    def format_publications(self, publications: List[Publication]) -> str:
+    def format_publications(self, publications: list[Publication]) -> str:
         """Format a list of publications for this platform.
 
         Args:
@@ -122,7 +122,7 @@ class MessagingPlugin(ABC):
         pass
 
     @abstractmethod
-    def format_authors(self, authors: List[Author]) -> str:
+    def format_authors(self, authors: list[Author]) -> str:
         """Format a list of authors for this platform.
 
         Args:
@@ -160,7 +160,7 @@ class MessagingPlugin(ABC):
         pass
 
     @abstractmethod
-    def get_config_schema(self) -> Dict[str, Any]:
+    def get_config_schema(self) -> dict[str, Any]:
         """Return JSON schema for plugin configuration.
 
         This schema is used by the GUI and API to provide configuration forms.
@@ -216,7 +216,7 @@ class MessagingPlugin(ABC):
 
     # Non-abstract helper methods
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """Get the current health status of the plugin.
 
         Returns:

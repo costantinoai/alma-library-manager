@@ -10,7 +10,6 @@ import re
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from alma.core.sql_helpers import canonical_paper_filter
 from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
@@ -190,13 +189,13 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
 # Paper CRUD
 # ============================================================================
 
-def get_paper(db: sqlite3.Connection, paper_id: str) -> Optional[dict]:
+def get_paper(db: sqlite3.Connection, paper_id: str) -> dict | None:
     """Get a paper by ID."""
     row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
     return dict(row) if row else None
 
 
-def get_paper_by_openalex_id(db: sqlite3.Connection, openalex_id: str) -> Optional[dict]:
+def get_paper_by_openalex_id(db: sqlite3.Connection, openalex_id: str) -> dict | None:
     """Get a paper by OpenAlex ID."""
     row = db.execute(
         "SELECT * FROM papers WHERE openalex_id = ?", (openalex_id,)
@@ -204,13 +203,13 @@ def get_paper_by_openalex_id(db: sqlite3.Connection, openalex_id: str) -> Option
     return dict(row) if row else None
 
 
-def get_paper_by_doi(db: sqlite3.Connection, doi: str) -> Optional[dict]:
+def get_paper_by_doi(db: sqlite3.Connection, doi: str) -> dict | None:
     """Get a paper by DOI."""
     row = db.execute("SELECT * FROM papers WHERE doi = ?", (doi,)).fetchone()
     return dict(row) if row else None
 
 
-def get_paper_by_semantic_scholar_id(db: sqlite3.Connection, semantic_scholar_id: str) -> Optional[dict]:
+def get_paper_by_semantic_scholar_id(db: sqlite3.Connection, semantic_scholar_id: str) -> dict | None:
     """Get a paper by Semantic Scholar paperId."""
     try:
         row = db.execute(
@@ -222,7 +221,7 @@ def get_paper_by_semantic_scholar_id(db: sqlite3.Connection, semantic_scholar_id
     return dict(row) if row else None
 
 
-def find_paper_by_title(db: sqlite3.Connection, title: str) -> Optional[dict]:
+def find_paper_by_title(db: sqlite3.Connection, title: str) -> dict | None:
     """Find a paper by exact title match."""
     row = db.execute("SELECT * FROM papers WHERE title = ?", (title,)).fetchone()
     return dict(row) if row else None
@@ -244,7 +243,7 @@ _AUTHOR_STOPWORDS = frozenset(
 )
 
 
-def _author_tokens(authors: Optional[str]) -> set[str]:
+def _author_tokens(authors: str | None) -> set[str]:
     text = str(authors or "").strip()
     if not text:
         return set()
@@ -255,7 +254,7 @@ def _author_tokens(authors: Optional[str]) -> set[str]:
     }
 
 
-def _authors_overlap(left: Optional[str], right: Optional[str]) -> bool:
+def _authors_overlap(left: str | None, right: str | None) -> bool:
     """Do two author strings plausibly name a shared author?
 
     Weak single-token matching (44.9) let a shared given name — or the literal
@@ -275,13 +274,13 @@ def _authors_overlap(left: Optional[str], right: Optional[str]) -> bool:
 def find_library_duplicate_for_metadata(
     db: sqlite3.Connection,
     *,
-    title: Optional[str],
-    authors: Optional[str] = None,
-    year: Optional[int] = None,
-    doi: Optional[str] = None,
-    openalex_id: Optional[str] = None,
-    exclude_id: Optional[str] = None,
-) -> Optional[str]:
+    title: str | None,
+    authors: str | None = None,
+    year: int | None = None,
+    doi: str | None = None,
+    openalex_id: str | None = None,
+    exclude_id: str | None = None,
+) -> str | None:
     """Return an existing saved Library row matching paper metadata.
 
     The canonical identity check delegates to ``resolve_existing_paper_id``.
@@ -340,7 +339,7 @@ def find_library_duplicate_for_metadata(
     return None
 
 
-def find_library_duplicate_for_paper(db: sqlite3.Connection, paper_id: str) -> Optional[str]:
+def find_library_duplicate_for_paper(db: sqlite3.Connection, paper_id: str) -> str | None:
     """Return an existing saved Library row that duplicates ``paper_id``."""
     paper = get_paper(db, paper_id)
     if not paper:
@@ -383,7 +382,7 @@ def mark_duplicate_paper_ignored(
     return cursor.rowcount > 0
 
 
-def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> Optional[dict]:
+def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> dict | None:
     """Promote a merged duplicate / part-of component back to a standalone paper.
 
     The single canonical "undo the subordination" op. A row is subordinate — and
@@ -641,9 +640,9 @@ def add_to_library(
     db: sqlite3.Connection,
     paper_id: str,
     rating: int = DEFAULT_LIBRARY_RATING,
-    notes: Optional[str] = None,
+    notes: str | None = None,
     added_from: str = "manual",
-    default_reading_status: Optional[str] = None,
+    default_reading_status: str | None = None,
     override_added_from: bool = False,
 ) -> bool:
     """Move a paper to library status.
@@ -1039,12 +1038,12 @@ def undo_paper_feedback(
 def list_papers(
     db: sqlite3.Connection,
     *,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    year: Optional[int] = None,
-    min_year: Optional[int] = None,
-    max_year: Optional[int] = None,
-    min_citations: Optional[int] = None,
+    status: str | None = None,
+    search: str | None = None,
+    year: int | None = None,
+    min_year: int | None = None,
+    max_year: int | None = None,
+    min_citations: int | None = None,
     order: str = "citations",
     limit: int = 100,
     offset: int = 0,
@@ -1109,7 +1108,7 @@ def get_favorites(db: sqlite3.Connection, limit: int = 100) -> list[dict]:
 # ============================================================================
 
 def create_collection(
-    db: sqlite3.Connection, name: str, description: Optional[str] = None, color: str = "#3B82F6"
+    db: sqlite3.Connection, name: str, description: str | None = None, color: str = "#3B82F6"
 ) -> str:
     """Create a collection. Returns the collection ID."""
     coll_id = str(uuid.uuid4())
@@ -1126,7 +1125,7 @@ def find_or_create_collection(
     name: str,
     *,
     color: str = "#3B82F6",
-    description: Optional[str] = None,
+    description: str | None = None,
 ) -> str:
     """Return the id of the collection named ``name``, creating it if absent.
 
@@ -1190,7 +1189,7 @@ def insert_collection_item(
     collection_id: str,
     paper_id: str,
     *,
-    now: Optional[str] = None,
+    now: str | None = None,
     ignore_existing: bool = True,
 ) -> bool:
     """Single source of truth for the ``collection_items`` INSERT.
@@ -1210,6 +1209,44 @@ def insert_collection_item(
         (collection_id, paper_id, stamp),
     )
     return cursor.rowcount > 0
+
+
+def save_paper_to_collections(
+    db: sqlite3.Connection,
+    paper_id: str,
+    collection_ids: list[str],
+    *,
+    rating: int = DEFAULT_LIBRARY_RATING,
+    added_from: str = "collection_add",
+) -> list[str]:
+    """Atomically promote one paper and file it into selected collections.
+
+    Caller owns transaction. Every collection is validated before paper
+    mutation, preventing partial saves when one selected id is stale.
+    """
+    ids = list(dict.fromkeys(str(value or "").strip() for value in collection_ids))
+    ids = [value for value in ids if value]
+    if not ids:
+        raise ValueError("Choose at least one collection")
+    paper = db.execute("SELECT rating FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    if not paper:
+        raise ValueError("Paper not found")
+    placeholders = ",".join("?" for _ in ids)
+    found = {
+        str(row["id"])
+        for row in db.execute(
+            f"SELECT id FROM collections WHERE id IN ({placeholders})", ids
+        ).fetchall()
+    }
+    missing = [value for value in ids if value not in found]
+    if missing:
+        raise ValueError(f"Collection not found: {', '.join(missing)}")
+
+    effective_rating = max(int(paper["rating"] or 0), int(rating or DEFAULT_LIBRARY_RATING), 3)
+    add_to_library(db, paper_id, rating=effective_rating, added_from=added_from)
+    for collection_id in ids:
+        insert_collection_item(db, collection_id, paper_id)
+    return ids
 
 
 def add_to_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:

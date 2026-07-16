@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from alma.core.db_write import write_section
 from alma.core.sql_helpers import canonical_paper_filter
@@ -67,7 +67,7 @@ _YEAR_TOLERANCE = 2
 _TITLE_EXACT = 1.0
 
 
-def classify_preprint_source(doi: Optional[str]) -> Optional[str]:
+def classify_preprint_source(doi: str | None) -> str | None:
     """Return the preprint source tag for a DOI, or None for published journals."""
     if not doi:
         return None
@@ -84,7 +84,7 @@ def classify_preprint_source(doi: Optional[str]) -> Optional[str]:
 def find_preprint_twin_candidates(
     conn: sqlite3.Connection,
     *,
-    limit: Optional[int] = None,
+    limit: int | None = None,
     scope: str = "corpus",
 ) -> list[dict[str, Any]]:
     """Return candidate twin pairs to merge.
@@ -311,7 +311,7 @@ def merge_duplicate_paper_rows(
     loser_id: str,
     keeper_id: str,
     *,
-    reason: Optional[str] = None,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     """Soft-merge a duplicate paper row (``loser_id``) into its keeper.
 
@@ -491,8 +491,8 @@ def count_preprint_twins(conn: sqlite3.Connection, scope: str = "library") -> in
 def run_preprint_dedup(
     db_path: str,
     *,
-    ctx: Optional[Any] = None,
-    limit: Optional[int] = None,
+    ctx: Any | None = None,
+    limit: int | None = None,
     scope: str = "corpus",
 ) -> dict[str, Any]:
     """Activity-envelope runner: detect candidates + merge them per-pair.
@@ -622,8 +622,8 @@ def find_duplicate_identity_pairs(conn: sqlite3.Connection) -> list[dict[str, st
 def run_duplicate_identity_collapse(
     db_path: str,
     *,
-    ctx: Optional[Any] = None,
-    limit: Optional[int] = None,
+    ctx: Any | None = None,
+    limit: int | None = None,
 ) -> dict[str, Any]:
     """Activity-envelope runner: collapse the LEGACY duplicate-identity backlog.
 

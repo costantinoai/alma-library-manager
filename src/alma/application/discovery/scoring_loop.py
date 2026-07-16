@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from alma.application.outcome_calibration import (
     calibration_multiplier_for,
@@ -91,7 +91,7 @@ class ScoringAggregates:
     low_similarity_count: int
 
 
-def score_candidates(merged: dict, ctx: "ScoringContext") -> "ScoringAggregates":
+def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
     """Score every candidate in ``merged`` in place; return the aggregates.
 
     The loop body is a verbatim lift of the inline scoring pass that used to live

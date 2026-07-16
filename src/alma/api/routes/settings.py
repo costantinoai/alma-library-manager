@@ -26,31 +26,30 @@ Secret handling (2026-04-29; generalized to S2 2026-05-25):
 """
 
 import logging
-import json
 import os
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
 import requests
-import sqlite3
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
+from alma.api.deps import get_current_user
 from alma.config import (
     DEFAULT_SETTINGS,
     get_all_settings,
     get_db_path,
     get_openalex_api_key,
     get_semantic_scholar_api_key,
-    update_settings as config_update_settings,
-    delete_settings_keys as config_delete_settings_keys,
     reload_settings,
 )
-from alma.api.deps import get_current_user
-from alma.openalex.http import get_client as get_openalex_client, reset_client as reset_openalex_client
-from alma.slack.client import get_slack_notifier
-from alma.plugins.config import save_plugin_config
+from alma.config import (
+    delete_settings_keys as config_delete_settings_keys,
+)
+from alma.config import (
+    update_settings as config_update_settings,
+)
 from alma.core.http_sources import get_source_http_client
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
@@ -63,6 +62,10 @@ from alma.core.secrets import (
     mask_secret,
     set_secret,
 )
+from alma.openalex.http import get_client as get_openalex_client
+from alma.openalex.http import reset_client as reset_openalex_client
+from alma.plugins.config import save_plugin_config
+from alma.slack.client import get_slack_notifier
 
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
 _SEMANTIC_SCHOLAR_ENV_KEY = "SEMANTIC_SCHOLAR_API_KEY"
@@ -198,53 +201,53 @@ router = APIRouter(
 
 class SettingsModel(BaseModel):
     backend: str = Field("openalex", pattern="^(scholar|openalex)$", description="Publication backend")
-    openalex_email: Optional[str] = Field(None, description="Optional contact email sent with OpenAlex requests")
-    fetch_full_history: Optional[bool] = Field(False, description="Fetch full author history (OpenAlex)")
-    from_year: Optional[int] = Field(None, description="Fetch from this year onward; ignored if fetch_full_history is true")
-    api_call_delay: Optional[str] = Field("1.0", description="Legacy UI delay; kept for compatibility")
+    openalex_email: str | None = Field(None, description="Optional contact email sent with OpenAlex requests")
+    fetch_full_history: bool | None = Field(False, description="Fetch full author history (OpenAlex)")
+    from_year: int | None = Field(None, description="Fetch from this year onward; ignored if fetch_full_history is true")
+    api_call_delay: str | None = Field("1.0", description="Legacy UI delay; kept for compatibility")
     # Paths (exposed for convenience; prefer env-vars in production)
     # IMPORTANT: All paths MUST be relative (e.g., ./data/scholar.db)
-    database: Optional[str] = Field(None, description="Relative path to the unified scholar database")
-    slack_config_path: Optional[str] = Field(None, description="Relative path to Slack plugin config file (INI)")
+    database: str | None = Field(None, description="Relative path to the unified scholar database")
+    slack_config_path: str | None = Field(None, description="Relative path to Slack plugin config file (INI)")
     # Slack notification settings
-    slack_token: Optional[str] = Field(None, description="Slack Bot User OAuth Token")
-    slack_channel: Optional[str] = Field(None, description="Default Slack channel for notifications")
+    slack_token: str | None = Field(None, description="Slack Bot User OAuth Token")
+    slack_channel: str | None = Field(None, description="Default Slack channel for notifications")
     # Email / SMTP digest channel (sibling of Slack). Add "email" to an alert's
     # channels to receive digests here. Password lives in the secret store.
-    smtp_host: Optional[str] = Field(None, description="SMTP server host for email digests")
-    smtp_port: Optional[int] = Field(587, description="SMTP port (587 = STARTTLS, 465 = implicit TLS)")
-    smtp_username: Optional[str] = Field(None, description="SMTP auth username")
-    smtp_password: Optional[str] = Field(None, description="SMTP auth password (stored in the secret store)")
-    smtp_from: Optional[str] = Field(None, description="From address for digest emails")
-    smtp_to: Optional[str] = Field(None, description="Recipient list (comma / newline separated)")
-    smtp_use_tls: Optional[bool] = Field(True, description="Use STARTTLS (ignored on port 465)")
+    smtp_host: str | None = Field(None, description="SMTP server host for email digests")
+    smtp_port: int | None = Field(587, description="SMTP port (587 = STARTTLS, 465 = implicit TLS)")
+    smtp_username: str | None = Field(None, description="SMTP auth username")
+    smtp_password: str | None = Field(None, description="SMTP auth password (stored in the secret store)")
+    smtp_from: str | None = Field(None, description="From address for digest emails")
+    smtp_to: str | None = Field(None, description="Recipient list (comma / newline separated)")
+    smtp_use_tls: bool | None = Field(True, description="Use STARTTLS (ignored on port 465)")
     # OpenAlex API key — REQUIRED since 2026-02-13 (the email "polite pool"
     # was discontinued; keyless requests get 100 credits/day then HTTP 409).
-    openalex_api_key: Optional[str] = Field(None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)")
+    openalex_api_key: str | None = Field(None, description="OpenAlex API key (required — get one free at openalex.org/settings/api)")
     # Semantic Scholar API key — strongly recommended; without it S2 uses the
     # shared anonymous worldwide pool and 429s frequently (stalls Discovery).
-    semantic_scholar_api_key: Optional[str] = Field(None, description="Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)")
+    semantic_scholar_api_key: str | None = Field(None, description="Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)")
     # Identifier resolution strategy settings
-    id_resolution_semantic_scholar_enabled: Optional[bool] = Field(
+    id_resolution_semantic_scholar_enabled: bool | None = Field(
         True,
         description="Use Semantic Scholar API for Scholar ID resolution",
     )
-    id_resolution_orcid_enabled: Optional[bool] = Field(
+    id_resolution_orcid_enabled: bool | None = Field(
         True,
         description="Use ORCID public API researcher links for Scholar ID resolution",
     )
-    id_resolution_scholar_scrape_auto_enabled: Optional[bool] = Field(
+    id_resolution_scholar_scrape_auto_enabled: bool | None = Field(
         False,
         description="Allow automatic Google Scholar scraping fallback in pipelines",
     )
-    id_resolution_scholar_scrape_manual_enabled: Optional[bool] = Field(
+    id_resolution_scholar_scrape_manual_enabled: bool | None = Field(
         False,
         description="Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default — D14)",
     )
 
     @field_validator('database', 'slack_config_path')
     @classmethod
-    def validate_relative_path(cls, v: Optional[str]) -> Optional[str]:
+    def validate_relative_path(cls, v: str | None) -> str | None:
         """Ensure paths are relative, not absolute."""
         if v is not None and Path(v).is_absolute():
             raise ValueError(f"Path must be relative, got absolute path: {v}")

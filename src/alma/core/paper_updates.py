@@ -10,8 +10,9 @@ slightly different ``UPDATE papers SET ... CASE`` block.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from alma.core.utils import clean_display_text
 

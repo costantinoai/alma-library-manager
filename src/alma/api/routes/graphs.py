@@ -1,32 +1,32 @@
 """Graph visualization API endpoints."""
 
+import hashlib
 import json
 import logging
 import math
 import sqlite3
 import uuid
-import hashlib
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from alma.api.deps import get_current_user, get_db, open_db_connection
-from alma.api.helpers import table_exists
 from alma.ai.cooccurrence import cooccurrence_pairs
 from alma.ai.embedding_graph import CouplingSpec, build_typed_edges
-from alma.application import materialized_views as mv
 from alma.ai.graph_versions import (
     CLUSTERING_ALGO_VERSION,
     LABELLING_VERSION,
     PROJECTION_ALGO_VERSION,
     with_version,
 )
-from alma.config import get_db_path
+from alma.api.deps import get_current_user, get_db, open_db_connection
+from alma.api.helpers import table_exists
+from alma.application import materialized_views as mv
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
 from alma.core.sql_helpers import standalone_paper_sql
@@ -49,8 +49,8 @@ class GraphNode(BaseModel):
     name: str
     x: float = 0.5
     y: float = 0.5
-    cluster_id: Optional[int] = None
-    color: Optional[str] = None
+    cluster_id: int | None = None
+    color: str | None = None
     size: float = 1.0
     node_type: str = "paper"  # "paper" or "topic"
     # True when this node belongs to the Library (paper: status='library';
@@ -372,7 +372,7 @@ def _build_author_network_payload(
     *,
     scope: str,
     cluster_resolution: float = 1.0,
-    layout_weights: Optional[dict] = None,
+    layout_weights: dict | None = None,
 ) -> dict:
     """Compute the author-network GraphData (as a dict) for the given scope.
 
@@ -1043,7 +1043,12 @@ def rebuild_graphs(
     _user: dict = Depends(get_current_user),
 ):
     """Rebuild the graph caches for the requested scope (I-3: scope-aware)."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     scope_obj = Scope.parse(scope)
     if not background:
@@ -1094,7 +1099,12 @@ def backfill_graph_references(
     _user: dict = Depends(get_current_user),
 ):
     """Backfill missing publication references from OpenAlex without rebuilding caches."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     if not background:
         return _backfill_references_impl(conn)
@@ -1299,6 +1309,7 @@ def _load_cluster_term_background(
 
     try:
         from sklearn.feature_extraction.text import CountVectorizer
+
         from alma.ai.clustering import _build_label_stop_words
 
         vectorizer = CountVectorizer(
@@ -1329,7 +1340,7 @@ def _build_text_paper_map(
     conn: sqlite3.Connection,
     *,
     scope: str,
-    ai_state: Optional[dict] = None,
+    ai_state: dict | None = None,
 ) -> GraphData:
     """Paper-map response when SPECTER2 embeddings are unavailable.
 
@@ -1351,10 +1362,11 @@ def _build_text_paper_map(
             coverage pct) so the frontend can show the right empty-
             state CTA.
     """
-    from alma.ai.clustering import _silhouette_optimal_k, label_clusters_tfidf, Cluster
-    from alma.ai.projections import project_embeddings as _project_embeddings
     from sklearn.cluster import MiniBatchKMeans
     from sklearn.feature_extraction.text import TfidfVectorizer
+
+    from alma.ai.clustering import Cluster, _silhouette_optimal_k, label_clusters_tfidf
+    from alma.ai.projections import project_embeddings as _project_embeddings
     # Standalone gate (43.5): mirror `_load_embeddings` — exclude component rows
     # (figures / SI / datasets) and merged-away preprint twins (which KEEP
     # status='library' per preprint_dedup). This text-fallback path is the
@@ -1421,7 +1433,7 @@ def _build_text_paper_map(
     method_tag = "text_tfidf"
     cluster_assignments: dict[str, int] = {}
     coords: dict[str, tuple[float, float]] = {}
-    similarity_matrix: Optional[np.ndarray] = None
+    similarity_matrix: np.ndarray | None = None
     cluster_labels_by_cid: dict[int, str] = {}
     cluster_sizes: dict[int, int] = {}
 
@@ -1919,12 +1931,74 @@ def _load_embeddings(
     return embeddings
 
 
+def _load_paper_map_metadata(
+    conn: sqlite3.Connection,
+    paper_ids: list[str],
+) -> tuple[dict[str, str], dict[str, dict]]:
+    """Load paper-map text and node metadata in bounded SQL batches.
+
+    Graph builds can contain thousands of embeddings. Loading one paper row per
+    embedding made this phase an N+1 query; chunks of 400 stay below SQLite's
+    common variable limit while preserving the same missing-row defaults.
+    """
+    ids = list(dict.fromkeys(paper_ids))
+    texts = {paper_id: "" for paper_id in ids}
+    paper_meta = {
+        paper_id: {
+            "title": "",
+            "cited_by_count": 0,
+            "year": None,
+            "rating": 0,
+            "journal": "",
+            "authors": "",
+            "publication_date": None,
+            "in_library": False,
+        }
+        for paper_id in ids
+    }
+    for start in range(0, len(ids), 400):
+        chunk = ids[start : start + 400]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT id, title, abstract, cited_by_count, year, rating, journal,
+                   authors, publication_date, status
+            FROM papers
+            WHERE id IN ({placeholders})
+            """,
+            chunk,
+        ).fetchall()
+        for row in rows:
+            paper_id = row["id"] if isinstance(row, sqlite3.Row) else row[0]
+            title = row["title"] if isinstance(row, sqlite3.Row) else row[1]
+            abstract = row["abstract"] if isinstance(row, sqlite3.Row) else row[2]
+            cited_by_count = row["cited_by_count"] if isinstance(row, sqlite3.Row) else row[3]
+            year = row["year"] if isinstance(row, sqlite3.Row) else row[4]
+            rating = row["rating"] if isinstance(row, sqlite3.Row) else row[5]
+            journal = row["journal"] if isinstance(row, sqlite3.Row) else row[6]
+            authors = row["authors"] if isinstance(row, sqlite3.Row) else row[7]
+            publication_date = row["publication_date"] if isinstance(row, sqlite3.Row) else row[8]
+            status = row["status"] if isinstance(row, sqlite3.Row) else row[9]
+            texts[paper_id] = f"{title or ''}. {abstract or ''}"
+            paper_meta[paper_id] = {
+                "title": title or "",
+                "cited_by_count": int(cited_by_count or 0),
+                "year": year,
+                "rating": int(rating or 0),
+                "journal": journal or "",
+                "authors": authors or "",
+                "publication_date": publication_date,
+                "in_library": status == "library",
+            }
+    return texts, paper_meta
+
+
 def _build_embedding_paper_map(
     conn: sqlite3.Connection,
     embeddings: dict[str, list[float]],
     *,
-    ai_state: Optional[dict] = None,
-    graph_options: Optional[dict] = None,
+    ai_state: dict | None = None,
+    graph_options: dict | None = None,
     persist: bool = True,
 ) -> GraphData:
     """Build paper map using embeddings, with incremental clustering/layout reuse.
@@ -1939,7 +2013,6 @@ def _build_embedding_paper_map(
     from alma.ai.projections import project_embeddings
 
     opts = graph_options or {}
-    label_mode = opts.get("label_mode", "cluster")
     color_by = opts.get("color_by", "cluster")
     size_by = opts.get("size_by", "citations")
     show_edges = opts.get("show_edges", True)
@@ -1956,7 +2029,7 @@ def _build_embedding_paper_map(
         return float(np.dot(a, b) / (na * nb))
 
     def _cluster_jitter(paper_id: str, cluster_id: int, index: int) -> tuple[float, float]:
-        digest = hashlib.sha1(f"{paper_id}:{cluster_id}:{index}".encode("utf-8")).hexdigest()
+        digest = hashlib.sha1(f"{paper_id}:{cluster_id}:{index}".encode()).hexdigest()
         angle = (int(digest[:8], 16) / float(16**8)) * (2.0 * np.pi)
         radius = 0.035 + 0.01 * (index % 3)
         return float(np.cos(angle) * radius), float(np.sin(angle) * radius)
@@ -1970,50 +2043,7 @@ def _build_embedding_paper_map(
     # Fetch per-paper text payloads (for labels and node metadata). The cluster
     # labels are c-TF-IDF over this title+abstract text — the noisy OpenAlex/S2
     # topic vocabulary is no longer loaded or attached to nodes.
-    texts: dict[str, str] = {}
-    paper_meta: dict[str, dict] = {}
-    for paper_id in embeddings:
-        row = conn.execute(
-            """
-            SELECT title, abstract, cited_by_count, year, rating, journal, authors, publication_date, status
-            FROM papers
-            WHERE id = ?
-            """,
-            (paper_id,),
-        ).fetchone()
-        if row:
-            title = row["title"] if isinstance(row, sqlite3.Row) else row[0]
-            abstract = row["abstract"] if isinstance(row, sqlite3.Row) else row[1]
-            cited_by_count = row["cited_by_count"] if isinstance(row, sqlite3.Row) else row[2]
-            year = row["year"] if isinstance(row, sqlite3.Row) else row[3]
-            rating = row["rating"] if isinstance(row, sqlite3.Row) else row[4]
-            journal = row["journal"] if isinstance(row, sqlite3.Row) else row[5]
-            authors = row["authors"] if isinstance(row, sqlite3.Row) else row[6]
-            publication_date = row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]
-            status = row["status"] if isinstance(row, sqlite3.Row) else row[8]
-            texts[paper_id] = f"{title or ''}. {abstract or ''}"
-            paper_meta[paper_id] = {
-                "title": title or "",
-                "cited_by_count": int(cited_by_count or 0),
-                "year": year,
-                "rating": int(rating or 0),
-                "journal": journal or "",
-                "authors": authors or "",
-                "publication_date": publication_date,
-                "in_library": status == "library",
-            }
-        else:
-            texts[paper_id] = ""
-            paper_meta[paper_id] = {
-                "title": "",
-                "cited_by_count": 0,
-                "year": None,
-                "rating": 0,
-                "journal": "",
-                "authors": "",
-                "publication_date": None,
-                "in_library": False,
-            }
+    texts, paper_meta = _load_paper_map_metadata(conn, list(embeddings))
 
     background_df, background_n = _load_cluster_term_background(conn)
 
@@ -2258,10 +2288,10 @@ def _build_embedding_paper_map(
     # commit through the central writer-gate primitive.
     if persist:
         now_iso = datetime.now().isoformat()
-        _CLUSTER_BATCH_SIZE = 200
+        cluster_batch_size = 200
         try:
-            for batch_start in range(0, len(paper_ids), _CLUSTER_BATCH_SIZE):
-                batch = paper_ids[batch_start:batch_start + _CLUSTER_BATCH_SIZE]
+            for batch_start in range(0, len(paper_ids), cluster_batch_size):
+                batch = paper_ids[batch_start:batch_start + cluster_batch_size]
                 with write_section(conn, label="graphs paper_map: persist clusters"):
                     for paper_id in batch:
                         # Default to the Unclustered group (not cluster 0) for any
@@ -2296,11 +2326,11 @@ def _build_embedding_paper_map(
     # weights. Applied AFTER persist so the cached layout stays pure-semantic.
     # Dense O(N²) ⇒ library-scale only; we hard-cap to avoid the corpus blowing
     # up (the sparse fuzzy-graph path is the corpus answer, still task 19).
-    _FUSED_MAX_PAPERS = 1500
+    fused_max_papers = 1500
     layout_weights = opts.get("layout_weights")
     if (
         layout_weights
-        and len(paper_ids) <= _FUSED_MAX_PAPERS
+        and len(paper_ids) <= fused_max_papers
         and (
             float(layout_weights.get("coauthorship", 0) or 0) > 0
             or float(layout_weights.get("bibliographic_coupling", 0) or 0) > 0
@@ -2506,7 +2536,7 @@ def _build_embedding_paper_map(
 
 def _get_cached_graph(
     conn: sqlite3.Connection, graph_type: str
-) -> Optional[GraphData]:
+) -> GraphData | None:
     """Get cached graph data if not expired (1 hour TTL)."""
     try:
         row = conn.execute(

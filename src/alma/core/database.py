@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Sat Oct  7 14:04:23 2023
 
 @author: costantino_ai
 """
+import json
+import logging
 import os
 import shutil
-import logging
 import sqlite3
-import json
 
 # Scholarly is optional (used only for Google Scholar backend). Avoid importing
 # it as a hard dependency at module import time to keep OpenAlex-only flows
@@ -74,7 +73,7 @@ def migrate_legacy_files(root: str = "./src") -> None:
                 if not fname.endswith(".json"):
                     continue
                 author_id = os.path.splitext(fname)[0]
-                with open(os.path.join(cache_dir, fname), "r", encoding="utf-8") as f:
+                with open(os.path.join(cache_dir, fname), encoding="utf-8") as f:
                     pubs = json.load(f)
                 for pub in pubs:
                     title = pub["bib"]["title"]
@@ -105,7 +104,7 @@ def migrate_legacy_files(root: str = "./src") -> None:
                         id TEXT PRIMARY KEY
                     )"""
             )
-            with open(authors_json, "r", encoding="utf-8") as f:
+            with open(authors_json, encoding="utf-8") as f:
                 authors = json.load(f)
             for author in authors:
                 conn_auth.execute(

@@ -6,18 +6,17 @@ Provides data export capabilities:
 - JSON export of library papers with metadata
 """
 
+import json
 import logging
 import shutil
 import sqlite3
-import json
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, Response
 
-from alma.api.deps import get_db, get_current_user
+from alma.api.deps import get_current_user, get_db
 from alma.config import get_db_path
 
 logger = logging.getLogger(__name__)

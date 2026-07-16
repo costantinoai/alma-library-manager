@@ -30,11 +30,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Callable, Tuple
+from typing import Any
 
 from alma.application import materialized_views as mv
-from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ DIM_INSUFFICIENT_DATA = "insufficient_data"  # empty universe — nothing to mea
 DIM_QUEUED = "queued"  # the gap is (nearly) all enqueued background work — runs when idle, not a defect (41.3)
 
 
-def _safe_assess(label: str, fn: Callable[[], Any]) -> Tuple[Any, bool]:
+def _safe_assess(label: str, fn: Callable[[], Any]) -> tuple[Any, bool]:
     """Run a health assessor; on failure log LOUDLY and signal it (H-2).
 
     Returns ``(value, ok)``. ``ok=False`` means the assessor raised — the caller
@@ -693,7 +694,6 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # so they share its state.
     enr, enr_ok = _safe_assess("enrichment_status", lambda: build_enrichment_status(conn))
     enr = enr or {}
-    enr_state = DIM_MEASURED if enr_ok else DIM_ERROR
     papers_total = int(enr.get("papers_total") or 0)
     missing = enr.get("missing") or {}
     # Per-field exhausted = the slice of the gap OpenAlex already tried and can't
@@ -1420,8 +1420,6 @@ def dimension_items(
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     order = "ORDER BY COALESCE(p.publication_date, '') DESC, p.title"
-    extra = ""  # extra selected column appended for special dims
-
     # identity.unresolved drills via title_resolution's shared eligibility
     # predicate — the SAME one its count and the op's pending use — so the list
     # reconciles with both (H-1). `list_remaining_eligible` returns rows shaped

@@ -13,8 +13,9 @@ import logging
 import sqlite3
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from alma.application.author_affiliation import (
     ensure_author_affiliation_evidence_table,
@@ -26,7 +27,11 @@ from alma.core.db_write import write_section
 from alma.core.utils import (
     normalize_id_list,
     normalize_orcid,
+)
+from alma.core.utils import (
     utcnow as _utcnow,
+)
+from alma.core.utils import (
     utcnow_iso as _utcnow_iso,
 )
 from alma.discovery.orcid import fetch_record_by_orcid

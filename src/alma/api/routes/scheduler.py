@@ -11,10 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from alma.api.deps import get_current_user
 from alma.api.scheduler import (
-    get_scheduler,
+    _scheduler_enabled,
     list_jobs,
     run_job,
-    _scheduler_enabled,
 )
 
 logger = logging.getLogger(__name__)

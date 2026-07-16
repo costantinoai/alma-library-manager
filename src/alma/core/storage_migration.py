@@ -31,7 +31,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +42,13 @@ _DB_NAME = "scholar.db"
 _DB_SIDECARS = (f"{_DB_NAME}-wal", f"{_DB_NAME}-shm")
 
 
-class StorageMigrationHalt(RuntimeError):
+class StorageMigrationHaltError(RuntimeError):
     """Raised when a migration decision is required but cannot be made
     (legacy data found, non-interactive, and no policy env var set)."""
+
+
+# Backward-compatible import retained for callers of the pre-lint API.
+StorageMigrationHalt = StorageMigrationHaltError
 
 
 # --------------------------------------------------------------------------
@@ -73,7 +76,7 @@ def _legacy_roots() -> list[Path]:
     return out
 
 
-def find_legacy_db() -> Optional[Path]:
+def find_legacy_db() -> Path | None:
     """Return the first legacy ``data/scholar.db`` that exists, else None."""
     for root in _legacy_roots():
         candidate = root / "data" / _DB_NAME
@@ -82,9 +85,9 @@ def find_legacy_db() -> Optional[Path]:
     return None
 
 
-def find_legacy_config() -> dict[str, Optional[Path]]:
+def find_legacy_config() -> dict[str, Path | None]:
     """Return legacy ``settings.json`` / ``.env`` paths that exist."""
-    found: dict[str, Optional[Path]] = {"settings": None, "env": None}
+    found: dict[str, Path | None] = {"settings": None, "env": None}
     for root in _legacy_roots():
         if found["settings"] is None and (root / _SETTINGS_NAME).exists():
             found["settings"] = root / _SETTINGS_NAME
@@ -150,7 +153,7 @@ def _migrate_db(legacy_db: Path, new_db: Path) -> None:
 # --------------------------------------------------------------------------
 # Orchestration
 # --------------------------------------------------------------------------
-def validate_and_migrate_storage(interactive: Optional[bool] = None) -> None:
+def validate_and_migrate_storage(interactive: bool | None = None) -> None:
     """Validate current storage locations and migrate legacy data on a miss.
 
     Safe to call once at startup, before the DB is opened. Idempotent: once

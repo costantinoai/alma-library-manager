@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
@@ -19,7 +18,7 @@ _NS = {
 }
 
 
-def _extract_year(published: str) -> Optional[int]:
+def _extract_year(published: str) -> int | None:
     if not published:
         return None
     try:
@@ -31,7 +30,7 @@ def _extract_year(published: str) -> Optional[int]:
             return None
 
 
-def _entry_to_candidate(entry: ET.Element, score: float) -> Optional[dict]:
+def _entry_to_candidate(entry: ET.Element, score: float) -> dict | None:
     title = (entry.findtext("atom:title", default="", namespaces=_NS) or "").strip()
     title = " ".join(title.split())
     if not title:
@@ -68,7 +67,7 @@ def _entry_to_candidate(entry: ET.Element, score: float) -> Optional[dict]:
     }
 
 
-def _fetch_entries(params: dict) -> List[ET.Element]:
+def _fetch_entries(params: dict) -> list[ET.Element]:
     """Issue one arXiv `/api/query` request and return its Atom entries.
 
     Shared by `search_works` (free-text) and `fetch_abstract_by_id`
@@ -94,8 +93,8 @@ def search_works(
     query: str,
     *,
     limit: int = 20,
-    from_year: Optional[int] = None,
-) -> List[dict]:
+    from_year: int | None = None,
+) -> list[dict]:
     """Search arXiv by free-text query."""
     query = (query or "").strip()
     if not query:
@@ -145,7 +144,7 @@ def fetch_abstract_by_id(arxiv_id: str) -> str:
 def find_abstract_for_title(
     title: str,
     *,
-    year: Optional[int] = None,
+    year: int | None = None,
     year_tolerance: int = 2,
 ) -> str:
     """Return the abstract of the arXiv preprint whose title matches *title*.

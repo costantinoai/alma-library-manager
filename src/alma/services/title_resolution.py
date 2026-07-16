@@ -68,8 +68,8 @@ import logging
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable, Optional
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
@@ -81,7 +81,8 @@ from alma.core.fetch_pipeline import (
     run_staged_fetch_pipeline,
 )
 from alma.core.sql_helpers import standalone_paper_sql
-from alma.core.utils import canonical_lookup_doi, utcnow_iso as _utcnow_iso
+from alma.core.utils import canonical_lookup_doi
+from alma.core.utils import utcnow_iso as _utcnow_iso
 from alma.discovery import semantic_scholar
 from alma.openalex.client import _normalize_openalex_work_id
 
@@ -154,9 +155,9 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
 
 def _accept_match(
     local_title: str,
-    local_year: Optional[int],
+    local_year: int | None,
     cand_title: str,
-    cand_year: Optional[int],
+    cand_year: int | None,
 ) -> tuple[bool, float]:
     """Score a candidate by Jaccard + year-delta. Returns (accept, score).
 
@@ -182,10 +183,10 @@ def _pick_best_candidate(
     candidates: list[dict],
     *,
     title: str,
-    local_year: Optional[int],
+    local_year: int | None,
     title_key: str,
     year_key: str,
-) -> tuple[Optional[dict], float]:
+) -> tuple[dict | None, float]:
     """Return ``(best_candidate, score)`` from a candidate list.
 
     ``title_key`` and ``year_key`` adapt for the source-specific shapes
@@ -193,7 +194,7 @@ def _pick_best_candidate(
     ``year``). Returns ``(None, 0.0)`` when nothing clears the
     Jaccard + year-delta thresholds.
     """
-    best: Optional[dict] = None
+    best: dict | None = None
     best_score = 0.0
     for cand in candidates:
         cand_title = str(cand.get(title_key) or "").strip()
@@ -320,7 +321,7 @@ def _active_model(conn: sqlite3.Connection) -> str:
 
 
 def count_remaining_eligible(
-    conn: sqlite3.Connection, model: Optional[str] = None, *, queued_only: bool = False
+    conn: sqlite3.Connection, model: str | None = None, *, queued_only: bool = False
 ) -> int:
     """Public count of papers still eligible for title resolution.
 
@@ -338,7 +339,7 @@ def count_remaining_eligible(
 
 def list_remaining_eligible(
     conn: sqlite3.Connection,
-    model: Optional[str] = None,
+    model: str | None = None,
     *,
     limit: int = 20,
     offset: int = 0,
@@ -410,7 +411,7 @@ class _FallbackGate:
             self.blocked = True
 
 
-def _local_year(row: sqlite3.Row) -> Optional[int]:
+def _local_year(row: sqlite3.Row) -> int | None:
     try:
         return int(row["year"]) if row["year"] is not None else None
     except (TypeError, ValueError):
@@ -425,8 +426,8 @@ def _title_ledger_key(title: str) -> str:
 
 
 def _fetch_openalex_title_match(
-    title: str, local_year: Optional[int]
-) -> tuple[Optional[dict], float]:
+    title: str, local_year: int | None
+) -> tuple[dict | None, float]:
     """FETCH (worker): OpenAlex ``/works?search`` → best raw work + score.
 
     Requests the FULL works projection (``_search_work_candidates`` ⇒
@@ -452,8 +453,8 @@ def _fetch_openalex_title_match(
 
 
 def _fetch_s2_title_match(
-    title: str, local_year: Optional[int]
-) -> tuple[Optional[dict], float, bool]:
+    title: str, local_year: int | None
+) -> tuple[dict | None, float, bool]:
     """FETCH (worker): S2 ``/paper/search`` → (candidate, score, rate_limited).
 
     The S2 response carries ``abstract`` + the SPECTER2 vector, which the
@@ -517,7 +518,7 @@ def _fetch_s2_stage(row: sqlite3.Row) -> dict:
     return {**base, "source": "s2", "resolved": False, "reason": "s2_no_match"}
 
 
-def _advance_after_s2(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
+def _advance_after_s2(row: sqlite3.Row, result: dict) -> sqlite3.Row | None:
     """Miss router for the S2 stage: hand the row to the OpenAlex fallback
     stage ONLY on a genuine S2 miss. A hit, an empty-title terminal, or a
     rate-limited retryable goes straight to the writer. (``FetchError`` is
@@ -529,7 +530,7 @@ def _advance_after_s2(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
 
 
 def _fetch_openalex_stage(
-    row: sqlite3.Row, *, fallback_gate: Optional[_FallbackGate] = None
+    row: sqlite3.Row, *, fallback_gate: _FallbackGate | None = None
 ) -> dict:
     """PAID OpenAlex ``/works?search`` stage — fallback OR primary.
 
@@ -576,7 +577,7 @@ def _fetch_openalex_stage(
     return {**base, "source": "openalex", "resolved": False, "reason": miss_reason}
 
 
-def _advance_after_openalex(row: sqlite3.Row, result: dict) -> Optional[sqlite3.Row]:
+def _advance_after_openalex(row: sqlite3.Row, result: dict) -> sqlite3.Row | None:
     """Miss router for the PRIMARY OpenAlex stage (OpenAlex-first order):
     hand the row to the free S2 stage ONLY on a genuine OpenAlex miss."""
     if result.get("resolved") or result.get("reason") == "empty_title":
@@ -644,8 +645,8 @@ def run_title_resolution_pipeline(
     counters: dict[str, int],
     fallback_gate: _FallbackGate,
     is_cancelled: Callable[[], bool],
-    on_progress: Optional[Callable[[int, int], None]] = None,
-    deadline: Optional[float] = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    deadline: float | None = None,
     openalex_first: bool = False,
 ) -> PipelineResult:
     """Run the staged two-source title-resolution pipeline over ``rows``.
@@ -671,7 +672,7 @@ def run_title_resolution_pipeline(
 
 def _apply_openalex_title_match(
     conn: sqlite3.Connection, paper_id: str, raw_work: dict
-) -> tuple[list[str], Optional[str]]:
+) -> tuple[list[str], str | None]:
     """WRITE: fill id+doi AND merge the FULL metadata the search already
     returned (B1 — no Phase-1 re-fetch), then stamp the OpenAlex enrichment
     ledger ``enriched`` so the rehydrate Phase-1 selector skips this paper.
@@ -977,12 +978,15 @@ def run_title_resolution_sweep(
         # onboarding-complete kick) with enough remaining credits for the
         # whole run + the user reserve goes OpenAlex-first — the user is
         # waiting. Background / low-budget runs go free-S2-first.
-        from alma.core.http_sources import RESERVED_USER_CALLS as _RESERVED
         from alma.api.scheduler import (
             get_job_trigger_source as _get_trigger,
+        )
+        from alma.api.scheduler import (
             is_user_facing_trigger as _is_user_facing,
         )
-        from alma.openalex.http import SEARCH_COST_CREDITS, get_client as _oa_client
+        from alma.core.http_sources import RESERVED_USER_CALLS as _RESERVED
+        from alma.openalex.http import SEARCH_COST_CREDITS
+        from alma.openalex.http import get_client as _oa_client
 
         # One title = one ?search = SEARCH_COST_CREDITS budget units — size the
         # reserve in the same unit the credit headers report.
@@ -1042,6 +1046,8 @@ def run_title_resolution_sweep(
         # A user-triggered run never yields (background_yield_reason no-ops).
         from alma.api.scheduler import (
             BG_CREDIT_LIMIT as _BG_CREDIT_LIMIT,
+        )
+        from alma.api.scheduler import (
             get_job_trigger_source,
             make_background_cancel_check,
         )
@@ -1153,7 +1159,6 @@ def run_title_resolution_sweep(
         # - more eligible candidates remain (work to do)
         # - depth cap not tripped (runaway guard)
         # - not cancelled (don't re-fire after Cancel)
-        resolved = resolved_via_openalex + resolved_via_s2
         remaining = _count_remaining_eligible(conn, model)
         cancelled = is_cancellation_requested(job_id)
         # One total budget across continuations: ``limit`` carries the REMAINING
@@ -1204,15 +1209,17 @@ def run_title_resolution_sweep(
         if will_continue:
             from uuid import uuid4
 
+            # Lazy import the route wrapper to avoid the routes ↔
+            # services cycle (routes/ai.py imports this module).
+            from alma.api.routes.ai import _run_title_resolution_sweep
             from alma.api.scheduler import (
                 get_job_status,
                 get_job_trigger_source,
                 schedule_immediate,
+            )
+            from alma.api.scheduler import (
                 set_job_status as _set_job_status,
             )
-            # Lazy import the route wrapper to avoid the routes ↔
-            # services cycle (routes/ai.py imports this module).
-            from alma.api.routes.ai import _run_title_resolution_sweep
 
             parent_source = get_job_trigger_source(job_id) or "auto:continuation"
             parent_status = get_job_status(job_id) or {}

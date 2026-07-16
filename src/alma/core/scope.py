@@ -38,7 +38,7 @@ class Scope(StrEnum):
     corpus = "corpus"
 
     @classmethod
-    def parse(cls, value: object, *, default: "Scope | None" = None) -> "Scope":
+    def parse(cls, value: object, *, default: Scope | None = None) -> Scope:
         """Coerce a request/query string to a ``Scope``; unknown/empty → default.
 
         Replaces the open-coded ``scope if scope in {"library","corpus"} else

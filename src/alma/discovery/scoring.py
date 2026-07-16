@@ -23,25 +23,28 @@ import logging
 import math
 import re
 import sqlite3
-from collections import defaultdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
-from alma.core.scoring_math import (
-    clamp as _clamp,
-    consensus_bonus as _shared_consensus_bonus,
-    log_prevalence_weights,
-)
-from alma.core.keywords import parse_keywords
-from alma.core.sql_helpers import standalone_paper_sql
-from alma.core import topics
-from alma.discovery import similarity as sim_module
-from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS, merge_discovery_defaults
 from alma.application.author_signal import build_discovery_author_affinity
 from alma.application.signal_projection import (
     ProjectedPaperSignals,
     load_projected_paper_signals,
 )
+from alma.core import topics
+from alma.core.keywords import parse_keywords
+from alma.core.scoring_math import (
+    clamp as _clamp,
+)
+from alma.core.scoring_math import (
+    consensus_bonus as _shared_consensus_bonus,
+)
+from alma.core.scoring_math import (
+    log_prevalence_weights,
+)
+from alma.core.sql_helpers import standalone_paper_sql
+from alma.discovery import similarity as sim_module
+from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.services.signal_lab import get_preference_affinity_signal
 
 logger = logging.getLogger(__name__)
@@ -96,7 +99,7 @@ def _consensus_bonus(consensus_count: int) -> float:
 # Author name parsing (shared with engine.py)
 # ---------------------------------------------------------------------------
 
-def parse_author_names(authors_str: str) -> List[str]:
+def parse_author_names(authors_str: str) -> list[str]:
     """Parse author strings from multiple formats into normalized display names.
 
     Supports:
@@ -128,7 +131,7 @@ def parse_author_names(authors_str: str) -> List[str]:
     return [" ".join(name.split()) for name in raw if name.strip()]
 
 
-def author_affinity_keys(name: str) -> Set[str]:
+def author_affinity_keys(name: str) -> set[str]:
     """Return robust match keys for author affinity matching."""
     tokens = [t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if t]
     if not tokens:
@@ -151,8 +154,8 @@ def _pub_text(pub: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def compute_centroid_from_ids(
-    conn: sqlite3.Connection, paper_ids: List[str]
-) -> Optional[Any]:
+    conn: sqlite3.Connection, paper_ids: list[str]
+) -> Any | None:
     """Compute average embedding from cached publication_embeddings rows.
 
     Only rows produced by the currently-active embedding model are
@@ -183,9 +186,9 @@ def compute_centroid_from_ids(
 # Preference profile
 # ---------------------------------------------------------------------------
 
-def load_settings(conn: sqlite3.Connection) -> Dict[str, str]:
+def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
     """Read discovery settings from DB, merged with defaults."""
-    kv: Dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
+    kv: dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
     try:
         rows = conn.execute("SELECT key, value FROM discovery_settings").fetchall()
         for r in rows:
@@ -199,12 +202,12 @@ def load_settings(conn: sqlite3.Connection) -> Dict[str, str]:
 
 def compute_preference_profile(
     conn: sqlite3.Connection,
-    positive_pubs: List[dict],
-    negative_pubs: List[dict],
-    settings: Optional[Dict[str, str]] = None,
+    positive_pubs: list[dict],
+    negative_pubs: list[dict],
+    settings: dict[str, str] | None = None,
     *,
-    scope_paper_ids: Optional[set[str]] = None,
-) -> Dict:
+    scope_paper_ids: set[str] | None = None,
+) -> dict:
     """Compute a user preference profile from rated publications.
 
     Aggregates signals from:
@@ -228,10 +231,10 @@ def compute_preference_profile(
     if settings is None:
         settings = load_settings(conn)
 
-    topic_weights: Dict[str, float] = {}
-    journal_affinity: Dict[str, float] = {}
+    topic_weights: dict[str, float] = {}
+    journal_affinity: dict[str, float] = {}
 
-    def _accumulate(pubs: List[dict], weight: float) -> None:
+    def _accumulate(pubs: list[dict], weight: float) -> None:
         for pub in pubs:
             paper_id = pub.get("id", "")
             if paper_id:
@@ -262,31 +265,29 @@ def compute_preference_profile(
 
     # -- Collection signals --
     try:
-        collection_rows = conn.execute("SELECT ci.paper_id FROM collection_items ci").fetchall()
-        for cr in collection_rows:
+        collection_topic_rows = conn.execute(
+            """SELECT ci.paper_id, pt.term, pt.score, t.canonical_name
+               FROM collection_items ci
+               JOIN papers p ON p.id = ci.paper_id
+               JOIN publication_topics pt ON pt.paper_id = ci.paper_id
+               LEFT JOIN topics t ON pt.topic_id = t.topic_id
+               WHERE p.status = 'library'"""
+        ).fetchall()
+        for cr in collection_topic_rows:
             c_paper_id = (cr["paper_id"] or "").strip() if isinstance(cr, sqlite3.Row) else ""
             if not c_paper_id:
                 continue
             if scope_paper_ids is not None and c_paper_id not in scope_paper_ids:
                 # Collection-scoped lens: ignore papers from other collections.
                 continue
-            try:
-                c_topics = conn.execute(
-                    "SELECT pt.term, pt.score, t.canonical_name "
-                    "FROM publication_topics pt "
-                    "LEFT JOIN topics t ON pt.topic_id = t.topic_id "
-                    "WHERE pt.paper_id = ?",
-                    (c_paper_id,),
-                ).fetchall()
-                for ct in c_topics:
-                    term = (ct["canonical_name"] or ct["term"] or "").strip().lower()
-                    if term:
-                        # 44.1: shared default only (no floor/clamp — see above).
-                        topic_weights[term] = topic_weights.get(term, 0) + 0.5 * (ct["score"] or topics.DEFAULT_TOPIC_SCORE)
-            except sqlite3.OperationalError:
-                pass
+            term = (cr["canonical_name"] or cr["term"] or "").strip().lower()
+            if term:
+                # 44.1: shared default only (no floor/clamp — see above).
+                topic_weights[term] = topic_weights.get(term, 0) + 0.5 * (
+                    cr["score"] or topics.DEFAULT_TOPIC_SCORE
+                )
     except sqlite3.OperationalError:
-        logger.debug("collection_items table not available")
+        logger.debug("collection topic signals unavailable")
 
     # -- Tag signals --
     try:
@@ -412,7 +413,7 @@ def compute_preference_profile(
     }
 
 
-def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
+def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
     """Scale weight dict so the maximum absolute value is 1.0.
 
     Preserves relative rankings and sign (for negative weights from
@@ -429,8 +430,8 @@ def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
 
 
 def _incorporate_feedback(
-    conn: sqlite3.Connection, settings: Dict[str, str]
-) -> Tuple[Any, Any]:
+    conn: sqlite3.Connection, settings: dict[str, str]
+) -> tuple[Any, Any]:
     """Build positive / negative semantic centroids from past recommendation feedback.
 
     Centroids are computed by averaging the cached active-model
@@ -445,8 +446,8 @@ def _incorporate_feedback(
     keeping a fallback that reads `recommendations.title` produced
     spurious matches on common stopword-like tokens.
     """
-    liked_paper_ids: List[str] = []
-    dismissed_paper_ids: List[str] = []
+    liked_paper_ids: list[str] = []
+    dismissed_paper_ids: list[str] = []
 
     try:
         rows = conn.execute(
@@ -491,24 +492,24 @@ def _incorporate_feedback(
 
 def score_candidate(
     candidate: dict,
-    preference_profile: Dict,
+    preference_profile: dict,
     positive_centroid,
     negative_centroid,
-    positive_texts: Optional[List[str]],
-    negative_texts: Optional[List[str]],
+    positive_texts: list[str] | None,
+    negative_texts: list[str] | None,
     conn: sqlite3.Connection,
-    settings: Optional[Dict[str, str]] = None,
+    settings: dict[str, str] | None = None,
     *,
-    candidate_text: Optional[str] = None,
+    candidate_text: str | None = None,
     candidate_embedding=None,
     lexical_profile=None,
     positive_example_embeddings=None,
     negative_example_embeddings=None,
-    precomputed_lexical_details: Optional[Dict[str, float]] = None,
-    user_topic_embeddings: Optional[Dict[str, Any]] = None,
-    preloaded_preference_profile: Optional[Dict[str, Any]] = None,
+    precomputed_lexical_details: dict[str, float] | None = None,
+    user_topic_embeddings: dict[str, Any] | None = None,
+    preloaded_preference_profile: dict[str, Any] | None = None,
     topic_provider: Any = _PROVIDER_UNSET,
-) -> Tuple[float, Dict[str, Any]]:
+) -> tuple[float, dict[str, Any]]:
     """Score a candidate paper using 10 weighted signals.
 
     ``topic_provider`` lets a hot-loop caller (the lens-refresh scoring
@@ -543,7 +544,7 @@ def score_candidate(
         source_relevance = min(1.0, source_relevance / 100.0)
 
     # -- 2. Topic score --
-    paper_topics: List[dict] = candidate.get("topics", [])
+    paper_topics: list[dict] = candidate.get("topics", [])
     if not paper_topics:
         paper_id = candidate.get("id", "")
         if paper_id:
@@ -941,7 +942,7 @@ def score_candidate(
     )
     final_score = max(0.0, score_pre_dismissal - dismissal_penalty)
 
-    breakdown: Dict[str, Any] = {}
+    breakdown: dict[str, Any] = {}
     for signal in weights:
         # Force Python float — semantic similarities arrive as numpy
         # float32 from the cosine path and would otherwise propagate
@@ -994,7 +995,7 @@ def score_candidate(
 
 def _projected_feedback_adjustment(
     candidate: dict,
-    paper_topics: List[dict],
+    paper_topics: list[dict],
     authors_str: str,
     projected: Any,
 ) -> float:
@@ -1046,10 +1047,10 @@ def _projected_feedback_adjustment(
 
 def _dismissal_cluster_penalty(
     candidate: dict,
-    paper_topics: List[dict],
+    paper_topics: list[dict],
     authors_str: str,
     projected: Any,
-) -> tuple[float, Dict[str, float]]:
+) -> tuple[float, dict[str, float]]:
     """Penalty in *score points* from candidate's overlap with negative projected signals.
 
     Mirror of `alma.application.authors._dismissal_overlap_penalty`.
@@ -1068,7 +1069,7 @@ def _dismissal_cluster_penalty(
     breakdown (``"topic"``, ``"venue"``, ``"author"``,
     ``"author_name"``, ``"keyword"``) for provenance.
     """
-    parts: Dict[str, float] = {}
+    parts: dict[str, float] = {}
     if not isinstance(projected, ProjectedPaperSignals):
         return 0.0, parts
 

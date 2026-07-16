@@ -15,7 +15,6 @@ Configuration is resolved via:
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +41,15 @@ class SlackNotifier:
 
     def __init__(
         self,
-        token: Optional[str] = None,
-        default_channel: Optional[str] = None,
+        token: str | None = None,
+        default_channel: str | None = None,
     ) -> None:
         self._token = token
         self._default_channel = default_channel
         self._client = None  # lazy-initialized WebClient
         # Cache: user-supplied name (channel name OR display name) → Slack channel ID.
         # Avoids re-listing on every send within a single process lifetime.
-        self._resolved_channel_cache: Dict[str, str] = {}
+        self._resolved_channel_cache: dict[str, str] = {}
 
         if self._token:
             logger.info(
@@ -97,7 +96,7 @@ class SlackNotifier:
         """Return ``True`` when a Slack token is available."""
         return bool(self._token)
 
-    def resolve_channel(self, channel: Optional[str] = None) -> str:
+    def resolve_channel(self, channel: str | None = None) -> str:
         """Return the effective channel string, falling back to *default_channel*.
 
         This returns the user-supplied label (which may be a channel name like
@@ -216,8 +215,8 @@ class SlackNotifier:
 
     async def send_paper_alert(
         self,
-        channel: Optional[str],
-        papers: List[dict],
+        channel: str | None,
+        papers: list[dict],
         alert_name: str,
     ) -> bool:
         """Format *papers* as a Block Kit message and post to *channel*.
@@ -276,8 +275,8 @@ class SlackNotifier:
 
     async def send_recommendation(
         self,
-        channel: Optional[str],
-        recommendations: List[dict],
+        channel: str | None,
+        recommendations: list[dict],
     ) -> bool:
         """Send a recommendation digest to Slack.
 
@@ -305,7 +304,7 @@ class SlackNotifier:
 
     # ---- Test message -------------------------------------------------
 
-    async def send_test_message(self, channel: Optional[str] = None) -> bool:
+    async def send_test_message(self, channel: str | None = None) -> bool:
         """Send a brief test message to verify connectivity.
 
         Returns:
@@ -347,8 +346,8 @@ class SlackNotifier:
     # ------------------------------------------------------------------
 
     def _build_paper_alert_blocks(
-        self, papers: List[dict], header_text: str
-    ) -> List[dict]:
+        self, papers: list[dict], header_text: str
+    ) -> list[dict]:
         """Build Block Kit blocks for a paper alert message.
 
         ``header_text`` is the exact string rendered as the message header.
@@ -356,7 +355,7 @@ class SlackNotifier:
         renders whatever subset of papers it is handed, no slicing or
         overflow note.
         """
-        blocks: List[dict] = [
+        blocks: list[dict] = [
             {
                 "type": "header",
                 "text": {
@@ -422,7 +421,7 @@ class SlackNotifier:
             title_line = f"*{title}*"
 
         # Build detail lines
-        lines: List[str] = [title_line]
+        lines: list[str] = [title_line]
         if authors:
             # Abbreviate long author lists, mirroring scholar-slack-bot's
             # "First, [+N], Last" shape.
@@ -436,7 +435,7 @@ class SlackNotifier:
                 authors_text = ", ".join(author_list)
             lines.append(f"Authors: {authors_text}")
 
-        meta_parts: List[str] = []
+        meta_parts: list[str] = []
         if pub_date:
             meta_parts.append(pub_date)
         elif year:
@@ -467,11 +466,11 @@ class SlackNotifier:
         }
 
     def _build_recommendation_blocks(
-        self, recommendations: List[dict]
-    ) -> List[dict]:
+        self, recommendations: list[dict]
+    ) -> list[dict]:
         """Build Block Kit blocks for a recommendation digest."""
         count = len(recommendations)
-        blocks: List[dict] = [
+        blocks: list[dict] = [
             {
                 "type": "header",
                 "text": {
@@ -561,7 +560,7 @@ class SlackNotifier:
     async def _post_message(
         self,
         channel: str,
-        blocks: List[dict],
+        blocks: list[dict],
         fallback_text: str,
     ) -> bool:
         """Post a Block Kit message to Slack.

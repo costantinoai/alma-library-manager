@@ -26,15 +26,13 @@ re-clustering) can still rebuild edges through the same code.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
-
-import numpy as np
+from typing import Any
 
 from alma.ai.clustering import cluster_publications, score_cluster_terms
 from alma.ai.cooccurrence import cooccurrence_pairs
 from alma.ai.neighbor_graph import mutual_knn_edges
-
 
 # ── Inputs ───────────────────────────────────────────────────────────────────
 
@@ -54,13 +52,13 @@ class CouplingSpec:
     # OR precomputed pairs (when the adapter already computed them — e.g. the paper
     # map reuses the same pair dict for edges AND its post-persist fused layout).
     entity_features: Mapping[str, Iterable[str]] = field(default_factory=dict)
-    pairs: Optional[dict[tuple[str, str], int]] = None
+    pairs: dict[tuple[str, str], int] | None = None
     min_shared: int = 1
-    max_feature_df: Optional[int] = None
+    max_feature_df: int | None = None
     weight_floor: float = 0.4
     weight_span: float = 0.5
     weight_mode: str = "normalized"  # "normalized" | "linear_capped"
-    top_k_per_node: Optional[int] = None  # sparsify to each node's strongest k
+    top_k_per_node: int | None = None  # sparsify to each node's strongest k
     use_for_fusion: bool = False  # feed this layer's pairs into fuse_layout
 
     def shared_pairs(self) -> dict[tuple[str, str], int]:
@@ -179,7 +177,7 @@ def build_embedding_graph(
     *,
     node_text: Mapping[str, str],
     resolution: float = 1.0,
-    layout_weights: Optional[dict] = None,
+    layout_weights: dict | None = None,
     coupling_specs: Iterable[CouplingSpec] = (),
     semantic_k: int = 8,
     semantic_min_similarity: float = 0.45,

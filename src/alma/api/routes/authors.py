@@ -6,23 +6,25 @@ import os
 import sqlite3
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout, as_completed
-
-from alma.core.concurrency import bounded_thread_pool
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime
+from difflib import SequenceMatcher
 from types import SimpleNamespace
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from difflib import SequenceMatcher
 
-from alma.application import authors as authors_app
-from alma.services import health as health_service
-from alma.application.followed_authors import (
-    apply_follow_state,
-    resolve_canonical_author_id,
-    schedule_followed_author_historical_backfill,
+from alma.api.deps import (  # internal helpers for path resolution
+    _data_dir,
+    _db_path,
+    get_current_user,
+    get_db,
+    normalize_author_id,
+    open_db_connection,
 )
+from alma.api.helpers import background_mode_requested, raise_internal
 from alma.api.models import (
     AuthorCreate,
     AuthorFollowFromPaperRequest,
@@ -32,37 +34,43 @@ from alma.api.models import (
     ErrorResponse,
     SavePublicationsRequest,
 )
-from alma.api.deps import get_db, get_current_user, normalize_author_id, open_db_connection
-from alma.api.deps import _data_dir, _db_path  # internal helpers for path resolution
-from alma.core.backend import fetch_publications_by_id, _settings as _fb_settings
-from alma.core.utils import canonical_lookup_doi, normalize_doi, normalize_orcid, repair_display_text
-from alma.config import get_db_path, get_fetch_year
-from alma.config import get_all_settings
-from alma.api.models import PublicationResponse
-from alma.plugins.config import load_plugin_config
-from alma.plugins.registry import get_global_registry
-from alma.plugins.slack import SlackPlugin
-from alma.plugins.base import Publication
-from alma.plugins.helpers import get_slack_plugin
-from alma.openalex.client import upsert_papers as _upsert_pubs
-from alma.openalex.client import resolve_openalex_candidates_from_scholar as _resolve_oa
-from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
-from alma.core.utils import derive_source_id, to_publication_dataclass
+from alma.application import authors as authors_app
+from alma.application.followed_authors import (
+    apply_follow_state,
+    schedule_followed_author_historical_backfill,
+)
+from alma.config import get_all_settings, get_fetch_year
+from alma.core.backend import fetch_publications_by_id
+from alma.core.concurrency import bounded_thread_pool
+from alma.core.db_retry import commit_with_retry
+from alma.core.db_write import run_write_unit, write_section
 from alma.core.identifier_resolution import (
     resolve_scholar_candidates_from_sources,
     scholar_url_for_id,
 )
+from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.redaction import redact_sensitive_text
 from alma.core.resolution import (
     get_author_sample_titles as _shared_get_author_sample_titles,
+)
+from alma.core.resolution import (
     resolve_author_identity,
     resolve_paper_openalex_work,
     summarize_author_resolution,
 )
-from alma.core.operations import OperationOutcome, OperationRunner
-from alma.core.redaction import redact_sensitive_text
-from alma.core.db_retry import commit_with_retry
-from alma.core.db_write import run_write_unit, write_section
-from alma.api.helpers import background_mode_requested, raise_internal
+from alma.core.utils import (
+    canonical_lookup_doi,
+    derive_source_id,
+    normalize_doi,
+    normalize_orcid,
+    repair_display_text,
+    to_publication_dataclass,
+)
+from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
+from alma.openalex.client import resolve_openalex_candidates_from_scholar as _resolve_oa
+from alma.openalex.client import upsert_papers as _upsert_pubs
+from alma.plugins.helpers import get_slack_plugin
+from alma.services import health as health_service
 
 logger = logging.getLogger(__name__)
 
@@ -546,7 +554,7 @@ def _normalize_text(s: str) -> str:
     return " ".join((s or "").strip().lower().split())
 
 
-def _parse_interests(raw: Any) -> Optional[List[str]]:
+def _parse_interests(raw: Any) -> list[str] | None:
     """Parse interests from JSON or legacy comma-separated storage."""
     if raw is None:
         return None
@@ -784,8 +792,8 @@ def _resolve_scholar_candidates(
     author_name: str,
     sample_titles: list[str],
     *,
-    openalex_id: Optional[str] = None,
-    orcid: Optional[str] = None,
+    openalex_id: str | None = None,
+    orcid: str | None = None,
     mode: str = "auto",
 ) -> list[dict]:
     """Resolve Scholar candidates using configured providers.
@@ -814,7 +822,7 @@ def _resolve_scholar_candidates(
     return _merge_scholar_candidates(from_api, from_local)
 
 
-def _pick_top_candidate(candidates: list[dict], min_score: float, min_margin: float) -> Optional[dict]:
+def _pick_top_candidate(candidates: list[dict], min_score: float, min_margin: float) -> dict | None:
     if not candidates:
         return None
     top = candidates[0]
@@ -873,7 +881,7 @@ def _collect_preprint_presence_for_openalex(openalex_id: str) -> dict:
     return {"arxiv_count": arxiv_count, "biorxiv_count": biorxiv_count}
 
 
-def _auto_resolve_openalex_from_scholar(scholar_id: str) -> Optional[str]:
+def _auto_resolve_openalex_from_scholar(scholar_id: str) -> str | None:
     """Best-effort auto-resolution of OpenAlex ID from Scholar ID."""
     if not (scholar_id or "").strip():
         return None
@@ -890,8 +898,8 @@ def _auto_resolve_openalex_from_scholar(scholar_id: str) -> Optional[str]:
 def _auto_resolve_scholar_from_openalex(
     openalex_id: str,
     *,
-    orcid: Optional[str] = None,
-) -> Optional[dict]:
+    orcid: str | None = None,
+) -> dict | None:
     """Best-effort Scholar ID resolution from OpenAlex via API bridges first."""
     from alma.openalex.client import fetch_author_profile, fetch_works_for_author
 
@@ -956,8 +964,8 @@ def _refresh_author_cache_impl(
     author_id: str,
     *,
     mode: str,
-    job_id: Optional[str] = None,
-    profile_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+    job_id: str | None = None,
+    profile_cache: dict[str, dict[str, Any]] | None = None,
     is_batch_member: bool = False,
 ) -> dict:
     """Run incremental/deep refresh for one author.
@@ -1030,7 +1038,7 @@ def _refresh_author_cache_impl(
     # — reused below to avoid a second `fetch_author_profile` round-trip
     # per author on bulk deep refresh. None when modern backfill didn't
     # run or its profile fetch errored.
-    backfill_profile: Optional[dict] = None
+    backfill_profile: dict | None = None
     if openalex_id:
         try:
             from alma.api.deps import _db_path
@@ -1224,7 +1232,7 @@ def _refresh_author_identity_profile_impl(
     db: sqlite3.Connection,
     author_id: str,
     *,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> dict:
     """Refresh author identity/profile only; no works, vectors, or broad rebuild."""
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
@@ -1345,7 +1353,7 @@ def _refresh_author_identity_profile_impl(
 def _deep_refresh_all_impl(
     db: sqlite3.Connection,
     *,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
     scope: str = "corpus",
     limit: int,
 ) -> dict:
@@ -1439,7 +1447,7 @@ def _deep_refresh_all_impl(
     # → `resolve_openalex_candidates_from_metadata`, which queries
     # OpenAlex works by title and inspects each work's `authorships`
     # to match the placeholder's display name).
-    work_items: list[tuple[str, str, Optional[str]]] = []
+    work_items: list[tuple[str, str, str | None]] = []
     for row in rows:
         author_id = (row["id"] or "").strip()
         author_name = row["name"] or author_id
@@ -1463,7 +1471,7 @@ def _deep_refresh_all_impl(
     # Cuts 1 OpenAlex roundtrip per author down to ~1 batched call per
     # 50 authors. Failure is non-fatal — workers fall back to per-author
     # fetches via the existing path.
-    profile_cache: Dict[str, Dict[str, Any]] = {}
+    profile_cache: dict[str, dict[str, Any]] = {}
     cache_oids = [oid for _, _, oid in work_items if oid]
     if cache_oids:
         try:
@@ -1495,7 +1503,7 @@ def _deep_refresh_all_impl(
     progress_lock = threading.Lock()
     cancelled = False
 
-    def _run_one_author(author_id: str, author_name: str) -> tuple[str, str, str, Optional[Exception], bool]:
+    def _run_one_author(author_id: str, author_name: str) -> tuple[str, str, str, Exception | None, bool]:
         """Worker body: open a private DB connection and refresh one author.
 
         Each worker thread holds its own SQLite connection so the per-author
@@ -1697,7 +1705,7 @@ def _deep_refresh_all_impl(
 
 @router.get(
     "",
-    response_model=List[AuthorResponse],
+    response_model=list[AuthorResponse],
     summary="List all authors",
     description="Retrieve a list of all monitored authors with their metadata.",
 )
@@ -1760,7 +1768,7 @@ def lookup_author(
 
 @router.get(
     "/suggestions",
-    response_model=List[AuthorSuggestionResponse],
+    response_model=list[AuthorSuggestionResponse],
     summary="List collaborator and adjacent author suggestions",
 )
 def list_author_suggestions(
@@ -1956,7 +1964,6 @@ def refresh_author_suggestion_network(
     user: dict = Depends(get_current_user),
 ):
     from alma.api.scheduler import (
-        activity_envelope,
         add_job_log,
         find_active_job,
         schedule_immediate,
@@ -2082,14 +2089,14 @@ class BackfillAuthorWorksRequest(BaseModel):
     coverage.
     """
 
-    author_openalex_id: Optional[str] = Field(
+    author_openalex_id: str | None = Field(
         default=None, description="Single author OpenAlex id, or null for the full batch"
     )
     full_refetch: bool = Field(
         default=False,
         description="Bypass the 'local paper count >= declared works_count' skip shortcut",
     )
-    limit: Optional[int] = Field(
+    limit: int | None = Field(
         default=None, ge=1, le=10000,
         description="Batch runs only: cap the number of authors processed this job",
     )
@@ -2928,7 +2935,7 @@ def list_authors_needs_attention(
         method: str,
         confidence: float,
         has_oa: bool,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Concrete second-line context: which resolver step ran, how
         confidently, whether an ID at least exists. The frontend renders
         this under the main reason so the user can see *what failed
@@ -3073,9 +3080,9 @@ class SetIdentifiersRequest(BaseModel):
     are left unchanged. ORCID + OpenAlex + Scholar IDs are normalized
     server-side (URL prefix stripped, lowercased)."""
 
-    orcid: Optional[str] = Field(default=None, description="ORCID iD (with or without https prefix)")
-    openalex_id: Optional[str] = Field(default=None, description="OpenAlex author ID (A1234… or full URL)")
-    scholar_id: Optional[str] = Field(default=None, description="Google Scholar user id")
+    orcid: str | None = Field(default=None, description="ORCID iD (with or without https prefix)")
+    openalex_id: str | None = Field(default=None, description="OpenAlex author ID (A1234… or full URL)")
+    scholar_id: str | None = Field(default=None, description="Google Scholar user id")
 
 
 @router.get(
@@ -3202,9 +3209,9 @@ class MergeProfilesRequest(BaseModel):
     papers reattach + the id is recorded as an alias of the primary.
     At least one of the two lists must be non-empty."""
 
-    alt_author_ids: List[str] = Field(default_factory=list)
-    alt_openalex_ids: List[str] = Field(default_factory=list)
-    field_choices: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+    alt_author_ids: list[str] = Field(default_factory=list)
+    alt_openalex_ids: list[str] = Field(default_factory=list)
+    field_choices: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 @router.post(
@@ -3436,8 +3443,8 @@ def reject_merge_candidate_endpoint(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    from alma.core.db_write import run_write_unit
     from alma.application.author_merge import reject_merge_candidate
+    from alma.core.db_write import run_write_unit
 
     result = run_write_unit(
         db, lambda: reject_merge_candidate(db, candidate_id), label="reject_merge_candidate"
@@ -3462,8 +3469,8 @@ def merge_one_candidate_endpoint(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    from alma.core.db_write import run_write_unit
     from alma.application.author_merge import merge_one_candidate
+    from alma.core.db_write import run_write_unit
 
     result = run_write_unit(
         db, lambda: merge_one_candidate(db, candidate_id), label="merge_one_candidate"
@@ -3706,11 +3713,11 @@ class ConfirmOpenAlexRequest(BaseModel):
 
 
 class ConfirmIdentifiersRequest(BaseModel):
-    openalex_id: Optional[str] = None
-    scholar_id: Optional[str] = None
-    orcid: Optional[str] = None
+    openalex_id: str | None = None
+    scholar_id: str | None = None
+    orcid: str | None = None
     status: str = "resolved_manual"
-    reason: Optional[str] = None
+    reason: str | None = None
 
 
 class ResolveIdentifiersRequest(BaseModel):
@@ -3826,6 +3833,7 @@ def _resolve_identifiers_bulk_optimized(
     malformed name, …) without killing the batch.
     """
     import time
+
     from alma.api.scheduler import add_job_log, set_job_status
 
     total = len(authors)
@@ -4327,7 +4335,7 @@ def resolve_identifiers_bulk(
 
 @router.get(
     "/{author_id}/publications",
-    response_model=List[dict],
+    response_model=list[dict],
     summary="Get author's publications",
     description="Retrieve all cached publications for a specific author.",
 )
@@ -4777,7 +4785,13 @@ def repair_author(
         if not row:
             raise HTTPException(status_code=404, detail="Author not found")
 
-        from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+        from alma.api.scheduler import (
+            activity_envelope,
+            add_job_log,
+            find_active_job,
+            schedule_immediate,
+            set_job_status,
+        )
 
         author_name = str(row["name"] or author_id)
         operation_key = f"authors.repair:{normalize_author_id(author_id) or author_id}"
@@ -4879,7 +4893,13 @@ def refresh_author_cache(
     Uses ``last_fetched_at`` for incremental fetches when available, falling
     back to the configured ``from_year`` from settings.
     """
-    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     if not background:
         try:
@@ -4976,7 +4996,13 @@ def deep_refresh_all_authors(
     - ``corpus`` — every active author row. Available via API for
       power use; not exposed in the Settings UI.
     """
-    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     scope_value = (scope or "followed").strip().lower()
     if scope_value not in {"library", "followed", "needs_metadata", "followed_plus_library", "corpus"}:
@@ -5041,7 +5067,7 @@ def deep_refresh_all_authors(
     ),
 )
 def rehydrate_author_metadata(
-    limit: Optional[int] = Query(
+    limit: int | None = Query(
         None,
         ge=1,
         le=100_000,
@@ -5061,7 +5087,13 @@ def rehydrate_author_metadata(
         except Exception as e:
             raise_internal("Author metadata hydration failed", e)
 
-    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = "authors.rehydrate_metadata"
     existing = find_active_job(operation_key)
@@ -5098,7 +5130,8 @@ def rehydrate_author_metadata(
 
     def _runner() -> dict:
         from alma.api.scheduler import add_job_log as _add_log
-        from alma.api.scheduler import is_cancellation_requested, set_job_status as _set_status
+        from alma.api.scheduler import is_cancellation_requested
+        from alma.api.scheduler import set_job_status as _set_status
 
         return run_author_metadata_rehydration(
             job_id,
@@ -5137,8 +5170,8 @@ def get_author_affiliations(
 
 class PickAffiliationRequest(BaseModel):
     institution_name: str = Field(..., description="Institution to display for this author")
-    institution_openalex_id: Optional[str] = None
-    institution_ror: Optional[str] = None
+    institution_openalex_id: str | None = None
+    institution_ror: str | None = None
 
 
 @router.post(
@@ -5395,7 +5428,13 @@ def identity_profile_refresh_author(
     user: dict = Depends(get_current_user),
 ):
     """Cheap author repair path for needs-attention retry/profile refresh."""
-    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     if not background:
         try:
@@ -5469,7 +5508,13 @@ def deep_refresh_author(
     configured ``from_year`` from settings (not the last-fetched timestamp),
     ensuring a complete re-fetch of the author's publication history.
     """
-    from alma.api.scheduler import activity_envelope, add_job_log, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        add_job_log,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     if not background:
         try:

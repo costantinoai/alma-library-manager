@@ -5,9 +5,9 @@ discovery, and instantiation of messaging plugins.
 """
 
 import logging
-from typing import Dict, Type, List, Optional, Any
+from typing import Any
 
-from alma.plugins.base import MessagingPlugin, PluginConfigError
+from alma.plugins.base import MessagingPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +30,11 @@ class PluginRegistry:
 
     def __init__(self):
         """Initialize an empty plugin registry."""
-        self._plugin_classes: Dict[str, Type[MessagingPlugin]] = {}
-        self._plugin_instances: Dict[str, MessagingPlugin] = {}
+        self._plugin_classes: dict[str, type[MessagingPlugin]] = {}
+        self._plugin_instances: dict[str, MessagingPlugin] = {}
         logger.info("Plugin registry initialized")
 
-    def register(self, plugin_class: Type[MessagingPlugin]) -> None:
+    def register(self, plugin_class: type[MessagingPlugin]) -> None:
         """Register a plugin class.
 
         Args:
@@ -86,7 +86,7 @@ class PluginRegistry:
 
         logger.info(f"Unregistered plugin: {plugin_name}")
 
-    def get_plugin_class(self, plugin_name: str) -> Type[MessagingPlugin]:
+    def get_plugin_class(self, plugin_name: str) -> type[MessagingPlugin]:
         """Get a registered plugin class by name.
 
         Args:
@@ -108,7 +108,7 @@ class PluginRegistry:
     def create_instance(
         self,
         plugin_name: str,
-        config: Dict[str, Any],
+        config: dict[str, Any],
         cache: bool = True
     ) -> MessagingPlugin:
         """Create an instance of a plugin with the given configuration.
@@ -145,7 +145,7 @@ class PluginRegistry:
             logger.error(f"Failed to create instance of {plugin_name}: {e}")
             raise
 
-    def get_instance(self, plugin_name: str) -> Optional[MessagingPlugin]:
+    def get_instance(self, plugin_name: str) -> MessagingPlugin | None:
         """Get a cached plugin instance if it exists.
 
         Args:
@@ -156,7 +156,7 @@ class PluginRegistry:
         """
         return self._plugin_instances.get(plugin_name)
 
-    def list_plugins(self) -> List[str]:
+    def list_plugins(self) -> list[str]:
         """Get a list of all registered plugin names.
 
         Returns:
@@ -164,7 +164,7 @@ class PluginRegistry:
         """
         return list(self._plugin_classes.keys())
 
-    def get_plugin_info(self, plugin_name: str) -> Dict[str, Any]:
+    def get_plugin_info(self, plugin_name: str) -> dict[str, Any]:
         """Get metadata about a registered plugin.
 
         Args:
@@ -189,7 +189,7 @@ class PluginRegistry:
             "config_schema": temp.get_config_schema(),
         }
 
-    def get_all_plugins_info(self) -> List[Dict[str, Any]]:
+    def get_all_plugins_info(self) -> list[dict[str, Any]]:
         """Get metadata for all registered plugins.
 
         Returns:
@@ -232,7 +232,7 @@ class PluginRegistry:
 
 
 # Global registry instance
-_global_registry: Optional[PluginRegistry] = None
+_global_registry: PluginRegistry | None = None
 
 
 def get_global_registry() -> PluginRegistry:

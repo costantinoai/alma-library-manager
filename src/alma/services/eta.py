@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class RateProfile:
     # Largest batch the endpoint accepts; when set (> batch_size) the op exposes a
     # per-op batch-size override (the ETA + the runner both honor it). ``None`` =
     # the batch is fixed (per-item ops, or a multi-phase op with no single knob).
-    max_batch_size: Optional[int] = None
+    max_batch_size: int | None = None
 
 
 # Keyed by maintenance ``task.key``; the Settings repair lanes reuse the same keys.
@@ -75,7 +75,7 @@ PROFILES: dict[str, RateProfile] = {
 }
 
 
-def batch_bounds(key: str) -> Optional[tuple[int, int]]:
+def batch_bounds(key: str) -> tuple[int, int] | None:
     """``(default_batch, max_batch)`` if op ``key`` exposes a batch-size override,
     else ``None`` (fixed batch). Lets the registry/UI offer a bounded control."""
     p = PROFILES.get(key)
@@ -84,7 +84,7 @@ def batch_bounds(key: str) -> Optional[tuple[int, int]]:
     return p.batch_size, p.max_batch_size
 
 
-def effective_batch_size(key: str, override: Optional[int]) -> int:
+def effective_batch_size(key: str, override: int | None) -> int:
     """The batch size op ``key`` will actually use: the override (clamped to the
     endpoint's [1, max]) when the op is overridable, else the profile default.
     Single source of truth so the ETA and the runner can't disagree."""
@@ -123,8 +123,8 @@ def estimate_eta(
     *,
     openalex_authed: bool,
     s2_authed: bool,
-    batch_size: Optional[int] = None,
-) -> Optional[dict[str, Any]]:
+    batch_size: int | None = None,
+) -> dict[str, Any] | None:
     """Estimate how long operation ``key`` needs to drain ``items`` eligible rows.
 
     ``batch_size`` overrides the profile default for overridable ops (clamped to

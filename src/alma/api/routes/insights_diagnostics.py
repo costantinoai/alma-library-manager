@@ -40,20 +40,10 @@ from typing import Any
 
 from fastapi import Depends, HTTPException
 
+from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
 from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import raise_internal, safe_div, table_exists
-from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
-from alma.application import materialized_views as mv
-from alma.application.diagnostics_stats import (
-    MIN_RATE_SAMPLE,
-    RateEstimate,
-)
-from alma.application.recommendation_outcomes import (
-    build_recommendation_outcomes,
-    count_outcomes,
-)
 from alma.api.routes.insights import (
-    router,
     _aggregate_http_source_diagnostics,
     _aggregate_openalex_usage,
     _build_ai_snapshot,
@@ -70,8 +60,17 @@ from alma.api.routes.insights import (
     _build_signal_lab_trend,
     _library_workflow_snapshot,
     _load_recent_operations,
+    router,
 )
-
+from alma.application import materialized_views as mv
+from alma.application.diagnostics_stats import (
+    MIN_RATE_SAMPLE,
+    RateEstimate,
+)
+from alma.application.recommendation_outcomes import (
+    build_recommendation_outcomes,
+    count_outcomes,
+)
 
 # ── Section keys ----------------------------------------------------------
 
@@ -329,12 +328,15 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
             }
         )
 
+    combined_ops = [*feed_ops, *discovery_ops]
     combined_results = [
         (op.get("result") or {})
-        for op in (*feed_ops, *discovery_ops)
+        for op in combined_ops
         if isinstance(op.get("result"), dict)
     ]
-    source_diagnostics = _aggregate_http_source_diagnostics(combined_results)
+    # Source diagnostics take the full op rows — the aggregator date-stamps each
+    # source (first/last seen, last error) from the op timestamps.
+    source_diagnostics = _aggregate_http_source_diagnostics(combined_ops)
     openalex_usage = _aggregate_openalex_usage(combined_results)
 
     discovery_refresh_trend = _build_refresh_trend(

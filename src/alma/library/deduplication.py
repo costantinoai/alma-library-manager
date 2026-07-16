@@ -15,7 +15,6 @@ import hashlib
 import logging
 import sqlite3
 from datetime import datetime
-from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from alma.core.db_write import write_section
@@ -24,11 +23,11 @@ from alma.core.utils import canonical_lookup_doi, normalize_openalex_id, normali
 logger = logging.getLogger(__name__)
 
 
-def _norm_text(value: Optional[str]) -> str:
+def _norm_text(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
 
 
-def _norm_orcid(value: Optional[str]) -> str:
+def _norm_orcid(value: str | None) -> str:
     """Dedup-friendly ORCID form. Returns ``""`` for invalid input.
 
     Wraps the canonical :func:`alma.core.utils.normalize_orcid` so dedup
@@ -37,14 +36,14 @@ def _norm_orcid(value: Optional[str]) -> str:
     return normalize_orcid(value) or ""
 
 
-def _norm_openalex_author(value: Optional[str]) -> str:
+def _norm_openalex_author(value: str | None) -> str:
     # Delegate to the canonical normalizer (43.4). The old local copy uppercased
     # the whole string and never repaired `%3A` residue, so it diverged from the
     # OpenAlex client on exactly the malformed ids dedup needs to match.
     return normalize_openalex_id(value)
 
 
-def _norm_doi(value: Optional[str]) -> str:
+def _norm_doi(value: str | None) -> str:
     """Dedup-friendly DOI form. Returns ``""`` for invalid input.
 
     Wraps :func:`alma.core.utils.canonical_lookup_doi` (lowercased,
@@ -55,7 +54,7 @@ def _norm_doi(value: Optional[str]) -> str:
     return canonical_lookup_doi(value) or ""
 
 
-def _norm_url(value: Optional[str]) -> str:
+def _norm_url(value: str | None) -> str:
     s = (value or "").strip()
     if not s:
         return ""
@@ -84,7 +83,7 @@ def _author_uid(row: sqlite3.Row) -> str:
     return _stable_hash("author", base)
 
 
-def _paper_identity(title: str, doi: str, url: str, year: Optional[int]) -> str:
+def _paper_identity(title: str, doi: str, url: str, year: int | None) -> str:
     """Generate stable identity string for a paper (v3 schema - no author_id)."""
     d = _norm_doi(doi)
     if d:
@@ -434,7 +433,7 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
     return {"merged_papers": merged, "rewired_references": rewired}
 
 
-def run_deduplication(conn: sqlite3.Connection, job_id: Optional[str] = None) -> dict:
+def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> dict:
     """Run full deduplication pass and stable-ID assignment (v3 schema)."""
     started = datetime.utcnow().isoformat()
 

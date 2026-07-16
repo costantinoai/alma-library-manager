@@ -4,14 +4,10 @@ import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from alma.api.deps import get_db, get_current_user
-from alma.core.db_write import run_write_unit
-from alma.api.helpers import table_exists
 from alma.ai.embedding_sources import (
     EMBEDDING_SOURCE_LOCAL,
     EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
@@ -22,6 +18,9 @@ from alma.ai.environment import (
     check_packages_in_environment,
     resolve_dependency_environment,
 )
+from alma.api.deps import get_current_user, get_db
+from alma.api.helpers import table_exists
+from alma.core.db_write import run_write_unit
 from alma.core.secrets import (
     SECRET_OPENAI_API_KEY,
     delete_secret,
@@ -43,18 +42,18 @@ router = APIRouter(
 class AIConfigureRequest(BaseModel):
     """Request body for POST /configure."""
 
-    provider: Optional[str] = Field(
+    provider: str | None = Field(
         None, description="Embedding provider name (none, local, openai)"
     )
-    openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
-    local_model: Optional[str] = Field(
+    openai_api_key: str | None = Field(None, description="OpenAI API key")
+    local_model: str | None = Field(
         None, description="Local embedding model key (specter2-base)"
     )
-    python_env_type: Optional[str] = Field(
+    python_env_type: str | None = Field(
         None,
         description="Dependency environment type (system, venv, uv, conda, miniconda, miniforge)",
     )
-    python_env_path: Optional[str] = Field(
+    python_env_path: str | None = Field(
         None,
         description="Path to dependency environment folder or python executable",
     )
@@ -67,11 +66,11 @@ class ComputeEmbeddingsResponse(BaseModel):
     """Response body for POST /compute-embeddings."""
 
     job_id: str
-    operation_id: Optional[str] = None
-    status: Optional[str] = None
-    activity_url: Optional[str] = None
-    operation_key: Optional[str] = None
-    scope: Optional[str] = None
+    operation_id: str | None = None
+    status: str | None = None
+    activity_url: str | None = None
+    operation_key: str | None = None
+    scope: str | None = None
     message: str
 
 
@@ -208,7 +207,7 @@ def _feature(
     status: str,
     dependency: str,
     detail: str,
-    action: Optional[str] = None,
+    action: str | None = None,
 ) -> dict:
     return {
         "id": feature_id,
@@ -1115,8 +1114,7 @@ def compute_embeddings(
 
     job_id = f"compute_embeddings_{normalized_scope}_{uuid.uuid4().hex[:8]}"
 
-    from alma.api.scheduler import schedule_immediate
-    from alma.api.scheduler import set_job_status
+    from alma.api.scheduler import schedule_immediate, set_job_status
 
     set_job_status(
         job_id,
@@ -1158,7 +1156,12 @@ def backfill_s2_vectors(
     _user: dict = Depends(get_current_user),
 ) -> ComputeEmbeddingsResponse:
     """Fetch missing API-sourced Semantic Scholar SPECTER2 vectors."""
-    from alma.api.scheduler import activity_envelope, find_active_job, schedule_immediate, set_job_status
+    from alma.api.scheduler import (
+        activity_envelope,
+        find_active_job,
+        schedule_immediate,
+        set_job_status,
+    )
 
     operation_key = "ai.backfill_s2_vectors"
     existing = find_active_job(operation_key)
@@ -1279,7 +1282,6 @@ def delete_inactive_embeddings(
 ) -> DeleteInactiveEmbeddingsResponse:
     """Delete vectors for models other than the active embedding model."""
     from alma.ai.providers import get_active_provider
-
     from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 
     active_model = _read_setting(db, "embedding_model", S2_SPECTER2_MODEL).strip() or S2_SPECTER2_MODEL

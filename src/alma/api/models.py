@@ -3,12 +3,11 @@
 v3: UUID-based papers, discovery lenses, feed items, digest alerts.
 """
 
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Any, Dict, Optional, List
-from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
-
 
 # ============================================================================
 # Author Models
@@ -17,10 +16,10 @@ from alma.discovery.semantic_scholar import S2_SPECTER2_MODEL
 class AuthorCreate(BaseModel):
     """Request model for creating a new author."""
 
-    scholar_id: Optional[str] = Field(None, description="Google Scholar ID")
-    openalex_id: Optional[str] = Field(None, description="OpenAlex author ID")
-    orcid: Optional[str] = Field(None, description="ORCID")
-    name: Optional[str] = Field(None, description="Optional display name fallback")
+    scholar_id: str | None = Field(None, description="Google Scholar ID")
+    openalex_id: str | None = Field(None, description="OpenAlex author ID")
+    orcid: str | None = Field(None, description="ORCID")
+    name: str | None = Field(None, description="Optional display name fallback")
 
 
 class AuthorResponse(BaseModel):
@@ -28,44 +27,44 @@ class AuthorResponse(BaseModel):
 
     id: str
     name: str
-    added_at: Optional[str] = None
+    added_at: str | None = None
     publication_count: int = 0
-    affiliation: Optional[str] = None
-    email_domain: Optional[str] = None
-    citedby: Optional[int] = None
-    h_index: Optional[int] = None
-    interests: Optional[List[str]] = None
-    url_picture: Optional[str] = None
-    works_count: Optional[int] = None
-    last_fetched_at: Optional[str] = None
-    orcid: Optional[str] = None
-    openalex_id: Optional[str] = None
-    scholar_id: Optional[str] = None
-    author_type: Optional[str] = None
-    id_resolution_status: Optional[str] = None
-    id_resolution_reason: Optional[str] = None
-    id_resolution_updated_at: Optional[str] = None
+    affiliation: str | None = None
+    email_domain: str | None = None
+    citedby: int | None = None
+    h_index: int | None = None
+    interests: list[str] | None = None
+    url_picture: str | None = None
+    works_count: int | None = None
+    last_fetched_at: str | None = None
+    orcid: str | None = None
+    openalex_id: str | None = None
+    scholar_id: str | None = None
+    author_type: str | None = None
+    id_resolution_status: str | None = None
+    id_resolution_reason: str | None = None
+    id_resolution_updated_at: str | None = None
     # Phase D hierarchical-resolver fields (2026-04-24): method = which
     # tier fired (`orcid_direct` / `openalex_provided` / …), confidence
     # ∈ [0, 1]. Lets the UI render a "resolved" checkmark without
     # re-evaluating the status enum.
-    id_resolution_method: Optional[str] = None
-    id_resolution_confidence: Optional[float] = None
-    monitor_health: Optional[str] = None
-    monitor_health_reason: Optional[str] = None
-    monitor_last_checked_at: Optional[str] = None
-    monitor_last_success_at: Optional[str] = None
-    monitor_last_status: Optional[str] = None
-    monitor_last_error: Optional[str] = None
-    monitor_last_result: Optional[dict] = None
-    monitor_papers_found: Optional[int] = None
-    monitor_items_created: Optional[int] = None
-    background_corpus_state: Optional[str] = None
-    background_corpus_detail: Optional[str] = None
-    background_corpus_last_success_at: Optional[str] = None
-    background_corpus_age_days: Optional[int] = None
-    background_corpus_publications: Optional[int] = None
-    background_corpus_coverage_ratio: Optional[float] = None
+    id_resolution_method: str | None = None
+    id_resolution_confidence: float | None = None
+    monitor_health: str | None = None
+    monitor_health_reason: str | None = None
+    monitor_last_checked_at: str | None = None
+    monitor_last_success_at: str | None = None
+    monitor_last_status: str | None = None
+    monitor_last_error: str | None = None
+    monitor_last_result: dict | None = None
+    monitor_papers_found: int | None = None
+    monitor_items_created: int | None = None
+    background_corpus_state: str | None = None
+    background_corpus_detail: str | None = None
+    background_corpus_last_success_at: str | None = None
+    background_corpus_age_days: int | None = None
+    background_corpus_publications: int | None = None
+    background_corpus_coverage_ratio: float | None = None
 
 
 class RelatedWork(BaseModel):
@@ -79,21 +78,21 @@ class RelatedWork(BaseModel):
     Semantic Scholar" hint on network-origin rows.
     """
 
-    paper_id: Optional[str] = None
+    paper_id: str | None = None
     title: str
-    authors: Optional[str] = None
-    year: Optional[int] = None
-    doi: Optional[str] = None
-    url: Optional[str] = None
-    journal: Optional[str] = None
-    abstract: Optional[str] = None
-    tldr: Optional[str] = None
+    authors: str | None = None
+    year: int | None = None
+    doi: str | None = None
+    url: str | None = None
+    journal: str | None = None
+    abstract: str | None = None
+    tldr: str | None = None
     cited_by_count: int = 0
     influential_citation_count: int = 0
-    openalex_id: Optional[str] = None
-    semantic_scholar_id: Optional[str] = None
-    status: Optional[str] = None
-    rating: Optional[int] = None
+    openalex_id: str | None = None
+    semantic_scholar_id: str | None = None
+    status: str | None = None
+    rating: int | None = None
     # Whether this edge (reference or citation) was classified as
     # influential by S2. Meaningful only on citation rows; always
     # False on reference rows for now.
@@ -110,7 +109,7 @@ class RelatedWorksResponse(BaseModel):
 
     direction: str
     source_paper_id: str
-    works: List[RelatedWork] = Field(default_factory=list)
+    works: list[RelatedWork] = Field(default_factory=list)
     local_count: int = 0
     remote_count: int = 0
 
@@ -128,9 +127,9 @@ class AuthorSuggestionSignal(BaseModel):
 
     kind: str
     label: str
-    count: Optional[int] = None
-    value: Optional[float] = None
-    subject: Optional[str] = None
+    count: int | None = None
+    value: float | None = None
+    subject: str | None = None
 
 
 class AuthorMergeMatch(BaseModel):
@@ -148,31 +147,31 @@ class AuthorSuggestionResponse(BaseModel):
     name: str
     suggestion_type: str
     score: float = 0.0
-    openalex_id: Optional[str] = None
-    existing_author_id: Optional[str] = None
-    known_author_type: Optional[str] = None
+    openalex_id: str | None = None
+    existing_author_id: str | None = None
+    known_author_type: str | None = None
     # Set when this suggestion's NAME matches an author you already follow — the UI
     # offers "merge into <them>" instead of "follow as new". Null = a genuinely new
     # name.
-    duplicate_of: Optional[AuthorMergeMatch] = None
+    duplicate_of: AuthorMergeMatch | None = None
     shared_paper_count: int = 0
     shared_followed_count: int = 0
     local_paper_count: int = 0
     recent_paper_count: int = 0
-    shared_followed_authors: List[str] = Field(default_factory=list)
-    shared_topics: List[str] = Field(default_factory=list)
-    shared_venues: List[str] = Field(default_factory=list)
-    sample_titles: List[str] = Field(default_factory=list)
+    shared_followed_authors: list[str] = Field(default_factory=list)
+    shared_topics: list[str] = Field(default_factory=list)
+    shared_venues: list[str] = Field(default_factory=list)
+    sample_titles: list[str] = Field(default_factory=list)
     # T7: priority-ordered evidence chips built from bucket-specific
     # signals (`shared_paper_count`, `similarity`, etc.). Capped at
     # 4; frontend renders as a row of neutral StatusBadge chips.
-    signals: List[AuthorSuggestionSignal] = Field(default_factory=list)
+    signals: list[AuthorSuggestionSignal] = Field(default_factory=list)
     negative_signal: float = 0.0
-    last_removed_at: Optional[str] = None
+    last_removed_at: str | None = None
     # Multi-source consensus: how many independent buckets surfaced
     # this candidate, plus the bucket labels for tooltip rendering.
     consensus_count: int = 1
-    consensus_buckets: List[str] = Field(default_factory=list)
+    consensus_buckets: list[str] = Field(default_factory=list)
     # Signed score adjustment from projected paper feedback (saves /
     # ratings / dismisses propagated through `signal_projection`).
     # Surfaced as a chip on the card when the magnitude clears 1 point.
@@ -195,7 +194,7 @@ class AuthorFollowFromPaperResponse(BaseModel):
     author: AuthorResponse
     created: bool = False
     already_followed: bool = False
-    matched_via: Optional[str] = None
+    matched_via: str | None = None
 
 
 # ============================================================================
@@ -207,30 +206,30 @@ class PaperResponse(BaseModel):
 
     id: str = Field(..., description="Paper UUID")
     title: str
-    authors: Optional[str] = None
-    year: Optional[int] = None
-    journal: Optional[str] = None
-    abstract: Optional[str] = None
-    url: Optional[str] = None
-    doi: Optional[str] = None
-    publication_date: Optional[str] = None
+    authors: str | None = None
+    year: int | None = None
+    journal: str | None = None
+    abstract: str | None = None
+    url: str | None = None
+    doi: str | None = None
+    publication_date: str | None = None
 
     # OpenAlex metadata
-    openalex_id: Optional[str] = None
-    work_type: Optional[str] = None
-    language: Optional[str] = None
+    openalex_id: str | None = None
+    work_type: str | None = None
+    language: str | None = None
     is_oa: bool = False
-    oa_status: Optional[str] = None
-    oa_url: Optional[str] = None
+    oa_status: str | None = None
+    oa_url: str | None = None
     is_retracted: bool = False
-    fwci: Optional[float] = None
+    fwci: float | None = None
     cited_by_count: int = 0
     referenced_works_count: int = 0
-    keywords: Optional[List[str]] = None
+    keywords: list[str] | None = None
     # T5: S2 1-2 sentence AI summary. Dense coverage in CS + biomed,
     # sparse elsewhere; `None` means "S2 didn't supply one", distinct
     # from "empty abstract".
-    tldr: Optional[str] = None
+    tldr: str | None = None
     # T5: S2's learned "this citation mattered" count. Supplements
     # `cited_by_count` in the `citation_quality` scoring signal.
     influential_citation_count: int = 0
@@ -238,23 +237,23 @@ class PaperResponse(BaseModel):
     # Status and library
     status: str = "tracked"
     rating: int = 0
-    notes: Optional[str] = None
-    added_at: Optional[str] = None
-    added_from: Optional[str] = None
-    reading_status: Optional[str] = None
+    notes: str | None = None
+    added_at: str | None = None
+    added_from: str | None = None
+    reading_status: str | None = None
     # Row mtime, populated by the `papers.updated_at` trigger default.
     # Surfaced so diagnostic surfaces (Corpus explorer) can show when a row
     # was last touched; without this declaration Pydantic v2's default
     # `extra='ignore'` drops the column silently even when `SELECT p.*`
     # pulls it.
-    updated_at: Optional[str] = None
+    updated_at: str | None = None
 
     # Resolution
-    openalex_resolution_status: Optional[str] = None
-    openalex_resolution_reason: Optional[str] = None
+    openalex_resolution_status: str | None = None
+    openalex_resolution_reason: str | None = None
 
     # Provenance
-    source_id: Optional[str] = None
+    source_id: str | None = None
 
     # Ranking — paper_signal composite score (rating + topic alignment +
     # embedding similarity + author alignment + signal lab + recency).
@@ -269,8 +268,8 @@ class PaperActionRequest(BaseModel):
 
     paper_id: str = Field(..., description="Paper UUID")
     action: str = Field(..., description="Action: add | like | love | dismiss")
-    notes: Optional[str] = None
-    rating: Optional[int] = Field(None, ge=0, le=5)
+    notes: str | None = None
+    rating: int | None = Field(None, ge=0, le=5)
 
 
 class PaperRateRequest(BaseModel):
@@ -284,12 +283,12 @@ class PaperCreateRequest(BaseModel):
     """Request model for manually adding a paper."""
 
     title: str = Field(..., min_length=1)
-    authors: Optional[str] = None
-    year: Optional[int] = None
-    journal: Optional[str] = None
-    abstract: Optional[str] = None
-    url: Optional[str] = None
-    doi: Optional[str] = None
+    authors: str | None = None
+    year: int | None = None
+    journal: str | None = None
+    abstract: str | None = None
+    url: str | None = None
+    doi: str | None = None
     status: str = Field("library", description="Initial status: tracked | library")
     added_from: str = Field("manual", description="Source: manual | import | feed | discovery")
 
@@ -301,30 +300,30 @@ PublicationResponse = PaperResponse
 class PublicationSendItem(BaseModel):
     """Item to send via a plugin from a preview."""
 
-    paper_id: Optional[str] = Field(None, description="Paper UUID (preferred)")
+    paper_id: str | None = Field(None, description="Paper UUID (preferred)")
     # Legacy fields for backward compatibility
-    author_id: Optional[str] = None
+    author_id: str | None = None
     title: str = ""
     authors: str = ""
-    year: Optional[int] = None
-    abstract: Optional[str] = None
-    url: Optional[str] = None
-    citations: Optional[int] = 0
-    journal: Optional[str] = None
+    year: int | None = None
+    abstract: str | None = None
+    url: str | None = None
+    citations: int | None = 0
+    journal: str | None = None
 
 
 class SendPublicationsRequest(BaseModel):
     """Request to send a previewed list of publications via a plugin."""
 
-    plugin_name: Optional[str] = None
-    target: Optional[str] = None
-    items: List[PublicationSendItem]
+    plugin_name: str | None = None
+    target: str | None = None
+    items: list[PublicationSendItem]
 
 
 class SavePublicationsRequest(BaseModel):
     """Request to save previewed publications to the database."""
 
-    items: List[PublicationSendItem]
+    items: list[PublicationSendItem]
 
 
 # ============================================================================
@@ -337,19 +336,19 @@ class FeedItemResponse(BaseModel):
     id: str
     paper_id: str
     author_id: str
-    author_name: Optional[str] = None
-    matched_author_ids: List[str] = Field(default_factory=list)
-    matched_authors: List[str] = Field(default_factory=list)
-    matched_monitors: List[dict] = Field(default_factory=list)
-    monitor_id: Optional[str] = None
-    monitor_type: Optional[str] = None
-    monitor_label: Optional[str] = None
+    author_name: str | None = None
+    matched_author_ids: list[str] = Field(default_factory=list)
+    matched_authors: list[str] = Field(default_factory=list)
+    matched_monitors: list[dict] = Field(default_factory=list)
+    monitor_id: str | None = None
+    monitor_type: str | None = None
+    monitor_label: str | None = None
     fetched_at: str
     status: str = "new"
     is_new: bool = False
     signal_value: int = 0
-    score_breakdown: Optional[dict] = None
-    paper: Optional[PaperResponse] = None
+    score_breakdown: dict | None = None
+    paper: PaperResponse | None = None
 
 
 class FeedMonitorCreateRequest(BaseModel):
@@ -357,17 +356,17 @@ class FeedMonitorCreateRequest(BaseModel):
 
     monitor_type: str = Field(..., description="query (keyword monitor) | topic | venue | preprint | branch")
     query: str = Field(..., min_length=1, description="Search string or boolean keyword expression used by the monitor")
-    label: Optional[str] = Field(default=None, description="Optional display label")
-    config: Optional[dict] = None
+    label: str | None = Field(default=None, description="Optional display label")
+    config: dict | None = None
 
 
 class FeedMonitorUpdateRequest(BaseModel):
     """Request model for updating a feed monitor."""
 
-    query: Optional[str] = Field(default=None, min_length=1, description="Updated search string or boolean keyword expression used by the monitor")
-    label: Optional[str] = Field(default=None, description="Optional display label")
-    enabled: Optional[bool] = Field(default=None, description="Enable or disable this monitor without deleting it")
-    config: Optional[dict] = None
+    query: str | None = Field(default=None, min_length=1, description="Updated search string or boolean keyword expression used by the monitor")
+    label: str | None = Field(default=None, description="Optional display label")
+    enabled: bool | None = Field(default=None, description="Enable or disable this monitor without deleting it")
+    config: dict | None = None
 
 
 class FeedMonitorResponse(BaseModel):
@@ -378,21 +377,21 @@ class FeedMonitorResponse(BaseModel):
     monitor_key: str
     label: str
     enabled: bool = True
-    author_id: Optional[str] = None
-    author_name: Optional[str] = None
-    openalex_id: Optional[str] = None
-    scholar_id: Optional[str] = None
-    orcid: Optional[str] = None
-    config: Optional[dict] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    last_checked_at: Optional[str] = None
-    last_success_at: Optional[str] = None
-    last_status: Optional[str] = None
-    last_error: Optional[str] = None
-    last_result: Optional[dict] = None
+    author_id: str | None = None
+    author_name: str | None = None
+    openalex_id: str | None = None
+    scholar_id: str | None = None
+    orcid: str | None = None
+    config: dict | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    last_checked_at: str | None = None
+    last_success_at: str | None = None
+    last_status: str | None = None
+    last_error: str | None = None
+    last_result: dict | None = None
     health: str = "ready"
-    health_reason: Optional[str] = None
+    health_reason: str | None = None
 
 
 # ============================================================================
@@ -404,18 +403,18 @@ class LensCreate(BaseModel):
 
     name: str = Field(..., min_length=1)
     context_type: str = Field(..., description="library_global | collection | topic_keyword | tag")
-    context_config: Optional[dict] = None
-    weights: Optional[dict] = None
+    context_config: dict | None = None
+    weights: dict | None = None
 
 
 class LensUpdate(BaseModel):
     """Request model for updating a discovery lens."""
 
-    name: Optional[str] = None
-    context_config: Optional[dict] = None
-    weights: Optional[dict] = None
-    branch_controls: Optional[dict] = None
-    is_active: Optional[bool] = None
+    name: str | None = None
+    context_config: dict | None = None
+    weights: dict | None = None
+    branch_controls: dict | None = None
+    is_active: bool | None = None
 
 
 class LensResponse(BaseModel):
@@ -424,25 +423,25 @@ class LensResponse(BaseModel):
     id: str
     name: str
     context_type: str
-    context_config: Optional[dict] = None
-    weights: Optional[dict] = None
+    context_config: dict | None = None
+    weights: dict | None = None
     created_at: str
-    last_refreshed_at: Optional[str] = None
+    last_refreshed_at: str | None = None
     is_active: bool = True
     signal_count: int = 0
     recommendation_count: int = 0
-    last_suggestion_set_id: Optional[str] = None
-    last_ranker_version: Optional[str] = None
-    last_retrieval_summary: Optional[dict] = None
-    branch_controls: Optional[dict] = None
+    last_suggestion_set_id: str | None = None
+    last_ranker_version: str | None = None
+    last_retrieval_summary: dict | None = None
+    branch_controls: dict | None = None
 
 
 class BranchSeedSample(BaseModel):
     """Small paper summary for branch visualization previews."""
 
-    paper_id: Optional[str] = None
+    paper_id: str | None = None
     title: str
-    year: Optional[int] = None
+    year: int | None = None
     rating: int = 0
 
 
@@ -453,11 +452,11 @@ class BranchPreviewItem(BaseModel):
     label: str
     seed_count: int
     branch_score: float = 0.0
-    core_topics: List[str] = Field(default_factory=list)
-    explore_topics: List[str] = Field(default_factory=list)
-    direction_hint: Optional[str] = None
-    sample_papers: List[BranchSeedSample] = Field(default_factory=list)
-    control_state: Optional[str] = None
+    core_topics: list[str] = Field(default_factory=list)
+    explore_topics: list[str] = Field(default_factory=list)
+    direction_hint: str | None = None
+    sample_papers: list[BranchSeedSample] = Field(default_factory=list)
+    control_state: str | None = None
     is_pinned: bool = False
     is_boosted: bool = False
     is_muted: bool = False
@@ -470,20 +469,20 @@ class BranchPreviewItem(BaseModel):
     unseen: int = 0
     unique_sources: int = 0
     auto_weight: float = 1.0
-    auto_weight_reason: Optional[str] = None
+    auto_weight_reason: str | None = None
 
 
 class LensBranchPreviewResponse(BaseModel):
     """Tree-like preview of branch structure for a lens."""
 
     lens_id: str
-    lens_name: Optional[str] = None
+    lens_name: str | None = None
     context_type: str
     seed_count: int = 0
     temperature: float = 0.0
     resolution: float = 1.0
     generated_at: str
-    branches: List[BranchPreviewItem] = Field(default_factory=list)
+    branches: list[BranchPreviewItem] = Field(default_factory=list)
 
 
 class SuggestionSetResponse(BaseModel):
@@ -493,8 +492,8 @@ class SuggestionSetResponse(BaseModel):
     lens_id: str
     context_type: str
     trigger_source: str
-    retrieval_summary: Optional[dict] = None
-    ranker_version: Optional[str] = None
+    retrieval_summary: dict | None = None
+    ranker_version: str | None = None
     created_at: str
 
 
@@ -502,26 +501,27 @@ class RecommendationResponse(BaseModel):
     """Response model for a recommendation."""
 
     id: str
-    suggestion_set_id: Optional[str] = None
-    lens_id: Optional[str] = None
+    suggestion_set_id: str | None = None
+    lens_id: str | None = None
     paper_id: str
-    rank: Optional[int] = None
+    rank: int | None = None
     score: float = Field(..., description="Recommendation score (0-100)")
     in_library: bool = Field(
         False,
         description="Paper is already a saved Library paper (collection lenses surface these so they can be added to the linked collection).",
     )
-    score_breakdown: Optional[dict] = None
-    user_action: Optional[str] = None
-    action_at: Optional[str] = None
-    source_type: Optional[str] = None
-    source_api: Optional[str] = None
-    source_key: Optional[str] = None
-    branch_id: Optional[str] = None
-    branch_label: Optional[str] = None
-    branch_mode: Optional[str] = None
+    score_breakdown: dict | None = None
+    user_action: str | None = None
+    action_at: str | None = None
+    source_type: str | None = None
+    source_api: str | None = None
+    source_key: str | None = None
+    branch_id: str | None = None
+    branch_label: str | None = None
+    branch_mode: str | None = None
     created_at: str
-    paper: Optional[PaperResponse] = None
+    is_new: bool = False
+    paper: PaperResponse | None = None
 
 
 class RecommendationExplainResponse(BaseModel):
@@ -544,10 +544,10 @@ class RecommendationExplainResponse(BaseModel):
     id: str
     title: str
     score: float
-    source_type: Optional[str] = None
-    source_key: Optional[str] = None
-    breakdown: Optional[Dict[str, Any]] = None
-    explanation: Optional[str] = None
+    source_type: str | None = None
+    source_key: str | None = None
+    breakdown: dict[str, Any] | None = None
+    explanation: str | None = None
 
 
 class DiscoveryWeights(BaseModel):
@@ -668,22 +668,22 @@ class DiscoverySettingsResponse(BaseModel):
 class DiscoverySettingsUpdate(BaseModel):
     """Partial update for discovery settings."""
 
-    weights: Optional[DiscoveryWeights] = None
-    strategies: Optional[DiscoveryStrategies] = None
-    limits: Optional[DiscoveryLimits] = None
-    schedule: Optional[DiscoverySchedule] = None
-    cache: Optional[DiscoveryCache] = None
-    sources: Optional[DiscoverySources] = None
-    branches: Optional[DiscoveryBranchSettings] = None
-    monitor_defaults: Optional[DiscoveryMonitorDefaults] = None
-    embedding_model: Optional[str] = None
-    recommendation_mode: Optional[str] = None
+    weights: DiscoveryWeights | None = None
+    strategies: DiscoveryStrategies | None = None
+    limits: DiscoveryLimits | None = None
+    schedule: DiscoverySchedule | None = None
+    cache: DiscoveryCache | None = None
+    sources: DiscoverySources | None = None
+    branches: DiscoveryBranchSettings | None = None
+    monitor_defaults: DiscoveryMonitorDefaults | None = None
+    embedding_model: str | None = None
+    recommendation_mode: str | None = None
 
 
 class SimilarityRequest(BaseModel):
     """Request to discover papers similar to given papers."""
 
-    paper_ids: List[str] = Field(..., description="Paper UUIDs to use as seeds")
+    paper_ids: list[str] = Field(..., description="Paper UUIDs to use as seeds")
     limit: int = Field(20, ge=1, le=100)
     force: bool = Field(False, description="Bypass cache")
 
@@ -691,14 +691,14 @@ class SimilarityRequest(BaseModel):
 class SimilarityResultItem(BaseModel):
     """A single result from a similarity search."""
 
-    paper_id: Optional[str] = None
+    paper_id: str | None = None
     title: str = ""
-    authors: Optional[str] = None
-    url: Optional[str] = None
-    doi: Optional[str] = None
+    authors: str | None = None
+    url: str | None = None
+    doi: str | None = None
     score: float = 0.0
-    score_breakdown: Optional[dict] = None
-    year: Optional[int] = None
+    score_breakdown: dict | None = None
+    year: int | None = None
     # T2 response: which retrieval lane surfaced this candidate
     # (openalex_related / citation_chain / semantic_scholar_recommend
     # / dense_fallback). Defaults to empty so legacy cached rows that
@@ -715,17 +715,17 @@ class SimilarityChannelStat(BaseModel):
     name: str
     fetched: int = 0
     skipped_as_existing: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SimilarityResponse(BaseModel):
     """Response from discover-similar endpoint."""
 
-    results: List[SimilarityResultItem]
+    results: list[SimilarityResultItem]
     cached: bool = False
-    cache_key: Optional[str] = None
+    cache_key: str | None = None
     seed_count: int = 0
-    channels: List[SimilarityChannelStat] = Field(default_factory=list)
+    channels: list[SimilarityChannelStat] = Field(default_factory=list)
     dense_fallback_used: bool = False
 
 
@@ -737,7 +737,7 @@ class CollectionCreate(BaseModel):
     """Request model for creating a collection."""
 
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     color: str = "#3B82F6"
 
 
@@ -746,14 +746,14 @@ class CollectionResponse(BaseModel):
 
     id: str
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     color: str
     created_at: str
     item_count: int = 0
-    last_added_at: Optional[str] = None
-    avg_citations: Optional[float] = None
-    avg_rating: Optional[float] = None
-    activity_status: Optional[str] = None
+    last_added_at: str | None = None
+    avg_citations: float | None = None
+    avg_rating: float | None = None
+    activity_status: str | None = None
 
 
 class CollectionAddPaperRequest(BaseModel):
@@ -796,7 +796,7 @@ class FollowAuthorRequest(BaseModel):
 
     author_id: str
     notify_new_papers: bool = True
-    name: Optional[str] = None
+    name: str | None = None
 
 
 class FollowedAuthorResponse(BaseModel):
@@ -806,7 +806,7 @@ class FollowedAuthorResponse(BaseModel):
     followed_at: str
     notify_new_papers: bool
     is_owner: bool = False
-    name: Optional[str] = None
+    name: str | None = None
 
 
 # ============================================================================
@@ -819,7 +819,7 @@ class AlertRuleCreate(BaseModel):
     name: str
     rule_type: str = Field(..., description="Rule type: author, keyword, topic, similarity, discovery_lens")
     rule_config: dict
-    channels: List[str]
+    channels: list[str]
     enabled: bool = True
 
 
@@ -830,7 +830,7 @@ class AlertRuleResponse(BaseModel):
     name: str
     rule_type: str
     rule_config: dict
-    channels: List[str]
+    channels: list[str]
     enabled: bool
     created_at: str
 
@@ -839,23 +839,23 @@ class AlertCreate(BaseModel):
     """Request model for creating an alert (digest)."""
 
     name: str
-    channels: List[str]
+    channels: list[str]
     schedule: str = "manual"
-    schedule_config: Optional[dict] = None
+    schedule_config: dict | None = None
     format: str = "grouped"
     enabled: bool = True
-    rule_ids: Optional[List[str]] = None
+    rule_ids: list[str] | None = None
 
 
 class AlertUpdate(BaseModel):
     """Request model for updating an alert."""
 
-    name: Optional[str] = None
-    channels: Optional[List[str]] = None
-    schedule: Optional[str] = None
-    schedule_config: Optional[dict] = None
-    format: Optional[str] = None
-    enabled: Optional[bool] = None
+    name: str | None = None
+    channels: list[str] | None = None
+    schedule: str | None = None
+    schedule_config: dict | None = None
+    format: str | None = None
+    enabled: bool | None = None
 
 
 class AlertResponse(BaseModel):
@@ -863,36 +863,36 @@ class AlertResponse(BaseModel):
 
     id: str
     name: str
-    channels: List[str]
+    channels: list[str]
     schedule: str
-    schedule_config: Optional[dict] = None
+    schedule_config: dict | None = None
     format: str
     enabled: bool
     created_at: str
-    last_evaluated_at: Optional[str] = None
-    rules: Optional[List[AlertRuleResponse]] = None
+    last_evaluated_at: str | None = None
+    rules: list[AlertRuleResponse] | None = None
 
 
 class AlertRuleAssignment(BaseModel):
     """Request model for assigning rules to an alert."""
 
-    rule_ids: List[str]
+    rule_ids: list[str]
 
 
 class AlertHistoryResponse(BaseModel):
     """Response model for an alert history entry."""
 
     id: str
-    rule_id: Optional[str] = None
-    alert_id: Optional[str] = None
+    rule_id: str | None = None
+    alert_id: str | None = None
     channel: str
-    paper_id: Optional[str] = None
-    publications: Optional[List[str]] = None
+    paper_id: str | None = None
+    publications: list[str] | None = None
     publication_count: int = 0
     sent_at: str
     status: str
-    message_preview: Optional[str] = None
-    error_message: Optional[str] = None
+    message_preview: str | None = None
+    error_message: str | None = None
 
 
 class AlertEvaluationResult(BaseModel):
@@ -900,18 +900,18 @@ class AlertEvaluationResult(BaseModel):
 
     alert_id: str
     alert_name: str
-    digest_id: Optional[str] = None
-    digest_name: Optional[str] = None
-    matched_rules: Optional[int] = None
+    digest_id: str | None = None
+    digest_name: str | None = None
+    matched_rules: int | None = None
     papers_found: int
     papers_new: int
     papers_sent: int
-    papers_failed: Optional[int] = None
-    channels: List[str]
-    channel_results: Optional[dict] = None
-    trigger_source: Optional[str] = None
+    papers_failed: int | None = None
+    channels: list[str]
+    channel_results: dict | None = None
+    trigger_source: str | None = None
     dry_run: bool
-    papers: Optional[List[dict]] = None
+    papers: list[dict] | None = None
 
 
 class AlertAutomationTemplateRule(BaseModel):
@@ -920,7 +920,7 @@ class AlertAutomationTemplateRule(BaseModel):
     name: str
     rule_type: str
     rule_config: dict
-    channels: List[str] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -928,9 +928,9 @@ class AlertAutomationTemplateDigest(BaseModel):
     """One digest payload proposed for an automation template."""
 
     name: str
-    channels: List[str] = Field(default_factory=list)
+    channels: list[str] = Field(default_factory=list)
     schedule: str = "manual"
-    schedule_config: Optional[dict] = None
+    schedule_config: dict | None = None
     format: str = "text"
     enabled: bool = True
 
@@ -942,7 +942,7 @@ class AlertAutomationTemplate(BaseModel):
     category: str
     title: str
     description: str
-    rationale: Optional[str] = None
+    rationale: str | None = None
     metrics: dict = Field(default_factory=dict)
     rule: AlertAutomationTemplateRule
     alert: AlertAutomationTemplateDigest
@@ -956,11 +956,11 @@ class JobCreate(BaseModel):
     """Request model for creating a scheduled job."""
 
     name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
+    description: str | None = Field(None, max_length=500)
     cron_expression: str
     action: str = Field(..., pattern="^(fetch|notify|fetch_and_notify)$")
-    plugin_name: Optional[str] = None
-    author_ids: Optional[List[str]] = None
+    plugin_name: str | None = None
+    author_ids: list[str] | None = None
     enabled: bool = True
 
 
@@ -969,14 +969,14 @@ class JobResponse(BaseModel):
 
     id: int
     name: str
-    description: Optional[str] = None
+    description: str | None = None
     cron_expression: str
     action: str
-    plugin_name: Optional[str] = None
-    author_ids: Optional[List[str]] = None
+    plugin_name: str | None = None
+    author_ids: list[str] | None = None
     enabled: bool
-    next_run: Optional[str] = None
-    last_run: Optional[str] = None
+    next_run: str | None = None
+    last_run: str | None = None
     created_at: str
 
 
@@ -993,7 +993,7 @@ class PluginInfo(BaseModel):
     description: str
     config_schema: dict
     is_configured: bool
-    is_healthy: Optional[bool] = None
+    is_healthy: bool | None = None
 
 
 class PluginConfigUpdate(BaseModel):
@@ -1036,32 +1036,32 @@ class ImportResultResponse(BaseModel):
     staged: int = 0
     skipped: int = 0
     failed: int = 0
-    errors: List[str] = Field(default_factory=list)
-    items: List[dict] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    items: list[dict] = Field(default_factory=list)
 
 
 class BibtexTextImportRequest(BaseModel):
     """Request model for importing BibTeX from text."""
 
     content: str
-    collection_name: Optional[str] = None
+    collection_name: str | None = None
 
 
 class ZoteroImportRequest(BaseModel):
     """Request model for importing from Zotero."""
 
     library_id: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
     library_type: str = "user"
-    collection_key: Optional[str] = None
-    collection_name: Optional[str] = None
+    collection_key: str | None = None
+    collection_name: str | None = None
 
 
 class ZoteroCollectionsRequest(BaseModel):
     """Request model for listing Zotero collections."""
 
     library_id: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
     library_type: str = "user"
 
 
@@ -1071,7 +1071,7 @@ class ZoteroCollectionResponse(BaseModel):
     key: str
     name: str
     num_items: int = 0
-    parent: Optional[str] = None
+    parent: str | None = None
 
 
 # ============================================================================
@@ -1094,7 +1094,7 @@ class VersionResponse(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
-    detail: Optional[dict] = None
+    detail: dict | None = None
 
 
 # ============================================================================
@@ -1104,7 +1104,6 @@ class ErrorResponse(BaseModel):
 class GraphData(BaseModel):
     """Response model for graph visualization data."""
 
-    nodes: List[dict]
-    edges: List[dict]
-    metadata: Optional[dict] = None
-
+    nodes: list[dict]
+    edges: list[dict]
+    metadata: dict | None = None

@@ -13,7 +13,6 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -24,27 +23,27 @@ from alma.api.helpers import background_mode_requested
 from alma.api.models import (
     BibtexTextImportRequest,
     ImportResultResponse,
-    ZoteroCollectionsRequest,
     ZoteroCollectionResponse,
+    ZoteroCollectionsRequest,
     ZoteroImportRequest,
 )
+from alma.application import import_preflight
 from alma.application import imports as imports_app
 from alma.application import library as library_app
-from alma.application import import_preflight
 from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
-from alma.library.importer import (
-    ImportResult,
-    import_bibtex,
-    import_zotero_rdf,
-    import_zotero,
-    list_zotero_collections,
-)
 from alma.core.redaction import redact_sensitive_text
 from alma.core.secrets import (
     SECRET_ZOTERO_API_KEY,
     get_secret,
     set_secret,
+)
+from alma.library.importer import (
+    ImportResult,
+    import_bibtex,
+    import_zotero,
+    import_zotero_rdf,
+    list_zotero_collections,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +59,7 @@ class PublicationRef(BaseModel):
 
 
 class ResolveImportedRequest(BaseModel):
-    items: List[PublicationRef] = Field(default_factory=list)
+    items: list[PublicationRef] = Field(default_factory=list)
     unresolved_only: bool = True
     limit: int = 1000
     background: bool = True
@@ -96,16 +95,16 @@ class OnlineSearchRequest(BaseModel):
         ),
     )
     limit: int = Field(default=20, ge=1, le=50)
-    year_min: Optional[int] = Field(default=None, ge=1800, le=2100)
-    year_max: Optional[int] = Field(default=None, ge=1800, le=2100)
+    year_min: int | None = Field(default=None, ge=1800, le=2100)
+    year_max: int | None = Field(default=None, ge=1800, le=2100)
 
 
 class OnlineAuthorSearchResult(BaseModel):
     """One author candidate from `/library/import/search/authors`."""
     openalex_id: str
     name: str
-    orcid: Optional[str] = None
-    institution: Optional[str] = None
+    orcid: str | None = None
+    institution: str | None = None
     works_count: int = 0
     cited_by_count: int = 0
     h_index: int = 0
@@ -118,8 +117,8 @@ class OnlineAuthorSearchResult(BaseModel):
     # is the canonical local `authors.id` when this human already has a row
     # (followed OR background) — it lets the search card open the full
     # author detail popup instead of the OpenAlex-only fallback.
-    existing_author_id: Optional[str] = None
-    existing_author_type: Optional[str] = None
+    existing_author_id: str | None = None
+    existing_author_type: str | None = None
     # Titles of the author's two most-cited works (from OpenAlex), shown on
     # the search card so the user can recognise the right person at a glance.
     top_cited_titles: list[str] = []
@@ -130,12 +129,12 @@ class OnlineSearchSaveRequest(BaseModel):
         ...,
         description="One of add | like | love | dislike (shared 3/4/5/1 contract).",
     )
-    openalex_id: Optional[str] = None
-    doi: Optional[str] = None
-    link: Optional[str] = None
-    title: Optional[str] = None
-    query: Optional[str] = None
-    candidate: Optional[dict] = Field(
+    openalex_id: str | None = None
+    doi: str | None = None
+    link: str | None = None
+    title: str | None = None
+    query: str | None = None
+    candidate: dict | None = Field(
         default=None,
         description=(
             "Full multi-source search candidate (fields as returned by "
@@ -144,13 +143,17 @@ class OnlineSearchSaveRequest(BaseModel):
             "Crossref, arXiv, bioRxiv) already provided full metadata."
         ),
     )
-    collection_name: Optional[str] = Field(
+    collection_name: str | None = Field(
         default=None,
         description=(
             "Optional local collection name. When set and the paper lands in "
             "Library (add/like/love), the collection is created/found and the "
             "paper is added to it. Ignored for dislike."
         ),
+    )
+    collection_ids: list[str] = Field(
+        default_factory=list,
+        description="Existing collection ids selected by the paper-card chooser.",
     )
 
 
@@ -185,7 +188,7 @@ def _fetch_zotero_collections_safe(
     return [ZoteroCollectionResponse(**c) for c in collections]
 
 
-def _resolve_zotero_api_key(raw_key: Optional[str]) -> str:
+def _resolve_zotero_api_key(raw_key: str | None) -> str:
     provided = (raw_key or "").strip()
     if provided:
         set_secret(SECRET_ZOTERO_API_KEY, provided)
@@ -207,7 +210,7 @@ def _run_import_sync(
     operation_key: str,
     message: str,
     import_callable,
-    secrets: Optional[list[str]] = None,
+    secrets: list[str] | None = None,
 ) -> ImportResultResponse:
     """Execute an importer inline through OperationRunner.
 
@@ -255,7 +258,7 @@ def _queue_import_background(
     queued_message: str,
     running_message: str,
     import_callable,
-    secrets: Optional[list[str]] = None,
+    secrets: list[str] | None = None,
 ) -> dict:
     """Enqueue an importer as a background Activity job.
 
@@ -481,7 +484,7 @@ def preflight_zotero_endpoint(
 async def import_bibtex_file_endpoint(
     file: UploadFile = File(..., description="A .bib file to import"),
     collection_name: str = Form(None, description="Optional target collection name"),
-    background: Optional[bool] = Query(
+    background: bool | None = Query(
         None,
         description="Run as a background Activity job when the scheduler is enabled",
     ),
@@ -540,7 +543,7 @@ async def import_bibtex_file_endpoint(
 )
 def import_bibtex_text_endpoint(
     req: BibtexTextImportRequest,
-    background: Optional[bool] = Query(
+    background: bool | None = Query(
         None,
         description="Run as a background Activity job when the scheduler is enabled",
     ),
@@ -586,7 +589,7 @@ def import_bibtex_text_endpoint(
 )
 def import_zotero_endpoint(
     req: ZoteroImportRequest,
-    background: Optional[bool] = Query(
+    background: bool | None = Query(
         None,
         description="Run as a background Activity job when the scheduler is enabled",
     ),
@@ -654,7 +657,7 @@ def import_zotero_endpoint(
 
 @router.post(
     "/import/zotero/collections",
-    response_model=List[ZoteroCollectionResponse],
+    response_model=list[ZoteroCollectionResponse],
     summary="List Zotero collections",
 )
 def list_zotero_collections_post_endpoint(
@@ -684,7 +687,7 @@ def list_zotero_collections_post_endpoint(
 async def import_zotero_rdf_file_endpoint(
     file: UploadFile = File(..., description="A Zotero RDF (.rdf) export file"),
     collection_name: str = Form(None, description="Optional target collection name"),
-    background: Optional[bool] = Query(
+    background: bool | None = Query(
         None,
         description="Run as a background Activity job when the scheduler is enabled",
     ),
@@ -765,7 +768,6 @@ def enrich_imports(
             schedule_immediate,
             set_job_status,
         )
-        from alma.config import get_db_path
 
         operation_key = "imports.enrich_all"
         existing = find_active_job(operation_key)
@@ -909,7 +911,6 @@ def resolve_imported_publications_openalex(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    from alma.library.enrichment import enrich_publication
     from alma.api.scheduler import (
         activity_envelope,
         add_job_log,
@@ -918,7 +919,7 @@ def resolve_imported_publications_openalex(
         schedule_immediate,
         set_job_status,
     )
-    from alma.config import get_db_path
+    from alma.library.enrichment import enrich_publication
 
     def _collect_targets(conn: sqlite3.Connection) -> list[str]:
         if req.items:
@@ -1282,6 +1283,7 @@ def online_source_search_save(
             candidate=req.candidate,
             action=req.action,
             collection_name=req.collection_name,
+            collection_ids=req.collection_ids,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

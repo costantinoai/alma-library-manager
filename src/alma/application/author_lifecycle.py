@@ -41,8 +41,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable, Optional
 
 from alma.core.db_write import run_after_gate_release, write_section
 
@@ -229,7 +229,7 @@ def soft_remove_author(
     author_id: str,
     *,
     reason: str,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> bool:
     """Mark an author as `status='removed'` and write an audit log.
 
@@ -291,7 +291,7 @@ def gc_author_if_orphan(
     author_id: str,
     *,
     reason: str,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> bool:
     """Eager helper: soft-remove the author iff they're orphan now.
 
@@ -308,7 +308,7 @@ def gc_authors_if_orphan(
     author_ids: Iterable[str],
     *,
     reason: str,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> int:
     """Cascade helper: GC every distinct author_id that's now orphan.
 
@@ -362,7 +362,7 @@ def cascade_gc_for_paper(
     paper_id: str,
     *,
     reason: str,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> int:
     """Eager cascade: after a paper transitions to a non-live status,
     walk its co-authors and soft-remove anyone newly orphan.
@@ -382,7 +382,7 @@ def garbage_collect_orphan_authors(
     *,
     dry_run: bool = False,
     limit: int,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> dict:
     """Sweep: find still-active orphan authors and soft-remove up to ``limit``.
 

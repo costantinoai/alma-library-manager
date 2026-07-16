@@ -16,14 +16,13 @@ source; the floor stops a hot week from making one source dominate.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from alma.application.signal_projection import normalize_feedback_event_value
-from alma.core.scoring_math import age_decay, clamp, days_since as _days_since
-
+from alma.core.scoring_math import age_decay, clamp
+from alma.core.scoring_math import days_since as _days_since
 
 # Bayesian priors. α=β means the prior peaks at 0.5 (no opinion); a
 # higher sum means more "data" is needed to move the smoothed estimate

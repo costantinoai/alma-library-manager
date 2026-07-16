@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
 
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
@@ -20,7 +19,7 @@ def _strip_jats(text: str) -> str:
     return " ".join(cleaned.split()).strip()
 
 
-def parent_doi_from_relation(relation: object) -> Optional[str]:
+def parent_doi_from_relation(relation: object) -> str | None:
     """Parent DOI from a Crossref ``relation`` block, or ``None``.
 
     Only ``is-supplement-to`` is trusted: it explicitly means "this work is
@@ -42,7 +41,7 @@ def parent_doi_from_relation(relation: object) -> Optional[str]:
     return None
 
 
-def _extract_year(item: dict) -> Optional[int]:
+def _extract_year(item: dict) -> int | None:
     for key in ("issued", "published-print", "published-online", "created"):
         block = item.get(key)
         if not isinstance(block, dict):
@@ -59,7 +58,7 @@ def _extract_year(item: dict) -> Optional[int]:
     return None
 
 
-def _extract_publication_date(item: dict) -> Optional[str]:
+def _extract_publication_date(item: dict) -> str | None:
     for key in ("issued", "published-print", "published-online", "created"):
         block = item.get(key)
         if not isinstance(block, dict):
@@ -92,7 +91,7 @@ def _extract_publication_date(item: dict) -> Optional[str]:
     return None
 
 
-def _crossref_to_candidate(item: dict, score: float) -> Optional[dict]:
+def _crossref_to_candidate(item: dict, score: float) -> dict | None:
     titles = item.get("title") or []
     title = ""
     if isinstance(titles, list) and titles:
@@ -146,7 +145,7 @@ def _crossref_to_candidate(item: dict, score: float) -> Optional[dict]:
     }
 
 
-def fetch_work_by_doi(doi: str) -> Optional[dict]:
+def fetch_work_by_doi(doi: str) -> dict | None:
     """Fetch a single Crossref work by DOI.
 
     Returns a normalized candidate dict (same shape as `_crossref_to_candidate`)
@@ -312,8 +311,8 @@ def search_works(
     query: str,
     *,
     limit: int = 20,
-    from_year: Optional[int] = None,
-) -> List[dict]:
+    from_year: int | None = None,
+) -> list[dict]:
     """Search Crossref works by free-text bibliographic query."""
     query = (query or "").strip()
     if not query:

@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Created on Sat Oct  7 02:46:59 2023
 
 @author: costantino_ai
 """
 
-import os
 import argparse
 import logging
+import os
 import shutil
 
-from alma.plugins.config import PluginConfigLoader, load_plugin_config
-from alma.plugins.registry import get_global_registry
 from alma.core.database import delete_temp_cache
+from alma.core.fetcher import fetch_author_details
+from alma.core.logging import setup_logging
 from alma.core.workflows import (
-    refetch_and_update,
     add_scholar_and_fetch,
+    refetch_and_update,
     regular_fetch_and_message,
     test_fetch_and_message,
 )
-from alma.core.fetcher import fetch_author_details
-from alma.core.logging import setup_logging
+from alma.plugins.config import PluginConfigLoader, load_plugin_config
+from alma.plugins.registry import get_global_registry
 
 logger = logging.getLogger(__name__)
 

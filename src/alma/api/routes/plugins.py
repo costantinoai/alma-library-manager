@@ -1,26 +1,21 @@
 """Plugin configuration and management API endpoints."""
 
 import logging
-from typing import List
 from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from alma.api.models import (
-    PluginInfo,
-    PluginConfigUpdate,
-    PluginTestResult,
-    ErrorResponse
-)
 from alma.api.deps import get_current_user
+from alma.api.models import ErrorResponse, PluginConfigUpdate, PluginInfo, PluginTestResult
 from alma.core.redaction import redact_sensitive_text
+from alma.plugins.config import load_plugin_config, save_plugin_config
+from alma.plugins.registry import PluginRegistry
 
 
 def _get_registry():
     # Resolve at call time so tests can monkeypatch alma.api.deps.get_plugin_registry
     from alma.api.deps import get_plugin_registry as _gpr
     return _gpr()
-from alma.plugins.registry import PluginRegistry
-from alma.plugins.config import load_plugin_config, save_plugin_config
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +31,7 @@ router = APIRouter(
 
 @router.get(
     "",
-    response_model=List[PluginInfo],
+    response_model=list[PluginInfo],
     summary="List all plugins",
     description="Retrieve information about all available messaging plugins.",
 )
@@ -232,7 +227,7 @@ def update_plugin_config(
 
         # Try to create instance with new config to validate
         try:
-            instance = registry.create_instance(plugin_name, config_update.config)
+            registry.create_instance(plugin_name, config_update.config)
             logger.info(f"Successfully configured plugin: {plugin_name}")
 
             return {

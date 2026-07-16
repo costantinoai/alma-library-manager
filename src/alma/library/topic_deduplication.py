@@ -21,9 +21,8 @@ import logging
 import re
 import sqlite3
 import unicodedata
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -485,7 +484,7 @@ def merge_topics(
 # ============================================================================
 
 
-def resolve_topic_id(conn: sqlite3.Connection, raw_term: str) -> Optional[str]:
+def resolve_topic_id(conn: sqlite3.Connection, raw_term: str) -> str | None:
     """Look up the canonical topic_id for a raw term.
 
     Checks the topic_aliases table for a matching normalized term.

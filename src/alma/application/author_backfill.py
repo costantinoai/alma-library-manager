@@ -35,8 +35,9 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Optional
+from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import commit_unless_gated, write_section
@@ -62,7 +63,7 @@ def refresh_author_centroid(
     conn: sqlite3.Connection,
     openalex_id: str,
     *,
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> bool:
     """Recompute and UPSERT one author's centroid from their embeddings.
 
@@ -138,7 +139,7 @@ def refresh_centroids_for_papers(
     conn: sqlite3.Connection,
     paper_ids: list[str],
     *,
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> int:
     """Recompute every author's centroid touched by these papers.
 
@@ -211,7 +212,7 @@ def _authors_needing_centroid_sql() -> str:
     """
 
 
-def _centroid_model(conn: sqlite3.Connection, model: Optional[str]) -> str:
+def _centroid_model(conn: sqlite3.Connection, model: str | None) -> str:
     if model:
         return model
     from alma.discovery.similarity import get_active_embedding_model
@@ -220,7 +221,7 @@ def _centroid_model(conn: sqlite3.Connection, model: Optional[str]) -> str:
 
 
 def count_authors_needing_centroid(
-    conn: sqlite3.Connection, *, model: Optional[str] = None
+    conn: sqlite3.Connection, *, model: str | None = None
 ) -> int:
     """How many authors have an out-of-date centroid (the `author_centroids`
     maintenance task's pending count). Never raises — a schema gap reports 0."""
@@ -239,11 +240,11 @@ def recompute_author_centroids(
     conn: sqlite3.Connection,
     *,
     limit: int,
-    model: Optional[str] = None,
-    job_id: Optional[str] = None,
-    set_job_status: Optional[Callable[..., Any]] = None,
-    add_job_log: Optional[Callable[..., Any]] = None,
-    is_cancellation_requested: Optional[Callable[[str], bool]] = None,
+    model: str | None = None,
+    job_id: str | None = None,
+    set_job_status: Callable[..., Any] | None = None,
+    add_job_log: Callable[..., Any] | None = None,
+    is_cancellation_requested: Callable[[str], bool] | None = None,
 ) -> dict:
     """Recompute stale/missing author centroids from EXISTING local embeddings.
 
@@ -292,7 +293,7 @@ def _fetch_missing_s2_vectors_for_author(
     conn: sqlite3.Connection,
     openalex_id: str,
     *,
-    log: Optional[Callable[..., None]] = None,
+    log: Callable[..., None] | None = None,
 ) -> Counter[str]:
     """Fetch missing S2/SPECTER2 vectors for one author's local papers."""
 
@@ -526,9 +527,9 @@ def refresh_author_works_and_vectors(
     db_path: str,
     author_openalex_id: str,
     *,
-    ctx: Optional[Any] = None,
+    ctx: Any | None = None,
     full_refetch: bool = False,
-    profile_cache: Optional[dict] = None,
+    profile_cache: dict | None = None,
 ) -> dict:
     """Fetch all works + SPECTER2 vectors for one author.
 
@@ -644,7 +645,7 @@ def refresh_author_works_and_vectors(
             return summary
 
         # Phase 2: paginate through all works.
-        cursor: Optional[str] = "*"
+        cursor: str | None = "*"
         works: list[dict] = []
         total_hint = declared or None
         while cursor:
@@ -729,9 +730,9 @@ def refresh_author_works_and_vectors(
 def backfill_all_resolved_authors(
     db_path: str,
     *,
-    ctx: Optional[Any] = None,
-    limit: Optional[int] = None,
-    is_cancellation_requested: Optional[Callable[[], bool]] = None,
+    ctx: Any | None = None,
+    limit: int | None = None,
+    is_cancellation_requested: Callable[[], bool] | None = None,
 ) -> dict:
     """Run `refresh_author_works_and_vectors` over every resolved author
     whose centroid is missing or older than 14 days.
@@ -837,7 +838,7 @@ def backfill_all_resolved_authors(
 
 def _upsert_work(
     conn: sqlite3.Connection, work: dict, *, now: str
-) -> tuple[Optional[str], bool]:
+) -> tuple[str | None, bool]:
     """Upsert one OpenAlex work into `papers`. Returns (paper_id, is_new).
 
     Delegates to `openalex.client._upsert_single_paper` so every

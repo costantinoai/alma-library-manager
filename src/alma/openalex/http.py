@@ -31,22 +31,22 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import json
 import logging
 import os
 import random
 import re
 import threading
 import time
-import json
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, Optional
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from requests.structures import CaseInsensitiveDict
 
-from alma.config import get_openalex_email, get_openalex_api_key
+from alma.config import get_openalex_api_key, get_openalex_email
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ _SINGLETON_PATH_RE = re.compile(
 )
 
 
-def classify_request(path: str, params: Optional[Dict[str, Any]] = None) -> str:
+def classify_request(path: str, params: dict[str, Any] | None = None) -> str:
     """Return the OpenAlex cost class of a request: ``singleton`` (free,
     unlimited), ``search`` ($1.00/1k — 10× list), or ``list`` ($0.10/1k).
 
@@ -166,8 +166,8 @@ class OpenAlexClient:
 
     def __init__(
         self,
-        api_key: Optional[str] | object = _UNSET,
-        mailto: Optional[str] = None,
+        api_key: str | None | object = _UNSET,
+        mailto: str | None = None,
     ) -> None:
         self._api_key = _resolve_api_key() if api_key is _UNSET else api_key
         self._mailto = mailto or get_openalex_email()
@@ -182,28 +182,28 @@ class OpenAlexClient:
         self._stats_lock = threading.Lock()
 
         # Rate-limit bookkeeping
-        self._rate_limit: Optional[int] = None  # X-RateLimit-Limit
-        self._rate_remaining: Optional[int] = None  # X-RateLimit-Remaining
-        self._credits_used: Optional[int] = None  # X-RateLimit-Credits-Used
-        self._rate_reset: Optional[str] = None  # X-RateLimit-Reset
+        self._rate_limit: int | None = None  # X-RateLimit-Limit
+        self._rate_remaining: int | None = None  # X-RateLimit-Remaining
+        self._credits_used: int | None = None  # X-RateLimit-Credits-Used
+        self._rate_reset: str | None = None  # X-RateLimit-Reset
         self._request_count: int = 0
         self._retry_count: int = 0
         self._rate_limited_events: int = 0
         self._calls_saved_by_cache: int = 0
         # Upstream calls by cost class (cache hits excluded) — backs the
         # per-class spend estimate in the usage snapshot / ApiBudgetCard.
-        self._class_counts: Dict[str, int] = {"singleton": 0, "list": 0, "search": 0}
+        self._class_counts: dict[str, int] = {"singleton": 0, "list": 0, "search": 0}
         self._cache_lock = threading.RLock()
         # key -> (expires_at, status_code, headers, content, url, reason, encoding)
-        self._response_cache: Dict[
+        self._response_cache: dict[
             str,
-            tuple[float, int, Dict[str, str], bytes, str, str, Optional[str]],
+            tuple[float, int, dict[str, str], bytes, str, str, str | None],
         ] = {}
 
         # Operation-scoped cache (active only inside `operation_cache()` block)
-        self._op_cache: Optional[Dict[str, tuple[int, Dict[str, str], bytes, str, str, Optional[str]]]] = None
-        self._op_negative_cache: Optional[set[str]] = None
-        self._op_stats: Optional[OperationStats] = None
+        self._op_cache: dict[str, tuple[int, dict[str, str], bytes, str, str, str | None]] | None = None
+        self._op_negative_cache: set[str] | None = None
+        self._op_stats: OperationStats | None = None
 
     def _session(self) -> requests.Session:
         """Return this thread's `requests.Session` (lazily created).
@@ -259,7 +259,7 @@ class OpenAlexClient:
             if stats.calls_total > 0:
                 logger.info("Operation cache [%s]: %s", name, stats.summary())
 
-    def _op_cache_get(self, key: str) -> Optional[requests.Response]:
+    def _op_cache_get(self, key: str) -> requests.Response | None:
         """Serve from the operation-scoped cache if active and key present."""
         if self._op_cache is None:
             return None
@@ -320,7 +320,7 @@ class OpenAlexClient:
     def get(
         self,
         path: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         timeout: float = 20,
     ) -> requests.Response:
         """Send a GET request to the OpenAlex API.
@@ -344,15 +344,15 @@ class OpenAlexClient:
     def get_singleton(
         self,
         work_id: str,
-        select: Optional[str] = None,
+        select: str | None = None,
         timeout: float = 20,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch a single work by ID (0 credits).
 
         Returns parsed JSON dict, or ``None`` on 404.
         """
         path = f"/works/{work_id}"
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if select:
             params["select"] = select
         resp = self.get(path, params=params, timeout=timeout)
@@ -364,7 +364,7 @@ class OpenAlexClient:
     def seed_cache(
         self,
         path: str,
-        params: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
         resp: requests.Response,
     ) -> None:
         """Store *resp* in the response cache as if fetched via ``get(path, params)``.
@@ -381,7 +381,7 @@ class OpenAlexClient:
         self._store_cached_response(key, resp, fallback_url=url)
         self._op_cache_put(key, resp, fallback_url=url)
 
-    def get_rate_limit_status(self, timeout: float = 10) -> Optional[Dict[str, Any]]:
+    def get_rate_limit_status(self, timeout: float = 10) -> dict[str, Any] | None:
         """Return authoritative rate-limit status from OpenAlex ``/rate-limit``.
 
         Requires a configured API key. Returns ``None`` if unavailable.
@@ -404,7 +404,7 @@ class OpenAlexClient:
         except Exception:
             return None
 
-    def probe_credentials(self, timeout: float = 8) -> Dict[str, Any]:
+    def probe_credentials(self, timeout: float = 8) -> dict[str, Any]:
         """Live check of the configured OpenAlex API key.
 
         Mirrors the Semantic Scholar status contract consumed by
@@ -461,8 +461,8 @@ class OpenAlexClient:
     # ------------------------------------------------------------------
 
     def _inject_auth(
-        self, params: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, params: dict[str, Any] | None
+    ) -> dict[str, Any]:
         """Return a copy of *params* with the ``api_key`` added.
 
         The ``mailto``/polite-pool parameter was discontinued by OpenAlex on
@@ -482,7 +482,7 @@ class OpenAlexClient:
     def _request_with_retry(
         self,
         url: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         timeout: float,
     ) -> requests.Response:
         """Execute a GET with bounded exponential backoff on retryable errors."""
@@ -508,8 +508,8 @@ class OpenAlexClient:
         with self._stats_lock:
             self._class_counts[cost_class] = self._class_counts.get(cost_class, 0) + 1
 
-        last_exc: Optional[Exception] = None
-        last_resp: Optional[requests.Response] = None
+        last_exc: Exception | None = None
+        last_resp: requests.Response | None = None
 
         for attempt in range(_MAX_RETRIES + 1):
             try:
@@ -603,7 +603,7 @@ class OpenAlexClient:
         )
 
     @staticmethod
-    def _cache_key(url: str, params: Dict[str, Any]) -> str:
+    def _cache_key(url: str, params: dict[str, Any]) -> str:
         """Build a stable cache key from URL and query params."""
         safe_params = {k: v for k, v in (params or {}).items() if str(k).lower() != "api_key"}
         try:
@@ -637,7 +637,7 @@ class OpenAlexClient:
         except Exception:
             return raw
 
-    def _get_cached_response(self, key: str) -> Optional[requests.Response]:
+    def _get_cached_response(self, key: str) -> requests.Response | None:
         """Return a cached response if present and unexpired."""
         now = time.time()
         with self._cache_lock:
@@ -739,7 +739,6 @@ class OpenAlexClient:
 
         limit_str = headers.get("X-RateLimit-Limit")
         remaining_str = headers.get("X-RateLimit-Remaining")
-        used_str = headers.get("X-RateLimit-Credits-Used")
         reset_str = headers.get("X-RateLimit-Reset")
 
         # Lock the counter/field block so concurrent fetch workers don't lose
@@ -794,22 +793,22 @@ class OpenAlexClient:
     # ------------------------------------------------------------------
 
     @property
-    def rate_limit(self) -> Optional[int]:
+    def rate_limit(self) -> int | None:
         """Total credit budget in the current window, or ``None`` if unknown."""
         return self._rate_limit
 
     @property
-    def rate_remaining(self) -> Optional[int]:
+    def rate_remaining(self) -> int | None:
         """Credits remaining in the current window, or ``None`` if unknown."""
         return self._rate_remaining
 
     @property
-    def credits_used(self) -> Optional[int]:
+    def credits_used(self) -> int | None:
         """Total credits used in the current window, or ``None`` if unknown."""
         return self._credits_used
 
     @property
-    def rate_reset(self) -> Optional[str]:
+    def rate_reset(self) -> str | None:
         """Raw ``X-RateLimit-Reset`` string from the last response, or ``None``."""
         return self._rate_reset
 
@@ -834,7 +833,7 @@ class OpenAlexClient:
         return self._calls_saved_by_cache
 
     @property
-    def class_counts(self) -> Dict[str, int]:
+    def class_counts(self) -> dict[str, int]:
         """Upstream calls by pricing class since process start."""
         with self._stats_lock:
             return dict(self._class_counts)
@@ -875,7 +874,7 @@ class OpenAlexClient:
 # Module-level singleton
 # ----------------------------------------------------------------------
 
-_client: Optional[OpenAlexClient] = None
+_client: OpenAlexClient | None = None
 _client_lock = threading.Lock()
 
 
@@ -909,7 +908,7 @@ def reset_client() -> None:
 # ----------------------------------------------------------------------
 
 
-def _resolve_api_key() -> Optional[str]:
+def _resolve_api_key() -> str | None:
     """Read the OpenAlex API key from environment or settings.
 
     Priority:

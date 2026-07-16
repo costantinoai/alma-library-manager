@@ -11,13 +11,11 @@ import importlib
 import importlib.metadata
 import json
 import logging
-import site
 import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from alma.ai.import_state import module_available
 
@@ -124,14 +122,14 @@ class DependencyEnvironment:
     configured_type: str
     configured_path: str
     valid: bool
-    message: Optional[str]
-    detected_type: Optional[str] = None
-    resolved_path: Optional[str] = None
-    selected_python_executable: Optional[str] = None
-    selected_python_version: Optional[str] = None
+    message: str | None
+    detected_type: str | None = None
+    resolved_path: str | None = None
+    selected_python_executable: str | None = None
+    selected_python_version: str | None = None
     selected_site_packages: list[str] = field(default_factory=list)
     using_fallback: bool = False
-    fallback_reason: Optional[str] = None
+    fallback_reason: str | None = None
     effective_python_executable: str = sys.executable
     effective_python_version: str = sys.version.split()[0]
 
@@ -185,7 +183,7 @@ def _read_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     return row["value"] if isinstance(row, sqlite3.Row) else row[0]
 
 
-def _detect_environment_layout(env_dir: Path) -> Optional[str]:
+def _detect_environment_layout(env_dir: Path) -> str | None:
     """Detect whether a directory looks like a venv or conda env."""
     if (env_dir / "conda-meta").is_dir():
         return "conda"
@@ -202,7 +200,7 @@ def _guess_env_root_from_python(python_path: Path) -> Path:
     return parent
 
 
-def _find_python_executable(env_dir: Path) -> Optional[Path]:
+def _find_python_executable(env_dir: Path) -> Path | None:
     """Find python executable inside an environment folder."""
     candidates = [
         env_dir / "bin" / "python",
@@ -216,7 +214,7 @@ def _find_python_executable(env_dir: Path) -> Optional[Path]:
     return None
 
 
-def _probe_python_environment(python_executable: str) -> tuple[Optional[dict], Optional[str]]:
+def _probe_python_environment(python_executable: str) -> tuple[dict | None, str | None]:
     """Query interpreter metadata from a python executable."""
     try:
         proc = subprocess.run(
@@ -248,8 +246,8 @@ def _invalid_with_fallback(
     env_type: str,
     env_path: str,
     message: str,
-    resolved_path: Optional[str] = None,
-    detected_type: Optional[str] = None,
+    resolved_path: str | None = None,
+    detected_type: str | None = None,
 ) -> DependencyEnvironment:
     """Build an invalid env result that falls back to current process."""
     current_exec, current_version = _current_python_info()
@@ -312,7 +310,7 @@ def resolve_dependency_environment(env_type: str, env_path: str) -> DependencyEn
             f"Path does not exist: {normalized_path}",
         )
 
-    selected_python: Optional[Path] = None
+    selected_python: Path | None = None
     env_dir: Path
     if original_path.is_file():
         selected_python = original_path
@@ -446,9 +444,9 @@ def _activate_site_packages(env: DependencyEnvironment) -> None:
 
 def check_packages_in_environment(
     package_map: dict[str, str],
-    dist_name_map: Optional[dict[str, str]],
+    dist_name_map: dict[str, str] | None,
     env: DependencyEnvironment,
-) -> tuple[dict[str, dict], Optional[str]]:
+) -> tuple[dict[str, dict], str | None]:
     """Check package install status in the selected env and backend runtime.
 
     ``installed``/``version`` describe the selected dependency environment.
@@ -507,7 +505,7 @@ def _check_packages_via_subprocess(
     python_executable: str,
     package_map: dict[str, str],
     dist_name_map: dict[str, str],
-) -> tuple[Optional[dict[str, dict]], Optional[str]]:
+) -> tuple[dict[str, dict] | None, str | None]:
     """Run dependency checks in a target python interpreter."""
     try:
         proc = subprocess.run(
@@ -555,7 +553,7 @@ def _check_packages_current_process(
     result: dict[str, dict] = {}
     for display_name, module_name in package_map.items():
         installed = module_available(module_name)
-        version: Optional[str] = None
+        version: str | None = None
         if installed:
             dist_name = dist_name_map.get(module_name, module_name)
             try:

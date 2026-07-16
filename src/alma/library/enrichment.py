@@ -6,14 +6,13 @@ then populates topics, institutions, and citation counts.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import sqlite3
 import time
-import hashlib
-import re
 from difflib import SequenceMatcher
-from typing import Optional
 
 import requests
 
@@ -21,20 +20,19 @@ from alma.config import get_api_call_delay
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.resolution import resolve_paper_openalex_work
-from alma.core.utils import normalize_doi, normalize_orcid, normalize_text as _normalize_text
+from alma.core.utils import normalize_doi, normalize_orcid
+from alma.core.utils import normalize_text as _normalize_text
 from alma.openalex.client import (
+    _WORKS_SELECT_FIELDS,
     _ensure_schema,
     _normalize_openalex_author_id,
     _normalize_work,
-    backfill_missing_publication_references,
     _upsert_institutions,
     _upsert_topics,
-    _WORKS_SELECT_FIELDS,
+    backfill_missing_publication_references,
     batch_fetch_works_by_dois,
 )
 from alma.openalex.http import get_client
-
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +107,7 @@ def _doi_variants(doi_raw: str) -> list[str]:
     return out
 
 
-def _extract_arxiv_id(text: str) -> Optional[str]:
+def _extract_arxiv_id(text: str) -> str | None:
     s = (text or "").strip()
     if not s:
         return None
@@ -125,7 +123,7 @@ def _extract_arxiv_id(text: str) -> Optional[str]:
     return None
 
 
-def _extract_biorxiv_doi(text: str) -> Optional[str]:
+def _extract_biorxiv_doi(text: str) -> str | None:
     s = (text or "").strip()
     if not s:
         return None
@@ -249,7 +247,7 @@ def _search_work_candidates(title_query: str, per_page: int = 10) -> list[dict]:
         return []
 
 
-def _fetch_work_by_doi_diagnostic(doi: str) -> tuple[Optional[dict], Optional[str]]:
+def _fetch_work_by_doi_diagnostic(doi: str) -> tuple[dict | None, str | None]:
     """DOI lookup with explicit failure diagnostics (vs silent None)."""
     if not doi:
         return None, None
@@ -280,7 +278,7 @@ def _fetch_work_by_doi_diagnostic(doi: str) -> tuple[Optional[dict], Optional[st
         return None, "openalex_lookup_error"
 
 
-def _fetch_work_by_title_diagnostic(title: str) -> tuple[Optional[dict], Optional[str]]:
+def _fetch_work_by_title_diagnostic(title: str) -> tuple[dict | None, str | None]:
     """Title lookup with diagnostics and slightly broader candidate sweep."""
     if not title or not title.strip():
         return None, None
@@ -335,9 +333,9 @@ def _fetch_work_by_title_diagnostic(title: str) -> tuple[Optional[dict], Optiona
 def _resolve_work(
     pub: dict,
     *,
-    _title_search_cache: Optional[dict[str, Optional[dict]]] = None,
-    _doi_prefetch: Optional[dict[str, dict]] = None,
-) -> tuple[Optional[dict], Optional[str], Optional[str]]:
+    _title_search_cache: dict[str, dict | None] | None = None,
+    _doi_prefetch: dict[str, dict] | None = None,
+) -> tuple[dict | None, str | None, str | None]:
     """Resolve a publication via the shared paper-resolution layer."""
     resolution = resolve_paper_openalex_work(
         pub,
@@ -353,8 +351,8 @@ def enrich_publication(
     paper_id: str,
     conn: sqlite3.Connection,
     *,
-    _title_search_cache: Optional[dict[str, Optional[dict]]] = None,
-    _doi_prefetch: Optional[dict[str, dict]] = None,
+    _title_search_cache: dict[str, dict | None] | None = None,
+    _doi_prefetch: dict[str, dict] | None = None,
 ) -> dict:
     """Enrich a single publication by resolving it via OpenAlex.
 
@@ -536,7 +534,7 @@ def enrich_publication(
 
 def enrich_all_unenriched(
     conn: sqlite3.Connection,
-    job_id: Optional[str] = None,
+    job_id: str | None = None,
 ) -> dict:
     """Enrich all publications that have no topic entries yet.
 
@@ -624,7 +622,7 @@ def enrich_all_unenriched(
     # Papers whose DOIs were resolved in the batch skip API calls entirely.
     # For the rest, pre-resolve titles in parallel threads to avoid serial
     # 1-API-call-per-paper bottleneck.
-    _title_search_cache: dict[str, Optional[dict]] = {}
+    _title_search_cache: dict[str, dict | None] = {}
     prefetched_doi_set = set(_doi_prefetch.keys())
     titles_to_resolve: list[tuple[str, dict]] = []  # (normalized_title, pub_dict)
     for r in rows:
@@ -648,7 +646,7 @@ def enrich_all_unenriched(
 
         from alma.core.concurrency import bounded_thread_pool
 
-        def _pre_resolve_title(item: tuple[str, dict]) -> tuple[str, Optional[dict], Optional[str], Optional[str]]:
+        def _pre_resolve_title(item: tuple[str, dict]) -> tuple[str, dict | None, str | None, str | None]:
             tnk, pub = item
             try:
                 work, match_source, fail_reason = _resolve_work(pub)
@@ -969,8 +967,8 @@ def materialize_imported_authors(conn: sqlite3.Connection) -> dict:
         if not names:
             continue
 
-        primary_id: Optional[str] = None
-        preferred_tracked_id: Optional[str] = None
+        primary_id: str | None = None
+        preferred_tracked_id: str | None = None
         for idx, raw_name in enumerate(names):
             clean_name = _canonical_author_name(raw_name)
             if not clean_name:
@@ -1042,7 +1040,6 @@ def _move_publication_owner(
     in sync so author-link and identifier resolution work on the same owner key.
     """
     pid = (paper_id or "").strip()
-    ttl = (title or "").strip()
     old_id = (old_author_id or "").strip()
     new_id = (new_author_id or "").strip()
     if not pid or not old_id or not new_id or old_id == new_id:
@@ -1105,7 +1102,7 @@ def _canonical_author_name(name: str) -> str:
     return text
 
 
-def _find_author_by_name(conn: sqlite3.Connection, name: str) -> Optional[sqlite3.Row]:
+def _find_author_by_name(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
     clean = _canonical_author_name(name)
     if not clean:
         return None
@@ -1327,7 +1324,7 @@ def _names_match(pub_name: str, tracked_name: str) -> bool:
 def _set_job_progress(job_id: str, **kwargs) -> None:
     """Update job status via the scheduler, if available."""
     try:
-        from alma.api.scheduler import set_job_status, add_job_log
+        from alma.api.scheduler import add_job_log, set_job_status
 
         set_job_status(job_id, **kwargs)
         msg = kwargs.get("message")

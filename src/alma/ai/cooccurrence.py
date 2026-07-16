@@ -27,14 +27,14 @@ whether it's an over-cited classic or a mega-author paper.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Iterable, Mapping, Optional
+from collections.abc import Iterable, Mapping
 
 
 def cooccurrence_pairs(
     entity_features: Mapping[str, Iterable[str]],
     *,
     min_shared: int = 1,
-    max_feature_df: Optional[int] = None,
+    max_feature_df: int | None = None,
 ) -> dict[tuple[str, str], int]:
     """Count shared features between entity pairs via an inverted index.
 

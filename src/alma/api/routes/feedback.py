@@ -13,7 +13,7 @@ import json
 import logging
 import sqlite3
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -41,10 +41,10 @@ class TrackRequest(BaseModel):
         ...,
         description="One of: external_link_click, abstract_engagement, search_query",
     )
-    paper_id: Optional[str] = Field(
+    paper_id: str | None = Field(
         None, description="Paper ID (null for search queries)"
     )
-    context: Optional[Dict[str, Any]] = Field(
+    context: dict[str, Any] | None = Field(
         None, description="Event-specific context data"
     )
 

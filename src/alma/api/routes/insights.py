@@ -6,10 +6,12 @@ import statistics
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from alma.api.deps import get_db, get_current_user
+from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
+from alma.api.deps import get_current_user, get_db
 from alma.api.helpers import (
     json_loads,
     raise_internal,
@@ -17,17 +19,16 @@ from alma.api.helpers import (
     safe_div,
     table_exists,
 )
-from alma.ai.graph_versions import INSIGHTS_LOGIC_VERSION, with_version
-from alma.core.db_write import run_write_unit
-from alma.core.sql_helpers import standalone_paper_sql
 from alma.application import materialized_views as mv
-from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 from alma.application.followed_authors import get_followed_author_backfill_status
 from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
     count_outcomes,
 )
+from alma.core.db_write import run_write_unit
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
+from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +75,25 @@ def _load_recent_operations(
 
 
 def _aggregate_http_source_diagnostics(
-    operation_results: list[dict[str, Any]],
+    operations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Merge per-source HTTP diagnostics across recent refresh operations.
+
+    ``operations`` are rows from ``_load_recent_operations`` — each carries its
+    ``result`` envelope plus timestamps. The window is count-based (last N ops,
+    however old), so every source row is date-stamped: ``first_seen`` /
+    ``last_seen`` bound the ops that actually touched the source, and
+    ``last_error_at`` is the newest op in which the source had errors. Without
+    these the UI cannot tell a live outage from a weeks-old blip that keeps
+    re-aggregating because no newer traffic has displaced it.
+    """
     merged: dict[str, dict[str, Any]] = {}
-    for entry in operation_results:
+    for op in operations:
+        entry = op.get("result")
+        if not isinstance(entry, dict):
+            continue
+        # Same recency key _load_recent_operations orders by.
+        op_ts = op.get("finished_at") or op.get("updated_at") or op.get("started_at")
         source_diagnostics = entry.get("source_diagnostics") or {}
         http_diag = source_diagnostics.get("http") if isinstance(source_diagnostics, dict) else {}
         if not isinstance(http_diag, dict):
@@ -99,9 +115,24 @@ def _aggregate_http_source_diagnostics(
                     "status_counts": {},
                     "endpoint_counts": {},
                     "last_error": None,
+                    "first_seen": None,
+                    "last_seen": None,
+                    "last_error_at": None,
                 },
             )
             target["operations"] += 1
+            if op_ts:
+                # ISO-8601 strings from one SQLite column compare lexicographically.
+                if target["first_seen"] is None or op_ts < target["first_seen"]:
+                    target["first_seen"] = op_ts
+                if target["last_seen"] is None or op_ts > target["last_seen"]:
+                    target["last_seen"] = op_ts
+                had_errors = (
+                    int(raw.get("http_errors") or 0) > 0
+                    or int(raw.get("transport_errors") or 0) > 0
+                )
+                if had_errors and (target["last_error_at"] is None or op_ts > target["last_error_at"]):
+                    target["last_error_at"] = op_ts
             requests = int(raw.get("requests") or 0)
             target["requests"] += requests
             target["ok"] += int(raw.get("ok") or 0)
@@ -148,6 +179,9 @@ def _aggregate_http_source_diagnostics(
                     for path, count in top_endpoints
                 ],
                 "last_error": raw.get("last_error"),
+                "first_seen": raw.get("first_seen"),
+                "last_seen": raw.get("last_seen"),
+                "last_error_at": raw.get("last_error_at"),
             }
         )
     out.sort(key=lambda item: (-int(item.get("requests") or 0), str(item.get("source") or "")))
