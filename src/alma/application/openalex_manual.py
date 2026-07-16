@@ -950,6 +950,7 @@ def save_online_search_result(
     added_from: str = "online_search",
     default_reading_status: Optional[str] = None,
     override_added_from: bool = False,
+    collection_name: Optional[str] = None,
 ) -> dict:
     """Resolve a work + apply the shared add/like/love/dislike contract.
 
@@ -981,6 +982,13 @@ def save_online_search_result(
     provenance. Used by deliberate, explicit save surfaces (e.g. the
     browser connector) so their provenance isn't masked by the ``'feed'``
     stamp the candidate-fallback upsert applies to brand-new rows.
+
+    ``collection_name`` — when set and the paper lands in Library (the
+    add/like/love path), the named local collection is created/found and
+    the paper is added to it. Reuses the importer's collection helpers and
+    runs INSIDE the same write unit, so the collection row + membership
+    commit atomically with the library save. Ignored for dislike (nothing
+    is saved to group).
     """
     action = (action or "add").strip().lower()
     if action not in _ONLINE_SEARCH_ACTION_RATINGS:
@@ -1054,6 +1062,15 @@ def save_online_search_result(
                 default_reading_status=default_reading_status,
                 override_added_from=override_added_from,
             )
+            # Optionally group the newly-saved paper into a local collection.
+            # Runs inside this write unit (writer gate held) so the collection
+            # row + membership commit atomically with the library save. Uses the
+            # application-layer collection helpers (plain INSERTs, no commit) so
+            # this path doesn't reach across into importer internals.
+            coll = (collection_name or "").strip()
+            if coll:
+                collection_id = library_app.find_or_create_collection(db, coll)
+                library_app.insert_collection_item(db, collection_id, pid)
         else:  # dislike
             if current_status == library_app.LIBRARY_STATUS:
                 # Respect an existing save: don't auto-remove from library just

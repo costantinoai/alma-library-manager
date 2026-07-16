@@ -144,6 +144,14 @@ class OnlineSearchSaveRequest(BaseModel):
             "Crossref, arXiv, bioRxiv) already provided full metadata."
         ),
     )
+    collection_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional local collection name. When set and the paper lands in "
+            "Library (add/like/love), the collection is created/found and the "
+            "paper is added to it. Ignored for dislike."
+        ),
+    )
 
 
 def _redact_exception_message(exc: Exception, secrets: list[str]) -> str:
@@ -1273,6 +1281,7 @@ def online_source_search_save(
             query=req.query,
             candidate=req.candidate,
             action=req.action,
+            collection_name=req.collection_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
