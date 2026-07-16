@@ -110,6 +110,8 @@ def summarize_records(
     with_abstract = 0
     rich_metadata = 0
     existing_matches = 0
+    existing_already_in_library = 0
+    existing_promotable = 0
     likely_new_rows = 0
 
     for row in rows:
@@ -134,6 +136,19 @@ def summarize_records(
         existing = importer._find_existing_paper(conn, doi, "", title, year)
         if existing:
             existing_matches += 1
+            # An existing row is only truly *skipped* if it is already a saved
+            # Library paper. A tracked/dismissed match is PROMOTED into the
+            # Library on import (counted as "imported"), so it must not inflate
+            # the forecasted skip count — this is what made the preflight
+            # forecast (8 matches) disagree with the result (3 skipped).
+            status_row = conn.execute(
+                "SELECT status FROM papers WHERE id = ?", (existing,)
+            ).fetchone()
+            status = str((status_row["status"] if status_row else "") or "").strip().lower()
+            if status == "library":
+                existing_already_in_library += 1
+            else:
+                existing_promotable += 1
         else:
             likely_new_rows += 1
 
@@ -161,6 +176,11 @@ def summarize_records(
         },
         "dedup": {
             "existing_matches": existing_matches,
+            # Of the existing matches: how many will be SKIPPED (already saved to
+            # Library) vs PROMOTED into the Library (tracked/other → imported).
+            # The forecasted "skipped" is `already_in_library`, not the total.
+            "already_in_library": existing_already_in_library,
+            "promotable_to_library": existing_promotable,
             "likely_new_rows": likely_new_rows,
             # Records collapsed at parse time (Zotero RDF resource aliases /
             # shared containers). Non-zero means the source file carried
