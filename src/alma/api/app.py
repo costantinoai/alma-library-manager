@@ -48,6 +48,7 @@ from alma.api.routes.extension import router as extension_router
 from alma.api.routes.onboarding import router as onboarding_router
 from alma.api.deps import get_db, get_plugin_registry, open_db_connection
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
+from alma.core.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,13 @@ async def lifespan(app: FastAPI):
     Handles startup and shutdown events.
     """
     # Startup
+    # Configure the root console handler first. Under uvicorn (Docker CMD / dev
+    # runner) the __main__ block below never runs, so without this the root
+    # logger has no stream handler; once install_log_handler() attaches the
+    # ring buffer, Python's lastResort stderr fallback is suppressed and every
+    # app log (including general_exception_handler's traceback) would vanish
+    # from the console. setup_logging() before install keeps both: console + ring.
+    setup_logging()
     logger.info(f"Starting ALMa API v{API_VERSION}")
 
     # Install the in-memory ring-buffer log handler for the /logs endpoint
