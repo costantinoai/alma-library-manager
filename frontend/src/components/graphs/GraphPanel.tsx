@@ -557,6 +557,9 @@ export function GraphPanel() {
                   clusters={clusters}
                   physics={physics}
                   visibleLayers={layerKeys.length ? visibleLayers : undefined}
+                  // Corpus scope dims non-library nodes to half opacity; library
+                  // scope is all-library so nothing is dimmed.
+                  scope={scope}
                   // Auto-fit only when the GRAPH identity changes (view/scope),
                   // not on slider-driven refetches — so tweaking weights keeps
                   // your current pan/zoom.

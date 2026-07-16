@@ -392,6 +392,30 @@ def build_coauthor_network(
     n_authors = len(author_ids)
     author_index = {aid: i for i, aid in enumerate(author_ids)}
 
+    # Library membership per author (for corpus-scope dimming): an author is
+    # "in library" iff they co-author >=1 paper with status='library'. In library
+    # scope every author already qualifies (the node query is already filtered to
+    # library papers), so we skip the extra lookup; in corpus scope we resolve it
+    # so the UI can dim background-only co-authors to half opacity.
+    if Scope.parse(scope) is Scope.library:
+        library_author_ids: set[str] = set(author_ids)
+    else:
+        placeholders = ",".join("?" * len(author_ids))
+        lib_rows = conn.execute(
+            f"""
+            SELECT DISTINCT pa.openalex_id AS aid
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE pa.openalex_id IN ({placeholders})
+              AND p.status = 'library'
+              AND {standalone_paper_sql('p')}
+            """,
+            author_ids,
+        ).fetchall()
+        library_author_ids = {
+            (r["aid"] if isinstance(r, sqlite3.Row) else r[0]) for r in lib_rows
+        }
+
     # Per-author TEXT for cluster labelling — the concatenated titles of each
     # author's papers. This replaces the old per-author `publication_topics` vector
     # (the OpenAlex/S2 topic vocabulary is noisy + ineffective, AND that 4-table
@@ -565,6 +589,7 @@ def build_coauthor_network(
                 "orcid": orcids.get(aid, ""),
                 "openalex_id": openalex_ids.get(aid, ""),
                 "interests": author_interests.get(aid, []),
+                "in_library": aid in library_author_ids,
                 "cluster_id": cid,
                 "cluster_label": (
                     cluster_topic_labels.get(cid) if cid is not None else None

@@ -53,6 +53,11 @@ class GraphNode(BaseModel):
     color: Optional[str] = None
     size: float = 1.0
     node_type: str = "paper"  # "paper" or "topic"
+    # True when this node belongs to the Library (paper: status='library';
+    # author: has >=1 library paper). In a corpus-scope graph the UI dims
+    # non-library nodes to half opacity; in a library-scope graph every node
+    # is in-library, so the default True is correct and nothing is dimmed.
+    in_library: bool = True
     metadata: dict = {}
 
 
@@ -413,6 +418,7 @@ def _build_author_network_payload(
             if n.get("cluster_id") is not None
             else OUTLIER_COLOR,  # Unclustered authors render neutral, not blue (I-6)
             size=max(1.0, n.get("pub_count", 1) / 6),
+            in_library=bool(n.get("in_library", True)),
             metadata={
                 "pub_count": n.get("pub_count", 0),
                 "citation_count": n.get("citation_count", 0),
@@ -1359,7 +1365,7 @@ def _build_text_paper_map(
         rows = conn.execute(
             f"""
             SELECT id, title, abstract, year, journal, cited_by_count, rating,
-                   publication_date, authors
+                   publication_date, authors, status
             FROM papers p
             WHERE status = 'library'
               AND {standalone_paper_sql('p')}
@@ -1371,7 +1377,7 @@ def _build_text_paper_map(
         rows = conn.execute(
             f"""
             SELECT id, title, abstract, year, journal, cited_by_count, rating,
-                   publication_date, authors
+                   publication_date, authors, status
             FROM papers p
             WHERE {standalone_paper_sql('p')}
             ORDER BY COALESCE(cited_by_count, 0) DESC,
@@ -1392,6 +1398,7 @@ def _build_text_paper_map(
         rating = (row["rating"] if isinstance(row, sqlite3.Row) else row[6]) or 0
         publication_date = (row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]) or None
         authors = (row["authors"] if isinstance(row, sqlite3.Row) else row[8]) or ""
+        status = (row["status"] if isinstance(row, sqlite3.Row) else row[9]) or ""
 
         paper_ids.append(paper_id)
         # Title + abstract only. Journal and authors are NOT topical
@@ -1407,6 +1414,7 @@ def _build_text_paper_map(
             "authors": authors,
             "cited_by_count": int(cited_by or 0),
             "rating": int(rating or 0),
+            "in_library": status == "library",
         }
 
     n_papers = len(paper_ids)
@@ -1541,6 +1549,7 @@ def _build_text_paper_map(
                     else None
                 ),
                 size=max(1.0, math.log1p(meta["cited_by_count"])),
+                in_library=bool(meta.get("in_library", True)),
                 metadata={
                     "title": meta["title"],
                     "year": meta["year"],
@@ -1966,7 +1975,7 @@ def _build_embedding_paper_map(
     for paper_id in embeddings:
         row = conn.execute(
             """
-            SELECT title, abstract, cited_by_count, year, rating, journal, authors, publication_date
+            SELECT title, abstract, cited_by_count, year, rating, journal, authors, publication_date, status
             FROM papers
             WHERE id = ?
             """,
@@ -1981,6 +1990,7 @@ def _build_embedding_paper_map(
             journal = row["journal"] if isinstance(row, sqlite3.Row) else row[5]
             authors = row["authors"] if isinstance(row, sqlite3.Row) else row[6]
             publication_date = row["publication_date"] if isinstance(row, sqlite3.Row) else row[7]
+            status = row["status"] if isinstance(row, sqlite3.Row) else row[8]
             texts[paper_id] = f"{title or ''}. {abstract or ''}"
             paper_meta[paper_id] = {
                 "title": title or "",
@@ -1990,6 +2000,7 @@ def _build_embedding_paper_map(
                 "journal": journal or "",
                 "authors": authors or "",
                 "publication_date": publication_date,
+                "in_library": status == "library",
             }
         else:
             texts[paper_id] = ""
@@ -2001,6 +2012,7 @@ def _build_embedding_paper_map(
                 "journal": "",
                 "authors": "",
                 "publication_date": None,
+                "in_library": False,
             }
 
     background_df, background_n = _load_cluster_term_background(conn)
@@ -2381,6 +2393,7 @@ def _build_embedding_paper_map(
                 cluster_id=cid,
                 color=node_color,
                 size=node_size,
+                in_library=bool(meta.get("in_library", True)),
                 metadata={
                     "paper_id": paper_id,
                     "cited_by_count": int(meta.get("cited_by_count") or 0),

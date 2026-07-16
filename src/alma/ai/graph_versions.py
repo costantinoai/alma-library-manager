@@ -58,7 +58,13 @@ from __future__ import annotations
 #            Paper-map edges are unchanged (co-authorship has no cap; bib coupling
 #            logic is identical), but the shared version forces one idempotent
 #            paper-map rebuild too.
-PROJECTION_ALGO_VERSION = "2026.07-6"
+# 2026.07-7: every node payload now carries an `in_library` flag (paper:
+#            status='library'; author: >=1 library paper) so the corpus-scope UI
+#            dims non-library nodes to half opacity. It's a new per-node field, so
+#            the cached graph payloads (paper map + author network, both scopes,
+#            default + variant caches — all keyed on this version) must rebuild to
+#            include it.
+PROJECTION_ALGO_VERSION = "2026.07-7"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.

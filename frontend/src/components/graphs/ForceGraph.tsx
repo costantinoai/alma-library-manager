@@ -38,6 +38,7 @@ interface RenderedNode extends Record<string, unknown> {
   size: number
   cluster_id?: number
   node_type: string
+  in_library: boolean
   metadata: Record<string, unknown>
   _highlighted: boolean
 }
@@ -102,6 +103,9 @@ interface ForceGraphProps {
   physics?: GraphPhysicsConfig
   /** Edge layers to render (Phase 3 / I-11). undefined ⇒ show every layer. */
   visibleLayers?: string[]
+  /** Graph scope. In 'corpus' the map dims non-library nodes (in_library=false)
+      to half opacity; 'library' is all-library so nothing is dimmed. */
+  scope?: 'library' | 'corpus'
   /** Auto fit-to-view fires ONLY when this key changes (e.g. view/scope switch),
       not on every data update — so tweaking a slider keeps your pan/zoom. */
   autoFitKey?: string
@@ -124,6 +128,7 @@ export function ForceGraph({
   clusters = [],
   physics,
   visibleLayers,
+  scope,
   autoFitKey,
 }: ForceGraphProps) {
   const fgRef = useRef<InstanceType<typeof ForceGraph2D>>(null)
@@ -186,6 +191,8 @@ export function ForceGraph({
           size: rawSize,
           cluster_id: node.cluster_id,
           node_type: node.node_type || 'paper',
+          // Default true so a node without the flag (older payload) never dims.
+          in_library: node.in_library !== false,
           metadata: node.metadata,
           _highlighted: highlightSearch ? node.name.toLowerCase().includes(highlightSearch.toLowerCase()) : false,
         } satisfies RenderedNode,
@@ -301,6 +308,11 @@ export function ForceGraph({
     const isSelectedNode = !!selectedNodeId && nodeId === selectedNodeId
     const isSelectedCluster = selectedClusterId !== null && nodeClusterId === selectedClusterId
     const dimmed = selectedClusterId !== null && !isSelectedCluster
+    // Corpus scope: a node that is NOT in the Library renders at half opacity so
+    // the saved-Library core stands out against the surrounding corpus. Composes
+    // with the cluster-dim state (a dimmed non-library node stays dimmed, then
+    // halved again). Library scope is all-library, so this never fires there.
+    const dimNonLibrary = scope === 'corpus' && node.in_library === false
     const highlighted = Boolean(node._highlighted)
     const fontSize = Math.max(10 / globalScale, 1)
     const size = (((node.size as number) || 1) * (physics?.nodeScale || 1)) * (physics?.baseSize ?? 6)
@@ -309,8 +321,9 @@ export function ForceGraph({
 
     ctx.save()
     // Slightly translucent fills so overlapping dots read as density and edges
-    // stay visible underneath; selection/dim states keep their own alpha.
-    ctx.globalAlpha = dimmed ? 0.15 : 0.8
+    // stay visible underneath; selection/dim states keep their own alpha. A
+    // non-library node in a corpus graph is halved on top of that base alpha.
+    ctx.globalAlpha = (dimmed ? 0.15 : 0.8) * (dimNonLibrary ? 0.5 : 1)
 
     if (isSelectedCluster) {
       ctx.beginPath()
@@ -354,7 +367,7 @@ export function ForceGraph({
     }
 
     ctx.restore()
-  }, [physics?.nodeScale, physics?.baseSize, selectedClusterId, selectedNodeId, showLabels])
+  }, [physics?.nodeScale, physics?.baseSize, selectedClusterId, selectedNodeId, showLabels, scope])
 
   // Hit area for hover/click. Without this, react-force-graph derives the
   // clickable region from a default node size, so only the centre of a
