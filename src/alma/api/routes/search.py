@@ -110,9 +110,10 @@ def global_search(
     try:
         collection_rows = db.execute(
             """
-            SELECT c.id, c.name, c.description, COUNT(ci.paper_id) as item_count
+            SELECT c.id, c.name, c.description, COUNT(p.id) as item_count
             FROM collections c
             LEFT JOIN collection_items ci ON c.id = ci.collection_id
+            LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
             WHERE c.name LIKE ? OR c.description LIKE ?
             GROUP BY c.id
             ORDER BY item_count DESC

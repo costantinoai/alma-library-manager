@@ -545,54 +545,7 @@ def list_collections(
 ):
     """Return all collections with item counts and health metrics."""
     try:
-        cursor = db.execute(
-            """SELECT c.*,
-                      COALESCE(cnt.n, 0) AS item_count,
-                      health.last_added_at,
-                      health.avg_citations,
-                      health.avg_rating,
-                      health.activity_status
-               FROM collections c
-               LEFT JOIN (
-                   SELECT ci.collection_id, COUNT(*) AS n
-                   FROM collection_items ci
-                   JOIN papers p ON p.id = ci.paper_id
-                   WHERE p.status = 'library'
-                   GROUP BY ci.collection_id
-               ) cnt ON cnt.collection_id = c.id
-               LEFT JOIN (
-                   SELECT ci.collection_id,
-                          MAX(ci.added_at) AS last_added_at,
-                          AVG(p.cited_by_count) AS avg_citations,
-                          AVG(CASE WHEN p.rating > 0 THEN p.rating ELSE NULL END) AS avg_rating,
-                          CASE
-                              WHEN MAX(julianday('now') - julianday(ci.added_at)) < 7 THEN 'fresh'
-                              WHEN MAX(julianday('now') - julianday(ci.added_at)) < 30 THEN 'active'
-                              WHEN MAX(julianday('now') - julianday(ci.added_at)) < 90 THEN 'stale'
-                              ELSE 'dormant'
-                          END AS activity_status
-                   FROM collection_items ci
-                   JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
-                   GROUP BY ci.collection_id
-               ) health ON health.collection_id = c.id
-               ORDER BY c.created_at DESC"""
-        )
-        rows = cursor.fetchall()
-        return [
-            CollectionResponse(
-                id=r["id"],
-                name=r["name"],
-                description=r["description"],
-                color=r["color"],
-                created_at=r["created_at"],
-                item_count=r["item_count"],
-                last_added_at=r["last_added_at"],
-                avg_citations=r["avg_citations"],
-                avg_rating=r["avg_rating"],
-                activity_status=r["activity_status"],
-            )
-            for r in rows
-        ]
+        return [CollectionResponse(**row) for row in library_app.list_collections(db)]
     except Exception as e:
         raise_internal("Failed to list collections", e)
 

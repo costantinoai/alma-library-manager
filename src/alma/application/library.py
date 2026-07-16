@@ -1145,19 +1145,41 @@ def find_or_create_collection(
 
 
 def list_collections(db: sqlite3.Connection) -> list[dict]:
-    """List all collections with item counts.
+    """List collections with saved-paper counts and activity metrics.
 
     Counts only Library papers: a staged import can hold a ``collection_items``
     row before it is confirmed (deferred membership), and it must not inflate
     the badge count until it actually becomes a Library paper.
+
+    Activity is based on the most recently added saved paper. Using the oldest
+    item's age would label an actively updated collection stale while reporting
+    a recent ``last_added_at`` beside it.
     """
     rows = db.execute(
-        """SELECT c.*, COUNT(ci.paper_id) AS item_count
+        """SELECT c.*,
+                  COUNT(p.id) AS item_count,
+                  MAX(CASE WHEN p.id IS NOT NULL THEN ci.added_at END) AS last_added_at,
+                  AVG(p.cited_by_count) AS avg_citations,
+                  AVG(CASE WHEN p.rating > 0 THEN p.rating END) AS avg_rating,
+                  CASE
+                      WHEN MAX(CASE WHEN p.id IS NOT NULL THEN ci.added_at END) IS NULL
+                          THEN NULL
+                      WHEN julianday('now') - julianday(
+                          MAX(CASE WHEN p.id IS NOT NULL THEN ci.added_at END)
+                      ) < 7 THEN 'fresh'
+                      WHEN julianday('now') - julianday(
+                          MAX(CASE WHEN p.id IS NOT NULL THEN ci.added_at END)
+                      ) < 30 THEN 'active'
+                      WHEN julianday('now') - julianday(
+                          MAX(CASE WHEN p.id IS NOT NULL THEN ci.added_at END)
+                      ) < 90 THEN 'stale'
+                      ELSE 'dormant'
+                  END AS activity_status
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
            LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = ?
            GROUP BY c.id
-           ORDER BY c.name""",
+           ORDER BY c.created_at DESC""",
         (LIBRARY_STATUS,),
     ).fetchall()
     return [dict(r) for r in rows]

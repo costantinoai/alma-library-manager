@@ -310,13 +310,13 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
             SELECT
                 c.id,
                 c.name,
-                COUNT(ci.paper_id) AS item_count,
+                COUNT(p.id) AS item_count,
                 ROUND(COALESCE(AVG(CASE WHEN p.rating > 0 THEN p.rating END), 0), 2) AS avg_rating
             FROM collections c
             LEFT JOIN collection_items ci ON ci.collection_id = c.id
-            LEFT JOIN papers p ON p.id = ci.paper_id
+            LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
             GROUP BY c.id, c.name
-            HAVING COUNT(ci.paper_id) > 0
+            HAVING COUNT(p.id) > 0
             ORDER BY item_count DESC, avg_rating DESC, lower(c.name)
             LIMIT 3
             """
