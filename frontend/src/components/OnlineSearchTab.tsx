@@ -38,6 +38,7 @@ import { Search, SearchX, SlidersHorizontal, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { CollectionNameField } from '@/components/shared/CollectionNameField'
 import { EmptyState } from '@/components/ui/empty-state'
 import {
   InputGroup,
@@ -203,6 +204,10 @@ export function OnlineSearchTab({
   const [yearMin, setYearMin] = useState('')
   const [yearMax, setYearMax] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  // Optional local collection: each save (add/like/love) also groups the
+  // paper into this collection via the backend `collection_name`. Sticky
+  // across saves within the session so a triage run lands in one collection.
+  const [collectionName, setCollectionName] = useState('')
   const PAGE_SIZE = 10
   const INITIAL_VISIBLE = resultPreviewLimit ?? 5
   const [visibleCount, setVisibleCount] = useState<number>(INITIAL_VISIBLE)
@@ -433,6 +438,9 @@ export function OnlineSearchTab({
           // when OpenAlex has no match for the paper.
           candidate: item,
           action,
+          // Group each saved paper into the optional target collection.
+          // Backend ignores it for dislike (nothing lands in Library).
+          collection_name: collectionName.trim() || undefined,
         })
         setRowStates((prev) => ({
           ...prev,
@@ -464,7 +472,7 @@ export function OnlineSearchTab({
         errorToast('Action failed')
       }
     },
-    [onImportComplete, queryClient],
+    [onImportComplete, queryClient, collectionName],
   )
 
   const undoMutation = usePaperUndo()
@@ -623,6 +631,17 @@ export function OnlineSearchTab({
 
   return (
     <div className="space-y-4">
+      {/* ── Optional target collection ──
+          Each save (add/like/love) also groups the paper into this local
+          collection (created if new). */}
+      <CollectionNameField
+        id="online-collection-name"
+        label="Add saved papers to collection (optional)"
+        value={collectionName}
+        onChange={setCollectionName}
+        compact
+      />
+
       {/* ── Search bar ── */}
       <div className="space-y-2">
         <InputGroup className="h-11">

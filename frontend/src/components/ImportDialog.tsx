@@ -41,6 +41,7 @@ import {
   preflightZotero,
   preflightZoteroRdfFile,
 } from '@/api/client'
+import { CollectionNameField } from '@/components/shared/CollectionNameField'
 
 type TabId = 'bibtex' | 'zotero' | 'zotero-rdf' | 'online'
 
@@ -105,6 +106,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [mode, setMode] = useState<'file' | 'text'>('file')
   const [file, setFile] = useState<File | null>(null)
   const [text, setText] = useState('')
+  const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
   const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
@@ -168,8 +170,8 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
     setError(null)
     try {
       const res = mode === 'file' && file
-        ? await importBibtexFile(file)
-        : await importBibtexText(text)
+        ? await importBibtexFile(file, collectionName.trim() || undefined)
+        : await importBibtexText(text, collectionName.trim() || undefined)
       if (isImportQueued(res)) {
         setQueued(res)
         // Notify parent so it can refresh Library views when the background
@@ -258,6 +260,12 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
         />
       )}
 
+      <CollectionNameField
+        id="bibtex-collection-name"
+        value={collectionName}
+        onChange={setCollectionName}
+      />
+
       {preflight && <ImportPreflightDisplay preflight={preflight} />}
 
       {/* Error */}
@@ -304,6 +312,10 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [libraryType, setLibraryType] = useState<'user' | 'group'>('user')
   const [collections, setCollections] = useState<ZoteroCollection[] | null>(null)
   const [selectedCollectionKey, setSelectedCollectionKey] = useState<string | null>(null)
+  // Local target collection (distinct from the Zotero *source* collection
+  // picker above): groups the imported papers into a new/existing local
+  // collection via the backend `collection_name`.
+  const [collectionName, setCollectionName] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
@@ -369,6 +381,7 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         api_key: apiKey.trim(),
         library_type: libraryType,
         collection_key: selectedCollectionKey,
+        collection_name: collectionName.trim() || undefined,
       })
       if (isImportQueued(res)) {
         setQueued(res)
@@ -509,6 +522,15 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
         </div>
       )}
 
+      {/* Local target collection — distinct from the Zotero source picker above */}
+      {collections !== null && (
+        <CollectionNameField
+          id="zotero-collection-name"
+          value={collectionName}
+          onChange={setCollectionName}
+        />
+      )}
+
       {/* Error */}
       {error && (
         <div className="flex items-center gap-2 rounded-lg border border-critical-100 bg-critical-50 px-4 py-3">
@@ -548,6 +570,7 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
 
 function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
   const [file, setFile] = useState<File | null>(null)
+  const [collectionName, setCollectionName] = useState('')
   const [loading, setLoading] = useState(false)
   const [preflightLoading, setPreflightLoading] = useState(false)
   const [preflight, setPreflight] = useState<ImportPreflight | null>(null)
@@ -605,7 +628,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
     setQueued(null)
     setError(null)
     try {
-      const res = await importZoteroRdfFile(file as File)
+      const res = await importZoteroRdfFile(file as File, collectionName.trim() || undefined)
       if (isImportQueued(res)) {
         setQueued(res)
         onImportComplete?.()
@@ -660,6 +683,12 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
           onChange={handleFileSelect}
         />
       </div>
+
+      <CollectionNameField
+        id="zotero-rdf-collection-name"
+        value={collectionName}
+        onChange={setCollectionName}
+      />
 
       {preflight && <ImportPreflightDisplay preflight={preflight} />}
 
@@ -719,7 +748,16 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
         <div>DOI-backed: <span className="font-medium">{preflight.identifiers.doi}</span></div>
         <div>Title search: <span className="font-medium">{preflight.identifiers.title_search_needed}</span></div>
         <div>Likely new rows: <span className="font-medium">{preflight.dedup.likely_new_rows}</span></div>
-        <div>Existing matches: <span className="font-medium">{preflight.dedup.existing_matches}</span></div>
+        <div>
+          Existing matches: <span className="font-medium">{preflight.dedup.existing_matches}</span>
+          {preflight.dedup.existing_matches > 0 &&
+            preflight.dedup.already_in_library !== undefined && (
+              <span className="text-slate-500">
+                {' '}({preflight.dedup.already_in_library} already saved,{' '}
+                {preflight.dedup.promotable_to_library ?? 0} promoted)
+              </span>
+            )}
+        </div>
         <div>With abstracts: <span className="font-medium">{preflight.metadata.with_abstract}</span></div>
         <div>Rich metadata: <span className="font-medium">{preflight.metadata.rich_enough_to_skip_most_hydration}</span></div>
       </div>
