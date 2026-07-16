@@ -77,6 +77,15 @@ export function AddToCollectionMenu({ onConfirm, disabled, compact }: AddToColle
       await onConfirm(ids)
       setOpen(false)
       reset()
+    } catch {
+      // Keep the popover + selection intact so the user can retry. Without this
+      // catch a rejected save escaped as an unhandled promise and failed with no
+      // visible feedback.
+      toast({
+        title: 'Could not add to collections',
+        description: 'Nothing changed. Try again.',
+        variant: 'destructive',
+      })
     } finally {
       setSubmitting(false)
     }
