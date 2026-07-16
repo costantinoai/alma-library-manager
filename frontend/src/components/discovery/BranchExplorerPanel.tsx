@@ -282,15 +282,15 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
             similar "What is this?" boxes elsewhere in the app (Signal
             Lab, Insights graph clusters, etc.) all look the same. */}
         <ConceptCallout
-          summary="Branches are clusters Discovery has carved out of your library — click for the full explanation."
+          summary="Branches are clusters Discovery has carved out of this lens's own papers — click for the full explanation."
         >
           <p>
             <strong className="text-alma-800">Branches</strong> are clusters of related papers
-            the lens has noticed in your saved library. The clustering runs on the SPECTER2
-            embedding of every saved paper, then auto-labels each cluster from the most
-            distinctive topic terms shared by its members — so the words you see ("models",
-            "nlp", "diffusion", etc.) are pulled directly from the papers you saved, not
-            chosen by an AI.
+            within this lens's own set — its collection, topic, or tag, or your whole library
+            for a library lens. The clustering runs on the SPECTER2 embedding of each of those
+            papers, then auto-labels each cluster from the most distinctive topic terms shared
+            by its members — so the words you see ("models", "nlp", "diffusion", etc.) are
+            pulled directly from the lens's papers, not chosen by an AI.
           </p>
           <p>
             <strong className="text-alma-800">Core Pull</strong> = topics every paper in
@@ -407,7 +407,7 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
                     title="Cluster detail"
                     description={
                       <>
-                        How finely the lens's saved papers are split into branches. <strong>Higher</strong>{' '}
+                        How finely the lens's own papers are split into branches. <strong>Higher</strong>{' '}
                         (&gt;1) splits into more, tighter branches; <strong>lower</strong> (&lt;1) merges into
                         fewer, broader ones. Drives the SAME clustering engine as the Insights graph's
                         cluster-detail knob. Tune live; Apply Controls to persist — the saved value also

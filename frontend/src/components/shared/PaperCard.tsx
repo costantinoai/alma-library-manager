@@ -98,6 +98,15 @@ interface PaperCardProps {
   dismissTitle?: string
   dislikeLabel?: string
   dislikeTitle?: string
+  /** Save-button "saved" label + passive (non-removing) saved state, and a
+   *  distinct "Add to collection" action. A collection lens uses these to show
+   *  an in-Library paper as a checked "In library" indicator plus a folio-accent
+   *  "Add to collection" button. Forwarded to PaperActionBar. */
+  savedLabel?: string
+  savedReadOnly?: boolean
+  onAddToCollection?: () => void
+  addToCollectionLabel?: string
+  addToCollectionTitle?: string
   onExpandBreakdown?: () => void
   quickActions?: React.ReactNode
   /** Provenance chips rendered in the metadata row — one short badge per
@@ -363,6 +372,11 @@ export function PaperCard({
   dismissTitle,
   dislikeLabel,
   dislikeTitle,
+  savedLabel,
+  savedReadOnly,
+  onAddToCollection,
+  addToCollectionLabel,
+  addToCollectionTitle,
   onExpandBreakdown,
   quickActions,
   sources,
@@ -880,6 +894,11 @@ export function PaperCard({
               dismissTitle={dismissTitle}
               dislikeLabel={dislikeLabel}
               dislikeTitle={dislikeTitle}
+              savedLabel={savedLabel}
+              savedReadOnly={savedReadOnly}
+              onAddToCollection={onAddToCollection}
+              addToCollectionLabel={addToCollectionLabel}
+              addToCollectionTitle={addToCollectionTitle}
               reaction={reaction}
               isSaved={isSaved}
               savedClickRemoves={savedClickRemoves}

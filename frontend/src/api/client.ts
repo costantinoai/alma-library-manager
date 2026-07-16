@@ -1089,6 +1089,14 @@ export function listCollections(): Promise<Collection[]> {
   return api.get<Collection[]>('/library/collections')
 }
 
+export function createCollection(body: {
+  name: string
+  description?: string
+  color?: string
+}): Promise<Collection> {
+  return api.post<Collection>('/library/collections', body)
+}
+
 export function listTags(): Promise<Tag[]> {
   return api.get<Tag[]>('/library/tags')
 }
@@ -1844,6 +1852,9 @@ export interface LensRecommendation {
   paper_id: string
   rank?: number | null
   score: number
+  /** Already a saved Library paper — only appears for a collection lens,
+   *  meaning "in the Library but not in this lens's collection". */
+  in_library?: boolean
   score_breakdown?: Record<string, unknown> | null
   user_action?: string | null
   action_at?: string | null
@@ -1955,6 +1966,7 @@ export interface DiscoveryStrategies {
 
 export interface DiscoveryLimits {
   max_results: number
+  min_score: number
   max_candidates_per_strategy: number
   recency_window_years: number
   feedback_decay_days_full: number
@@ -3218,6 +3230,10 @@ export interface GraphNode {
   color?: string
   size: number
   node_type?: string
+  // True when the node is in the Library (paper: status='library'; author:
+  // >=1 library paper). In a corpus-scope graph the map dims non-library
+  // nodes to half opacity; defaults true so a library-scope graph never dims.
+  in_library?: boolean
   metadata: Record<string, unknown>
 }
 
@@ -3266,7 +3282,14 @@ export interface ImportPreflight {
   }
   dedup: {
     existing_matches: number
+    /** Existing matches already saved to Library — these are the ones that
+     *  will actually be skipped. */
+    already_in_library?: number
+    /** Existing matches that are tracked (not yet Library) — import promotes
+     *  these into the Library (counted as imported, not skipped). */
+    promotable_to_library?: number
     likely_new_rows: number
+    parse_duplicates?: number
   }
   likely_source_calls: {
     openalex: number
@@ -3862,6 +3885,10 @@ export function onlineImportSave(body: {
    *  (e.g. a Semantic Scholar-only result). Pass the item as returned by
    *  `onlineImportSearch`. */
   candidate?: OnlineSearchItem
+  /** Optional local collection name. When set and the paper lands in Library
+   *  (add/like/love), the collection is created/found and the paper added to
+   *  it. Ignored for dislike. */
+  collection_name?: string
 }): Promise<OnlineSearchSaveResponse> {
   return api.post('/library/import/search/save', body)
 }
@@ -3869,9 +3896,11 @@ export function onlineImportSave(body: {
 export function saveRecommendation(
   recId: string,
   rating?: number,
+  collectionIds?: string[],
 ): Promise<{ id: string; save: boolean }> {
   return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/save`, {
     rating,
+    collection_ids: collectionIds && collectionIds.length > 0 ? collectionIds : undefined,
   })
 }
 

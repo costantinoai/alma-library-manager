@@ -47,6 +47,7 @@ import {
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
+import { AddToCollectionMenu } from '@/components/discovery/AddToCollectionMenu'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -175,6 +176,17 @@ export function DiscoveryPage() {
     const lenses = lensesQuery.data ?? []
     return lenses.find((lens) => lens.id === selectedLensId) ?? null
   }, [lensesQuery.data, selectedLensId])
+
+  // A collection lens is tied to a collection: saving a recommendation files
+  // it into that collection (and its discovery surfaces Library papers from
+  // other collections so they can be pulled in — they arrive with
+  // `rec.in_library === true`).
+  const selectedLensCollectionId = useMemo(() => {
+    if (!selectedLens || selectedLens.context_type !== 'collection') return null
+    const cfg = (selectedLens.context_config ?? {}) as Record<string, unknown>
+    const id = typeof cfg.collection_id === 'string' ? cfg.collection_id.trim() : ''
+    return id || null
+  }, [selectedLens])
 
   const upsertLensCache = (lens: Lens) => {
     queryClient.setQueryData<Lens[]>(['lenses'], (prev) => {
@@ -314,12 +326,39 @@ export function DiscoveryPage() {
   })
 
   const addMutation = useMutation({
-    mutationFn: (recId: string) => saveRecommendation(recId),
+    mutationFn: (recId: string) =>
+      saveRecommendation(
+        recId,
+        undefined,
+        selectedLensCollectionId ? [selectedLensCollectionId] : undefined,
+      ),
     onSuccess: async (_data, recId) => {
       markActioned(recId)
-      toast({ title: 'Added', description: 'Paper saved to library.' })
+      toast({
+        title: 'Added',
+        description: selectedLensCollectionId
+          ? "Paper added to this lens's collection."
+          : 'Paper saved to library.',
+      })
       await invalidateAfterPaperMutation(queryClient, selectedLensId)
       await invalidateQueries(queryClient, ['lens-recommendations', selectedLensId])
+    },
+  })
+
+  // Feature A: add a recommendation to Library AND file it into one or more
+  // chosen collections in a single action (the AddToCollectionMenu on the card).
+  const addToCollectionsMutation = useMutation({
+    mutationFn: ({ recId, collectionIds }: { recId: string; collectionIds: string[] }) =>
+      saveRecommendation(recId, undefined, collectionIds),
+    onSuccess: async (_data, { recId }) => {
+      markActioned(recId)
+      toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
+      await invalidateAfterPaperMutation(queryClient, selectedLensId)
+      await invalidateQueries(
+        queryClient,
+        ['lens-recommendations', selectedLensId],
+        ['library-collections'],
+      )
     },
   })
 
@@ -1105,8 +1144,42 @@ export function DiscoveryPage() {
                     seedTitle: cardPaper.title,
                   })}
                   actionDisabled={pendingRecId === rec.id}
+                  quickActions={
+                    <AddToCollectionMenu
+                      compact
+                      disabled={pendingRecId === rec.id}
+                      onConfirm={async (collectionIds) => {
+                        await addToCollectionsMutation.mutateAsync({ recId: rec.id, collectionIds })
+                      }}
+                    />
+                  }
                   reaction={deriveDiscoveryReaction(rec)}
-                  isSaved={paper?.status === 'library' || rec.user_action === 'save'}
+                  // Gold ribbon + checked "In library" for a paper already in the
+                  // Library. On a collection lens these are papers from OTHER
+                  // collections (rec.in_library) — surfaced so they can be pulled
+                  // in; the saved state is passive (savedReadOnly) since removing
+                  // from the Library belongs in the Library, not the feed.
+                  isSaved={
+                    (selectedLensCollectionId ? !!rec.in_library : paper?.status === 'library') ||
+                    rec.user_action === 'save'
+                  }
+                  savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
+                  savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
+                  // Distinct folio-accent "Add to collection" action, shown for a
+                  // collection lens's already-in-Library papers (Save is passive
+                  // for those). Files the paper into the linked collection. For a
+                  // not-yet-saved rec the Save button already saves + files, so no
+                  // separate button is needed there.
+                  onAddToCollection={
+                    selectedLensCollectionId && rec.in_library
+                      ? () =>
+                          addToCollectionsMutation.mutate({
+                            recId: rec.id,
+                            collectionIds: [selectedLensCollectionId],
+                          })
+                      : undefined
+                  }
+                  addToCollectionTitle="Add to this lens's collection"
                 >
                   {/* Normal view: provenance is folded into the card body
                       as a single chip row (no standalone "Why this surfaced"

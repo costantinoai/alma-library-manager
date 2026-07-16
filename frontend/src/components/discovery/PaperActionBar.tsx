@@ -1,11 +1,11 @@
-import { BookOpenCheck, BookPlus, BookmarkCheck, Heart, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react'
+import { BookOpenCheck, BookPlus, BookmarkCheck, FolderPlus, Heart, Plus, ThumbsDown, ThumbsUp, X } from 'lucide-react'
 import type { ComponentType, ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ACTION_QUEUE_CLASSES } from '@/lib/palette'
 
-type Tone = 'neutral' | 'queue' | 'add' | 'like' | 'love' | 'dismiss' | 'dislike'
+type Tone = 'neutral' | 'queue' | 'add' | 'collection' | 'like' | 'love' | 'dismiss' | 'dislike'
 
 export type PaperReaction = 'like' | 'love' | 'dislike' | null
 
@@ -27,6 +27,20 @@ interface PaperActionBarProps {
   dismissTitle?: string
   dislikeLabel?: string
   dislikeTitle?: string
+  /** Label shown when `isSaved` (default "Saved"). A collection lens sets
+   *  "In library" for a paper that is in the Library but not in this collection. */
+  savedLabel?: string
+  /** When saved, make the Save button a passive indicator (no remove-on-click).
+   *  Used on Discovery collection-lens cards: an already-in-Library paper shows a
+   *  checked "In library" state, but the destructive remove lives in the Library,
+   *  not the discovery feed. */
+  savedReadOnly?: boolean
+  /** Distinct "Add to collection" action (folio-accent, folder icon), separate
+   *  from Save. A collection lens uses it to file the paper into the linked
+   *  collection — including papers already in the Library from another collection. */
+  onAddToCollection?: () => void
+  addToCollectionLabel?: string
+  addToCollectionTitle?: string
   /** Current reaction on the paper. like/love/dislike are mutually exclusive. */
   reaction?: PaperReaction
   /** Whether the paper is already saved to Library. Toggles Save → Saved. */
@@ -68,6 +82,13 @@ const toneClasses: Record<Tone, { icon: string; hover: string; active: string }>
     icon: 'text-warning-600',
     hover: 'hover:bg-warning-50 hover:text-warning-700',
     active: 'border-warning-100 bg-warning-50 text-warning-700',
+  },
+  // Add to collection — accent (folio), the single interactive identity. Distinct
+  // from the amber Save so "file into this collection" reads as its own action.
+  collection: {
+    icon: 'text-alma-folio',
+    hover: 'hover:bg-accent-soft hover:text-alma-folio',
+    active: 'border-alma-folio bg-accent-soft text-alma-folio',
   },
   like: {
     icon: 'text-success-600',
@@ -173,6 +194,11 @@ export function PaperActionBar({
   dismissTitle = 'Dismiss — hide from discovery',
   dislikeLabel = 'Dislike',
   dislikeTitle = 'Negative signal — keeps the paper visible',
+  savedLabel,
+  savedReadOnly = false,
+  onAddToCollection,
+  addToCollectionLabel = 'Add to collection',
+  addToCollectionTitle = 'Add to this collection',
   reaction = null,
   isSaved = false,
   savedClickRemoves = false,
@@ -181,7 +207,7 @@ export function PaperActionBar({
 }: PaperActionBarProps) {
   const showLabel = showLabels ?? !compact
   const hasRemove = !!onDismiss
-  const hasReactions = !!(onQueue || onAdd || onDislike || onLike || onLove)
+  const hasReactions = !!(onQueue || onAdd || onAddToCollection || onDislike || onLike || onLove)
   // Re-clicking an applied action toggles off only that button's effect via
   // `onUndo(aspect)` when a surface supplies it; otherwise it re-fires the
   // original handler.
@@ -225,15 +251,36 @@ export function PaperActionBar({
       {onAdd && (
         <ActionButton
           icon={isSaved ? BookmarkCheck : Plus}
-          label={isSaved ? 'Saved' : 'Save'}
+          label={isSaved ? (savedLabel ?? 'Saved') : 'Save'}
           tone="add"
           compact={compact}
-          disabled={disabled}
+          // Read-only saved state: a passive "in library" indicator, not a
+          // click target (the destructive remove lives in the Library).
+          disabled={disabled || (isSaved && savedReadOnly)}
           showLabel={showLabel}
-          title={isSaved ? (savedClickRemoves || canUndo ? 'Remove from library' : 'Already saved to library') : 'Save to library'}
+          title={
+            isSaved
+              ? (savedReadOnly
+                  ? 'In your library'
+                  : (savedClickRemoves || canUndo ? 'Remove from library' : 'Already saved to library'))
+              : 'Save to library'
+          }
           onClick={click(isSaved, 'membership', onAdd)}
           iconFilled={isSaved}
           active={isSaved}
+        />
+      )}
+
+      {onAddToCollection && (
+        <ActionButton
+          icon={FolderPlus}
+          label={addToCollectionLabel}
+          tone="collection"
+          compact={compact}
+          disabled={disabled}
+          showLabel={showLabel}
+          title={addToCollectionTitle}
+          onClick={onAddToCollection}
         />
       )}
 

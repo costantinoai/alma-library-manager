@@ -107,6 +107,7 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
   },
   limits: {
     max_results: 50,
+    min_score: 0,
     max_candidates_per_strategy: 20,
     recency_window_years: 10,
     feedback_decay_days_full: 90,
@@ -218,6 +219,7 @@ const discoverySchema = z.object({
   }),
   limits: z.object({
     max_results: z.number().int().min(10).max(200),
+    min_score: z.number().min(0).max(100),
     max_candidates_per_strategy: z.number().int().min(5).max(50),
     recency_window_years: z.number().int().min(1).max(20),
     feedback_decay_days_full: z.number().int().min(1).max(3650),
@@ -591,6 +593,15 @@ export function DiscoveryWeightsCard() {
                     min={10}
                     max={200}
                     onChange={(v) => form.setValue('limits.max_results', v, { shouldDirty: true })}
+                  />
+                  <SettingsNumberField
+                    label="Min Relevance Score"
+                    description="Drop recommendations scoring below this (0-100). 0 keeps everything; raise it to hide weak, off-topic matches at the tail of the feed."
+                    value={values.limits.min_score}
+                    min={0}
+                    max={100}
+                    step={5}
+                    onChange={(v) => form.setValue('limits.min_score', v, { shouldDirty: true })}
                   />
                   <SettingsNumberField
                     label="Max Candidates / Strategy"
