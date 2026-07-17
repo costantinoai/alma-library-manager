@@ -239,6 +239,10 @@ html, body {
 .badge.doi { border-color: #D7E2EF; background: var(--folio-soft); color: var(--folio-ink); }
 .badge.arxiv { border-color: #E6D8C0; background: #F6EFD9; color: #7a5a1e; }
 .badge.pdf { border-color: var(--line); }
+/* identifier badges are click-to-copy buttons */
+.badge.is-copy { cursor: copy; appearance: none; font-family: var(--mono); }
+.badge.is-copy:hover { filter: brightness(0.96); text-decoration: underline; text-underline-offset: 2px; }
+.badge.is-copied { text-decoration: none; }
 
 .meta {
   font-size: 12.5px;
@@ -313,6 +317,67 @@ html, body {
 .star-off { color: var(--ink-faint); opacity: 0.4; }
 .seg-rating button[aria-pressed="true"] .star-on { color: var(--folio-ink); }
 
+/* ---- Collection picker (optional filing) ---- */
+.section-label .optional {
+  text-transform: none; letter-spacing: 0.2px; font-weight: 500;
+  color: var(--ink-faint); opacity: 0.8; margin-left: 4px;
+}
+.coll-row { display: flex; flex-direction: column; gap: 7px; }
+/* Always-visible wrapping chips — deliberately NOT a dropdown of any kind:
+ * floating lists get cut at the popup window's edge. Chips flow and wrap;
+ * past ~3 rows the shelf scrolls internally (in-flow, so never clipped). */
+.coll-chips {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  max-height: 96px; overflow-y: auto;
+}
+.coll-chip {
+  appearance: none;
+  position: relative;
+  font-family: var(--sans); font-size: 11.5px; font-weight: 500;
+  color: var(--ink-soft);
+  background: var(--content-elev);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 4.5px 10px;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.coll-chip:hover { color: var(--ink); border-color: var(--folio); }
+.coll-chip:focus-visible { outline: none; border-color: var(--folio); box-shadow: 0 0 0 3px var(--folio-soft); }
+.coll-chip:disabled { opacity: 0.6; cursor: default; }
+.coll-chip[aria-checked="true"] {
+  background: var(--folio-soft);
+  border-color: var(--folio);
+  color: var(--folio-ink);
+  font-weight: 600;
+}
+/* Collections that already hold this paper wear the bookmark-ribbon mark —
+ * the same folio ribbon language as the paper card's left edge. */
+.coll-chip.is-member { padding-left: 14px; }
+.coll-chip.is-member::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 4px; bottom: 4px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(var(--folio), var(--folio-ink));
+}
+.coll-hint {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  align-self: center;
+  padding: 3px 2px;
+}
+.coll-new {
+  width: 100%; font-family: var(--sans); font-size: 12.5px; color: var(--ink);
+  background: var(--content); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px 11px;
+}
+.coll-new:focus { outline: none; border-color: var(--folio); box-shadow: 0 0 0 3px var(--folio-soft); background: var(--content-elev); }
+.coll-new[hidden] { display: none; }
+
 /* ---- Commit row (Cancel / Save  ·  Undo / Done) ---- */
 .commit-row { display: flex; gap: 8px; margin-top: 14px; }
 .btn-primary {
@@ -347,6 +412,15 @@ html, body {
 .saved-ribbon .saved-rating { margin-left: auto; display: inline-flex; gap: 1px; color: var(--sage); }
 .saved-ribbon .saved-rating svg { width: 12px; height: 12px; }
 .saved-ribbon[hidden] { display: none; }
+.saved-ribbon .sr-open {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  font-size: 11px; font-weight: 700;
+  color: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.saved-ribbon .sr-open:hover { opacity: 0.75; }
+.saved-ribbon .sr-open[hidden] { display: none; }
 /* reading-list variant: folio instead of sage */
 .saved-ribbon.is-reading { background: var(--folio-soft); color: var(--folio-ink); border-color: #cddff0; }
 .saved-ribbon.is-reading .saved-rating { color: var(--folio); }
@@ -471,6 +545,40 @@ html, body {
 .sm-submit:hover { background: var(--folio-ink); }
 .sm-submit:disabled { opacity: 0.6; cursor: not-allowed; }
 .sm-error { margin-top: 8px; font-size: 11.5px; color: #8a3a2f; }
+
+/* ---- Offline queue (Servers panel) ---- */
+.ob-section { margin-top: 14px; padding-top: 13px; border-top: 1px dashed var(--line); }
+.ob-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.ob-label { margin-bottom: 0; }
+.ob-sync {
+  appearance: none; cursor: pointer;
+  font-family: var(--sans); font-size: 11px; font-weight: 600; color: var(--folio-ink);
+  background: var(--content-elev); border: 1px solid var(--folio); border-radius: 7px;
+  padding: 4px 9px;
+}
+.ob-sync:hover { background: var(--folio-soft); }
+.ob-sync:disabled { opacity: 0.6; cursor: progress; }
+.ob-list { display: flex; flex-direction: column; gap: 5px; }
+.ob-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--content);
+}
+.ob-row.is-conflict { border-style: dashed; }
+.ob-title { font-size: 11.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ob-target { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; }
+.ob-tag {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px;
+  padding: 1px 5px; border-radius: 5px;
+  color: #8a3a2f; background: var(--brick-soft); border: 1px solid #e9cfca;
+  white-space: nowrap;
+}
+.ob-tag.ob-retry { color: var(--amber); background: var(--amber-soft); border-color: #e3d5ab; }
 
 /* staggered entrance */
 .reveal { opacity: 0; transform: translateY(4px); animation: rise 0.34s ease forwards; }

@@ -50,8 +50,12 @@
 
     let candidates = [];   // [{url, apiKey, configured, online, version, probing}]
     let activeUrl = "";
+    let outboxItems = []; // queued offline captures — shown so the queue is never invisible
+    let syncing = false;
 
     async function refresh() {
+      const OB = root.almaOutbox;
+      try { outboxItems = OB ? await OB.list() : []; } catch (e) { outboxItems = []; }
       const { servers, activeUrl: a } = await S.load();
       activeUrl = a;
       const configured = servers.map((s) => ({ ...s, configured: true, probing: true }));
@@ -111,6 +115,60 @@
       container.appendChild(list);
 
       container.appendChild(addForm());
+      if (outboxItems.length) container.appendChild(outboxSection());
+    }
+
+    // Offline queue: captures saved while their target ALMa was down
+    // (lib/outbox.js). Surfaced here so queued work is visible and
+    // recoverable — never a silent background state.
+    function outboxSection() {
+      const OB = root.almaOutbox;
+      const sec = elem("div", "ob-section");
+
+      const head = elem("div", "ob-head");
+      head.appendChild(elem("span", "sm-form-label ob-label",
+        "Offline queue · " + outboxItems.length + (outboxItems.length === 1 ? " capture" : " captures")));
+      const sync = elem("button", "ob-sync", syncing ? "Syncing…" : "Sync now");
+      sync.disabled = syncing;
+      sync.addEventListener("click", async () => {
+        if (syncing) return;
+        syncing = true;
+        render();
+        try { await OB.flushVia(S); } catch (e) { /* best effort */ }
+        syncing = false;
+        await refresh();
+      });
+      head.appendChild(sync);
+      sec.appendChild(head);
+
+      const list = elem("div", "ob-list");
+      outboxItems.forEach((it) => {
+        const r = elem("div", "ob-row" + (it.status === "conflict" ? " is-conflict" : ""));
+        const label = (it.body && (it.body.title || it.body.doi || it.body.url)) || "Untitled capture";
+        const title = elem("span", "ob-title", label);
+        title.title = label;
+        r.appendChild(title);
+        r.appendChild(elem("span", "ob-target", "→ " + S.shortHost(it.url)));
+        if (it.status === "conflict") {
+          const tag = elem("span", "ob-tag", "different DB");
+          tag.title = "Held — this address now serves a different database than the one this capture was queued for. It will sync when the right instance is back.";
+          r.appendChild(tag);
+        } else if (it.attempts > 0) {
+          const tag = elem("span", "ob-tag ob-retry", "retrying");
+          tag.title = (it.attempts) + " failed " + (it.attempts === 1 ? "attempt" : "attempts") + (it.lastError ? " · " + it.lastError : "");
+          r.appendChild(tag);
+        } else {
+          r.appendChild(elem("span", "sm-spacer", ""));
+        }
+        const rm = elem("button", "sm-remove");
+        rm.title = "Discard this capture";
+        rm.setAttribute("aria-label", "Discard queued capture: " + label);
+        rm.appendChild(svgEl(["M18 6 6 18", "M6 6l12 12"], "", "2.2"));
+        rm.addEventListener("click", async () => { await OB.remove(it.id, it.url); await refresh(); });
+        r.appendChild(rm);
+      });
+      sec.appendChild(list);
+      return sec;
     }
 
     function row(c) {

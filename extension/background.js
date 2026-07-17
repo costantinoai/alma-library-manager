@@ -77,18 +77,7 @@
     if (!S || !OB) return;
     try {
       if ((await OB.count()) === 0) return;
-      await OB.flush({
-        ping: (url, key) => S.pingUrl(url, key),
-        save: async (url, key, body) => {
-          const headers = { "Content-Type": "application/json" };
-          if (key) headers["X-API-Key"] = key;
-          try {
-            const res = await fetch(url + "/api/v1/extension/save", { method: "POST", headers, body: JSON.stringify(body) });
-            return { ok: res.ok, status: res.status };
-          } catch (e) { return { ok: false, status: 0 }; }
-        },
-        apiKeyFor: async (url) => { const st = await S.load(); const s = st.servers.find((x) => x.url === url); return (s && s.apiKey) || ""; },
-      });
+      await OB.flushVia(S);
     } catch (e) { /* best effort */ }
   }
 

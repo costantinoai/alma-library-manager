@@ -34,18 +34,29 @@
   const $title = el("title"), $badges = el("badges"), $meta = el("meta");
   const $detectedText = el("detected-text");
   const $savedRibbon = el("saved-ribbon"), $savedRibbonText = el("saved-ribbon-text"), $savedRating = el("saved-rating");
+  const $savedOpen = el("saved-open");
   const $rating = el("rating"), $dest = el("dest"), $result = el("result");
   const $commitPre = el("commit-pre"), $commitPost = el("commit-post");
   const $cancel = el("cancel"), $saveBtn = el("save-btn"), $undoBtn = el("undo-btn"), $doneBtn = el("done-btn");
   const $settings = el("settings"), $serverManager = el("server-manager"), $settingsBack = el("settings-back");
+  const $collLabel = el("coll-label"), $collRow = el("coll-row"), $collNew = el("coll-new");
+  const $collChips = el("coll-chips");
 
   let candidates = [], active = null, detected = null;
   let destination = "library", selectedRating = "add";
   let menuOpen = false, mainView = "main", managerCtl = null;
   let membership = null;   // /lookup result, or null
   let undoToken = null;    // from the last successful save
+  let undoTarget = null;   // { url, apiKey } of the server that PERFORMED the
+                           // save — Undo must go there, not to whatever server
+                           // is active when the button is clicked (the same
+                           // paper id can exist in another instance's DB)
   let committed = false;
   let resolving = false;   // fetching the title from the identifier for preview
+  let collections = null;  // [{id,name,item_count}] from the server; null = unsupported/unknown → picker hidden
+  let collectionSel = "";  // "" = none · a collection id · "__new__"
+  let membershipSeq = 0;   // stale-response guards: switching servers mid-fetch
+  let collectionsSeq = 0;  // must not let the old server's response win
 
   const connected = () => !!(active && active.online);
 
@@ -129,9 +140,14 @@
     active = chosen;
     renderConn();
     refreshActionState();
+    loadCollections();
 
-    // Late-landing probes refresh the dropdown dots when they complete.
-    Promise.all(probes).then(() => { renderConn(); refreshActionState(); }).catch(() => {});
+    // Late-landing probes refresh the dropdown dots when they complete (and
+    // may flip the active server online → the picker gets its list then).
+    Promise.all(probes).then(() => {
+      renderConn(); refreshActionState();
+      if (collections === null && connected()) loadCollections();
+    }).catch(() => {});
   }
 
   function visibleCandidates() {
@@ -187,6 +203,7 @@
     toggleMenu(false);
     renderConn();
     refreshActionState();
+    loadCollections();
     refreshMembership();
     try { await S.setActive(url); } catch (e) { /* best effort */ }
   }
@@ -298,11 +315,24 @@
   function renderRatingStars() {
     $rating.querySelectorAll("button").forEach((btn) => fillStars(btn.querySelector(".stars"), parseInt(btn.getAttribute("data-stars"), 10) || 0));
   }
-  function badge(text, cls) {
-    const span = document.createElement("span");
-    span.className = "badge " + (cls || "");
-    span.textContent = text; span.title = text;
-    return span;
+  // A badge is a <span>; pass `copyText` to make it a click-to-copy <button>
+  // (identifiers are the thing you want on the clipboard — for a citation
+  // manager, an email, a search box).
+  function badge(text, cls, copyText) {
+    const node = document.createElement(copyText ? "button" : "span");
+    node.className = "badge " + (cls || "") + (copyText ? " is-copy" : "");
+    node.textContent = text;
+    node.title = copyText ? "Click to copy " + copyText : text;
+    if (copyText) {
+      node.addEventListener("click", async () => {
+        try { await navigator.clipboard.writeText(copyText); } catch (e) { return; }
+        const prev = node.textContent;
+        node.textContent = "Copied ✓";
+        node.classList.add("is-copied");
+        setTimeout(() => { node.textContent = prev; node.classList.remove("is-copied"); }, 1200);
+      });
+    }
+    return node;
   }
   function renderPaper(p) {
     mainView = "main";
@@ -314,8 +344,8 @@
     else { $title.textContent = "Couldn't read a title"; $title.classList.add("is-untitled"); }
 
     clear($badges);
-    if (p.arxivId) $badges.appendChild(badge("arXiv:" + p.arxivId, "arxiv"));
-    if (p.doi) $badges.appendChild(badge(p.doi, "doi"));
+    if (p.arxivId) $badges.appendChild(badge("arXiv:" + p.arxivId, "arxiv", p.arxivId));
+    if (p.doi) $badges.appendChild(badge(p.doi, "doi", p.doi));
     if (p.isPdf) $badges.appendChild(badge("PDF", "pdf"));
 
     const bits = [];
@@ -335,6 +365,112 @@
   }
 
   // -------------------------------------------------------------------
+  // "File under" — optional collection filing at save time
+  // -------------------------------------------------------------------
+  // Every state is VISIBLE (no silent hiding):
+  //   ready        chips: None · <collections> · ＋ New collection…
+  //   empty        just the ＋ New chip, with a quiet hint
+  //   unsupported  the active ALMa predates /extension/collections → a
+  //                muted note says so (a hidden feature reads as broken)
+  //   offline      section absent — filing can't be offered truthfully
+  //                (queued captures deliver without it)
+  let collectionsState = "loading"; // "ready" | "unsupported" | "error" | "loading"
+  async function loadCollections() {
+    const seq = ++collectionsSeq;
+    if (!connected()) { collections = null; collectionsState = "loading"; renderCollections(); return; }
+    let next = null, state = "error";
+    try {
+      const res = await fetch(active.url + "/api/v1/extension/collections", { headers: authHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.collections)) { next = data.collections; state = "ready"; }
+      } else if (res.status === 404) {
+        state = "unsupported"; // older ALMa build — say so, don't vanish
+      }
+    } catch (e) { state = "error"; }
+    if (seq !== collectionsSeq) return; // a newer load (server switch) owns the UI
+    collections = next;
+    collectionsState = state;
+    renderCollections();
+  }
+  // Always-visible wrapping chips — no dropdown of any kind. Anything that
+  // floats or expands over the popup fights the popup window's document-sized
+  // bounds and gets cut; chips wrap in normal flow and the shelf scrolls
+  // internally past ~3 rows.
+  function collOptions() {
+    const memberIds = new Set(((membership && membership.collections) || []).map((c) => c.id));
+    const opts = [];
+    if ((collections || []).length) {
+      opts.push({ value: "", label: "None", title: "Don't file into a collection" });
+    }
+    (collections || []).forEach((c) => {
+      const already = memberIds.has(c.id);
+      opts.push({
+        value: c.id,
+        label: c.name,
+        member: already,
+        title: already
+          ? c.name + " — already holds this paper"
+          : c.name + (c.item_count ? " · " + c.item_count + (c.item_count === 1 ? " paper" : " papers") : ""),
+      });
+    });
+    opts.push({ value: "__new__", label: "＋ New collection…", title: "Create a collection and file this paper into it" });
+    return opts;
+  }
+  function collNote(text) {
+    const note = document.createElement("div");
+    note.className = "coll-hint";
+    note.textContent = text;
+    return note;
+  }
+  function renderCollections() {
+    // Offline / still probing → no section (filing can't be offered).
+    const show = connected() && collectionsState !== "loading" && collectionsState !== "error";
+    $collLabel.hidden = !show;
+    $collRow.hidden = !show;
+    if (!show) { collectionSel = ""; return; }
+    clear($collChips);
+    if (collectionsState === "unsupported") {
+      collectionSel = "";
+      $collChips.appendChild(collNote("This ALMa build doesn't support collections yet — update ALMa to file papers."));
+      $collNew.hidden = true;
+      return;
+    }
+    const opts = collOptions();
+    if (!opts.some((o) => o.value === collectionSel)) collectionSel = ""; // chosen collection vanished on refresh
+    opts.forEach((o) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "coll-chip" + (o.member ? " is-member" : "");
+      chip.setAttribute("role", "radio");
+      chip.setAttribute("aria-checked", String(o.value === collectionSel));
+      chip.setAttribute("data-value", o.value);
+      chip.textContent = o.label;
+      chip.title = o.title;
+      $collChips.appendChild(chip);
+    });
+    if (!(collections || []).length) {
+      $collChips.appendChild(collNote("No collections yet — create the first one."));
+    }
+    $collNew.hidden = collectionSel !== "__new__";
+  }
+  function selectCollection(value) {
+    // Tapping the selected chip again deselects (back to no filing).
+    collectionSel = value === collectionSel && value !== "" ? "" : value;
+    renderCollections();
+    if (collectionSel === "__new__") $collNew.focus();
+  }
+  // The user's chosen filing, or {} when none / picker hidden.
+  function collectionChoice() {
+    if (!Array.isArray(collections) || $collRow.hidden) return {};
+    if (collectionSel === "__new__") {
+      const name = $collNew.value.trim();
+      return name ? { collection_name: name } : {};
+    }
+    return collectionSel ? { collection_id: collectionSel } : {};
+  }
+
+  // -------------------------------------------------------------------
   // Membership (already in Library / Reading list?)
   // -------------------------------------------------------------------
   function ratingToStars(r) { r = parseInt(r, 10) || 0; return Math.max(0, Math.min(5, r)); }
@@ -342,17 +478,21 @@
 
   async function refreshMembership() {
     if (!detected || !connected() || !saveable() || committed) return;
+    const seq = ++membershipSeq;
     // If the page gave us no title (e.g. a PDF), ask the server to resolve
     // it from the identifier so we can show the real title now, not on save.
     const needResolve = !(detected.title && detected.title.trim());
     if (needResolve) { resolving = true; renderPaper(detected); }
+    let next = null;
     try {
       const res = await fetch(active.url + "/api/v1/extension/lookup", {
         method: "POST", headers: authHeaders(),
         body: JSON.stringify({ doi: detected.doi || null, openalex_id: detected.openalexId || null, title: detected.title || null, year: detected.year || null, resolve: needResolve }),
       });
-      membership = res.ok ? await res.json() : null;
-    } catch (e) { membership = null; }
+      next = res.ok ? await res.json() : null;
+    } catch (e) { next = null; }
+    if (seq !== membershipSeq) return; // superseded (server switch) — stale response must not win
+    membership = next;
     resolving = false;
 
     // Fill in metadata we couldn't scrape, from the resolved result.
@@ -365,6 +505,7 @@
     }
     renderPaper(detected);
     applyMembership();
+    renderCollections(); // refresh the "already in" markers
   }
   function applyMembership() {
     const m = membership;
@@ -374,6 +515,14 @@
       $savedRibbon.className = "saved-ribbon" + (reading ? " is-reading" : "");
       $savedRibbonText.textContent = reading ? "On your Reading list" : "In your Library";
       fillStars($savedRating, ratingToStars(m.rating));
+      // Deep-link into the ALMa Library view of this exact paper (the web
+      // app reads #/library?paper=<id> and opens it).
+      if (m.paper_id && active) {
+        $savedOpen.href = active.url + "/#/library?paper=" + encodeURIComponent(m.paper_id);
+        $savedOpen.hidden = false;
+      } else {
+        $savedOpen.hidden = true;
+      }
       $paper.classList.toggle("is-reading", reading);
       $paper.classList.toggle("is-saved", !reading);
       selectRating(starsToRating(m.rating));
@@ -431,18 +580,7 @@
     if ((await OB.count()) === 0) return;
     let summary;
     try {
-      summary = await OB.flush({
-        ping: (url, key) => S.pingUrl(url, key),
-        save: async (url, key, body) => {
-          const headers = { "Content-Type": "application/json" };
-          if (key) headers["X-API-Key"] = key;
-          try {
-            const res = await fetch(url + "/api/v1/extension/save", { method: "POST", headers, body: JSON.stringify(body) });
-            return { ok: res.ok, status: res.status };
-          } catch (e) { return { ok: false, status: 0 }; }
-        },
-        apiKeyFor: async (url) => { const st = await S.load(); const s = st.servers.find((x) => x.url === url); return (s && s.apiKey) || ""; },
-      });
+      summary = await OB.flushVia(S);
     } catch (e) { return; }
     if (committed) return;
     if (summary.delivered > 0) {
@@ -457,7 +595,10 @@
   // -------------------------------------------------------------------
   // Commit / Undo
   // -------------------------------------------------------------------
-  function setSelectorsDisabled(d) { document.querySelectorAll("#rating button, #dest button").forEach((b) => (b.disabled = d)); }
+  function setSelectorsDisabled(d) {
+    document.querySelectorAll("#rating button, #dest button, #coll-chips button").forEach((b) => (b.disabled = d));
+    $collNew.disabled = d;
+  }
   function enterCommitted() {
     committed = true; setSelectorsDisabled(true);
     $commitPre.classList.add("hide"); $commitPost.classList.remove("hide");
@@ -466,16 +607,22 @@
   function exitCommitted() {
     committed = false; setSelectorsDisabled(false);
     $commitPost.classList.add("hide"); $commitPre.classList.remove("hide");
-    $saveBtn.disabled = !(connected() && saveable());
+    // Recompute the Save button through the one shared path — it knows the
+    // offline-queueable case (server down but a target selected), so undoing
+    // a queued capture leaves "Save for later" clickable, not a dead button.
+    refreshActionState();
   }
 
   function buildBody() {
+    const coll = collectionChoice();
     return {
       action: selectedRating, destination: destination,
       doi: detected.doi || null, openalex_id: detected.openalexId || null,
       title: detected.title || null, url: detected.url || null,
       authors: detected.authors || null, year: detected.year || null,
       journal: detected.journal || null, abstract: detected.abstract || null,
+      collection_id: coll.collection_id || null,
+      collection_name: coll.collection_name || null,
     };
   }
 
@@ -498,6 +645,13 @@
 
   async function save() {
     if (!saveable() || committed) return;
+    // "New collection…" chosen but unnamed → block loudly rather than
+    // silently saving without the filing the user asked for.
+    if (!$collRow.hidden && collectionSel === "__new__" && !$collNew.value.trim()) {
+      result("error", "Name the new collection (or pick “No collection”) before saving.");
+      $collNew.focus();
+      return;
+    }
     const body = buildBody();
     // Server down → queue it (bound to the intended instance) instead of
     // failing. The user clicked "Save for later".
@@ -509,10 +663,19 @@
       let data = {}; try { data = await res.json(); } catch (e) { /* ignore */ }
       if (res.ok) {
         undoToken = data.undo || null;
+        undoTarget = { url: active.url, apiKey: active.apiKey || "" };
         const rating = data.rating ? data.rating + "★" : "";
-        result("success", "Saved to " + destLabel(data.destination || destination) + (rating ? " · " + rating : "") + " on " + S.shortHost(active.url),
+        // Name the filing in the receipt so the save's full effect is visible.
+        let collNote = "";
+        if (body.collection_name) collNote = " · in “" + body.collection_name + "”";
+        else if (body.collection_id && Array.isArray(collections)) {
+          const c = collections.find((x) => x.id === body.collection_id);
+          if (c) collNote = " · in “" + c.name + "”";
+        }
+        result("success", "Saved to " + destLabel(data.destination || destination) + (rating ? " · " + rating : "") + collNote + " on " + S.shortHost(active.url),
           { title: data.title || detected.title || "", link: { text: "Open ALMa", href: active.url + "/" } });
         enterCommitted();
+        loadCollections(); // a just-created collection should be in the list on Undo/next render
       } else if (res.status === 422) { result("error", (data && data.detail) || "Couldn't identify this paper. Try its article page."); $saveBtn.disabled = false; }
       else if (res.status === 400) { result("error", (data && data.detail) || "Invalid request."); $saveBtn.disabled = false; }
       else { result("error", "ALMa returned an error (" + res.status + "). Try again."); $saveBtn.disabled = false; }
@@ -533,17 +696,24 @@
       result("info", "Removed from the offline queue.");
       return;
     }
+    // Undo goes to the server that performed the save (pinned at save time),
+    // NOT the currently active one — switching the pill must never point an
+    // Undo at a different instance's database.
+    const target = undoTarget || active;
+    if (!target) { result("error", "Couldn't undo — no server."); return; }
     $undoBtn.disabled = true;
     result("loading", "Undoing…");
+    const headers = { "Content-Type": "application/json" };
+    if (target.apiKey) headers["X-API-Key"] = target.apiKey;
     try {
-      const res = await fetch(active.url + "/api/v1/extension/undo", { method: "POST", headers: authHeaders(), body: JSON.stringify(undoToken) });
+      const res = await fetch(target.url + "/api/v1/extension/undo", { method: "POST", headers, body: JSON.stringify(undoToken) });
       if (res.ok) {
-        undoToken = null;
+        undoToken = null; undoTarget = null;
         exitCommitted();
         result("info", "Undone — this paper is no longer saved.");
         refreshMembership();
       } else { result("error", "Couldn't undo (" + res.status + ")."); $undoBtn.disabled = false; }
-    } catch (e) { result("error", "Couldn't reach ALMa to undo."); $undoBtn.disabled = false; }
+    } catch (e) { result("error", "Couldn't reach ALMa at " + S.shortHost(target.url) + " to undo."); $undoBtn.disabled = false; }
   }
 
   // -------------------------------------------------------------------
@@ -591,12 +761,30 @@
     $conn.addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
     $menu.addEventListener("click", (e) => { const item = e.target.closest(".srv-item"); if (item) { e.stopPropagation(); selectServer(item.getAttribute("data-url")); } });
     document.addEventListener("click", (e) => { if (menuOpen && $connWrap && !$connWrap.contains(e.target)) toggleMenu(false); });
+    $collChips.addEventListener("click", (e) => {
+      const chip = e.target.closest(".coll-chip");
+      if (chip && !chip.disabled) selectCollection(chip.getAttribute("data-value"));
+    });
+    // Naming the new collection then hitting Enter = Save (one fluid motion).
+    $collNew.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !$saveBtn.disabled && $collNew.value.trim()) { e.preventDefault(); save(); }
+    });
     $rating.addEventListener("click", (e) => { const b = e.target.closest("button[data-rating]"); if (b && !b.disabled) selectRating(b.getAttribute("data-rating")); });
     $dest.addEventListener("click", (e) => { const b = e.target.closest("button[data-dest]"); if (b && !b.disabled) setDestination(b.getAttribute("data-dest")); });
     $saveBtn.addEventListener("click", save);
     $cancel.addEventListener("click", () => window.close());
     $undoBtn.addEventListener("click", undo);
     $doneBtn.addEventListener("click", () => window.close());
+    // Enter = Save (the popup's one primary action). Ignored while typing in
+    // an input, while a button has focus (native activation wins), in the
+    // Servers panel, and after a commit. Esc already closes the popup natively.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "BUTTON" || t.isContentEditable)) return;
+      if (mainView !== "main" || committed || !$settings.classList.contains("hide")) return;
+      if (!$saveBtn.disabled) { e.preventDefault(); save(); }
+    });
   }
 
   async function init() {

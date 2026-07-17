@@ -44,6 +44,11 @@
           ? { ok: true, json: async () => ({ ok: true, connector_version: 1, alma_version: "1.0.0" }) }
           : { ok: false, status: 0, json: async () => ({}) };
       }
+      if (u.includes("/extension/collections"))
+        return { ok: true, json: async () => ({ collections: [
+          { id: "c1", name: "Vision", item_count: 12 },
+          { id: "c2", name: "Methods", item_count: 4 },
+        ] }) };
       if (u.includes("/extension/lookup")) {
         // __RESOLVE_TITLE simulates an upstream title resolve for a PDF.
         if (window.__RESOLVE_TITLE)
@@ -51,7 +56,7 @@
         // __ALREADY_SAVED = {reading?:bool, rating?:int} simulates membership.
         const s = window.__ALREADY_SAVED;
         return { ok: true, json: async () => (s
-          ? { found: true, in_library: true, reading_status: s.reading ? "reading" : null, rating: s.rating || 4, paper_id: "x" }
+          ? { found: true, in_library: true, reading_status: s.reading ? "reading" : null, rating: s.rating || 4, paper_id: "x", collections: [{ id: "c1", name: "Vision" }] }
           : { found: false }) };
       }
       if (u.includes("/extension/save"))
@@ -94,6 +99,7 @@
             <svg class="sr-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
             <span class="sr-text" id="saved-ribbon-text">In your Library</span>
             <span class="saved-rating" id="saved-rating"></span>
+            <a class="sr-open" id="saved-open" target="_blank" rel="noopener" hidden>Open</a>
           </div>
           <h1 class="title" id="title">Reading the page…</h1>
           <div class="badges" id="badges"></div>
@@ -120,6 +126,11 @@
             Reading list
           </button>
         </div>
+        <div class="section-label reveal d2" id="coll-label" hidden>File under <span class="optional">optional</span></div>
+        <div class="coll-row reveal d2" id="coll-row" hidden>
+          <div id="coll-chips" class="coll-chips" role="radiogroup" aria-label="Add to collection"></div>
+          <input id="coll-new" class="coll-new" type="text" placeholder="New collection name" spellcheck="false" autocomplete="off" hidden />
+        </div>
         <div class="commit-row reveal d3" id="commit-pre">
           <button class="btn-quiet" id="cancel">Cancel</button>
           <button class="btn-primary" id="save-btn">Save to ALMa</button>
@@ -144,6 +155,7 @@
   <p class="note">Render harness — mocked APIs + sample paper. Keep the body markup in sync with <code>popup.html</code>.</p>
 
   <script src="../lib/settings.js"></script>
+  <script src="../lib/outbox.js"></script>
   <script src="../lib/servers-ui.js"></script>
   <script src="../lib/extract.js"></script>
   <script src="../popup.js"></script>

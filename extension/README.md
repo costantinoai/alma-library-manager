@@ -10,9 +10,22 @@ selectors; **nothing is saved until you press Save** (Cancel closes). The
 connector sends the identifier to your local ALMa, which resolves full
 metadata via OpenAlex and saves the paper.
 
+An optional **Collection** picker files the paper into one of your ALMa
+collections at save time (or creates a new one by name). The picker only
+appears when the connected ALMa exposes `/extension/collections`; options
+the paper is already filed in are marked. Undo reverses the filing too —
+but only memberships that save created.
+
 If the paper is **already in your Library / Reading list**, the card shows
-a clear ribbon with its current rating and the button becomes **Update**.
-Right after saving, an **Undo** button reverses it.
+a clear ribbon with its current rating (plus an **Open** link straight to
+the paper in ALMa) and the button becomes **Update**. Right after saving,
+an **Undo** button reverses it — on the server that performed the save,
+even if you switch the connection pill afterwards.
+
+Small conveniences: the DOI / arXiv badges are **click-to-copy**;
+**Enter** triggers Save; the popup **mirrors the ALMa app's theme**
+(the light/dark/system toggle at the bottom of ALMa's sidebar — synced
+whenever an ALMa tab is open; light by default).
 
 The toolbar icon shows a **green dot** when the current page looks like a
 savable paper (URL-level detection — arXiv, DOI-in-URL, `/doi/…`,
@@ -122,6 +135,12 @@ Preferences) to make a server active, **Add** a detected one, **Add a
 server** by URL (with an optional `API_KEY` sent as `X-API-Key`; non-local
 hosts prompt for permission once), **Remove**, or **Recheck**. Stored
 locally in your browser.
+
+The same panel shows the **Offline queue**: captures saved while their
+target ALMa was down, each bound to the intended instance. You can
+**Sync now**, discard individual captures, and see held conflicts
+("different DB") with the reason — queued work is never an invisible
+background state.
 
 ## Tests
 
