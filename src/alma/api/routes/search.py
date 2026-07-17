@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +58,11 @@ def global_search(
     # Search papers (title, abstract)
     try:
         paper_rows = db.execute(
-            """
+            f"""
             SELECT id, title, authors, year, status
             FROM papers
-            WHERE title LIKE ? OR abstract LIKE ?
+            WHERE (title LIKE ? OR abstract LIKE ?)
+              AND {standalone_paper_sql('papers')}
             ORDER BY
                 CASE WHEN status = 'library' THEN 0 ELSE 1 END,
                 year DESC
@@ -108,11 +110,12 @@ def global_search(
     # Search collections (name)
     try:
         collection_rows = db.execute(
-            """
+            f"""
             SELECT c.id, c.name, c.description, COUNT(p.id) as item_count
             FROM collections c
             LEFT JOIN collection_items ci ON c.id = ci.collection_id
             LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
+                AND {standalone_paper_sql('p')}
             WHERE c.name LIKE ? OR c.description LIKE ?
             GROUP BY c.id
             ORDER BY item_count DESC

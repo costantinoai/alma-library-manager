@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from alma.core.scoring_math import clamp
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 
 from .lens_crud import (
@@ -155,10 +156,11 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
     max_seeds = max(50, min(5000, max_seeds))
     if context_type == "library_global":
         rows = db.execute(
-            """
+            f"""
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
             ORDER BY COALESCE(rating, 0) DESC, COALESCE(cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -170,12 +172,13 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
         if not collection_id:
             return []
         rows = db.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.abstract, p.doi, p.openalex_id, p.authors, p.journal, p.year, p.cited_by_count, p.rating
             FROM papers p
             JOIN collection_items ci ON ci.paper_id = p.id
             WHERE ci.collection_id = ?
               AND p.status = 'library'
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -188,10 +191,11 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
             return []
         pattern = f"%{keyword}%"
         rows = db.execute(
-            """
+            f"""
             SELECT id, title, abstract, doi, openalex_id, authors, journal, year, cited_by_count, rating
             FROM papers
-            WHERE title LIKE ? OR abstract LIKE ?
+            WHERE (title LIKE ? OR abstract LIKE ?)
+              AND {standalone_paper_sql('papers')}
             ORDER BY COALESCE(cited_by_count, 0) DESC
             LIMIT ?
             """,
@@ -203,11 +207,12 @@ def _load_seed_papers_for_lens(db: sqlite3.Connection, lens: dict) -> list[dict]
         tag_name = str(config.get("tag") or "").strip()
         if tag_id:
             rows = db.execute(
-                """
+                f"""
                 SELECT p.id, p.title, p.abstract, p.doi, p.openalex_id, p.authors, p.journal, p.year, p.cited_by_count, p.rating
                 FROM papers p
                 JOIN publication_tags pt ON pt.paper_id = p.id
                 WHERE pt.tag_id = ?
+                  AND {standalone_paper_sql('p')}
                 ORDER BY COALESCE(p.cited_by_count, 0) DESC
                 LIMIT ?
                 """,
@@ -341,9 +346,10 @@ def _load_library_preference_inputs(
     instead — see the caller in ``refresh_lens_recommendations``.
     """
     rows = db.execute(
-        """SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
+        f"""SELECT id, title, abstract, url, doi, authors, journal, year, rating, added_at
            FROM papers
            WHERE status = 'library'
+             AND {standalone_paper_sql('papers')}
            ORDER BY COALESCE(added_at, '') DESC"""
     ).fetchall()
     library_pubs = [dict(r) for r in rows]
@@ -463,17 +469,18 @@ def _top_preferred_authors(
     library_author_share: dict[str, float] = {}
     try:
         size_row = db.execute(
-            "SELECT COUNT(*) AS n FROM papers WHERE status = 'library'"
+            f"SELECT COUNT(*) AS n FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
         ).fetchone()
         library_size = int(size_row["n"] or 0) if size_row else 0
         if library_size > 0:
             share_rows = db.execute(
-                """
+                f"""
                 SELECT pa.display_name AS display_name, COUNT(DISTINCT pa.paper_id) AS n
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
                 WHERE p.status = 'library'
                   AND COALESCE(TRIM(pa.display_name), '') != ''
+                  AND {standalone_paper_sql('p')}
                 GROUP BY LOWER(TRIM(pa.display_name))
                 """
             ).fetchall()
@@ -488,7 +495,7 @@ def _top_preferred_authors(
 
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT entity_id, affinity_weight, confidence, interaction_count
             FROM preference_profiles
             WHERE entity_type = 'author'
@@ -555,11 +562,12 @@ def _recent_positive_publications(
 ) -> list[dict]:
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.abstract, p.authors, p.journal, p.year, r.action_at
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE r.user_action IN ('save', 'like')
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(r.action_at, r.created_at, '') DESC
             LIMIT ?
             """,
@@ -817,9 +825,12 @@ def _fetch_seed_embedding_vectors(
     try:
         rows = db.execute(
             f"""
-            SELECT paper_id, embedding
-            FROM publication_embeddings
-            WHERE model = ? AND paper_id IN ({placeholders})
+            SELECT pe.paper_id, pe.embedding
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ?
+              AND pe.paper_id IN ({placeholders})
+              AND {standalone_paper_sql('p')}
             """,
             [active_model, *seed_ids],
         ).fetchall()

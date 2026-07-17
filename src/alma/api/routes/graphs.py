@@ -817,8 +817,14 @@ def _load_vectors_for(
         model = get_active_embedding_model(conn)
         placeholders = ",".join("?" * len(paper_ids))
         rows = conn.execute(
-            f"SELECT paper_id, embedding FROM publication_embeddings "
-            f"WHERE model = ? AND paper_id IN ({placeholders})",
+            f"""
+            SELECT pe.paper_id, pe.embedding
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ?
+              AND pe.paper_id IN ({placeholders})
+              AND {standalone_paper_sql('p')}
+            """,
             [model, *paper_ids],
         ).fetchall()
     except sqlite3.OperationalError:
@@ -1215,7 +1221,13 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
 
             active_model = get_active_embedding_model(conn)
             r = conn.execute(
-                "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
+                f"""
+                SELECT COUNT(*) AS c
+                FROM publication_embeddings pe
+                JOIN papers p ON p.id = pe.paper_id
+                WHERE pe.model = ?
+                  AND {standalone_paper_sql('p')}
+                """,
                 (active_model,),
             ).fetchone()
             emb_count = int(r["c"] if isinstance(r, sqlite3.Row) else r[0])
@@ -1224,7 +1236,9 @@ def _get_graph_ai_state(conn: sqlite3.Connection) -> dict:
 
     pub_count = 0
     try:
-        r = conn.execute("SELECT COUNT(*) AS c FROM papers").fetchone()
+        r = conn.execute(
+            f"SELECT COUNT(*) AS c FROM papers p WHERE {standalone_paper_sql('p')}"
+        ).fetchone()
         pub_count = int(r["c"] if isinstance(r, sqlite3.Row) else r[0])
     except Exception:
         pub_count = 0
@@ -2777,28 +2791,31 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
 # (Topics are deliberately NOT here: the noisy OpenAlex/S2 topic vocabulary was
 # removed from the machines in LABELLING_VERSION 2026.07-6 — labels come from title
 # text now, so publication_topics is no longer a graph input.)
-_PAPER_MAP_LIBRARY_FP_SQL = """
+_PAPER_MAP_LIBRARY_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers WHERE status = 'library'),
-      (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
+      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM publication_embeddings pe
          JOIN papers p ON p.id = pe.paper_id
-         WHERE p.status = 'library'),
+         WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library'),
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library')
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')})
 """
 
-_PAPER_MAP_CORPUS_FP_SQL = """
+_PAPER_MAP_CORPUS_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers),
-      (SELECT COALESCE(MAX(updated_at), '') FROM papers),
-      (SELECT COUNT(*) FROM publication_embeddings),
+      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model'),
-      (SELECT COALESCE(MAX(created_at), '') FROM publication_embeddings),
-      (SELECT COUNT(*) FROM publication_references)
+      (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM publication_references pr
+         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql('p')})
 """
 
 # Author network. The graph's structure is derived from the publication graph —
@@ -2808,29 +2825,32 @@ _PAPER_MAP_CORPUS_FP_SQL = """
 # of authorships, a reference backfill, or a re-embed (none of which need touch
 # papers.updated_at) served a stale network. Added: authorship count, reference
 # count, and the embedding-recompute watermark.
-_AUTHOR_NETWORK_LIBRARY_FP_SQL = """
+_AUTHOR_NETWORK_LIBRARY_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers WHERE status = 'library'),
-      (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
+      (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM followed_authors),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
       (SELECT COUNT(*) FROM publication_authors pa
-         JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library'),
+         JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM publication_references pr
-         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library'),
+         JOIN papers p ON p.id = pr.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
-         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library')
+         JOIN papers p ON p.id = pe.paper_id WHERE p.status = 'library' AND {standalone_paper_sql('p')})
 """
 
-_AUTHOR_NETWORK_CORPUS_FP_SQL = """
+_AUTHOR_NETWORK_CORPUS_FP_SQL = f"""
     SELECT
-      (SELECT COUNT(*) FROM papers),
-      (SELECT COALESCE(MAX(updated_at), '') FROM papers),
+      (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
+      (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COUNT(*) FROM followed_authors),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
-      (SELECT COUNT(*) FROM publication_authors),
-      (SELECT COUNT(*) FROM publication_references),
-      (SELECT COALESCE(MAX(created_at), '') FROM publication_embeddings)
+      (SELECT COUNT(*) FROM publication_authors pa
+         JOIN papers p ON p.id = pa.paper_id WHERE {standalone_paper_sql('p')}),
+      (SELECT COUNT(*) FROM publication_references pr
+         JOIN papers p ON p.id = pr.paper_id WHERE {standalone_paper_sql('p')}),
+      (SELECT COALESCE(MAX(pe.created_at), '') FROM publication_embeddings pe
+         JOIN papers p ON p.id = pe.paper_id WHERE {standalone_paper_sql('p')})
 """
 
 # I-4: stamp the clustering/projection/labelling versions into the paper-map +

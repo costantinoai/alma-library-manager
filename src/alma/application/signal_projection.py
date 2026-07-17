@@ -21,7 +21,7 @@ from alma.core.keywords import parse_keywords
 from alma.core.scoring_math import age_decay
 from alma.core.scoring_math import clamp as _clamp
 from alma.core.scoring_math import days_since as _days_since
-from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.core.topics import DEFAULT_TOPIC_SCORE, topic_relevance
 
 _POSITIVE_ACTIONS = {
@@ -180,7 +180,7 @@ def compute_paper_signal_map(
                 str(row[0])
                 for row in db.execute(
                     f"SELECT id FROM papers p WHERE id IN ({placeholders}) "
-                    f"AND {standalone_paper_sql('p')}",
+                    f"AND {standalone_paper_sql_for_db(db, 'p')}",
                     ids,
                 ).fetchall()
             }
@@ -270,7 +270,12 @@ def _add_rating_signals(
     """
     try:
         rows = db.execute(
-            "SELECT id, rating FROM papers WHERE rating IS NOT NULL AND rating > 0"
+            f"""
+            SELECT id, rating
+            FROM papers p
+            WHERE rating IS NOT NULL AND rating > 0
+              AND {standalone_paper_sql_for_db(db, 'p')}
+            """
         ).fetchall()
     except sqlite3.OperationalError:
         return
@@ -306,10 +311,12 @@ def _add_recommendation_signals(
     """
     try:
         rows = db.execute(
-            """
-            SELECT paper_id, user_action, action_at
-            FROM recommendations
-            WHERE user_action IS NOT NULL AND TRIM(user_action) <> ''
+            f"""
+            SELECT r.paper_id, r.user_action, r.action_at
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE r.user_action IS NOT NULL AND TRIM(r.user_action) <> ''
+              AND {standalone_paper_sql_for_db(db, 'p')}
             """
         ).fetchall()
     except sqlite3.OperationalError:
@@ -499,10 +506,11 @@ def _project_semantic_neighbors(
         if not seed_rows:
             return
         all_rows = db.execute(
-            """
-            SELECT paper_id, embedding
-            FROM publication_embeddings
-            WHERE model = ?
+            f"""
+            SELECT pe.paper_id, pe.embedding
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ? AND {standalone_paper_sql_for_db(db, 'p')}
             """,
             (model,),
         ).fetchall()
@@ -586,6 +594,7 @@ def _project_citation_neighbors(
                 JOIN papers rp ON rp.openalex_id = 'W' || pr.referenced_work_id
                 WHERE pr.paper_id IN ({placeholders})
                   AND rp.id <> pr.paper_id
+                  AND {standalone_paper_sql_for_db(db, 'rp')}
                 """,
                 chunk,
             ).fetchall()
@@ -607,6 +616,7 @@ def _project_citation_neighbors(
                   AND cp.id <> fp.id
                   AND fp.openalex_id IS NOT NULL
                   AND fp.openalex_id LIKE 'W%'
+                  AND {standalone_paper_sql_for_db(db, 'cp')}
                 """,
                 chunk,
             ).fetchall()
@@ -708,8 +718,10 @@ def _project_author_profiles(
                        COALESCE(pt.score, 0.5) AS score
                 FROM publication_authors pa
                 JOIN publication_topics pt ON pt.paper_id = pa.paper_id
+                JOIN papers p ON p.id = pa.paper_id
                 WHERE lower(pa.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(pt.term), '') <> ''
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -728,6 +740,7 @@ def _project_author_profiles(
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
                 WHERE lower(pa.openalex_id) IN ({placeholders})
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -746,8 +759,10 @@ def _project_author_profiles(
                 FROM publication_authors pa
                 JOIN publication_tags pt ON pt.paper_id = pa.paper_id
                 JOIN tags t ON t.id = pt.tag_id
+                JOIN papers p ON p.id = pa.paper_id
                 WHERE lower(pa.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(t.name), '') <> ''
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -790,8 +805,10 @@ def _project_author_coauthors(
                 JOIN publication_authors other
                   ON other.paper_id = seed.paper_id
                  AND lower(other.openalex_id) <> lower(seed.openalex_id)
+                JOIN papers p ON p.id = seed.paper_id
                 WHERE lower(seed.openalex_id) IN ({placeholders})
                   AND COALESCE(TRIM(other.openalex_id), '') <> ''
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -836,11 +853,13 @@ def _project_author_institutions(
             seed_rows = db.execute(
                 f"""
                 SELECT
-                    lower(openalex_id) AS seed_id,
-                    lower(trim(institution)) AS institution
-                FROM publication_authors
-                WHERE lower(openalex_id) IN ({placeholders})
-                  AND COALESCE(TRIM(institution), '') <> ''
+                    lower(pa.openalex_id) AS seed_id,
+                    lower(trim(pa.institution)) AS institution
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                WHERE lower(pa.openalex_id) IN ({placeholders})
+                  AND COALESCE(TRIM(pa.institution), '') <> ''
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -865,12 +884,14 @@ def _project_author_institutions(
             rows = db.execute(
                 f"""
                 SELECT
-                    lower(trim(institution)) AS institution,
-                    lower(trim(openalex_id)) AS openalex_id,
-                    COUNT(*) OVER (PARTITION BY lower(trim(institution))) AS inst_size
-                FROM publication_authors
-                WHERE lower(trim(institution)) IN ({placeholders})
-                  AND COALESCE(TRIM(openalex_id), '') <> ''
+                    lower(trim(pa.institution)) AS institution,
+                    lower(trim(pa.openalex_id)) AS openalex_id,
+                    COUNT(*) OVER (PARTITION BY lower(trim(pa.institution))) AS inst_size
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                WHERE lower(trim(pa.institution)) IN ({placeholders})
+                  AND COALESCE(TRIM(pa.openalex_id), '') <> ''
+                  AND {standalone_paper_sql_for_db(db, 'p')}
                 """,
                 chunk,
             ).fetchall()
@@ -962,5 +983,3 @@ def _squash_map(values: dict[str, float], *, saturation: float) -> dict[str, flo
 def _chunks(values: list[str], size: int) -> Iterable[list[str]]:
     for idx in range(0, len(values), size):
         yield values[idx : idx + size]
-
-

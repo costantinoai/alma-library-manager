@@ -48,6 +48,7 @@ from alma.core.identifier_resolution import (
     resolve_scholar_candidates_from_sources,
     scholar_url_for_id,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
 from alma.core.resolution import (
@@ -4236,7 +4237,7 @@ def resolve_identifiers_bulk(
     scope_join_clauses: dict[str, str] = {
         "library": (
             "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
-            "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
+            f"INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library' AND {standalone_paper_sql('p')}"
         ),
         "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",
         "corpus": "",

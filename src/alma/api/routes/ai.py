@@ -26,6 +26,7 @@ from alma.core.secrets import (
     delete_secret,
     set_secret,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.services.health import embedding_coverage
 
 router = APIRouter(
@@ -376,7 +377,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     try:
         if fetch_status_available:
             row = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) AS total_missing,
                     SUM(
@@ -407,13 +408,14 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                AND {standalone_paper_sql('p')}
                 AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
                 """,
                 (model, model),
             ).fetchone()
         else:
             row = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) AS total_missing,
                     SUM(
@@ -439,6 +441,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                AND {standalone_paper_sql('p')}
                 """,
                 (model,),
             ).fetchone()
@@ -449,7 +452,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
         if not fetch_status_available:
             raise sqlite3.OperationalError("publication_embedding_fetch_status missing")
         terminal_row = conn.execute(
-            """
+            f"""
             SELECT
                 SUM(CASE WHEN fs.status = 'unmatched' THEN 1 ELSE 0 END) AS unmatched,
                 SUM(CASE WHEN fs.status = 'missing_vector' THEN 1 ELSE 0 END) AS missing_vector,
@@ -466,6 +469,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?
             )
+            AND {standalone_paper_sql('p')}
             """,
             (model, model),
         ).fetchone()
@@ -475,7 +479,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     try:
         if fetch_status_available:
             status_rows = conn.execute(
-                """
+                f"""
                 SELECT
                     COALESCE(NULLIF(p.status, ''), 'unknown') AS status,
                     COUNT(*) AS total_missing,
@@ -498,6 +502,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                AND {standalone_paper_sql('p')}
                 AND COALESCE(fs.status, '') NOT IN ('unmatched', 'missing_vector', 'lookup_error', 'bad_local_doi')
                 GROUP BY COALESCE(NULLIF(p.status, ''), 'unknown')
                 """,
@@ -505,7 +510,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
             ).fetchall()
         else:
             status_rows = conn.execute(
-                """
+                f"""
                 SELECT
                     COALESCE(NULLIF(p.status, ''), 'unknown') AS status,
                     COUNT(*) AS total_missing,
@@ -523,6 +528,7 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
                     SELECT 1 FROM publication_embeddings pe
                     WHERE pe.paper_id = p.id AND pe.model = ?
                 )
+                AND {standalone_paper_sql('p')}
                 GROUP BY COALESCE(NULLIF(p.status, ''), 'unknown')
                 """,
                 (model,),
@@ -553,13 +559,14 @@ def _build_s2_backfill_status(conn: sqlite3.Connection, model: str) -> dict:
     terminal_error = int((terminal_row["error"] if terminal_row else 0) or 0)
     try:
         local_compute_row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) AS c
             FROM papers p
             WHERE NOT EXISTS (
                 SELECT 1 FROM publication_embeddings pe
                 WHERE pe.paper_id = p.id AND pe.model = ?
             )
+            AND {standalone_paper_sql('p')}
             AND COALESCE(NULLIF(TRIM(p.title), ''), '') != ''
             AND COALESCE(NULLIF(TRIM(p.abstract), ''), '') != ''
             """,
@@ -621,11 +628,13 @@ def _infer_env_type_from_path(env_path: str) -> str:
 def _embedding_source_counts(conn: sqlite3.Connection, model: str) -> dict[str, int]:
     try:
         rows = conn.execute(
-            """
-            SELECT COALESCE(NULLIF(TRIM(source), ''), ?) AS source, COUNT(*) AS vectors
-            FROM publication_embeddings
-            WHERE model = ?
-            GROUP BY COALESCE(NULLIF(TRIM(source), ''), ?)
+            f"""
+            SELECT COALESCE(NULLIF(TRIM(pe.source), ''), ?) AS source, COUNT(*) AS vectors
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ?
+              AND {standalone_paper_sql('p')}
+            GROUP BY COALESCE(NULLIF(TRIM(pe.source), ''), ?)
             """,
             (EMBEDDING_SOURCE_UNKNOWN, model, EMBEDDING_SOURCE_UNKNOWN),
         ).fetchall()
@@ -674,7 +683,9 @@ def ai_status(
         info["active"] = info["name"] == configured_provider
 
     try:
-        pub_count = db.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+        pub_count = db.execute(
+            f"SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}"
+        ).fetchone()[0]
     except sqlite3.OperationalError:
         pub_count = 0
 
@@ -692,7 +703,7 @@ def ai_status(
 
     try:
         lifecycle_row = db.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_papers,
                 SUM(CASE WHEN active_pe.paper_id IS NULL THEN 1 ELSE 0 END) AS missing_embeddings,
@@ -710,6 +721,7 @@ def ai_status(
             FROM papers p
             LEFT JOIN publication_embeddings active_pe
               ON active_pe.paper_id = p.id AND active_pe.model = ?
+            WHERE {standalone_paper_sql('p')}
             """,
             (expected_embedding_model, expected_embedding_model),
         ).fetchone()
@@ -732,7 +744,7 @@ def ai_status(
 
     try:
         status_rows = db.execute(
-            """
+            f"""
             SELECT
                 COALESCE(NULLIF(p.status, ''), 'unknown') AS status,
                 COUNT(DISTINCT p.id) AS total,
@@ -746,6 +758,7 @@ def ai_status(
               ON active_pe.paper_id = p.id AND active_pe.model = ?
             LEFT JOIN publication_embeddings canonical_pe
               ON canonical_pe.paper_id = p.id AND canonical_pe.model = ?
+            WHERE {standalone_paper_sql('p')}
             GROUP BY COALESCE(NULLIF(p.status, ''), 'unknown')
             """,
             (
@@ -777,13 +790,14 @@ def ai_status(
             return 0
         try:
             row = db.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS c
                 FROM papers p
                 WHERE NOT EXISTS (
                     SELECT 1 FROM publication_embeddings active_pe
                     WHERE active_pe.paper_id = p.id AND active_pe.model = ?
                 )
+                  AND {standalone_paper_sql('p')}
                   AND EXISTS (
                     SELECT 1 FROM publication_embeddings other_pe
                     WHERE other_pe.paper_id = p.id AND other_pe.model <> ?
@@ -797,21 +811,25 @@ def ai_status(
 
     try:
         model_rows = db.execute(
-            """
-            SELECT model, COUNT(*) AS vectors, MAX(created_at) AS last_created_at
-            FROM publication_embeddings
-            GROUP BY model
+            f"""
+            SELECT pe.model, COUNT(*) AS vectors, MAX(pe.created_at) AS last_created_at
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE {standalone_paper_sql('p')}
+            GROUP BY pe.model
             ORDER BY vectors DESC, model ASC
             """
         ).fetchall()
         model_source_rows = db.execute(
-            """
+            f"""
             SELECT
-                model,
-                COALESCE(NULLIF(TRIM(source), ''), ?) AS source,
+                pe.model,
+                COALESCE(NULLIF(TRIM(pe.source), ''), ?) AS source,
                 COUNT(*) AS vectors
-            FROM publication_embeddings
-            GROUP BY model, COALESCE(NULLIF(TRIM(source), ''), ?)
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE {standalone_paper_sql('p')}
+            GROUP BY pe.model, COALESCE(NULLIF(TRIM(pe.source), ''), ?)
             ORDER BY model ASC, vectors DESC, source ASC
             """,
             (EMBEDDING_SOURCE_UNKNOWN, EMBEDDING_SOURCE_UNKNOWN),

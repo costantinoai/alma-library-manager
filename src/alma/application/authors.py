@@ -30,7 +30,7 @@ from alma.core.scoring_math import (
 from alma.core.scoring_math import (
     log_prevalence_weights,
 )
-from alma.core.sql_helpers import paper_date_sort_expr
+from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
 
@@ -488,7 +488,10 @@ def _author_paper_clause(
     if legacy_where:
         clauses.append(f"({legacy_where})")
         params.extend(legacy_params)
-    return (f"({' OR '.join(clauses)})", params) if clauses else ("", [])
+    return (
+        f"({' OR '.join(clauses)}) AND {standalone_paper_sql('p')}",
+        params,
+    ) if clauses else ("", [])
 
 
 def _scope_clause(scope: str) -> str:
@@ -1132,7 +1135,7 @@ def annotate_external_authors_with_local_identity(
     followed_orcids: set[str] = set()
     if _table_exists(db, "followed_authors") and _table_exists(db, "authors"):
         rows = db.execute(
-            """
+            f"""
             SELECT a.openalex_id, a.orcid
             FROM followed_authors fa
             JOIN authors a ON a.id = fa.author_id
@@ -1442,11 +1445,12 @@ def _top_topics_for_library(db: sqlite3.Connection, *, limit: int = 12) -> dict[
         return {}
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT pt.term, COUNT(DISTINCT pt.paper_id) AS paper_count
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
             WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
               AND pt.term IS NOT NULL
               AND TRIM(pt.term) <> ''
             GROUP BY pt.term
@@ -1471,10 +1475,11 @@ def _top_venues_for_library(db: sqlite3.Connection, *, limit: int = 8) -> dict[s
         return {}
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT p.journal, COUNT(DISTINCT p.id) AS paper_count
             FROM papers p
             WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(p.journal), '') <> ''
             GROUP BY lower(trim(p.journal)), p.journal
             ORDER BY paper_count DESC, p.journal ASC
@@ -1542,7 +1547,7 @@ def _load_dismissal_signature(
     institutions: dict[str, int] = {}
     try:
         rows = db.execute(
-            """
+            f"""
             WITH dismissed AS (
                 SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
@@ -1980,7 +1985,7 @@ def _shared_library_authors_for_candidate(
         return []
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT
                 COALESCE(pa2.display_name, pa2.openalex_id, '') AS name,
                 COUNT(DISTINCT p.id) AS shared_papers
@@ -1988,6 +1993,7 @@ def _shared_library_authors_for_candidate(
             JOIN publication_authors pa ON pa.paper_id = p.id
             JOIN publication_authors pa2 ON pa2.paper_id = pa.paper_id
             WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
               AND lower(trim(pa.openalex_id)) = lower(trim(?))
               AND lower(trim(pa2.openalex_id)) <> lower(trim(pa.openalex_id))
               AND COALESCE(TRIM(COALESCE(pa2.display_name, pa2.openalex_id, '')), '') <> ''
@@ -2021,10 +2027,11 @@ def _expand_library_reference_graph(
         return {"references_inserted": 0, "materialized": 0}
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT id
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
               AND COALESCE(TRIM(openalex_id), '') <> ''
             ORDER BY COALESCE(updated_at, created_at, publication_date, '') DESC
             LIMIT ?
@@ -2117,7 +2124,7 @@ def _semantic_similar_candidates(
     # work; the cosine-ranking pass below narrows further.
     try:
         author_rows = db.execute(
-            """
+            f"""
             SELECT
                 lower(trim(pa.openalex_id)) AS candidate_openalex_id,
                 COALESCE(MAX(pa.display_name), '') AS candidate_name,
@@ -2125,7 +2132,9 @@ def _semantic_similar_candidates(
             FROM publication_authors pa
             JOIN publication_embeddings pe
               ON pe.paper_id = pa.paper_id AND pe.model = ?
+            JOIN papers p ON p.id = pa.paper_id
             WHERE COALESCE(TRIM(pa.openalex_id), '') <> ''
+              AND {standalone_paper_sql('p')}
             GROUP BY lower(trim(pa.openalex_id))
             HAVING COUNT(DISTINCT pa.paper_id) >= 2
             ORDER BY embedded_paper_count DESC
@@ -2150,7 +2159,9 @@ def _semantic_similar_candidates(
             FROM publication_authors pa
             JOIN publication_embeddings pe
               ON pe.paper_id = pa.paper_id AND pe.model = ?
+            JOIN papers p ON p.id = pa.paper_id
             WHERE lower(pa.openalex_id) IN ({placeholders})
+              AND {standalone_paper_sql('p')}
             """,
             (model, *openalex_ids),
         ).fetchall()
@@ -2231,7 +2242,7 @@ def _cited_by_high_signal_candidates(
         return []
     try:
         rows = db.execute(
-            """
+            f"""
             -- `papers.openalex_id` is canonical bare W-form
             -- (e.g. ``W123``). `publication_references.referenced_work_id`
             -- stores the bare integer suffix (``123``). Restore the
@@ -2244,6 +2255,7 @@ def _cited_by_high_signal_candidates(
                        COALESCE(p.rating, 0) AS citing_rating
                 FROM papers p
                 WHERE p.status = 'library' AND COALESCE(p.rating, 0) >= ?
+                  AND {standalone_paper_sql('p')}
             ),
             cited_works AS (
                 SELECT DISTINCT
@@ -2506,7 +2518,7 @@ def list_author_suggestions(
     followed_ids: set[str] = set()
     if _table_exists(db, "followed_authors") and _table_exists(db, "authors"):
         followed_rows = db.execute(
-            """
+            f"""
             SELECT a.openalex_id
             FROM followed_authors fa
             JOIN authors a ON a.id = fa.author_id
@@ -2628,7 +2640,7 @@ def list_author_suggestions(
     # single digits).
     try:
         library_rows = db.execute(
-            """
+            f"""
             WITH paper_meta AS (
                 SELECT
                     p.id AS paper_id,
@@ -2642,6 +2654,7 @@ def list_author_suggestions(
                     ), 0), 1) AS author_count
                 FROM papers p
                 WHERE p.status = 'library'
+                  AND {standalone_paper_sql('p')}
             )
             SELECT
                 lower(trim(pa.openalex_id)) AS candidate_openalex_id,
@@ -2857,12 +2870,13 @@ def list_author_suggestions(
                 # the author's Library (1293 papers): **107s → sub-second**
                 # after this fix.
                 rows = db.execute(
-                    """
+                    f"""
                     WITH library_refs AS (
                         SELECT DISTINCT pr.paper_id AS seed_paper_id, pr.referenced_work_id
                         FROM publication_references pr
                         JOIN papers p ON p.id = pr.paper_id
                         WHERE p.status = 'library'
+                          AND {standalone_paper_sql('p')}
                     ),
                     referenced_local AS (
                         SELECT lr.seed_paper_id, rp.id AS referenced_paper_id
@@ -2893,12 +2907,13 @@ def list_author_suggestions(
     if len(adjacent_rows) < max(limit * 2, 12):
         try:
             rows = db.execute(
-                """
+                f"""
                 WITH library_topics AS (
                     SELECT pt.term
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
                     WHERE p.status = 'library'
+                      AND {standalone_paper_sql('p')}
                       AND pt.term IS NOT NULL
                       AND TRIM(pt.term) <> ''
                     GROUP BY pt.term
@@ -2909,6 +2924,7 @@ def list_author_suggestions(
                     SELECT lower(trim(p.journal)) AS journal_key
                     FROM papers p
                     WHERE p.status = 'library'
+                      AND {standalone_paper_sql('p')}
                       AND COALESCE(TRIM(p.journal), '') <> ''
                     GROUP BY lower(trim(p.journal))
                     ORDER BY COUNT(DISTINCT p.id) DESC

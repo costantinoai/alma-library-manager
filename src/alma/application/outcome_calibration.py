@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from alma.application.signal_projection import normalize_feedback_event_value
 from alma.core.scoring_math import age_decay, clamp
 from alma.core.scoring_math import days_since as _days_since
+from alma.core.sql_helpers import standalone_paper_sql
 
 # Bayesian priors. α=β means the prior peaks at 0.5 (no opinion); a
 # higher sum means more "data" is needed to move the smoothed estimate
@@ -126,10 +127,12 @@ def compute_outcome_calibration(
                 fe.value      AS event_value,
                 fe.created_at AS created_at
             FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
             JOIN feedback_events fe
               ON fe.entity_id = r.paper_id
              AND fe.entity_type IN ('publication', 'paper')
             WHERE {key_expr} IS NOT NULL
+              AND {standalone_paper_sql('p')}
             """
         ).fetchall()
     except sqlite3.OperationalError:
@@ -143,8 +146,10 @@ def compute_outcome_calibration(
             SELECT
                 {key_expr} AS dim_key,
                 COUNT(*) AS impressions
-            FROM recommendations
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
             WHERE {key_expr} IS NOT NULL
+              AND {standalone_paper_sql('p')}
             GROUP BY 1
             """
         ).fetchall()

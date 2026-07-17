@@ -45,6 +45,7 @@ from collections.abc import Iterable
 from datetime import datetime
 
 from alma.core.db_write import run_after_gate_release, write_section
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ def is_orphan_author(db: sqlite3.Connection, author_id: str) -> bool:
         SELECT 1
         FROM publication_authors pa
         JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
+         AND {standalone_paper_sql('p')}
         WHERE (
               (? <> '' AND lower(pa.openalex_id)   = ?)
            OR (? <> '' AND lower(trim(pa.display_name))  = ?)
@@ -120,6 +122,7 @@ def count_orphan_authors(db: sqlite3.Connection) -> int:
               AND NOT EXISTS (
                   SELECT 1 FROM publication_authors pa
                   JOIN papers p ON p.id = pa.paper_id AND p.status IN ({placeholders})
+                   AND {standalone_paper_sql('p')}
                   WHERE (
                         (lower(trim(COALESCE(a.openalex_id, ''))) <> ''
                          AND lower(pa.openalex_id) = lower(trim(a.openalex_id)))
@@ -150,7 +153,7 @@ def _scope_clauses(scope: str) -> tuple[str, str]:
     scope_join_map: dict[str, str] = {
         "library": (
             "INNER JOIN publication_authors pa ON lower(pa.openalex_id) = lower(a.openalex_id) "
-            "INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'"
+            f"INNER JOIN papers p ON p.id = pa.paper_id AND p.status = 'library' AND {standalone_paper_sql('p')}"
         ),
         "followed": "INNER JOIN followed_authors fa ON fa.author_id = a.id",
         "needs_metadata": "",
@@ -160,7 +163,7 @@ def _scope_clauses(scope: str) -> tuple[str, str]:
             "  UNION"
             "  SELECT a2.id FROM authors a2"
             "  INNER JOIN publication_authors pa2 ON lower(trim(pa2.openalex_id)) = lower(trim(a2.openalex_id))"
-            "  INNER JOIN papers p2 ON p2.id = pa2.paper_id AND p2.status = 'library'"
+            f"  INNER JOIN papers p2 ON p2.id = pa2.paper_id AND p2.status = 'library' AND {standalone_paper_sql('p2')}"
             ") sub ON sub.id = a.id"
         ),
         "corpus": "",

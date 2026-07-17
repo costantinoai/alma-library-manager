@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.mailer.client import get_email_notifier
 from alma.slack.client import get_slack_notifier
 
@@ -306,7 +307,7 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
 
     try:
         collection_rows = db.execute(
-            """
+            f"""
             SELECT
                 c.id,
                 c.name,
@@ -315,6 +316,7 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
             FROM collections c
             LEFT JOIN collection_items ci ON ci.collection_id = c.id
             LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
+              AND {standalone_paper_sql('p')}
             GROUP BY c.id, c.name
             HAVING COUNT(p.id) > 0
             ORDER BY item_count DESC, avg_rating DESC, lower(c.name)
@@ -358,16 +360,18 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
 
     try:
         branch_rows = db.execute(
-            """
+            f"""
             SELECT
-                COALESCE(NULLIF(branch_id, ''), NULL) AS branch_id,
-                COALESCE(NULLIF(branch_label, ''), NULL) AS branch_label,
+                COALESCE(NULLIF(r.branch_id, ''), NULL) AS branch_id,
+                COALESCE(NULLIF(r.branch_label, ''), NULL) AS branch_label,
                 COUNT(*) AS count,
-                COALESCE(SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
-                COALESCE(SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed
-            FROM recommendations
-            WHERE COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> ''
-            GROUP BY COALESCE(NULLIF(branch_id, ''), NULL), COALESCE(NULLIF(branch_label, ''), NULL)
+                COALESCE(SUM(CASE WHEN r.user_action = 'like' THEN 1 ELSE 0 END), 0) AS liked,
+                COALESCE(SUM(CASE WHEN r.user_action = 'dismiss' THEN 1 ELSE 0 END), 0) AS dismissed
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE (COALESCE(r.branch_id, '') <> '' OR COALESCE(r.branch_label, '') <> '')
+              AND {standalone_paper_sql('p')}
+            GROUP BY COALESCE(NULLIF(r.branch_id, ''), NULL), COALESCE(NULLIF(r.branch_label, ''), NULL)
             ORDER BY liked DESC, count DESC
             LIMIT 4
             """
@@ -901,7 +905,8 @@ def _evaluate_rule(
                 SELECT DISTINCT p.*
                 FROM papers p
                 JOIN publication_authors pa ON pa.paper_id = p.id
-                WHERE {" OR ".join(where_clauses)}
+                WHERE ({" OR ".join(where_clauses)})
+                  AND {standalone_paper_sql('p')}
                 ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
                 LIMIT 500
                 """,
@@ -922,7 +927,8 @@ def _evaluate_rule(
             f"""
             SELECT DISTINCT p.*
             FROM papers p
-            WHERE {" OR ".join(where_clauses)}
+            WHERE ({" OR ".join(where_clauses)})
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -935,7 +941,7 @@ def _evaluate_rule(
         if not collection_ref:
             return []
         row = db.execute(
-            """
+            f"""
             SELECT id
             FROM collections
             WHERE id = ? OR lower(name) = lower(?)
@@ -947,12 +953,13 @@ def _evaluate_rule(
         if not collection_id:
             return []
         rows = db.execute(
-            """
+            f"""
             SELECT p.*
             FROM collection_items ci
             JOIN papers p ON p.id = ci.paper_id
             WHERE ci.collection_id = ?
               AND p.status = 'library'
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.rating, 0) DESC, COALESCE(p.added_at, '') DESC
             LIMIT 500
             """,
@@ -977,7 +984,8 @@ def _evaluate_rule(
             f"""
             SELECT DISTINCT p.*
             FROM papers p
-            WHERE {where}
+            WHERE ({where})
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -991,16 +999,18 @@ def _evaluate_rule(
             return []
         pattern = f"%{topic.lower()}%"
         rows = db.execute(
-            """
+            f"""
             SELECT DISTINCT p.*
             FROM papers p
             LEFT JOIN publication_topics pt ON pt.paper_id = p.id
             LEFT JOIN topic_aliases ta ON LOWER(ta.raw_term) = LOWER(pt.term)
             LEFT JOIN topics t ON t.topic_id = ta.topic_id
-            WHERE LOWER(COALESCE(pt.term, '')) LIKE ?
-               OR LOWER(COALESCE(t.canonical_name, '')) LIKE ?
-               OR LOWER(COALESCE(p.title, '')) LIKE ?
-               OR LOWER(COALESCE(p.abstract, '')) LIKE ?
+            WHERE (
+                LOWER(COALESCE(pt.term, '')) LIKE ?
+                OR LOWER(COALESCE(t.canonical_name, '')) LIKE ?
+                OR LOWER(COALESCE(p.title, '')) LIKE ?
+                OR LOWER(COALESCE(p.abstract, '')) LIKE ?
+            ) AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.year, 0) DESC, COALESCE(p.cited_by_count, 0) DESC
             LIMIT 500
             """,
@@ -1025,6 +1035,7 @@ def _evaluate_rule(
             JOIN papers p ON p.id = r.paper_id
             WHERE r.score >= ?
               AND COALESCE(r.user_action, '') != 'dismiss'
+              AND {standalone_paper_sql('p')}
               {lens_clause}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
@@ -1041,13 +1052,14 @@ def _evaluate_rule(
         if min_score <= 1.0:
             min_score *= 100.0
         rows = db.execute(
-            """
+            f"""
             SELECT p.*
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE r.lens_id = ?
               AND r.score >= ?
               AND COALESCE(r.user_action, '') != 'dismiss'
+              AND {standalone_paper_sql('p')}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
             """,
@@ -1120,6 +1132,7 @@ def _evaluate_rule(
               AND TRIM(p.publication_date) != ''
               AND p.publication_date >= date('now', '-' || ? || ' days')
               AND lower(COALESCE(fi.status, 'new')) IN ({status_placeholders})
+              AND {standalone_paper_sql('p')}
               {watermark_clause}
             ORDER BY p.publication_date DESC, fi.fetched_at DESC
             LIMIT 500
@@ -1142,7 +1155,11 @@ def _evaluate_rule(
         min_score = float(config.get("min_score", 0) or 0)
         if min_score <= 1.0:
             min_score *= 100.0
-        clauses = ["r.score >= ?", "COALESCE(r.user_action, '') != 'dismiss'"]
+        clauses = [
+            "r.score >= ?",
+            "COALESCE(r.user_action, '') != 'dismiss'",
+            standalone_paper_sql("p"),
+        ]
         params: list[Any] = [min_score]
         if branch_id:
             clauses.append("r.branch_id = ?")
@@ -1159,6 +1176,7 @@ def _evaluate_rule(
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE {' AND '.join(clauses)}
+              AND {standalone_paper_sql('p')}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
             """,
@@ -1182,6 +1200,7 @@ def _evaluate_rule(
             SELECT p.*
             FROM papers p
             WHERE {where}
+              AND {standalone_paper_sql('p')}
             ORDER BY COALESCE(p.added_at, '') DESC, COALESCE(p.rating, 0) DESC
             LIMIT ?
             """,

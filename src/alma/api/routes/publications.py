@@ -16,7 +16,8 @@ from alma.api.models import ErrorResponse, PaperResponse
 from alma.application import authors as authors_app
 from alma.application import library as library_app
 from alma.core.db_write import run_write_unit
-from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
+from alma.core.paper_groups import resolve_action_paper_id
+from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def query_publications(
         # duplicate cards in the /papers listing.
         query_parts = [
             "SELECT p.* FROM papers p "
-            f"WHERE {canonical_paper_filter('p')}"
+            f"WHERE {standalone_paper_sql('p')}"
         ]
         params = []
 
@@ -342,7 +343,13 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
         )
 
         vector_count = conn.execute(
-            "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
+            f"""
+            SELECT COUNT(*) AS c
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ?
+              AND {standalone_paper_sql('p')}
+            """,
             (S2_SPECTER2_MODEL,),
         ).fetchone()["c"]
         if int(vector_count or 0) <= 0:
@@ -582,7 +589,7 @@ def get_publication_stats(
     """
     try:
         # Common WHERE clause parts (bound to papers alias `p`)
-        where_parts = ["1=1"]
+        where_parts = [standalone_paper_sql("p")]
         params: list = []
         if min_year is not None:
             where_parts.append("p.year >= ?")
@@ -712,9 +719,10 @@ def rate_publication(
     pub_db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    root_id = resolve_action_paper_id(pub_db, paper_id)
     target = pub_db.execute(
         "SELECT id, title, status FROM papers WHERE id = ?",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if rating < 0 or rating > 5:
         raise HTTPException(status_code=400, detail="rating must be between 0 and 5")
@@ -758,12 +766,13 @@ def undo_paper_feedback_endpoint(
     pub_db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    target = pub_db.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    root_id = resolve_action_paper_id(pub_db, paper_id)
+    target = pub_db.execute("SELECT id FROM papers WHERE id = ?", (root_id,)).fetchone()
     if target is None:
         raise HTTPException(status_code=404, detail="Paper not found")
     result = run_write_unit(
         pub_db,
-        lambda: library_app.undo_paper_feedback(pub_db, paper_id, aspect),
+        lambda: library_app.undo_paper_feedback(pub_db, str(root_id), aspect),
         label="paper_undo_feedback",
     )
     return result
@@ -786,7 +795,8 @@ def get_paper_details(
     ``publication_topics`` so the popup can show the semantic labels that
     OpenAlex attached to the work.
     """
-    row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    root_id = resolve_action_paper_id(db, paper_id)
+    row = db.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Paper not found")
     paper = row_to_paper_response(row).model_dump()
@@ -798,7 +808,7 @@ def get_paper_details(
         WHERE paper_id = ?
         ORDER BY COALESCE(score, 0) DESC, term ASC
         """,
-        (paper_id,),
+        (root_id,),
     ).fetchall()
     paper["topics"] = [dict(r) for r in topic_rows]
 
@@ -812,7 +822,7 @@ def get_paper_details(
         WHERE parent_paper_id = ?
         ORDER BY component_type ASC, doi ASC
         """,
-        (paper_id,),
+        (root_id,),
     ).fetchall()
     paper["components"] = [dict(r) for r in component_rows]
 
@@ -829,7 +839,7 @@ def get_paper_details(
         WHERE canonical_paper_id = ?
         ORDER BY COALESCE(year, 0) DESC, doi ASC
         """,
-        (paper_id,),
+        (root_id,),
     ).fetchall()
     paper["preprint_versions"] = [dict(r) for r in preprint_rows]
     return paper
@@ -1022,7 +1032,7 @@ def _build_local_index(
         try:
             rows = db.execute(
                 f"SELECT * FROM papers WHERE openalex_id IN ({placeholders}) "
-                "AND COALESCE(status, '') != 'removed'",
+                f"AND COALESCE(status, '') != 'removed' AND {standalone_paper_sql('papers')}",
                 openalex_ids,
             ).fetchall()
             for row in rows:
@@ -1037,7 +1047,7 @@ def _build_local_index(
         try:
             rows = db.execute(
                 f"SELECT * FROM papers WHERE LOWER(doi) IN ({placeholders}) "
-                "AND COALESCE(status, '') != 'removed'",
+                f"AND COALESCE(status, '') != 'removed' AND {standalone_paper_sql('papers')}",
                 normalized,
             ).fetchall()
             for row in rows:
@@ -1081,9 +1091,10 @@ def list_prior_works(
     instant; cache key is ``paper_id + 'prior'``.
     """
     bounded = max(1, min(int(limit or 30), 100))
+    root_id = resolve_action_paper_id(db, paper_id)
     anchor = db.execute(
         "SELECT id, openalex_id, doi FROM papers WHERE id = ?",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if anchor is None:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -1094,20 +1105,20 @@ def list_prior_works(
         # fetch. Return an empty envelope rather than guessing.
         return {
             "direction": "prior",
-            "source_paper_id": paper_id,
+            "source_paper_id": root_id,
             "works": [],
             "remote_count": 0,
             "in_library_count": 0,
         }
 
-    cached = _network_cache_read(db, paper_id, "prior")
+    cached = _network_cache_read(db, str(root_id), "prior")
     if cached is not None:
         oa_works = cached.get("oa_works") or []
     else:
         from alma.openalex.client import fetch_referenced_works_for_openalex_id
 
         oa_works = fetch_referenced_works_for_openalex_id(seed_oa, limit=bounded)
-        _network_cache_write(db, paper_id, "prior", {"oa_works": oa_works})
+        _network_cache_write(db, str(root_id), "prior", {"oa_works": oa_works})
 
     oa_ids = [
         (w.get("id") or "").rstrip("/").split("/")[-1]
@@ -1124,7 +1135,7 @@ def list_prior_works(
     in_library_count = sum(1 for w in works if w.get("in_library"))
     return {
         "direction": "prior",
-        "source_paper_id": paper_id,
+        "source_paper_id": root_id,
         "works": works[:bounded],
         "remote_count": len(oa_works),
         "in_library_count": in_library_count,
@@ -1152,9 +1163,10 @@ def list_derivative_works(
     Cached for 24 h in ``paper_network_cache``.
     """
     bounded = max(1, min(int(limit or 30), 100))
+    root_id = resolve_action_paper_id(db, paper_id)
     anchor = db.execute(
         "SELECT id, openalex_id, doi FROM papers WHERE id = ?",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if anchor is None:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -1163,20 +1175,20 @@ def list_derivative_works(
     if not seed_oa:
         return {
             "direction": "derivative",
-            "source_paper_id": paper_id,
+            "source_paper_id": root_id,
             "works": [],
             "remote_count": 0,
             "in_library_count": 0,
         }
 
-    cached = _network_cache_read(db, paper_id, "derivative")
+    cached = _network_cache_read(db, str(root_id), "derivative")
     if cached is not None:
         oa_works = cached.get("oa_works") or []
     else:
         from alma.openalex.client import fetch_citing_works_for_openalex_id
 
         oa_works = fetch_citing_works_for_openalex_id(seed_oa, limit=bounded)
-        _network_cache_write(db, paper_id, "derivative", {"oa_works": oa_works})
+        _network_cache_write(db, str(root_id), "derivative", {"oa_works": oa_works})
 
     oa_ids = [
         (w.get("id") or "").rstrip("/").split("/")[-1]
@@ -1193,7 +1205,7 @@ def list_derivative_works(
     in_library_count = sum(1 for w in works if w.get("in_library"))
     return {
         "direction": "derivative",
-        "source_paper_id": paper_id,
+        "source_paper_id": root_id,
         "works": works[:bounded],
         "remote_count": len(oa_works),
         "in_library_count": in_library_count,
@@ -1225,10 +1237,16 @@ def delete_publication(
         ```
     """
     try:
+        root_id = resolve_action_paper_id(db, paper_id)
+        if not root_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Paper not found",
+            )
         # Check if paper exists
         cursor = db.execute(
             "SELECT id, title FROM papers WHERE id = ?",
-            (paper_id,)
+            (root_id,)
         )
         paper = cursor.fetchone()
 
@@ -1240,11 +1258,11 @@ def delete_publication(
 
         run_write_unit(
             db,
-            lambda: library_app.soft_remove_from_library(db, paper_id),
+            lambda: library_app.soft_remove_from_library(db, str(root_id)),
             label="paper_delete",
         )
 
-        logger.info(f"Soft-removed paper: {paper['title']} (ID: {paper_id})")
+        logger.info("Soft-removed paper: %s (ID: %s)", paper["title"], root_id)
 
     except HTTPException:
         raise

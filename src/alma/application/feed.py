@@ -17,7 +17,6 @@ from alma.application.feed_query_language import (
 )
 from alma.core.components import (
     link_orphan_components,
-    not_component_sql,
     resolve_component,
 )
 from alma.core.concurrency import bounded_thread_pool
@@ -28,7 +27,13 @@ from alma.core.http_sources import (
     openalex_usage_snapshot,
     source_diagnostics_scope,
 )
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    promote_matching_preprints,
+    purge_orphan_subordinate_state,
+)
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
 )
@@ -498,7 +503,12 @@ def _upsert_candidate_paper(
     # Is this a paper, or a *part* of one (figure / SI / dataset / author
     # response)? Components are upserted into the corpus but the `_insert_feed_item`
     # gate keeps them out of the inbox; they surface inside the parent's popup.
-    component_type, parent_paper_id = resolve_component(db, doi=doi, work_type=work_type)
+    component_type, parent_paper_id = resolve_component(
+        db,
+        doi=doi,
+        work_type=work_type,
+        relation_parent_doi=str(candidate.get("parent_doi") or "").strip() or None,
+    )
 
     existing_paper_id = resolve_existing_paper_id(
         db,
@@ -565,23 +575,35 @@ def _upsert_candidate_paper(
             ),
         )
 
-    # Orphan reconcile: if THIS paper is a parent (not itself a component) with a
-    # DOI, adopt any suffix children (figures / SI) that were ingested before it
-    # in this same refresh and are still unlinked.
-    if component_type is None and doi:
-        link_orphan_components(db, parent_paper_id=paper_id, parent_doi=doi)
+    if component_type is not None:
+        # Classification is a write invariant: strip an old vector/signal/cache
+        # immediately, and consolidate into the root when the authoritative
+        # relation is already known.
+        if parent_paper_id:
+            absorb_paper_group(
+                db, paper_id, parent_paper_id, reason="feed_component_ingest"
+            )
+        else:
+            purge_orphan_subordinate_state(db, paper_id)
+    else:
+        # Journal arrival promotes an existing preprint group before any new
+        # sidecar or Feed row can target the old root.
+        promote_matching_preprints(db, paper_id)
+        if doi:
+            link_orphan_components(db, parent_paper_id=paper_id, parent_doi=doi)
 
     try:
         from alma.openalex.client import upsert_work_sidecars
 
-        upsert_work_sidecars(
-            db,
-            paper_id,
-            topics=candidate.get("topics") if isinstance(candidate.get("topics"), list) else None,
-            institutions=candidate.get("institutions") if isinstance(candidate.get("institutions"), list) else None,
-            authorships=candidate.get("authorships") if isinstance(candidate.get("authorships"), list) else None,
-            referenced_works=candidate.get("referenced_works") if isinstance(candidate.get("referenced_works"), list) else None,
-        )
+        if component_type is None:
+            upsert_work_sidecars(
+                db,
+                paper_id,
+                topics=candidate.get("topics") if isinstance(candidate.get("topics"), list) else None,
+                institutions=candidate.get("institutions") if isinstance(candidate.get("institutions"), list) else None,
+                authorships=candidate.get("authorships") if isinstance(candidate.get("authorships"), list) else None,
+                referenced_works=candidate.get("referenced_works") if isinstance(candidate.get("referenced_works"), list) else None,
+            )
     except Exception as exc:
         logger.debug("Feed candidate sidecar upsert failed for %s: %s", paper_id, exc)
     # Enqueue for cross-source metadata hydration so a Feed-discovered paper
@@ -593,7 +615,9 @@ def _upsert_candidate_paper(
     try:
         from alma.services.corpus_rehydrate import enqueue_pending_hydration
 
-        needs_hydration = enqueue_pending_hydration(db, paper_id, auto_schedule=False)
+        needs_hydration = component_type is None and enqueue_pending_hydration(
+            db, paper_id, auto_schedule=False
+        )
         if needs_hydration and pending_hydration_ids is not None:
             pending_hydration_ids.add(paper_id)
     except Exception as exc:
@@ -616,8 +640,11 @@ def _insert_feed_item(
     # paper's popup. ONE gate here keeps every monitor loop DRY and also
     # protects retroactively (a paper re-classified as a component by the
     # backfill stops producing new feed items).
-    row = db.execute("SELECT component_type FROM papers WHERE id = ?", (paper_id,)).fetchone()
-    if row is not None and str(row["component_type"] or "").strip():
+    row = db.execute(
+        f"SELECT 1 FROM papers p WHERE p.id = ? AND {standalone_paper_sql('p')}",
+        (paper_id,),
+    ).fetchone()
+    if row is None:
         return False
 
     feed_id = uuid.uuid4().hex
@@ -699,7 +726,7 @@ def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_day
               AND pp.earliest >= ?
               AND pp.earliest <= ?
               AND COALESCE(NULLIF(p.publication_date, ''), pp.earliest) >= ?
-              AND """ + not_component_sql("p") + """
+              AND """ + standalone_paper_sql("p") + """
             """,
             (start, finish, cutoff),
         ).fetchone()
@@ -740,7 +767,7 @@ def list_feed_items(
     # inbox — they're shown inside their parent paper's popup. Defense in depth
     # alongside the `_insert_feed_item` gate: this also hides any historical
     # component row the backfill re-classified, with no feed_items deletion.
-    where.append(not_component_sql("p"))
+    where.append(standalone_paper_sql("p"))
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
     filter_to_new_papers = False
@@ -1124,12 +1151,14 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     # ── Gather positive / negative library papers ──
     try:
         pos_rows = db.execute(
-            "SELECT id, title, authors, year, journal, abstract, doi, url, "
-            "cited_by_count FROM papers WHERE status = 'library' AND rating >= 4"
+            f"SELECT id, title, authors, year, journal, abstract, doi, url, "
+            f"cited_by_count FROM papers WHERE status = 'library' AND rating >= 4 "
+            f"AND {standalone_paper_sql('papers')}"
         ).fetchall()
         neg_rows = db.execute(
-            "SELECT id, title, authors, year, journal, abstract, doi, url, "
-            "cited_by_count FROM papers WHERE status = 'library' AND rating <= 2 AND rating > 0"
+            f"SELECT id, title, authors, year, journal, abstract, doi, url, "
+            f"cited_by_count FROM papers WHERE status = 'library' AND rating <= 2 AND rating > 0 "
+            f"AND {standalone_paper_sql('papers')}"
         ).fetchall()
     except Exception:
         pos_rows, neg_rows = [], []

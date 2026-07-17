@@ -37,6 +37,7 @@ from typing import Any
 from alma.application import paper_signal
 from alma.core.db_write import write_section
 from alma.core.http_sources import get_source_http_client
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_doi
 from alma.discovery.defaults import merge_discovery_defaults
 from alma.openalex import client as openalex_client
@@ -226,7 +227,7 @@ def _select_seed_authors(db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS)
     # alignment with the library when we have it.
     state = paper_signal.load_library_state(db)
     lib_paper_rows = db.execute(
-        "SELECT id FROM papers WHERE status = 'library'"
+        f"SELECT id FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
     ).fetchall()
     lib_ids = [str(r["id"]) for r in lib_paper_rows]
     scores = paper_signal.score_papers_batch(db, lib_ids, state)
@@ -271,10 +272,11 @@ def _select_seed_dois(db: sqlite3.Connection, limit: int = _MAX_SEED_DOIS) -> li
 
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT id, doi
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
               AND COALESCE(NULLIF(TRIM(doi), ''), '') <> ''
             """
         ).fetchall()
@@ -441,10 +443,11 @@ def _score_candidates(
 def _library_venue_set(db: sqlite3.Connection) -> set[str]:
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT lower(trim(journal)) AS v
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
               AND COALESCE(TRIM(journal), '') <> ''
             """
         ).fetchall()

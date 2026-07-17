@@ -19,6 +19,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.core.vector_blob import cosine_similarity as _cosine_similarity_np
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,13 @@ def has_active_embeddings(conn: sqlite3.Connection, *, min_count: int = 1) -> bo
     try:
         active_model = get_active_embedding_model(conn)
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM publication_embeddings WHERE model = ?",
+            f"""
+            SELECT COUNT(*) AS c
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ?
+              AND {standalone_paper_sql_for_db(conn, 'p')}
+            """,
             (active_model,),
         ).fetchone()
         count = int((row["c"] if row else 0) or 0)
@@ -1028,8 +1035,14 @@ def get_cached_embedding(
     active_model = get_active_embedding_model(conn)
 
     row = conn.execute(
-        "SELECT embedding FROM publication_embeddings "
-        "WHERE paper_id = ? AND model = ?",
+        f"""
+        SELECT pe.embedding
+        FROM publication_embeddings pe
+        JOIN papers p ON p.id = pe.paper_id
+        WHERE pe.paper_id = ?
+          AND pe.model = ?
+          AND {standalone_paper_sql_for_db(conn, 'p')}
+        """,
         (paper_id, active_model),
     ).fetchone()
 

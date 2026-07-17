@@ -497,6 +497,7 @@ def _load_paper_stats(
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
                 WHERE {where_expr}
+                  AND {standalone_paper_sql('p')}
                 GROUP BY {group_expr}
                 """
             ).fetchall()
@@ -527,12 +528,14 @@ def _load_paper_stats(
     # name(s) per oid — lets the discovery affinity map register name keys.
     try:
         rows = db.execute(
-            """
-            SELECT DISTINCT lower(trim(openalex_id)) AS oid,
-                            lower(trim(display_name)) AS name
-            FROM publication_authors
-            WHERE COALESCE(TRIM(openalex_id), '') <> ''
-              AND COALESCE(TRIM(display_name), '') <> ''
+            f"""
+            SELECT DISTINCT lower(trim(pa.openalex_id)) AS oid,
+                            lower(trim(pa.display_name)) AS name
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE COALESCE(TRIM(pa.openalex_id), '') <> ''
+              AND COALESCE(TRIM(pa.display_name), '') <> ''
+              AND {standalone_paper_sql('p')}
             """
         ).fetchall()
         for row in rows:
@@ -583,13 +586,14 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
     # include a Library-circle author, and the outer join restricts to those.
     try:
         rows = db.execute(
-            """
+            f"""
             WITH lib_authors AS (
                 SELECT DISTINCT lower(pa.openalex_id) AS oid
                 FROM publication_authors pa
                 JOIN papers p ON p.id = pa.paper_id
                 WHERE p.status = 'library'
                   AND COALESCE(TRIM(pa.openalex_id), '') <> ''
+                  AND {standalone_paper_sql('p')}
             ),
             lib_circle_papers AS (
                 SELECT DISTINCT pa.paper_id, lower(pa.openalex_id) AS lib_oid
@@ -602,7 +606,9 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
             JOIN lib_circle_papers lcp
               ON lcp.paper_id = pa.paper_id
              AND lcp.lib_oid <> lower(pa.openalex_id)
+            JOIN papers p ON p.id = pa.paper_id
             WHERE COALESCE(TRIM(pa.openalex_id), '') <> ''
+              AND {standalone_paper_sql('p')}
             GROUP BY lower(pa.openalex_id)
             """
         ).fetchall()
@@ -616,13 +622,14 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
     cited: dict[str, int] = {}
     try:
         rows = db.execute(
-            """
+            f"""
             WITH lib_refs AS (
                 SELECT DISTINCT pr.referenced_work_id AS wid
                 FROM publication_references pr
                 JOIN papers p ON p.id = pr.paper_id
                 WHERE p.status = 'library'
                   AND pr.referenced_work_id IS NOT NULL
+                  AND {standalone_paper_sql('p')}
             )
             SELECT lower(pa.openalex_id) AS oid,
                    COUNT(DISTINCT pa.paper_id) AS papers
@@ -630,6 +637,7 @@ def _load_neighborhood(db: sqlite3.Connection) -> dict[str, float]:
             JOIN papers p ON p.openalex_id = ('W' || lr.wid)
             JOIN publication_authors pa ON pa.paper_id = p.id
             WHERE COALESCE(TRIM(pa.openalex_id), '') <> ''
+              AND {standalone_paper_sql('p')}
             GROUP BY lower(pa.openalex_id)
             """
         ).fetchall()

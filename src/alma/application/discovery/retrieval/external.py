@@ -17,6 +17,7 @@ from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.scoring_math import clamp
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import openalex_related, source_search
 
 from ..lens_crud import (
@@ -504,10 +505,11 @@ def _retrieve_external_channel(
         from alma.discovery import semantic_scholar as _s2_lane
 
         pos_rows = db.execute(
-            """
+            f"""
             SELECT semantic_scholar_id, semantic_scholar_corpus_id, doi
             FROM papers
             WHERE status = 'library' AND COALESCE(rating, 0) >= 4
+              AND {standalone_paper_sql('papers')}
               AND (
                 COALESCE(NULLIF(TRIM(semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(doi), ''), '') != ''
@@ -518,13 +520,14 @@ def _retrieve_external_channel(
             """
         ).fetchall()
         neg_rows = db.execute(
-            """
+            f"""
             SELECT semantic_scholar_id, semantic_scholar_corpus_id, doi
             FROM papers
             WHERE (
                 status IN ('removed', 'dismissed')
                 OR COALESCE(rating, 0) BETWEEN 1 AND 2
               )
+              AND {standalone_paper_sql('papers')}
               AND (
                 COALESCE(NULLIF(TRIM(semantic_scholar_id), ''), '') != ''
                 OR COALESCE(NULLIF(TRIM(doi), ''), '') != ''

@@ -239,13 +239,14 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
     if not table_exists(db, "papers"):
         return _defaults
     row = db.execute(
-        """
+        f"""
         SELECT
             COALESCE(SUM(CASE WHEN status = 'library' THEN 1 ELSE 0 END), 0) AS total_library,
             COALESCE(SUM(CASE WHEN reading_status = 'reading' THEN 1 ELSE 0 END), 0) AS reading_count,
             COALESCE(SUM(CASE WHEN reading_status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
             COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count
         FROM papers
+        WHERE {standalone_paper_sql('papers')}
         """
     ).fetchone()
     uncollected_count = 0
@@ -254,10 +255,11 @@ def _library_workflow_snapshot(db: sqlite3.Connection) -> dict[str, int]:
             uncollected_count = int(
                 (
                     db.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) AS c
                         FROM papers p
                         WHERE p.status = 'library'
+                          AND {standalone_paper_sql('p')}
                           AND NOT EXISTS (
                             SELECT 1 FROM collection_items ci WHERE ci.paper_id = p.id
                           )
@@ -1138,11 +1140,14 @@ def _build_ai_snapshot(
             # until vector_blob.migrate_blob_column_to_float16 rewrites them — that
             # extra variant row is a useful "migration still pending" signal.
             dim_rows = db.execute(
-                """
-                SELECT CAST(LENGTH(embedding) / 2 AS INTEGER) AS embedding_dim, COUNT(*) AS count
-                FROM publication_embeddings
-                WHERE embedding IS NOT NULL AND model = ?
-                GROUP BY CAST(LENGTH(embedding) / 2 AS INTEGER)
+                f"""
+                SELECT CAST(LENGTH(pe.embedding) / 2 AS INTEGER) AS embedding_dim, COUNT(*) AS count
+                FROM publication_embeddings pe
+                JOIN papers p ON p.id = pe.paper_id
+                WHERE pe.embedding IS NOT NULL
+                  AND pe.model = ?
+                  AND {standalone_paper_sql('p')}
+                GROUP BY CAST(LENGTH(pe.embedding) / 2 AS INTEGER)
                 ORDER BY count DESC, embedding_dim DESC
                 """,
                 (summary["embedding_model"],),
@@ -1156,11 +1161,14 @@ def _build_ai_snapshot(
     if table_exists(db, "recommendations"):
         try:
             rows = db.execute(
-                """
-                SELECT score_breakdown
-                FROM recommendations
-                WHERE score_breakdown IS NOT NULL AND COALESCE(score_breakdown, '') <> ''
-                ORDER BY created_at DESC
+                f"""
+                SELECT r.score_breakdown
+                FROM recommendations r
+                JOIN papers p ON p.id = r.paper_id
+                WHERE r.score_breakdown IS NOT NULL
+                  AND COALESCE(r.score_breakdown, '') <> ''
+                  AND {standalone_paper_sql('p')}
+                ORDER BY r.created_at DESC
                 LIMIT 500
                 """
             ).fetchall()
@@ -1721,17 +1729,17 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
             "JOIN publication_topics pt ON pt.paper_id = p.id "
             "LEFT JOIN topics t ON t.topic_id = pt.topic_id"
         ),
-        "where": "COALESCE(t.canonical_name, pt.term) = ? AND p.status = 'library'",
+        "where": f"COALESCE(t.canonical_name, pt.term) = ? AND p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": str,
     },
     "journal": {
         "join": "",
-        "where": "p.journal = ? AND p.status = 'library'",
+        "where": f"p.journal = ? AND p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": str,
     },
     "institution": {
         "join": "JOIN publication_institutions pi ON pi.paper_id = p.id",
-        "where": "LOWER(TRIM(pi.institution_name)) = LOWER(TRIM(?)) AND p.status = 'library'",
+        "where": f"LOWER(TRIM(pi.institution_name)) = LOWER(TRIM(?)) AND p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": str,
     },
     # Geographic-distribution drilldown — same grouping key (country_code) the
@@ -1739,17 +1747,17 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
     # exactly the papers it counted.
     "country": {
         "join": "JOIN publication_institutions pi ON pi.paper_id = p.id",
-        "where": "UPPER(TRIM(pi.country_code)) = UPPER(TRIM(?)) AND p.status = 'library'",
+        "where": f"UPPER(TRIM(pi.country_code)) = UPPER(TRIM(?)) AND p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": str,
     },
     "year": {
         "join": "",
-        "where": "p.year = ? AND p.status = 'library'",
+        "where": f"p.year = ? AND p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": int,
     },
     "source": {
         "join": "JOIN recommendations r ON r.paper_id = p.id",
-        "where": "COALESCE(NULLIF(TRIM(r.source_api), ''), NULLIF(TRIM(r.source_type), ''), 'unknown') = ?",
+        "where": f"COALESCE(NULLIF(TRIM(r.source_api), ''), NULLIF(TRIM(r.source_type), ''), 'unknown') = ? AND {standalone_paper_sql('p')}",
         "coerce": str,
     },
     # Whole-library drilldown — the population behind every summary tile. The 5
@@ -1759,7 +1767,7 @@ _DRILLDOWN_FILTERS: dict[str, dict[str, Any]] = {
     # this the natural "papers by citation" view the Citations tile implies.
     "all": {
         "join": "",
-        "where": "p.status = 'library'",
+        "where": f"p.status = 'library' AND {standalone_paper_sql('p')}",
         "coerce": str,
         "noparam": True,
     },
@@ -1795,7 +1803,7 @@ def get_insights_papers(
             raise HTTPException(status_code=422, detail="cluster filter_value must be an integer")
         sc = scope if scope in ("library", "corpus") else "library"
         join = "JOIN publication_clusters pc ON pc.paper_id = p.id"
-        where = "pc.scope = ? AND pc.cluster_id = ?"
+        where = f"pc.scope = ? AND pc.cluster_id = ? AND {standalone_paper_sql('p')}"
         params: list[Any] = [sc, cluster_id]
     else:
         spec = _DRILLDOWN_FILTERS.get(ft)
@@ -1936,10 +1944,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         membership.
     """
     try:
+        library_where = f"status = 'library' AND {standalone_paper_sql('papers')}"
+        library_where_p = f"p.status = 'library' AND {standalone_paper_sql('p')}"
+
         # ── Summary counts (Library-scoped) ──
         row = db.execute(
-            "SELECT COUNT(*) AS total, COALESCE(SUM(cited_by_count), 0) AS citations "
-            "FROM papers WHERE status = 'library'"
+            f"SELECT COUNT(*) AS total, COALESCE(SUM(cited_by_count), 0) AS citations "
+            f"FROM papers WHERE {library_where}"
         ).fetchone()
         total_pubs = row["total"]
         total_citations = row["citations"] or 0
@@ -1952,7 +1963,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         cite_values = [
             int(r["c"] or 0)
             for r in db.execute(
-                "SELECT COALESCE(cited_by_count, 0) AS c FROM papers WHERE status = 'library'"
+                f"SELECT COALESCE(cited_by_count, 0) AS c FROM papers WHERE {library_where}"
             ).fetchall()
         ]
         median_citations = statistics.median(cite_values) if cite_values else 0
@@ -1967,7 +1978,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         author_paper_links = 0
         if table_exists(db, "publication_authors") and table_exists(db, "authors"):
             r = db.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT a.id) AS authors,
                        COUNT(DISTINCT a.id || ':' || p.id) AS links
                 FROM authors a
@@ -1976,7 +1987,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                  AND a.openalex_id IS NOT NULL
                  AND TRIM(a.openalex_id) <> ''
                 JOIN papers p ON p.id = pa.paper_id
-                WHERE p.status = 'library'
+                WHERE {library_where_p}
                 """
             ).fetchone()
             total_authors = r["authors"] or 0
@@ -1989,22 +2000,22 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         total_institutions = 0
         if table_exists(db, "publication_institutions"):
             r = db.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT UPPER(TRIM(pi.country_code))) AS c
                 FROM publication_institutions pi
                 JOIN papers p ON p.id = pi.paper_id
-                WHERE p.status = 'library'
+                WHERE {library_where_p}
                   AND pi.country_code IS NOT NULL
                   AND TRIM(pi.country_code) <> ''
                 """
             ).fetchone()
             total_countries = r["c"]
             r = db.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT pi.institution_name) AS c
                 FROM publication_institutions pi
                 JOIN papers p ON p.id = pi.paper_id
-                WHERE p.status = 'library'
+                WHERE {library_where_p}
                   AND pi.institution_name IS NOT NULL
                   AND TRIM(pi.institution_name) <> ''
                 """
@@ -2015,21 +2026,21 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         if table_exists(db, "publication_topics"):
             if table_exists(db, "topics"):
                 r = db.execute(
-                    """
+                    f"""
                     SELECT COUNT(DISTINCT COALESCE(t.canonical_name, pt.term)) AS c
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
                     LEFT JOIN topics t ON pt.topic_id = t.topic_id
-                    WHERE p.status = 'library'
+                    WHERE {library_where_p}
                     """
                 ).fetchone()
             else:
                 r = db.execute(
-                    """
+                    f"""
                     SELECT COUNT(DISTINCT pt.term) AS c
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
-                    WHERE p.status = 'library'
+                    WHERE {library_where_p}
                     """
                 ).fetchone()
             total_topics = r["c"]
@@ -2048,10 +2059,10 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
 
         # ── Publications by year (Library-scoped) ──
         rows = db.execute(
-            "SELECT year, COUNT(*) AS count, "
+            f"SELECT year, COUNT(*) AS count, "
             "COALESCE(SUM(cited_by_count), 0) AS citations, "
             "ROUND(COALESCE(AVG(cited_by_count), 0), 1) AS avg_citations "
-            "FROM papers WHERE status = 'library' AND year IS NOT NULL "
+            f"FROM papers WHERE {library_where} AND year IS NOT NULL "
             "GROUP BY year ORDER BY year ASC"
         ).fetchall()
         publications_by_year = [dict(r) for r in rows]
@@ -2060,12 +2071,12 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         countries = []
         if table_exists(db, "publication_institutions"):
             rows = db.execute(
-                """
+                f"""
                 SELECT TRIM(UPPER(pi.country_code)) AS country_code,
                        COUNT(DISTINCT pi.paper_id) AS count
                 FROM publication_institutions pi
                 JOIN papers p ON p.id = pi.paper_id
-                WHERE p.status = 'library'
+                WHERE {library_where_p}
                   AND pi.country_code IS NOT NULL
                   AND TRIM(pi.country_code) <> ''
                 GROUP BY TRIM(UPPER(pi.country_code))
@@ -2078,13 +2089,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         top_institutions = []
         if table_exists(db, "publication_institutions"):
             rows = db.execute(
-                """
+                f"""
                 SELECT MAX(pi.institution_name) AS institution_name,
                        pi.country_code,
                        COUNT(DISTINCT pi.paper_id) AS count
                 FROM publication_institutions pi
                 JOIN papers p ON p.id = pi.paper_id
-                WHERE p.status = 'library'
+                WHERE {library_where_p}
                   AND pi.institution_name IS NOT NULL
                   AND TRIM(pi.institution_name) <> ''
                 -- I-17: group by NORMALIZED name + country so `country_code` is a
@@ -2101,27 +2112,27 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         if table_exists(db, "publication_topics"):
             if table_exists(db, "topics"):
                 rows = db.execute(
-                    """
+                    f"""
                     SELECT COALESCE(t.canonical_name, pt.term) AS term,
                            COUNT(DISTINCT pt.paper_id) AS count,
                            ROUND(COALESCE(AVG(p.cited_by_count), 0), 1) AS avg_citations
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
                     LEFT JOIN topics t ON pt.topic_id = t.topic_id
-                    WHERE p.status = 'library'
+                    WHERE {library_where_p}
                     GROUP BY COALESCE(t.canonical_name, pt.term)
                     ORDER BY count DESC LIMIT 20
                     """
                 ).fetchall()
             else:
                 rows = db.execute(
-                    """
+                    f"""
                     SELECT pt.term,
                            COUNT(DISTINCT pt.paper_id) AS count,
                            ROUND(COALESCE(AVG(p.cited_by_count), 0), 1) AS avg_citations
                     FROM publication_topics pt
                     JOIN papers p ON p.id = pt.paper_id
-                    WHERE p.status = 'library'
+                    WHERE {library_where_p}
                     GROUP BY pt.term
                     ORDER BY count DESC LIMIT 20
                     """
@@ -2130,11 +2141,11 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
 
         # ── Top journals (Library-scoped) ──
         rows = db.execute(
-            "SELECT journal, COUNT(*) AS count, "
+            f"SELECT journal, COUNT(*) AS count, "
             "COALESCE(SUM(cited_by_count), 0) AS citations, "
             "ROUND(COALESCE(AVG(cited_by_count), 0), 1) AS avg_citations "
             "FROM papers "
-            "WHERE status = 'library' "
+            f"WHERE {library_where} "
             "  AND journal IS NOT NULL "
             "  AND TRIM(journal) <> '' "
             "GROUP BY journal "
@@ -2147,7 +2158,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         # counts are scoped to Library papers so the number advertises an
         # author's footprint inside *this* library, not their full career.
         author_rows = db.execute(
-            """
+            f"""
             SELECT
                 a.id AS id,
                 a.name AS name,
@@ -2161,7 +2172,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
              AND TRIM(a.openalex_id) <> ''
             JOIN papers p
               ON p.id = pa.paper_id
-             AND p.status = 'library'
+             AND {library_where_p}
             GROUP BY a.id, a.name, a.h_index
             ORDER BY a.name COLLATE NOCASE
             """
@@ -2175,13 +2186,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         if table_exists(db, "publication_topics") and table_exists(db, "publication_authors"):
             if has_topics_table:
                 rows = db.execute(
-                    """
+                    f"""
                     WITH author_paper_topics AS (
                         SELECT
                             pa.openalex_id AS author_openalex_id,
                             COALESCE(t.canonical_name, pt.term) AS term
                         FROM publication_authors pa
-                        JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'
+                        JOIN papers p ON p.id = pa.paper_id AND {library_where_p}
                         JOIN publication_topics pt ON pt.paper_id = pa.paper_id
                         LEFT JOIN topics t ON pt.topic_id = t.topic_id
                     ),
@@ -2211,13 +2222,13 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                 ).fetchall()
             else:
                 rows = db.execute(
-                    """
+                    f"""
                     WITH author_paper_topics AS (
                         SELECT
                             pa.openalex_id AS author_openalex_id,
                             pt.term
                         FROM publication_authors pa
-                        JOIN papers p ON p.id = pa.paper_id AND p.status = 'library'
+                        JOIN papers p ON p.id = pa.paper_id AND {library_where_p}
                         JOIN publication_topics pt ON pt.paper_id = pa.paper_id
                     ),
                     topic_counts AS (
@@ -2278,9 +2289,16 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             counts = count_outcomes(build_recommendation_outcomes(db))
 
             rows = db.execute(
-                "SELECT COALESCE(lens_id, 'unknown') AS lens_id, COUNT(*) AS count, "
-                "ROUND(AVG(score), 3) AS avg_score "
-                "FROM recommendations GROUP BY lens_id ORDER BY count DESC"
+                f"""
+                SELECT COALESCE(r.lens_id, 'unknown') AS lens_id,
+                       COUNT(*) AS count,
+                       ROUND(AVG(r.score), 3) AS avg_score
+                FROM recommendations r
+                JOIN papers p ON p.id = r.paper_id
+                WHERE {standalone_paper_sql('p')}
+                GROUP BY r.lens_id
+                ORDER BY count DESC
+                """
             ).fetchall()
             by_lens = [dict(r) for r in rows]
 
@@ -2304,11 +2322,11 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         emb_total = 0
         if table_exists(db, "publication_embeddings"):
             r = db.execute(
-                """
+                f"""
                 SELECT COUNT(*) AS c
                 FROM publication_embeddings pe
                 JOIN papers p ON p.id = pe.paper_id
-                WHERE pe.model = ? AND p.status = 'library'
+                WHERE pe.model = ? AND {library_where_p}
                 """,
                 (emb_model,),
             ).fetchone()
@@ -2324,8 +2342,8 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         lib_liked = 0
         lib_avg_rating = 0.0
         r = db.execute(
-            "SELECT COUNT(*) AS c, ROUND(COALESCE(AVG(CASE WHEN rating > 0 THEN rating END), 0), 1) AS avg "
-            "FROM papers WHERE status = 'library'"
+            f"SELECT COUNT(*) AS c, ROUND(COALESCE(AVG(CASE WHEN rating > 0 THEN rating END), 0), 1) AS avg "
+            f"FROM papers WHERE {library_where}"
         ).fetchone()
         lib_liked = r["c"]
         lib_avg_rating = r["avg"] or 0.0
@@ -2377,12 +2395,12 @@ mv.register(
         # cached payload — without it the data inputs are unchanged and the stale
         # numbers would serve indefinitely (the exact I-4 trap).
         fingerprint_sql=with_version(
-            """
+            f"""
             SELECT
-              (SELECT COUNT(*) FROM papers WHERE status = 'library'),
-              (SELECT COALESCE(MAX(updated_at), '') FROM papers WHERE status = 'library'),
-              (SELECT COUNT(*) FROM recommendations),
-              (SELECT COALESCE(MAX(created_at), '') FROM recommendations),
+              (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+              (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}),
+              (SELECT COUNT(*) FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql('p')}),
+              (SELECT COALESCE(MAX(r.created_at), '') FROM recommendations r JOIN papers p ON p.id = r.paper_id WHERE {standalone_paper_sql('p')}),
               (SELECT COUNT(*) FROM followed_authors),
               (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
               (SELECT COALESCE(value, '') FROM discovery_settings WHERE key = 'embedding_model')
@@ -2465,4 +2483,3 @@ def apply_branch_action(
 # module — the imported file pulls helpers from here, so it must run
 # after they are defined.
 from alma.api.routes import insights_diagnostics  # noqa: E402,F401
-

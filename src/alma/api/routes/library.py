@@ -33,7 +33,8 @@ from alma.application.followed_authors import (
     schedule_followed_author_historical_backfill,
 )
 from alma.core.db_write import run_write_unit
-from alma.core.sql_helpers import canonical_paper_filter, paper_date_sort_expr
+from alma.core.paper_groups import resolve_action_paper_id
+from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
 from alma.services import health as health_service
 
 logger = logging.getLogger(__name__)
@@ -55,11 +56,12 @@ def _paper_tag_count(db: sqlite3.Connection, paper_id: str) -> int:
     return int((row["c"] if row else 0) or 0)
 
 
-def _require_library_paper(db: sqlite3.Connection, paper_id: str) -> None:
+def _require_library_paper(db: sqlite3.Connection, paper_id: str) -> str:
     """Raise unless the paper is in the saved Library."""
+    root_id = resolve_action_paper_id(db, paper_id)
     paper = db.execute(
         "SELECT id, status FROM papers WHERE id = ?",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -68,6 +70,7 @@ def _require_library_paper(db: sqlite3.Connection, paper_id: str) -> None:
             status_code=400,
             detail="Only saved Library papers can use Library organization actions",
         )
+    return str(root_id)
 
 
 def _ensure_topic_alias_table(db: sqlite3.Connection) -> None:
@@ -179,7 +182,7 @@ def list_saved(
             cursor = db.execute(
                 f"""SELECT * FROM papers
                     WHERE status = 'library'
-                      AND {canonical_paper_filter('papers')}
+                      AND {standalone_paper_sql('papers')}
                       AND (
                         title LIKE ?
                         OR COALESCE(notes, '') LIKE ?
@@ -194,7 +197,7 @@ def list_saved(
             cursor = db.execute(
                 f"""SELECT * FROM papers
                     WHERE status = 'library'
-                      AND {canonical_paper_filter('papers')}
+                      AND {standalone_paper_sql('papers')}
                     ORDER BY {order_clause}
                     LIMIT ? OFFSET ?""",
                 (limit, offset),
@@ -334,15 +337,16 @@ def unsave_publication(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove a paper from library."""
+    root_id = resolve_action_paper_id(db, paper_id)
     row = db.execute(
         "SELECT id FROM papers WHERE id = ? AND status = 'library'",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found in library")
     run_write_unit(
         db,
-        lambda: library_app.soft_remove_from_library(db, paper_id),
+        lambda: library_app.soft_remove_from_library(db, str(root_id)),
         label="library_unsave",
     )
 
@@ -369,9 +373,10 @@ def update_saved_paper(
     came in malformed (typical for legacy BibTeX rows). Rating still
     writes a feedback event; the metadata fields are silent edits.
     """
+    root_id = resolve_action_paper_id(db, paper_id)
     row = db.execute(
         "SELECT * FROM papers WHERE id = ? AND status = 'library'",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found in library")
@@ -411,11 +416,11 @@ def update_saved_paper(
     if abstract is not None:
         update_kwargs["abstract"] = abstract.strip()
     def _persist() -> None:
-        library_app.update_paper(db, paper_id, **update_kwargs)
+        library_app.update_paper(db, str(root_id), **update_kwargs)
         if rating is not None:
             library_app.record_paper_feedback(
                 db,
-                paper_id,
+                str(root_id),
                 action="rate",
                 rating=int(rating),
                 source_surface="library",
@@ -434,7 +439,7 @@ def update_saved_paper(
             logger.debug("signal recompute after rating skipped: %s", exc)
     updated = db.execute(
         "SELECT * FROM papers WHERE id = ?",
-        (paper_id,),
+        (root_id,),
     ).fetchone()
     return row_to_paper_response(updated)
 
@@ -457,6 +462,16 @@ class _BulkActionResponse(BaseModel):
     affected: int
 
 
+def _bulk_root_ids(db: sqlite3.Connection, paper_ids: list[str]) -> list[str]:
+    return sorted(
+        {
+            root
+            for paper_id in paper_ids
+            if (root := resolve_action_paper_id(db, paper_id))
+        }
+    )
+
+
 @router.post(
     "/bulk/clear-rating",
     response_model=_BulkActionResponse,
@@ -467,12 +482,15 @@ def bulk_clear_rating(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Set rating to 0 for multiple library papers (paper stays saved)."""
-    placeholders = ",".join("?" for _ in req.paper_ids)
+    root_ids = _bulk_root_ids(db, req.paper_ids)
+    placeholders = ",".join("?" for _ in root_ids)
+    if not root_ids:
+        return _BulkActionResponse(affected=0)
 
     def _persist() -> int:
         cursor = db.execute(
             f"UPDATE papers SET rating = 0 WHERE id IN ({placeholders}) AND status = 'library'",
-            req.paper_ids,
+            root_ids,
         )
         return cursor.rowcount or 0
 
@@ -490,10 +508,13 @@ def bulk_remove(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove multiple papers from library with soft-remove semantics."""
-    placeholders = ",".join("?" for _ in req.paper_ids)
+    root_ids = _bulk_root_ids(db, req.paper_ids)
+    if not root_ids:
+        return _BulkActionResponse(affected=0)
+    placeholders = ",".join("?" for _ in root_ids)
     rows = db.execute(
         f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = 'library'",
-        req.paper_ids,
+        root_ids,
     ).fetchall()
 
     def _persist() -> None:
@@ -607,12 +628,13 @@ def update_collection(
         label="collection_update",
     )
     cnt = db.execute(
-        """
+        f"""
         SELECT COUNT(*) AS n
         FROM collection_items ci
         JOIN papers p ON p.id = ci.paper_id
         WHERE ci.collection_id = ?
           AND p.status = 'library'
+          AND {standalone_paper_sql('p')}
         """,
         (collection_id,),
     ).fetchone()["n"]
@@ -691,13 +713,13 @@ def add_collection_item(
     coll = db.execute("SELECT id FROM collections WHERE id = ?", (collection_id,)).fetchone()
     if not coll:
         raise HTTPException(status_code=404, detail="Collection not found")
-    _require_library_paper(db, body.paper_id)
+    root_id = _require_library_paper(db, body.paper_id)
     now = datetime.utcnow().isoformat()
     try:
         run_write_unit(
             db,
             lambda: library_app.insert_collection_item(
-                db, collection_id, body.paper_id, now=now, ignore_existing=False
+                db, collection_id, root_id, now=now, ignore_existing=False
             ),
             label="collection_add_item",
         )
@@ -717,10 +739,14 @@ def remove_collection_item(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove a paper from a collection."""
+    root_id = resolve_action_paper_id(db, paper_id)
+    if not root_id:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
     def _persist() -> int:
         cursor = db.execute(
             "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
-            (collection_id, paper_id),
+            (collection_id, root_id),
         )
         return cursor.rowcount
 
@@ -742,11 +768,12 @@ def list_collection_items(
     if not coll:
         raise HTTPException(status_code=404, detail="Collection not found")
     cursor = db.execute(
-        """SELECT p.*
+        f"""SELECT p.*
            FROM collection_items ci
            JOIN papers p ON p.id = ci.paper_id
            WHERE ci.collection_id = ?
              AND p.status = 'library'
+             AND {standalone_paper_sql('p')}
            ORDER BY ci.added_at DESC""",
         (collection_id,),
     )
@@ -836,14 +863,14 @@ def assign_tag(
     tag = db.execute("SELECT id FROM tags WHERE id = ?", (body.tag_id,)).fetchone()
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
-    _require_library_paper(db, body.paper_id)
+    root_id = _require_library_paper(db, body.paper_id)
     existing = db.execute(
         "SELECT 1 FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
-        (body.paper_id, body.tag_id),
+        (root_id, body.tag_id),
     ).fetchone()
     if existing:
         raise HTTPException(status_code=409, detail="Tag already assigned to this paper")
-    if _paper_tag_count(db, body.paper_id) >= MAX_TAGS_PER_PAPER:
+    if _paper_tag_count(db, root_id) >= MAX_TAGS_PER_PAPER:
         raise HTTPException(
             status_code=409,
             detail=f"Each paper may have at most {MAX_TAGS_PER_PAPER} tags",
@@ -853,13 +880,13 @@ def assign_tag(
             db,
             lambda: db.execute(
                 "INSERT INTO publication_tags (paper_id, tag_id) VALUES (?, ?)",
-                (body.paper_id, body.tag_id),
+                (root_id, body.tag_id),
             ),
             label="tag_assign",
         )
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Tag already assigned to this paper")
-    return {"paper_id": body.paper_id, "tag_id": body.tag_id}
+    return {"paper_id": root_id, "tag_id": body.tag_id}
 
 
 @router.delete(
@@ -873,10 +900,12 @@ def remove_tag_assignment(
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Remove a tag assignment from a paper."""
+    root_id = resolve_action_paper_id(db, paper_id)
+
     def _persist() -> int:
         cursor = db.execute(
             "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
-            (paper_id, tag_id),
+            (root_id, tag_id),
         )
         return cursor.rowcount
 
@@ -896,13 +925,14 @@ def _list_topic_summaries(db: sqlite3.Connection) -> list[TopicSummary]:
     # Use new canonical topics table when available
     if table_exists(db, "topics"):
         usage_rows = db.execute(
-            """
+            f"""
             SELECT COALESCE(t.canonical_name, pt.term) AS canonical,
                    COUNT(DISTINCT pt.paper_id) AS paper_count
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
             LEFT JOIN topics t ON pt.topic_id = t.topic_id
             WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
             GROUP BY canonical
             """
         ).fetchall()
@@ -914,12 +944,13 @@ def _list_topic_summaries(db: sqlite3.Connection) -> list[TopicSummary]:
         ).fetchall()
     else:
         usage_rows = db.execute(
-            """
+            f"""
             SELECT pt.term AS canonical,
                    COUNT(DISTINCT pt.paper_id) AS paper_count
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
             WHERE p.status = 'library'
+              AND {standalone_paper_sql('p')}
             GROUP BY canonical
             """
         ).fetchall()
@@ -1689,12 +1720,15 @@ def update_reading_status(
                 status_code=400,
                 detail=f"Invalid reading status. Must be one of: {valid_statuses}"
             )
+        root_id = resolve_action_paper_id(db, paper_id)
+        if not root_id:
+            raise HTTPException(status_code=404, detail="Paper not found")
 
         # Update the paper
         def _persist() -> int:
             cursor = db.execute(
                 "UPDATE papers SET reading_status = ? WHERE id = ?",
-                (incoming, paper_id),
+                (incoming, root_id),
             )
             return cursor.rowcount
 
@@ -1702,7 +1736,7 @@ def update_reading_status(
             raise HTTPException(status_code=404, detail="Paper not found")
 
         # Return updated paper
-        row = db.execute("SELECT * FROM papers WHERE id = ?", (paper_id,)).fetchone()
+        row = db.execute("SELECT * FROM papers WHERE id = ?", (root_id,)).fetchone()
         return row_to_paper_response(row)
     except HTTPException:
         raise
@@ -1777,7 +1811,7 @@ def get_library_workflow_summary(
     """Return a workflow-oriented summary of the library state."""
     try:
         total_row = db.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_library,
                 ROUND(COALESCE(AVG(CASE WHEN rating > 0 THEN rating END), 0), 2) AS avg_rating,
@@ -1788,16 +1822,18 @@ def get_library_workflow_summary(
                 COALESCE(SUM(CASE WHEN COALESCE(added_from, '') NOT LIKE 'feed%' AND COALESCE(added_from, '') NOT LIKE 'discovery%' AND COALESCE(added_from, '') != 'import' THEN 1 ELSE 0 END), 0) AS from_manual_or_other
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
             """
         ).fetchone()
         reading_row = db.execute(
-            """
+            f"""
             SELECT
                 COALESCE(SUM(CASE WHEN reading_status = 'reading' THEN 1 ELSE 0 END), 0) AS reading_count,
                 COALESCE(SUM(CASE WHEN reading_status = 'done' THEN 1 ELSE 0 END), 0) AS done_count,
                 COALESCE(SUM(CASE WHEN reading_status = 'excluded' THEN 1 ELSE 0 END), 0) AS excluded_count,
                 COALESCE(SUM(CASE WHEN COALESCE(TRIM(reading_status), '') <> '' THEN 1 ELSE 0 END), 0) AS reading_list_count
             FROM papers
+            WHERE {standalone_paper_sql('papers')}
             """
         ).fetchone()
 
@@ -1812,10 +1848,11 @@ def get_library_workflow_summary(
         if table_exists(db, "collection_items"):
             uncollected_count = int(
                 db.execute(
-                    """
+                    f"""
                     SELECT COUNT(*) AS c
                     FROM papers p
                     WHERE p.status = 'library'
+                      AND {standalone_paper_sql('p')}
                       AND NOT EXISTS (
                         SELECT 1 FROM collection_items ci WHERE ci.paper_id = p.id
                       )
@@ -1828,11 +1865,12 @@ def get_library_workflow_summary(
         if table_exists(db, "publication_tags"):
             tagged_count = int(
                 db.execute(
-                    """
+                    f"""
                     SELECT COUNT(DISTINCT p.id) AS c
                     FROM papers p
                     JOIN publication_tags pt ON pt.paper_id = p.id
                     WHERE p.status = 'library'
+                      AND {standalone_paper_sql('p')}
                     """
                 ).fetchone()["c"]
                 or 0
@@ -1842,18 +1880,19 @@ def get_library_workflow_summary(
         if table_exists(db, "publication_topics"):
             topic_count = int(
                 db.execute(
-                    """
+                    f"""
                     SELECT COUNT(DISTINCT p.id) AS c
                     FROM papers p
                     JOIN publication_topics pt ON pt.paper_id = p.id
                     WHERE p.status = 'library'
+                      AND {standalone_paper_sql('p')}
                     """
                 ).fetchone()["c"]
                 or 0
             )
 
         source_rows = db.execute(
-            """
+            f"""
             SELECT
                 CASE
                     WHEN COALESCE(added_from, '') = '' THEN 'manual'
@@ -1864,6 +1903,7 @@ def get_library_workflow_summary(
                 COUNT(*) AS count
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
             GROUP BY CASE
                 WHEN COALESCE(added_from, '') = '' THEN 'manual'
                 WHEN COALESCE(added_from, '') LIKE 'feed%' THEN 'feed'
@@ -1875,30 +1915,33 @@ def get_library_workflow_summary(
         ).fetchall()
 
         reading_rows = db.execute(
-            """
+            f"""
             SELECT reading_status AS reading_bucket, COUNT(*) AS count
             FROM papers
             WHERE COALESCE(TRIM(reading_status), '') <> ''
+              AND {standalone_paper_sql('papers')}
             GROUP BY reading_status
             ORDER BY count DESC, reading_bucket ASC
             """
         ).fetchall()
 
         recent_rows = db.execute(
-            """
+            f"""
             SELECT *
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
             ORDER BY COALESCE(added_at, created_at) DESC
             LIMIT 6
             """
         ).fetchall()
 
         next_rows = db.execute(
-            """
+            f"""
             SELECT *
             FROM papers
             WHERE reading_status = 'reading'
+              AND {standalone_paper_sql('papers')}
             ORDER BY
                 COALESCE(rating, 0) DESC,
                 COALESCE(publication_date, added_at, created_at, '') DESC
@@ -1930,6 +1973,7 @@ def get_library_workflow_summary(
                    {_attn_issue}
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
               AND (
                     {_attn_where}
               )
@@ -2018,6 +2062,7 @@ def get_library_workflow_summary(
                     SELECT COUNT(*) AS c
                     FROM papers
                     WHERE status = 'library'
+                      AND {standalone_paper_sql('papers')}
                       AND (
                             {_attn_where}
                       )
@@ -2030,11 +2075,12 @@ def get_library_workflow_summary(
         top_collection_rows = []
         if table_exists(db, "collections") and table_exists(db, "collection_items"):
             top_collection_rows = db.execute(
-                """
+                f"""
                 SELECT c.name, COUNT(p.id) AS count
                 FROM collections c
                 LEFT JOIN collection_items ci ON ci.collection_id = c.id
                 LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
+                  AND {standalone_paper_sql('p')}
                 GROUP BY c.id, c.name
                 ORDER BY count DESC, c.name ASC
                 LIMIT 6
@@ -2044,12 +2090,13 @@ def get_library_workflow_summary(
         top_tag_rows = []
         if table_exists(db, "tags") and table_exists(db, "publication_tags"):
             top_tag_rows = db.execute(
-                """
+                f"""
                 SELECT t.name, COUNT(DISTINCT pt.paper_id) AS count
                 FROM tags t
                 JOIN publication_tags pt ON pt.tag_id = t.id
                 JOIN papers p ON p.id = pt.paper_id
                 WHERE p.status = 'library'
+                  AND {standalone_paper_sql('p')}
                 GROUP BY t.id, t.name
                 ORDER BY count DESC, t.name ASC
                 LIMIT 8
@@ -2059,12 +2106,13 @@ def get_library_workflow_summary(
         top_topic_rows = []
         if table_exists(db, "publication_topics"):
             top_topic_rows = db.execute(
-                """
+                f"""
                 SELECT COALESCE(t.canonical_name, pt.term, '') AS term, COUNT(DISTINCT pt.paper_id) AS count
                 FROM publication_topics pt
                 JOIN papers p ON p.id = pt.paper_id
                 LEFT JOIN topics t ON t.topic_id = pt.topic_id
                 WHERE p.status = 'library'
+                  AND {standalone_paper_sql('p')}
                   AND COALESCE(TRIM(pt.term), '') <> ''
                 GROUP BY COALESCE(t.canonical_name, pt.term, '')
                 ORDER BY count DESC, term ASC
@@ -2076,7 +2124,7 @@ def get_library_workflow_summary(
             "collection_coverage_pct": round((1.0 - (uncollected_count / max(1, total_library))) * 100, 1),
             "tag_coverage_pct": round((tagged_count / max(1, total_library)) * 100, 1),
             "topic_coverage_pct": round((topic_count / max(1, total_library)) * 100, 1),
-            "rated_pct": round((safe_div(int(db.execute("SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND rating > 0").fetchone()["c"] or 0), max(1, total_library))) * 100, 1),
+            "rated_pct": round((safe_div(int(db.execute(f"SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND rating > 0 AND {standalone_paper_sql('papers')}").fetchone()["c"] or 0), max(1, total_library))) * 100, 1),
             "cleanup_flags": {
                 "uncollected": uncollected_count,
                 "untagged": max(0, total_library - tagged_count),

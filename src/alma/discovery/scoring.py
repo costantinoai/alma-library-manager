@@ -169,8 +169,14 @@ def compute_centroid_from_ids(
     active_model = sim_module.get_active_embedding_model(conn)
     placeholders = ",".join("?" * len(paper_ids))
     rows = conn.execute(
-        f"SELECT embedding FROM publication_embeddings "
-        f"WHERE model = ? AND paper_id IN ({placeholders})",
+        f"""
+        SELECT pe.embedding
+        FROM publication_embeddings pe
+        JOIN papers p ON p.id = pe.paper_id
+        WHERE pe.model = ?
+          AND pe.paper_id IN ({placeholders})
+          AND {standalone_paper_sql('p')}
+        """,
         [active_model, *paper_ids],
     ).fetchall()
     if not rows:
@@ -266,12 +272,13 @@ def compute_preference_profile(
     # -- Collection signals --
     try:
         collection_topic_rows = conn.execute(
-            """SELECT ci.paper_id, pt.term, pt.score, t.canonical_name
+            f"""SELECT ci.paper_id, pt.term, pt.score, t.canonical_name
                FROM collection_items ci
                JOIN papers p ON p.id = ci.paper_id
                JOIN publication_topics pt ON pt.paper_id = ci.paper_id
                LEFT JOIN topics t ON pt.topic_id = t.topic_id
-               WHERE p.status = 'library'"""
+               WHERE p.status = 'library'
+                 AND {standalone_paper_sql('p')}"""
         ).fetchall()
         for cr in collection_topic_rows:
             c_paper_id = (cr["paper_id"] or "").strip() if isinstance(cr, sqlite3.Row) else ""
@@ -292,7 +299,13 @@ def compute_preference_profile(
     # -- Tag signals --
     try:
         tag_rows = conn.execute(
-            "SELECT pt.paper_id, t.name FROM publication_tags pt JOIN tags t ON pt.tag_id = t.id"
+            f"""
+            SELECT pt.paper_id, t.name
+            FROM publication_tags pt
+            JOIN tags t ON pt.tag_id = t.id
+            JOIN papers p ON p.id = pt.paper_id
+            WHERE {standalone_paper_sql('p')}
+            """
         ).fetchall()
         for tr in tag_rows:
             if scope_paper_ids is not None:

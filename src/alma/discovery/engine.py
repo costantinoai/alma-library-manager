@@ -31,6 +31,15 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from alma.core.components import link_orphan_components, resolve_component
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    classify_preprint_source,
+    is_component_row,
+    promote_matching_preprints,
+    purge_orphan_subordinate_state,
+    resolve_paper_root_id,
+)
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
@@ -272,9 +281,10 @@ def get_existing_recommendation_titles(conn: sqlite3.Connection) -> set[str]:
     """Return titles already present in the recommendations table."""
     try:
         rows = conn.execute(
-            """SELECT p.title
+            f"""SELECT p.title
                FROM recommendations r
-               LEFT JOIN papers p ON r.paper_id = p.id"""
+               JOIN papers p ON r.paper_id = p.id
+               WHERE {standalone_paper_sql('p')}"""
         ).fetchall()
         return {(r["title"] or "").strip().lower() for r in rows}
     except sqlite3.OperationalError:
@@ -292,9 +302,10 @@ def get_existing_recommendation_keys(conn: sqlite3.Connection) -> set[str]:
     """Return canonical identity keys from existing recommendations."""
     try:
         rows = conn.execute(
-            """SELECT p.title, p.url, p.doi, p.openalex_id, p.year
+            f"""SELECT p.title, p.url, p.doi, p.openalex_id, p.year
                FROM recommendations r
-               LEFT JOIN papers p ON r.paper_id = p.id"""
+               JOIN papers p ON r.paper_id = p.id
+               WHERE {standalone_paper_sql('p')}"""
         ).fetchall()
         return {
             candidate_dedup_key(
@@ -334,6 +345,18 @@ def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
     for rec in recs:
         try:
             doi_raw = (rec.get("doi") or "").strip()
+            work_type = str(rec.get("work_type") or rec.get("type") or "").strip() or None
+            component_type, parent_paper_id = resolve_component(
+                conn,
+                doi=doi_raw,
+                work_type=work_type,
+                relation_parent_doi=rec.get("relation_parent_doi"),
+            )
+            preprint_source = classify_preprint_source(
+                doi_raw,
+                preprint_source=rec.get("preprint_source"),
+                work_type=work_type,
+            )
             # Canonical dedup: resolve against the SAME triple Feed
             # (`_upsert_candidate_paper`) and the importer use —
             # openalex_id -> case-insensitive DOI -> (year, normalized
@@ -364,8 +387,9 @@ def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
                     """INSERT OR IGNORE INTO papers
                            (id, title, authors, abstract, url, doi,
                             journal, publication_date, year, cited_by_count,
-                            tldr, influential_citation_count)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            tldr, influential_citation_count, work_type,
+                            preprint_source, component_type, parent_paper_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         paper_id,
                         rec.get("title", "") or "",
@@ -379,7 +403,18 @@ def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
                         rec.get("cited_by_count", 0) or 0,
                         rec.get("tldr", "") or "",
                         rec.get("influential_citation_count"),
+                        work_type,
+                        preprint_source,
+                        component_type,
+                        parent_paper_id,
                     ),
+                )
+            if component_type:
+                conn.execute(
+                    "UPDATE papers SET component_type = ?, "
+                    "parent_paper_id = COALESCE(?, parent_paper_id), work_type = COALESCE(?, work_type) "
+                    "WHERE id = ?",
+                    (component_type, parent_paper_id, work_type, paper_id),
                 )
             # Fill-only secondary UPDATE: covers both the
             # already-existed-and-INSERT-was-ignored case AND the brand-new
@@ -398,7 +433,6 @@ def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
                     },
                     touch_updated_at=False,
                 )
-                upsert_specter2_embedding(conn, paper_id, rec)
             except sqlite3.OperationalError as exc:
                 logger.warning(
                     "Recommendation metadata/vector fill failed for paper %s: %s",
@@ -433,6 +467,40 @@ def insert_recommendations(conn: sqlite3.Connection, recs: list[dict]) -> int:
                         paper_id,
                         exc,
                     )
+
+            persisted = conn.execute(
+                "SELECT id, doi, work_type, preprint_source, component_type, "
+                "parent_paper_id FROM papers WHERE id = ?",
+                (paper_id,),
+            ).fetchone()
+            if persisted is not None and is_component_row(persisted):
+                parent_id = str(persisted["parent_paper_id"] or "").strip()
+                if parent_id:
+                    absorb_paper_group(
+                        conn, paper_id, parent_id, reason="discovery_component_ingest"
+                    )
+                else:
+                    purge_orphan_subordinate_state(conn, paper_id)
+                # Components remain pointer rows only: never hydrate, embed, or
+                # stage them as independently actionable recommendations.
+                continue
+
+            promote_matching_preprints(conn, paper_id)
+            paper_id = resolve_paper_root_id(conn, paper_id, strict=False)
+            root_doi_row = conn.execute("SELECT doi FROM papers WHERE id = ?", (paper_id,)).fetchone()
+            link_orphan_components(
+                conn,
+                parent_paper_id=paper_id,
+                parent_doi=str(root_doi_row["doi"] or "") if root_doi_row else None,
+            )
+            try:
+                upsert_specter2_embedding(conn, paper_id, rec)
+            except sqlite3.OperationalError as exc:
+                logger.warning(
+                    "Recommendation vector fill failed for paper %s: %s",
+                    paper_id,
+                    exc,
+                )
 
             # Enqueue cross-source metadata hydration for the paper so
             # that any abstract / journal / publication_date the
@@ -1022,13 +1090,14 @@ def _dense_fallback_candidates(
     model = sim_module.get_active_embedding_model(conn)
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT p.id, p.title, p.authors, p.year, p.doi, p.url, p.abstract,
                    p.journal, p.cited_by_count, pe.embedding
             FROM publication_embeddings pe
             JOIN papers p ON pe.paper_id = p.id
             WHERE pe.model = ?
               AND COALESCE(p.status, '') NOT IN ('library', 'removed', 'dismissed')
+              AND {standalone_paper_sql('p')}
             """,
             (model,),
         ).fetchall()
@@ -1132,13 +1201,15 @@ def _discover_similar_with_meta_and_conn(
     seed_papers: list[dict] = []
     for paper_id in paper_ids:
         try:
+            root_id = resolve_paper_root_id(conn, str(paper_id), strict=False)
             row = conn.execute(
-                """SELECT id, title, abstract, url, doi, authors, journal, year,
+                f"""SELECT id, title, abstract, url, doi, authors, journal, year,
                           semantic_scholar_id, semantic_scholar_corpus_id
                    FROM papers
                    WHERE id = ?
+                     AND {standalone_paper_sql('papers')}
                    LIMIT 1""",
-                (paper_id,),
+                (root_id,),
             ).fetchone()
             if row:
                 seed_papers.append(dict(row))

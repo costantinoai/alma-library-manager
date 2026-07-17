@@ -41,6 +41,7 @@ from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import commit_unless_gated, write_section
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     canonical_lookup_doi,
     normalize_doi,
@@ -90,12 +91,14 @@ def refresh_author_centroid(
         return False
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT pe.embedding AS embedding
             FROM publication_authors pa
             JOIN publication_embeddings pe
               ON pe.paper_id = pa.paper_id AND pe.model = ?
+            JOIN papers p ON p.id = pa.paper_id
             WHERE lower(pa.openalex_id) = ?
+              AND {standalone_paper_sql('p')}
             """,
             (model, oid),
         ).fetchall()
@@ -189,7 +192,7 @@ def _authors_needing_centroid_sql() -> str:
     or when it predates the newest embedding for that author (a vector was
     refreshed in place). Both callers bind the embedding model twice (the
     `pe.model` filter and the `author_centroids` join)."""
-    return """
+    return f"""
         SELECT lower(trim(a.openalex_id)) AS oid,
                COUNT(DISTINCT pe.paper_id) AS emb_count,
                ac.paper_count             AS centroid_count,
@@ -201,9 +204,12 @@ def _authors_needing_centroid_sql() -> str:
           ON lower(trim(pa.openalex_id)) = lower(trim(a.openalex_id))
         JOIN publication_embeddings pe
           ON pe.paper_id = pa.paper_id AND pe.model = ?
+        JOIN papers p
+          ON p.id = pa.paper_id
         LEFT JOIN author_centroids ac
           ON ac.author_openalex_id = lower(trim(a.openalex_id)) AND ac.model = ?
         WHERE COALESCE(TRIM(a.openalex_id), '') <> ''
+          AND {standalone_paper_sql('p')}
         GROUP BY oid
         HAVING ac.author_openalex_id IS NULL
             OR ac.paper_count <> emb_count
@@ -330,6 +336,7 @@ def _fetch_missing_s2_vectors_for_author(
              || lower(trim(COALESCE(p.doi, '')))
          )
         WHERE lower(pa.openalex_id) = ?
+          AND {standalone_paper_sql('p')}
           AND (
                COALESCE(NULLIF(TRIM(p.doi), ''), '') <> ''
             OR COALESCE(NULLIF(TRIM(p.semantic_scholar_id), ''), '') <> ''

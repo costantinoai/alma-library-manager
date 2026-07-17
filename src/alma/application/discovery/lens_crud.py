@@ -23,10 +23,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from alma.application import library as library_app
-from alma.core.components import not_component_sql
 from alma.core.db_write import run_write_unit
+from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.scoring_math import age_decay, clamp
-from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery.defaults import (
     DISCOVERY_SETTINGS_DEFAULTS,
     merge_discovery_defaults,
@@ -59,7 +59,7 @@ def latest_discovery_refresh_window(
     """Return window for latest successful Discovery refresh."""
     try:
         row = db.execute(
-            """
+            f"""
             SELECT started_at, finished_at
             FROM operation_status
             WHERE status IN ('completed', 'noop')
@@ -90,7 +90,7 @@ def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
         return 0
     try:
         row = db.execute(
-            """
+            f"""
             SELECT COUNT(*) AS c
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
@@ -98,7 +98,7 @@ def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
               AND r.created_at >= ?
               AND r.created_at <= ?
               AND p.status NOT IN ('dismissed', 'removed')
-              AND COALESCE(TRIM(p.component_type), '') = ''
+              AND {standalone_paper_sql('p')}
             """,
             (start, finish),
         ).fetchone()
@@ -212,17 +212,10 @@ def list_recommendations(
         # Semantic filtering is not implemented in phase-6 application layer.
         # Keep deterministic lexical behavior.
         pass
-    # `canonical_paper_id IS NULL` drops recs whose paper was merged
-    # into a published journal twin (preprint_dedup). The canonical
-    # version will have its own rec row if the lens retrieval touched it.
-    # `not_component_sql` drops figures / SI / datasets / author responses —
-    # the same component read-gate the Feed inbox uses, so a part-of-a-paper
-    # never surfaces as a standalone recommendation either.
     query.append(
         "AND r.user_action IS NULL AND p.status NOT IN ('library', 'dismissed', 'removed') "
         "AND COALESCE(TRIM(p.reading_status), '') = '' "
-        f"AND {canonical_paper_filter('p')} "
-        "AND " + not_component_sql("p") + " "
+        f"AND {standalone_paper_sql('p')} "
         "ORDER BY r.score DESC, COALESCE(p.publication_date, printf('%04d-01-01', COALESCE(p.year, 0))) DESC, r.created_at DESC LIMIT ? OFFSET ?"
     )
     params.extend([limit, offset])
@@ -275,7 +268,13 @@ def mark_recommendation_action(
     if action not in VALID_RECOMMENDATION_ACTIONS:
         raise ValueError(f"Unsupported recommendation action: {action}")
 
-    paper_id = str((row["paper_id"] if isinstance(row, sqlite3.Row) else "") or "").strip()
+    raw_paper_id = str((row["paper_id"] if isinstance(row, sqlite3.Row) else "") or "").strip()
+    paper_id = resolve_action_paper_id(db, raw_paper_id) if raw_paper_id else None
+    if paper_id and paper_id != raw_paper_id:
+        db.execute(
+            "UPDATE recommendations SET paper_id = ? WHERE id = ?",
+            (paper_id, rec_id),
+        )
     current_rating_row = db.execute(
         "SELECT rating FROM papers WHERE id = ?",
         (paper_id,),
@@ -472,14 +471,16 @@ def recommendation_stats(db: sqlite3.Connection) -> dict:
     implied "viewed / impression count"; those are not recorded here.
     """
     row = db.execute(
-        """
+        f"""
         SELECT
             COUNT(*) AS total,
-            SUM(CASE WHEN user_action IS NOT NULL THEN 1 ELSE 0 END) AS actioned,
-            SUM(CASE WHEN user_action = 'save' THEN 1 ELSE 0 END) AS saved,
-            SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END) AS liked,
-            SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed
-        FROM recommendations
+            SUM(CASE WHEN r.user_action IS NOT NULL THEN 1 ELSE 0 END) AS actioned,
+            SUM(CASE WHEN r.user_action = 'save' THEN 1 ELSE 0 END) AS saved,
+            SUM(CASE WHEN r.user_action = 'like' THEN 1 ELSE 0 END) AS liked,
+            SUM(CASE WHEN r.user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE {standalone_paper_sql('p')}
         """
     ).fetchone()
     return {
@@ -493,7 +494,16 @@ def recommendation_stats(db: sqlite3.Connection) -> dict:
 
 def get_recommendation(db: sqlite3.Connection, rec_id: str) -> dict | None:
     """Get one recommendation row."""
-    row = db.execute("SELECT * FROM recommendations WHERE id = ?", (rec_id,)).fetchone()
+    row = db.execute(
+        f"""
+        SELECT r.*
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE r.id = ?
+          AND {standalone_paper_sql('p')}
+        """,
+        (rec_id,),
+    ).fetchone()
     return _normalize_recommendation(dict(row)) if row else None
 
 
@@ -545,9 +555,11 @@ def list_lenses(
             GROUP BY lens_id
         ) ls ON ls.lens_id = l.id
         LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS recommendation_count
-            FROM recommendations
-            GROUP BY lens_id
+            SELECT r.lens_id, COUNT(*) AS recommendation_count
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE {standalone_paper_sql('p')}
+            GROUP BY r.lens_id
         ) r ON r.lens_id = l.id
         WHERE {" AND ".join(where)}
         ORDER BY l.created_at DESC
@@ -561,7 +573,7 @@ def list_lenses(
 def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
     """Fetch one lens by ID."""
     rows = db.execute(
-        """
+        f"""
         SELECT
             l.*,
             COALESCE(ls.signal_count, 0) AS signal_count,
@@ -594,9 +606,11 @@ def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
             GROUP BY lens_id
         ) ls ON ls.lens_id = l.id
         LEFT JOIN (
-            SELECT lens_id, COUNT(*) AS recommendation_count
-            FROM recommendations
-            GROUP BY lens_id
+            SELECT r.lens_id, COUNT(*) AS recommendation_count
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE {standalone_paper_sql('p')}
+            GROUP BY r.lens_id
         ) r ON r.lens_id = l.id
         WHERE l.id = ?
         """,
@@ -707,11 +721,13 @@ def apply_branch_control_action(
         raise ValueError(f"Unsupported branch action: {action}")
 
     lens_rows = db.execute(
-        """
-        SELECT DISTINCT lens_id
-        FROM recommendations
-        WHERE branch_id = ?
-          AND COALESCE(lens_id, '') <> ''
+        f"""
+        SELECT DISTINCT r.lens_id
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE r.branch_id = ?
+          AND COALESCE(r.lens_id, '') <> ''
+          AND {standalone_paper_sql('p')}
         """,
         (branch_id,),
     ).fetchall()
@@ -875,21 +891,23 @@ def _aggregate_branch_outcomes(
     params: list[Any] = [since]
     lens_clause = ""
     if str(lens_id or "").strip():
-        lens_clause = "AND COALESCE(lens_id, '') = ?"
+        lens_clause = "AND COALESCE(r.lens_id, '') = ?"
         params.append(str(lens_id).strip())
     try:
         rows = db.execute(
             f"""
             SELECT
-                COALESCE(NULLIF(branch_id, ''), '') AS branch_id,
-                COALESCE(NULLIF(branch_label, ''), 'Unnamed branch') AS branch_label,
-                COALESCE(user_action, '') AS user_action,
-                COALESCE(action_at, created_at) AS acted_at,
-                COALESCE(score, 0.0) AS score,
-                COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type
-            FROM recommendations
-            WHERE (COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> '')
-              AND substr(COALESCE(action_at, created_at), 1, 10) >= ?
+                COALESCE(NULLIF(r.branch_id, ''), '') AS branch_id,
+                COALESCE(NULLIF(r.branch_label, ''), 'Unnamed branch') AS branch_label,
+                COALESCE(r.user_action, '') AS user_action,
+                COALESCE(r.action_at, r.created_at) AS acted_at,
+                COALESCE(r.score, 0.0) AS score,
+                COALESCE(NULLIF(r.source_type, ''), 'unknown') AS source_type
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE (COALESCE(r.branch_id, '') <> '' OR COALESCE(r.branch_label, '') <> '')
+              AND substr(COALESCE(r.action_at, r.created_at), 1, 10) >= ?
+              AND {standalone_paper_sql('p')}
               {lens_clause}
             """,
             params,
@@ -1064,7 +1082,7 @@ def list_lens_recommendations(
     if lens_collection_id:
         rows = db.execute(
             select_cols
-            + """
+            + f"""
             FROM recommendations r
             LEFT JOIN papers p ON p.id = r.paper_id
             LEFT JOIN collection_items ci
@@ -1072,6 +1090,7 @@ def list_lens_recommendations(
             WHERE r.lens_id = ?
               AND r.user_action IS NULL
               AND p.status NOT IN ('dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
               AND ci.paper_id IS NULL
               AND (p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = '')
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
@@ -1082,12 +1101,13 @@ def list_lens_recommendations(
     else:
         rows = db.execute(
             select_cols
-            + """
+            + f"""
             FROM recommendations r
             LEFT JOIN papers p ON p.id = r.paper_id
             WHERE r.lens_id = ?
               AND r.user_action IS NULL
               AND p.status NOT IN ('library', 'dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
               AND COALESCE(TRIM(p.reading_status), '') = ''
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
@@ -1376,15 +1396,17 @@ def _load_branch_seed_history(
         return []
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT
-                COALESCE(NULLIF(branch_id, ''), '') AS branch_id,
-                COALESCE(NULLIF(branch_label, ''), '') AS branch_label,
-                paper_id
-            FROM recommendations
-            WHERE COALESCE(lens_id, '') = ?
-              AND COALESCE(NULLIF(branch_id, ''), '') <> ''
-            ORDER BY created_at DESC
+                COALESCE(NULLIF(r.branch_id, ''), '') AS branch_id,
+                COALESCE(NULLIF(r.branch_label, ''), '') AS branch_label,
+                r.paper_id
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE COALESCE(r.lens_id, '') = ?
+              AND COALESCE(NULLIF(r.branch_id, ''), '') <> ''
+              AND {standalone_paper_sql('p')}
+            ORDER BY r.created_at DESC
             LIMIT ?
             """,
             (str(lens_id), int(limit)),

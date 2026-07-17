@@ -38,6 +38,7 @@ from datetime import datetime, timezone
 
 from alma.application.signal_projection import normalize_feedback_event_value
 from alma.core.scoring_math import age_decay
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +124,12 @@ def _load_library_centroid(db: sqlite3.Connection, model: str):
         return None
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT pe.embedding AS embedding
             FROM publication_embeddings pe
             JOIN papers p ON p.id = pe.paper_id
             WHERE p.status = 'library' AND pe.model = ?
+              AND {standalone_paper_sql('p')}
             LIMIT 2000
             """,
             (model,),
@@ -154,11 +156,12 @@ def _load_library_topic_weights(db: sqlite3.Connection) -> dict[str, float]:
 
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT pt.term AS term, SUM(COALESCE(pt.score, 0)) AS w
             FROM publication_topics pt
             JOIN papers p ON p.id = pt.paper_id
             WHERE p.status = 'library' AND COALESCE(pt.term, '') <> ''
+              AND {standalone_paper_sql('p')}
             GROUP BY pt.term
             """
         ).fetchall()
@@ -331,6 +334,7 @@ def score_papers_batch(
             SELECT id, rating, publication_date
             FROM papers
             WHERE id IN ({placeholders})
+              AND {standalone_paper_sql('papers')}
             """,
             paper_ids,
         ).fetchall()
@@ -351,9 +355,12 @@ def score_papers_batch(
         try:
             emb_rows = db.execute(
                 f"""
-                SELECT paper_id, embedding
-                FROM publication_embeddings
-                WHERE model = ? AND paper_id IN ({placeholders})
+                SELECT pe.paper_id, pe.embedding
+                FROM publication_embeddings pe
+                JOIN papers p ON p.id = pe.paper_id
+                WHERE pe.model = ?
+                  AND pe.paper_id IN ({placeholders})
+                  AND {standalone_paper_sql('p')}
                 """,
                 (state.model, *paper_ids),
             ).fetchall()
@@ -567,7 +574,7 @@ def recompute_library_signal_scores(
     """
     from alma.core.db_write import run_write_unit
 
-    where = "status = 'library'"
+    where = f"status = 'library' AND {standalone_paper_sql('papers')}"
     if only_missing:
         where += " AND COALESCE(global_signal_score, 0) = 0"
     try:

@@ -22,6 +22,7 @@ from typing import Any
 
 from alma.api.helpers import table_exists
 from alma.application import diagnostics_stats as stats
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,12 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
 
     # Papers added this week (library only).
     new_papers = conn.execute(
-        "SELECT COUNT(*) AS c FROM papers WHERE added_at >= ? AND status = 'library'",
+        f"SELECT COUNT(*) AS c FROM papers WHERE added_at >= ? AND status = 'library' AND {standalone_paper_sql('papers')}",
         (week_ago,),
     ).fetchone()["c"]
 
     total_library = conn.execute(
-        "SELECT COUNT(*) AS c FROM papers WHERE status = 'library'"
+        f"SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
     ).fetchone()["c"]
 
     # I-28: rating EVENTS this week, derived from feedback-event timestamps.
@@ -102,12 +103,13 @@ def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
     trending_topics = []
     try:
         rows = conn.execute(
-            """SELECT COALESCE(t.canonical_name, pt.term) AS topic,
+            f"""SELECT COALESCE(t.canonical_name, pt.term) AS topic,
                       COUNT(DISTINCT pt.paper_id) AS cnt
                FROM publication_topics pt
                JOIN papers p ON p.id = pt.paper_id
                LEFT JOIN topics t ON t.topic_id = pt.topic_id
                WHERE p.added_at >= ? AND p.status = 'library'
+                 AND {standalone_paper_sql('p')}
                GROUP BY topic
                ORDER BY cnt DESC
                LIMIT 10""",
@@ -198,7 +200,7 @@ def collection_intelligence(conn: sqlite3.Connection) -> dict[str, Any]:
         #    library papers still appears with paper_count = 0 rather than
         #    vanishing.
         rows = conn.execute(
-            """SELECT c.id, c.name, c.color,
+            f"""SELECT c.id, c.name, c.color,
                       COUNT(p.id) AS paper_count,
                       COALESCE(AVG(p.cited_by_count), 0) AS avg_citations,
                       COALESCE(AVG(CASE WHEN p.rating > 0 THEN p.rating END), 0) AS avg_rating,
@@ -208,6 +210,7 @@ def collection_intelligence(conn: sqlite3.Connection) -> dict[str, Any]:
                FROM collections c
                LEFT JOIN collection_items ci ON ci.collection_id = c.id
                LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = 'library'
+                    AND {standalone_paper_sql('p')}
                GROUP BY c.id, c.name, c.color
                ORDER BY paper_count DESC"""
         ).fetchall()
@@ -218,12 +221,13 @@ def collection_intelligence(conn: sqlite3.Connection) -> dict[str, Any]:
         if table_exists(conn, "publication_topics"):
             try:
                 trows = conn.execute(
-                    """SELECT ci.collection_id AS cid,
+                    f"""SELECT ci.collection_id AS cid,
                               COALESCE(t.canonical_name, pt.term) AS topic,
                               COUNT(DISTINCT pt.paper_id) AS cnt
                        FROM publication_topics pt
                        JOIN collection_items ci ON ci.paper_id = pt.paper_id
                        JOIN papers p ON p.id = pt.paper_id AND p.status = 'library'
+                           AND {standalone_paper_sql('p')}
                        LEFT JOIN topics t ON t.topic_id = pt.topic_id
                        GROUP BY ci.collection_id, topic"""
                 ).fetchall()
@@ -270,7 +274,7 @@ def _library_papers_in_years(conn: sqlite3.Connection, y0: int, y1: int) -> int:
     denominator for a topic-drift window."""
     try:
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND year >= ? AND year <= ?",
+            f"SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')} AND year >= ? AND year <= ?",
             (y0, y1),
         ).fetchone()
         return int((row["c"] if row else 0) or 0)
@@ -309,12 +313,13 @@ def topic_drift(conn: sqlite3.Connection) -> dict[str, Any]:
         if total_papers > 0 and table_exists(conn, "publication_topics"):
             try:
                 rows = conn.execute(
-                    """SELECT COALESCE(t.canonical_name, pt.term) AS topic,
+                    f"""SELECT COALESCE(t.canonical_name, pt.term) AS topic,
                               COUNT(DISTINCT pt.paper_id) AS cnt
                        FROM publication_topics pt
                        JOIN papers p ON p.id = pt.paper_id
                        LEFT JOIN topics t ON t.topic_id = pt.topic_id
                        WHERE p.status = 'library' AND p.year >= ? AND p.year <= ?
+                         AND {standalone_paper_sql('p')}
                        GROUP BY topic
                        HAVING cnt >= ?
                        ORDER BY cnt DESC

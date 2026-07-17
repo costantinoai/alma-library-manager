@@ -33,6 +33,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from alma.api.helpers import table_exists
+from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.application.signal_projection import compute_paper_signal_map
 
 # Net-signal magnitude under which an outcome is "neutral" rather than having a
@@ -84,7 +85,12 @@ def build_paper_outcome_map(db: sqlite3.Connection) -> dict[str, PaperOutcome]:
     statuses: dict[str, str] = {}
     try:
         for row in db.execute(
-            "SELECT id, status FROM papers WHERE status IN ('library','dismissed','removed')"
+            f"""
+            SELECT id, status
+            FROM papers
+            WHERE status IN ('library','dismissed','removed')
+              AND {standalone_paper_sql_for_db(db, 'papers')}
+            """
         ).fetchall():
             pid = str((row["id"] if isinstance(row, sqlite3.Row) else row[0]) or "").strip()
             if pid:
@@ -158,7 +164,7 @@ def build_recommendation_outcomes(
 
     outcomes = build_paper_outcome_map(db)
 
-    sql = """
+    sql = f"""
         SELECT
             r.paper_id AS paper_id,
             COALESCE(NULLIF(r.source_type, ''), 'unknown') AS source_type,
@@ -173,7 +179,8 @@ def build_recommendation_outcomes(
             r.action_at AS action_at,
             r.user_action AS user_action
         FROM recommendations r
-        LEFT JOIN papers p ON p.id = r.paper_id
+        JOIN papers p ON p.id = r.paper_id
+         AND {standalone_paper_sql_for_db(db, 'p')}
     """
     params: tuple = ()
     if since:

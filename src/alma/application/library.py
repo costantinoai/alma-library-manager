@@ -11,7 +11,15 @@ import sqlite3
 import uuid
 from datetime import datetime
 
-from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.components import link_orphan_components, resolve_component
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    promote_matching_preprints,
+    purge_orphan_subordinate_state,
+    resolve_action_paper_id,
+    resolve_paper_root_id,
+)
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -34,6 +42,11 @@ _BLANKABLE_IDENTIFIERS = (
     "semantic_scholar_id",
     "semantic_scholar_corpus_id",
 )
+
+
+def _action_root(db: sqlite3.Connection, paper_id: str) -> str | None:
+    """Canonicalize a user-facing paper id; orphan components are inert."""
+    return resolve_action_paper_id(db, paper_id)
 
 
 def _normalize_paper_identifiers(kwargs: dict) -> None:
@@ -298,7 +311,13 @@ def find_library_duplicate_for_metadata(
         status=LIBRARY_STATUS,
     )
     if duplicate_id:
-        return duplicate_id
+        root_id = resolve_action_paper_id(db, duplicate_id)
+        if root_id:
+            root = db.execute(
+                "SELECT status FROM papers WHERE id = ?", (root_id,)
+            ).fetchone()
+            if root is not None and str(root["status"] or "") == LIBRARY_STATUS:
+                return root_id
 
     title_key = normalize_title_key(title)
     if not title_key:
@@ -316,7 +335,7 @@ def find_library_duplicate_for_metadata(
         FROM papers
         WHERE status = ?
           {exclude_clause}
-          AND {canonical_paper_filter('papers')}
+          AND {standalone_paper_sql('papers')}
           AND COALESCE(TRIM(title), '') <> ''
         LIMIT 5000
         """,
@@ -362,24 +381,9 @@ def mark_duplicate_paper_ignored(
     *,
     reason: str,
 ) -> bool:
-    """Stamp a duplicate row as canonicalized without deleting provenance."""
-    if not paper_id or not canonical_id or paper_id == canonical_id:
-        return False
-    now = datetime.utcnow().isoformat()
-    cursor = db.execute(
-        """
-        UPDATE papers
-        SET canonical_paper_id = ?,
-            openalex_resolution_reason = CASE
-                WHEN COALESCE(TRIM(openalex_resolution_reason), '') = '' THEN ?
-                ELSE openalex_resolution_reason
-            END,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (canonical_id, reason, now, paper_id),
-    )
-    return cursor.rowcount > 0
+    """Consolidate a duplicate into the journal-first group root."""
+    result = absorb_paper_group(db, paper_id, canonical_id, reason=reason)
+    return not result.get("skipped") or result.get("reason") == "already_merged"
 
 
 def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> dict | None:
@@ -437,13 +441,16 @@ def resolve_library_save_target(db: sqlite3.Connection, paper_id: str) -> tuple[
     duplicate_id = find_library_duplicate_for_paper(db, paper_id)
     if not duplicate_id:
         return paper_id, False
-    mark_duplicate_paper_ignored(
+    result = absorb_paper_group(
         db,
         paper_id,
         duplicate_id,
         reason=f"duplicate_library_save_ignored:{duplicate_id}",
     )
-    return duplicate_id, True
+    root_id = str(result.get("root_id") or "").strip()
+    if not root_id:
+        root_id = resolve_paper_root_id(db, duplicate_id, strict=False)
+    return root_id, True
 
 
 def create_paper(db: sqlite3.Connection, **kwargs) -> str:
@@ -453,6 +460,20 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
     Optional: all other paper fields
     """
     _normalize_paper_identifiers(kwargs)
+    relation_parent_doi = kwargs.pop("relation_parent_doi", None)
+    component_type = kwargs.get("component_type")
+    parent_paper_id = kwargs.get("parent_paper_id")
+    if not component_type:
+        component_type, resolved_parent = resolve_component(
+            db,
+            doi=kwargs.get("doi"),
+            work_type=kwargs.get("work_type"),
+            relation_parent_doi=relation_parent_doi,
+        )
+        if component_type:
+            kwargs["component_type"] = component_type
+            kwargs["parent_paper_id"] = parent_paper_id or resolved_parent
+            parent_paper_id = kwargs["parent_paper_id"]
     paper_id = kwargs.pop("id", None) or str(uuid.uuid4())
     kwargs.setdefault("status", TRACKED_STATUS)
     kwargs.setdefault("created_at", datetime.utcnow().isoformat())
@@ -470,6 +491,19 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
     values = [paper_id] + list(kwargs.values())
 
     db.execute(f"INSERT INTO papers ({col_str}) VALUES ({placeholders})", values)
+    if component_type:
+        if parent_paper_id:
+            absorb_paper_group(
+                db, paper_id, str(parent_paper_id), reason="paper_create_component"
+            )
+        else:
+            purge_orphan_subordinate_state(db, paper_id)
+    else:
+        promote_matching_preprints(db, paper_id)
+        if kwargs.get("doi"):
+            link_orphan_components(
+                db, parent_paper_id=paper_id, parent_doi=kwargs.get("doi")
+            )
     return paper_id
 
 
@@ -504,6 +538,20 @@ def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True
     Returns the paper ID (existing or new).
     """
     _normalize_paper_identifiers(kwargs)
+    relation_parent_doi = kwargs.pop("relation_parent_doi", None)
+    component_type = kwargs.get("component_type")
+    parent_paper_id = kwargs.get("parent_paper_id")
+    if not component_type:
+        component_type, resolved_parent = resolve_component(
+            db,
+            doi=kwargs.get("doi"),
+            work_type=kwargs.get("work_type"),
+            relation_parent_doi=relation_parent_doi,
+        )
+        if component_type:
+            kwargs["component_type"] = component_type
+            kwargs["parent_paper_id"] = parent_paper_id or resolved_parent
+            parent_paper_id = kwargs["parent_paper_id"]
 
     # Canonical triple lookup (see lessons → "Canonical paper-dedup helper
     # lives in core.utils"). resolve_existing_paper_id refuses a title-only
@@ -555,17 +603,38 @@ def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True
                 f"UPDATE papers SET {set_clause} WHERE id = ?",
                 list(updates.values()) + [paper_id],
             )
-        _schedule_pending_hydration(db, paper_id, auto_schedule=auto_schedule_hydration)
-        return paper_id
+        if component_type:
+            if parent_paper_id:
+                absorb_paper_group(
+                    db, paper_id, str(parent_paper_id), reason="paper_upsert_component"
+                )
+            else:
+                purge_orphan_subordinate_state(db, paper_id)
+            return paper_id
+        root_id = resolve_paper_root_id(db, paper_id, strict=False)
+        promote_matching_preprints(db, root_id)
+        root_id = resolve_paper_root_id(db, root_id, strict=False)
+        _schedule_pending_hydration(
+            db, root_id, auto_schedule=auto_schedule_hydration
+        )
+        return root_id
     else:
         new_id = create_paper(db, **kwargs)
-        _schedule_pending_hydration(db, new_id, auto_schedule=auto_schedule_hydration)
+        if not component_type:
+            new_id = resolve_paper_root_id(db, new_id, strict=False)
+            _schedule_pending_hydration(
+                db, new_id, auto_schedule=auto_schedule_hydration
+            )
         return new_id
 
 
 def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:
     """Update specific fields of a paper. Returns True if found."""
     if not kwargs:
+        return False
+
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
         return False
 
     existing = get_paper(db, paper_id)
@@ -654,6 +723,9 @@ def add_to_library(
     the canonical case is a BibTeX/Zotero import promoting a row that was
     previously auto-tracked from feed or discovery.
     """
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     now = datetime.utcnow().isoformat()
     added_from_clause = (
         "added_from = ?"
@@ -708,6 +780,9 @@ def add_to_library(
 
 def dismiss_paper(db: sqlite3.Connection, paper_id: str) -> bool:
     """Dismiss a paper (hide from feed/discovery, not in library)."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     now = datetime.utcnow().isoformat()
     cursor = db.execute(
         "UPDATE papers SET status = ?, rating = ?, updated_at = ? WHERE id = ?",
@@ -729,6 +804,9 @@ def sink_disliked_paper(db: sqlite3.Connection, paper_id: str) -> bool:
 
     Feed dislikes are signals only: keep membership untouched and set rating 1.
     """
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     now = datetime.utcnow().isoformat()
     cursor = db.execute(
         """
@@ -744,6 +822,9 @@ def sink_disliked_paper(db: sqlite3.Connection, paper_id: str) -> bool:
 
 def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
     """Remove from Library without deleting provenance."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     now = datetime.utcnow().isoformat()
     cursor = db.execute(
         """
@@ -774,6 +855,9 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
 
 def rate_paper(db: sqlite3.Connection, paper_id: str, rating: int) -> bool:
     """Set rating on a paper."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     now = datetime.utcnow().isoformat()
     cursor = db.execute(
         "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
@@ -816,7 +900,8 @@ def record_paper_feedback(
     engine does NOT commit — the caller owns the transaction (every caller runs
     inside a ``run_write_unit``).
     """
-    if not _table_exists(db, "feedback_events"):
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id or not _table_exists(db, "feedback_events"):
         return
     # Lazy import: a module-level ``application → services`` import would be a
     # cycle. Feed records through the same engine the same way.
@@ -852,6 +937,7 @@ def sync_surface_resolution(
     This keeps Feed, Discovery, and Library aligned so the same paper does not
     remain actionable on one surface after being accepted or dismissed on another.
     """
+    paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return
 
@@ -975,6 +1061,9 @@ def undo_paper_feedback(
     relevant events here clears it everywhere. ``preference_profiles`` is a
     recomputed aggregate, rebuilt on the next lens refresh. Idempotent.
     """
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        raise ValueError("Paper is subordinate and has no actionable root")
     aspect = aspect if aspect in UNDO_ASPECTS else "all"
     now = datetime.utcnow().isoformat()
 
@@ -1049,7 +1138,7 @@ def list_papers(
     offset: int = 0,
 ) -> list[dict]:
     """Query papers with filters."""
-    parts = ["SELECT * FROM papers WHERE 1=1"]
+    parts = [f"SELECT * FROM papers WHERE {standalone_paper_sql('papers')}"]
     params: list = []
 
     if status:
@@ -1097,7 +1186,9 @@ def get_library_papers(db: sqlite3.Connection, **kwargs) -> list[dict]:
 def get_favorites(db: sqlite3.Connection, limit: int = 100) -> list[dict]:
     """Get favorite papers (rating >= 4)."""
     rows = db.execute(
-        "SELECT * FROM papers WHERE status = 'library' AND rating >= 4 ORDER BY rating DESC, added_at DESC LIMIT ?",
+        f"SELECT * FROM papers WHERE status = 'library' AND rating >= 4 "
+        f"AND {standalone_paper_sql('papers')} "
+        "ORDER BY rating DESC, added_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
@@ -1177,6 +1268,7 @@ def list_collections(db: sqlite3.Connection) -> list[dict]:
            FROM collections c
            LEFT JOIN collection_items ci ON ci.collection_id = c.id
            LEFT JOIN papers p ON p.id = ci.paper_id AND p.status = ?
+             AND """ + standalone_paper_sql("p") + """
            GROUP BY c.id
            ORDER BY c.created_at DESC""",
         (LIBRARY_STATUS,),
@@ -1224,6 +1316,9 @@ def save_paper_to_collections(
     Caller owns transaction. Every collection is validated before paper
     mutation, preventing partial saves when one selected id is stale.
     """
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        raise ValueError("Paper is subordinate and has no actionable root")
     ids = list(dict.fromkeys(str(value or "").strip() for value in collection_ids))
     ids = [value for value in ids if value]
     if not ids:
@@ -1251,6 +1346,9 @@ def save_paper_to_collections(
 
 def add_to_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
     """Add a saved Library paper to a collection. Returns True if newly added."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        raise ValueError("Paper is subordinate and has no actionable root")
     paper = get_paper(db, paper_id)
     if paper is None:
         raise ValueError("Paper not found")
@@ -1267,12 +1365,21 @@ def add_papers_to_collection(
     Silently skips papers that are not saved Library rows and papers already in
     the collection — the caller has already validated the collection exists.
     """
-    ids = [pid for pid in (paper_ids or []) if pid]
+    ids = list(
+        dict.fromkeys(
+            root
+            for pid in (paper_ids or [])
+            if pid
+            for root in [_action_root(db, pid)]
+            if root
+        )
+    )
     if not ids:
         return 0
     placeholders = ",".join("?" for _ in ids)
     library_rows = db.execute(
-        f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = ?",
+        f"SELECT id FROM papers WHERE id IN ({placeholders}) AND status = ? "
+        f"AND {standalone_paper_sql('papers')}",
         (*ids, LIBRARY_STATUS),
     ).fetchall()
     now = datetime.utcnow().isoformat()
@@ -1286,6 +1393,9 @@ def add_papers_to_collection(
 
 def remove_from_collection(db: sqlite3.Connection, collection_id: str, paper_id: str) -> bool:
     """Remove a paper from a collection."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     cursor = db.execute(
         "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
         (collection_id, paper_id),
@@ -1300,6 +1410,7 @@ def get_collection_papers(db: sqlite3.Connection, collection_id: str) -> list[di
            JOIN collection_items ci ON ci.paper_id = p.id
            WHERE ci.collection_id = ?
              AND p.status = 'library'
+             AND """ + standalone_paper_sql("p") + """
            ORDER BY ci.added_at DESC""",
         (collection_id,),
     ).fetchall()
@@ -1331,6 +1442,9 @@ def list_tags(db: sqlite3.Connection) -> list[dict]:
 
 def tag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> None:
     """Tag a saved Library paper."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        raise ValueError("Paper is subordinate and has no actionable root")
     paper = get_paper(db, paper_id)
     if paper is None:
         raise ValueError("Paper not found")
@@ -1344,6 +1458,9 @@ def tag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> None:
 
 def untag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> bool:
     """Remove a tag from a paper."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return False
     cursor = db.execute(
         "DELETE FROM publication_tags WHERE paper_id = ? AND tag_id = ?",
         (paper_id, tag_id),
@@ -1353,6 +1470,9 @@ def untag_paper(db: sqlite3.Connection, paper_id: str, tag_id: str) -> bool:
 
 def get_paper_tags(db: sqlite3.Connection, paper_id: str) -> list[dict]:
     """Get all tags for a paper."""
+    paper_id = _action_root(db, paper_id) or ""
+    if not paper_id:
+        return []
     rows = db.execute(
         """SELECT t.* FROM tags t
            JOIN publication_tags pt ON pt.tag_id = t.id
@@ -1370,6 +1490,7 @@ def get_papers_by_tag(db: sqlite3.Connection, tag_id: str) -> list[dict]:
            JOIN publication_tags pt ON pt.paper_id = p.id
            WHERE pt.tag_id = ?
              AND p.status = 'library'
+             AND """ + standalone_paper_sql("p") + """
            ORDER BY p.added_at DESC""",
         (tag_id,),
     ).fetchall()

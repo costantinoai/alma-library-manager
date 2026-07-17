@@ -15,6 +15,9 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from alma.core.paper_groups import resolve_action_paper_id
+from alma.core.sql_helpers import standalone_paper_sql
+
 logger = logging.getLogger(__name__)
 
 # Half-life for exponential time decay on affinity weights (days).
@@ -89,7 +92,8 @@ def record_feedback(
     if entity_type == "publication":
         rec_target = _resolve_recommendation_target(conn, entity_id)
         if rec_target is not None:
-            paper_target_id = str(rec_target["paper_id"] or "")
+            raw_target_id = str(rec_target["paper_id"] or "")
+            paper_target_id = resolve_action_paper_id(conn, raw_target_id)
             src_key, src_label = _derive_source_fields(rec_target)
             if src_key or src_label:
                 enriched_context = dict(enriched_context or {})
@@ -106,7 +110,9 @@ def record_feedback(
                         resolved_label = author_name
                 enriched_context.setdefault("source_label", resolved_label or src_key)
         elif str((context or {}).get("paper_id") or "").strip():
-            paper_target_id = str((context or {}).get("paper_id") or "").strip()
+            paper_target_id = resolve_action_paper_id(
+                conn, str((context or {}).get("paper_id") or "").strip()
+            )
         else:
             try:
                 row = conn.execute(
@@ -114,7 +120,7 @@ def record_feedback(
                     (entity_id,),
                 ).fetchone()
                 if row is not None:
-                    paper_target_id = str(row["id"] or "")
+                    paper_target_id = resolve_action_paper_id(conn, str(row["id"] or ""))
             except sqlite3.OperationalError:
                 paper_target_id = None
 
@@ -728,7 +734,7 @@ def _active_recommendation_candidates(
     lens_id: str | None = None,
     limit: int = 240,
 ) -> list[dict]:
-    where = ["r.user_action IS NULL"]
+    where = ["r.user_action IS NULL", standalone_paper_sql("p")]
     params: list[Any] = []
     lid = str(lens_id or "").strip()
     if lid:
@@ -742,7 +748,9 @@ def _active_recommendation_candidates(
         r.paper_id NOT IN (
             SELECT DISTINCT r2.paper_id
             FROM recommendations r2
+            JOIN papers p2 ON p2.id = r2.paper_id
             WHERE r2.user_action IS NOT NULL
+              AND """ + standalone_paper_sql("p2") + """
         )
     """)
 
@@ -802,13 +810,14 @@ def _library_candidates(
     # gameplay sessions.
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 id AS paper_id,
                 title, authors, abstract, url, doi, year, journal,
                 rating, added_at
             FROM papers
             WHERE status = 'library'
+              AND {standalone_paper_sql('papers')}
             ORDER BY COALESCE(rating, 0) DESC, RANDOM()
             LIMIT ?
             """,
@@ -879,12 +888,13 @@ def _corpus_candidates(
         return []
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 id AS paper_id,
                 title, authors, abstract, url, doi, year, journal
             FROM papers
             WHERE status = 'tracked'
+              AND {standalone_paper_sql('papers')}
             ORDER BY RANDOM()
             LIMIT ?
             """,
@@ -1420,7 +1430,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
 
         try:
             bg_row = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(DISTINCT p.id) AS papers,
                     COUNT(DISTINCT fa.author_id) AS authors
@@ -1429,6 +1439,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
                 JOIN authors a ON a.openalex_id = pa.openalex_id
                 JOIN followed_authors fa ON fa.author_id = a.id
                 WHERE p.status <> 'library'
+                  AND {standalone_paper_sql('p')}
                 """
             ).fetchone()
             if bg_row:
@@ -1616,13 +1627,15 @@ def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict
 
     try:
         rec_outcome_row = conn.execute(
-            """
+            f"""
             SELECT
-              SUM(CASE WHEN user_action = 'like' THEN 1 ELSE 0 END) AS liked,
-              SUM(CASE WHEN user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed,
-              SUM(CASE WHEN user_action IS NOT NULL THEN 1 ELSE 0 END) AS seen,
+              SUM(CASE WHEN r.user_action = 'like' THEN 1 ELSE 0 END) AS liked,
+              SUM(CASE WHEN r.user_action = 'dismiss' THEN 1 ELSE 0 END) AS dismissed,
+              SUM(CASE WHEN r.user_action IS NOT NULL THEN 1 ELSE 0 END) AS seen,
               COUNT(*) AS total
-            FROM recommendations
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE {standalone_paper_sql('p')}
             """
         ).fetchone()
     except sqlite3.OperationalError:

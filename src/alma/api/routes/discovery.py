@@ -42,6 +42,7 @@ from alma.core.http_sources import (
 )
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -482,8 +483,17 @@ def refresh_recommendations(
         conn = open_db_connection()
         usage_before = openalex_usage_snapshot()
         try:
-            liked_count = conn.execute("SELECT COUNT(*) FROM papers WHERE status='library'").fetchone()[0]
-            existing_count = conn.execute("SELECT COUNT(*) FROM recommendations").fetchone()[0]
+            liked_count = conn.execute(
+                f"SELECT COUNT(*) FROM papers WHERE status='library' AND {standalone_paper_sql('papers')}"
+            ).fetchone()[0]
+            existing_count = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM recommendations r
+                JOIN papers p ON p.id = r.paper_id
+                WHERE {standalone_paper_sql('p')}
+                """
+            ).fetchone()[0]
             add_job_log(
                 job_id,
                 f"Starting discovery refresh (liked={liked_count}, existing_recommendations={existing_count})",
@@ -494,7 +504,14 @@ def refresh_recommendations(
                 new_recs = refresh_global_recommendations(db_path)
                 http_source_diagnostics = source_diag.summary()
             new_count = len(new_recs or [])
-            after_count = conn.execute("SELECT COUNT(*) FROM recommendations").fetchone()[0]
+            after_count = conn.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM recommendations r
+                JOIN papers p ON p.id = r.paper_id
+                WHERE {standalone_paper_sql('p')}
+                """
+            ).fetchone()[0]
             usage_after = openalex_usage_snapshot()
             usage_delta = openalex_usage_delta(usage_before, usage_after)
             add_job_log(
@@ -1236,7 +1253,7 @@ def explain_recommendation(
     along with human-readable descriptions of what each signal measures.
     """
     row = db.execute(
-        """
+        f"""
         SELECT
             r.*,
             r.id,
@@ -1245,8 +1262,9 @@ def explain_recommendation(
             r.score,
             r.score_breakdown
         FROM recommendations r
-        LEFT JOIN papers p ON p.id = r.paper_id
+        JOIN papers p ON p.id = r.paper_id
         WHERE r.id = ?
+          AND {standalone_paper_sql('p')}
         """,
         (rec_id,),
     ).fetchone()

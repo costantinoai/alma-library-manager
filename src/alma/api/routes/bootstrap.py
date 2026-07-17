@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends
 from alma.api.deps import get_current_user, get_db
 from alma.application import discovery as discovery_app
 from alma.application import feed as feed_app
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.version import get_app_version
 
 logger = logging.getLogger(__name__)
@@ -30,11 +31,11 @@ def get_bootstrap(
 ):
     # Library counts
     total_papers = db.execute(
-        "SELECT COUNT(*) AS c FROM papers WHERE status = 'library'"
+        f"SELECT COUNT(*) AS c FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}"
     ).fetchone()["c"]
 
     total_candidates = db.execute(
-        "SELECT COUNT(*) AS c FROM papers WHERE status = 'tracked'"
+        f"SELECT COUNT(*) AS c FROM papers WHERE status = 'tracked' AND {standalone_paper_sql('papers')}"
     ).fetchone()["c"]
 
     total_authors = db.execute(
@@ -97,7 +98,13 @@ def get_bootstrap(
     new_recs = 0
     try:
         pending_recs = db.execute(
-            "SELECT COUNT(*) AS c FROM recommendations WHERE user_action IS NULL"
+            f"""
+            SELECT COUNT(*) AS c
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE r.user_action IS NULL
+              AND {standalone_paper_sql('p')}
+            """
         ).fetchone()["c"]
         new_recs = discovery_app.count_new_discovery_recommendations(db)
     except Exception:

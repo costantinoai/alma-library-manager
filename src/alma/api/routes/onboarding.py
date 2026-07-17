@@ -32,6 +32,7 @@ from alma.application.followed_authors import (
     schedule_followed_author_historical_backfill,
 )
 from alma.core.db_write import run_write_unit
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import (
     _normalize_openalex_author_id,
@@ -158,7 +159,10 @@ def get_onboarding_status(
     return OnboardingStatusResponse(
         completed=_truthy(_get_kv(db, _COMPLETED_KEY)),
         has_owner=_count(db, "SELECT COUNT(*) FROM followed_authors WHERE is_owner = 1") > 0,
-        library_count=_count(db, "SELECT COUNT(*) FROM papers WHERE status = 'library'"),
+        library_count=_count(
+            db,
+            f"SELECT COUNT(*) FROM papers WHERE status = 'library' AND {standalone_paper_sql('papers')}",
+        ),
         followed_count=_count(db, "SELECT COUNT(*) FROM followed_authors"),
         user_name=_get_kv(db, _USER_NAME_KEY),
     )

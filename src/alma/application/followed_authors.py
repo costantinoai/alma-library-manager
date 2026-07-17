@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from alma.core.sql_helpers import standalone_paper_sql
+
 logger = logging.getLogger(__name__)
 _AUTHOR_BACKFILL_STALE_AFTER_DAYS = 45
 _AUTHOR_BACKFILL_MIN_EXPECTED = 5
@@ -431,13 +433,14 @@ def get_followed_author_backfill_status(
     if background_publications is None and _table_exists(db, "publication_authors"):
         try:
             row = db.execute(
-                """
+                f"""
                 SELECT COUNT(DISTINCT p.id) AS c
                 FROM papers p
                 JOIN publication_authors pa ON pa.paper_id = p.id
                 JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
                 WHERE a.id = ?
                   AND p.status <> 'library'
+                  AND {standalone_paper_sql('p')}
                 """,
                 (author_key,),
             ).fetchone()

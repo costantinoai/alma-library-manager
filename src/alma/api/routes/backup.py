@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, Response
 
 from alma.api.deps import get_current_user, get_db
 from alma.config import get_db_path
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,10 @@ def export_bibtex(conn: sqlite3.Connection = Depends(get_db)):
     """
     try:
         cursor = conn.execute(
-            """SELECT id, title, authors, year, journal, doi, url, abstract, volume, issue, first_page, last_page
+            f"""SELECT id, title, authors, year, journal, doi, url, abstract, volume, issue, first_page, last_page
                FROM papers
                WHERE status = 'library'
+                 AND {standalone_paper_sql('papers')}
                ORDER BY year DESC, title ASC"""
         )
         papers = cursor.fetchall()
@@ -139,11 +141,12 @@ def export_json(conn: sqlite3.Connection = Depends(get_db)):
     try:
         # Get all library papers
         cursor = conn.execute(
-            """SELECT id, title, authors, year, journal, doi, url, abstract,
+            f"""SELECT id, title, authors, year, journal, doi, url, abstract,
                       openalex_id, work_type, language, is_oa, oa_status, oa_url,
                       cited_by_count, rating, notes, added_at, added_from
                FROM papers
                WHERE status = 'library'
+                 AND {standalone_paper_sql('papers')}
                ORDER BY year DESC, title ASC"""
         )
         papers = cursor.fetchall()

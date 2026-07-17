@@ -14,7 +14,9 @@ from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
+from alma.core.paper_groups import resolve_paper_root_id
 from alma.core.scoring_math import clamp
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 from alma.discovery.scoring import (
     compute_preference_profile,
@@ -731,7 +733,9 @@ def refresh_lens_recommendations(
                     for row in rows:
                         for matched_key in value_to_keys.get(str(row["lookup"] or ""), []):
                             if matched_key not in candidate_paper_ids:
-                                candidate_paper_ids[matched_key] = str(row["id"])
+                                candidate_paper_ids[matched_key] = resolve_paper_root_id(
+                                    db, str(row["id"]), strict=False
+                                )
 
         if candidate_paper_ids:
             pid_to_keys: dict[str, list[str]] = defaultdict(list)
@@ -740,8 +744,14 @@ def refresh_lens_recommendations(
             for chunk in _chunked(list(pid_to_keys.keys()), 200):
                 placeholders = ", ".join("?" for _ in chunk)
                 rows = db.execute(
-                    f"SELECT paper_id, embedding FROM publication_embeddings "
-                    f"WHERE model = ? AND paper_id IN ({placeholders})",
+                    f"""
+                    SELECT pe.paper_id, pe.embedding
+                    FROM publication_embeddings pe
+                    JOIN papers p ON p.id = pe.paper_id
+                    WHERE pe.model = ?
+                      AND pe.paper_id IN ({placeholders})
+                      AND {standalone_paper_sql('p')}
+                    """,
                     [active_embedding_model, *chunk],
                 ).fetchall()
                 from alma.core.vector_blob import decode_vector

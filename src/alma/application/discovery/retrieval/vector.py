@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from alma.core.components import not_component_sql
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.discovery import similarity as sim_module
 
 try:
@@ -40,9 +40,11 @@ def _retrieve_vector_channel(
     placeholders = ",".join("?" for _ in seed_ids)
     seed_rows = db.execute(
         f"""
-        SELECT paper_id, embedding
-        FROM publication_embeddings
-        WHERE model = ? AND paper_id IN ({placeholders})
+        SELECT pe.paper_id, pe.embedding
+        FROM publication_embeddings pe
+        JOIN papers p ON p.id = pe.paper_id
+        WHERE pe.model = ? AND pe.paper_id IN ({placeholders})
+          AND {standalone_paper_sql('p')}
         """,
         [active_model, *seed_ids],
     ).fetchall()
@@ -70,12 +72,12 @@ def _retrieve_vector_channel(
     centroid = centroid / centroid_norm
 
     rows = db.execute(
-        """
+        f"""
         SELECT pe.paper_id, pe.embedding, p.title, p.authors, p.url, p.doi, p.year, p.journal, p.cited_by_count
         FROM publication_embeddings pe
         JOIN papers p ON p.id = pe.paper_id
         WHERE pe.model = ? AND p.status NOT IN ('dismissed', 'removed')
-          AND """ + not_component_sql("p") + """
+          AND {standalone_paper_sql('p')}
         """,
         [active_model],
     ).fetchall()
