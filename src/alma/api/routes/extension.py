@@ -87,6 +87,11 @@ class ExtensionSaveRequest(BaseModel):
     year: int | None = None
     journal: str | None = None
     abstract: str | None = None
+    # Optional collection filing (additive, contract-compatible): an existing
+    # collection's id, OR a name to find-or-create. Membership is written
+    # inside the same atomic write unit as the save.
+    collection_id: str | None = None
+    collection_name: str | None = None
 
 
 @router.get(
@@ -148,6 +153,35 @@ def _instance_identity() -> dict:
     return {"profile": profile, "db_fingerprint": fingerprint}
 
 
+@router.get(
+    "/collections",
+    summary="List collections for the connector's picker (read-only)",
+    description=(
+        "Compact collection list (id / name / saved-paper count) so the "
+        "popup can offer 'Add to collection' at save time. Pure read. "
+        "Connectors detect an older ALMa without this endpoint by the 404 "
+        "and simply hide the picker."
+    ),
+)
+def list_collections_for_extension(
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    from alma.application import library as library_app
+
+    rows = library_app.list_collections(db)
+    return {
+        "collections": [
+            {
+                "id": str(r["id"]),
+                "name": r["name"],
+                "item_count": int(r.get("item_count") or 0),
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.post(
     "/save",
     status_code=201,
@@ -194,6 +228,25 @@ def save_from_extension(
             detail="One of doi / openalex_id / title is required",
         )
 
+    # Optional collection filing. An id must point at an existing collection
+    # (400 otherwise — a stale picker should fail loudly, not save the paper
+    # while silently dropping the filing); a name is find-or-create.
+    collection_id = (req.collection_id or "").strip()
+    collection_name = (req.collection_name or "").strip()
+    if collection_id and collection_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass collection_id OR collection_name, not both",
+        )
+    if collection_id:
+        if not db.execute(
+            "SELECT id FROM collections WHERE id = ?", (collection_id,)
+        ).fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="Collection not found — refresh the popup and pick again",
+            )
+
     # The candidate fallback mirrors the feed-candidate shape that
     # `_upsert_candidate_paper` reads (title/authors/year/journal/
     # abstract/url/doi). Used only when OpenAlex can't resolve the DOI.
@@ -213,6 +266,7 @@ def save_from_extension(
     # If the paper doesn't exist yet, prior stays None and Undo reverts the
     # newly-created row to a bare tracked row (out of the Library).
     prior = None
+    existing_id = None
     try:
         existing_id = resolve_existing_paper_id(
             db,
@@ -232,6 +286,24 @@ def save_from_extension(
     except Exception:
         prior = None
 
+    # Was the paper already in the target collection before this save? Needed
+    # so Undo only removes memberships THIS save created. For a name that
+    # doesn't resolve to a collection yet, membership is trivially new.
+    prior_member = False
+    prior_collection_id = collection_id or None
+    if not prior_collection_id and collection_name:
+        crow = db.execute(
+            "SELECT id FROM collections WHERE name = ?", (collection_name,)
+        ).fetchone()
+        prior_collection_id = str(crow["id"]) if crow else None
+    if existing_id and prior_collection_id:
+        prior_member = bool(
+            db.execute(
+                "SELECT 1 FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+                (prior_collection_id, existing_id),
+            ).fetchone()
+        )
+
     try:
         row = save_online_search_result(
             db,
@@ -248,6 +320,8 @@ def save_from_extension(
             # (and over the 'feed' stamp the candidate-fallback upsert
             # applies to brand-new rows). Same rationale as D4 imports.
             override_added_from=True,
+            collection_ids=[collection_id] if collection_id else None,
+            collection_name=collection_name or None,
         )
     except ValueError as exc:
         # Could not resolve the paper from any input.
@@ -261,6 +335,19 @@ def save_from_extension(
             detail="Could not resolve the paper upstream. Try again.",
         ) from exc
 
+    # Which collection membership did THIS save create? (For the undo token —
+    # a membership that existed before the save must survive an Undo.)
+    collections_added: list[str] = []
+    if (collection_id or collection_name) and not prior_member:
+        final_cid = collection_id
+        if not final_cid and collection_name:
+            crow = db.execute(
+                "SELECT id FROM collections WHERE name = ?", (collection_name,)
+            ).fetchone()
+            final_cid = str(crow["id"]) if crow else None
+        if final_cid:
+            collections_added = [final_cid]
+
     return {
         "paper_id": row.get("id"),
         "action": row.get("action"),
@@ -272,7 +359,11 @@ def save_from_extension(
         "added_from": row.get("added_from"),
         "title": row.get("title"),
         # Token the connector echoes back to /undo to reverse this save.
-        "undo": {"paper_id": row.get("id"), "prior": prior},
+        "undo": {
+            "paper_id": row.get("id"),
+            "prior": prior,
+            "collections_added": collections_added,
+        },
     }
 
 
@@ -350,6 +441,17 @@ def lookup_from_extension(
                 "authors": row["authors"] or "",
                 "year": row["year"],
                 "journal": row["journal"] or "",
+                # Collections this paper is already filed in, so the popup
+                # can mark them in its picker ("already in").
+                "collections": [
+                    {"id": str(c["id"]), "name": c["name"]}
+                    for c in db.execute(
+                        "SELECT c.id AS id, c.name AS name FROM collection_items ci "
+                        "JOIN collections c ON c.id = ci.collection_id "
+                        "WHERE ci.paper_id = ? ORDER BY c.name",
+                        (paper_id,),
+                    ).fetchall()
+                ],
             }
             # Local row exists but has no title yet — try upstream if asked.
             if req.resolve and not str(out["title"]).strip():
@@ -385,6 +487,9 @@ class ExtensionUndoRequest(BaseModel):
     # The paper's column values before the save, or null if the save created
     # the row (then Undo reverts it to a bare tracked row, out of Library).
     prior: dict | None = None
+    # Collection memberships the save created (and only those) — Undo removes
+    # them; memberships that predate the save are left alone.
+    collections_added: list[str] | None = None
 
 
 @router.post(
@@ -413,6 +518,17 @@ def undo_from_extension(
     result = "restored" if prior else "removed_from_library"
 
     def _persist() -> None:
+        # Remove the collection memberships this save created (and only
+        # those — pre-existing memberships survive; the collection row itself
+        # is never deleted).
+        for cid in req.collections_added or []:
+            cid = str(cid or "").strip()
+            if cid:
+                db.execute(
+                    "DELETE FROM collection_items WHERE collection_id = ? AND paper_id = ?",
+                    (cid, paper_id),
+                )
+
         # Drop the positive feedback signal this save wrote (the most recent
         # browser_extension paper_action for this paper) so an undone save
         # doesn't keep teaching the recommender. The surface lives in
