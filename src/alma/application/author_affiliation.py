@@ -266,7 +266,9 @@ def recompute_display_affiliation(conn: sqlite3.Connection, author_id: str) -> A
     return AffiliationDecision(author_key, selected, changed, conflict, candidates)
 
 
-def list_affiliation_conflicts(conn: sqlite3.Connection, *, limit: int = 100) -> list[dict[str, Any]]:
+def list_affiliation_conflicts(
+    conn: sqlite3.Connection, *, limit: int | None = 100
+) -> list[dict[str, Any]]:
     """Return current evidence conflicts for Authors needs-attention.
 
     ``limit`` caps the RETURNED list only — it must NOT cap the author scan.
@@ -310,6 +312,8 @@ def list_affiliation_conflicts(conn: sqlite3.Connection, *, limit: int = 100) ->
                 "second": second,
             }
         )
-        if len(out) >= limit:
+        # ``limit=None`` = uncapped: the Health count must be the TRUE total,
+        # not the list cap (a capped len() understated >limit conflicts).
+        if limit is not None and len(out) >= limit:
             break
     return out

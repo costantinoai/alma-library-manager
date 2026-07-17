@@ -140,7 +140,11 @@ def _aggregate_http_source_diagnostics(
             target["transport_errors"] += int(raw.get("transport_errors") or 0)
             target["retries"] += int(raw.get("retries") or 0)
             target["latency_sum"] += float(raw.get("avg_latency_ms") or 0.0) * requests
-            if raw.get("last_error"):
+            # Operations arrive newest-first, so keep the FIRST error text we
+            # see — it belongs to the newest erroring op and therefore matches
+            # the `last_error_at` stamp (overwriting on every op kept the
+            # OLDEST error while the timestamp said "newest").
+            if raw.get("last_error") and target["last_error"] is None:
                 target["last_error"] = raw.get("last_error")
             for status_key, count in (raw.get("status_counts") or {}).items():
                 counts = target["status_counts"]
@@ -819,6 +823,8 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
         "pending_backfills": 0,
         "stale_backfills": 0,
         "thin_backfills": 0,
+        "failed_backfills": 0,
+        "unverified_backfills": 0,
     }
     degraded: list[dict[str, Any]] = []
     suggestions: list[dict[str, Any]] = []
@@ -866,7 +872,7 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
         }
         for monitor in author_monitors
         if monitor.get("health") == "degraded"
-    ][:6]
+    ][:12]
 
     try:
         from alma.application import authors as authors_app
@@ -954,6 +960,10 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
                 summary["stale_backfills"] += 1
             elif state == "thin":
                 summary["thin_backfills"] += 1
+            elif state == "failed":
+                summary["failed_backfills"] += 1
+            elif state == "unverified":
+                summary["unverified_backfills"] += 1
             if state in {"stale", "thin", "pending", "failed", "unverified", "running"}:
                 corpus_health.append(
                     {
@@ -971,7 +981,7 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
         "summary": summary,
         "degraded": degraded,
         "suggestions": suggestions,
-        "corpus_health": corpus_health[:8],
+        "corpus_health": corpus_health[:12],
     }
 
 
@@ -1286,7 +1296,6 @@ def _build_operational_snapshot(
     states: list[dict[str, Any]] = []
     plugins: list[dict[str, Any]] = []
     author_summary = authors_snapshot.get("summary") or {}
-    degraded_authors = authors_snapshot.get("degraded") or []
     corpus_health = authors_snapshot.get("corpus_health") or []
 
     degraded_monitor_count = sum(1 for monitor in monitors if monitor.get("health") == "degraded")
@@ -1407,16 +1416,22 @@ def _build_operational_snapshot(
             }
         )
     if int(author_summary.get("bridge_gap_count") or 0) > 0:
+        # Targets must be the authors that actually HAVE the bridge gap — the
+        # generic degraded list mixes every health_reason (and is capped), so
+        # drawing from it could name authors degraded for unrelated reasons
+        # while the bridge-gap author is absent. Filter monitors directly.
         author_targets = [
             {
-                "id": str(author.get("author_id") or ""),
-                "label": str(author.get("author_name") or author.get("author_id") or "").strip() or "Tracked author",
+                "id": str(monitor.get("author_id") or ""),
+                "label": str(monitor.get("author_name") or monitor.get("label") or "").strip() or "Tracked author",
                 "kind": "author",
                 "action": "repair_author",
-                "author_id": str(author.get("author_id") or ""),
+                "author_id": str(monitor.get("author_id") or ""),
             }
-            for author in degraded_authors
-            if author.get("author_id")
+            for monitor in monitors
+            if str(monitor.get("monitor_type") or "") == "author"
+            and str(monitor.get("health_reason") or "") == "missing_openalex_id_for_scholar_monitor"
+            and monitor.get("author_id")
         ][:3]
         states.append(
             {
@@ -1429,6 +1444,19 @@ def _build_operational_snapshot(
                 "targets": author_targets,
             }
         )
+    # Corpus maintenance split (audit 2026-07-17): a QUEUED backfill is not a
+    # problem to fix — offering a Backfill button for it would re-queue work
+    # already underway — so pending rows inform but never trigger the warning
+    # or a target. Counts come from the UNCAPPED summary counters, never from
+    # the capped corpus_health/target lists (the old detail said "3 authors"
+    # whatever the real backlog was).
+    stale_corpus_count = (
+        int(author_summary.get("stale_backfills") or 0)
+        + int(author_summary.get("thin_backfills") or 0)
+        + int(author_summary.get("failed_backfills") or 0)
+        + int(author_summary.get("unverified_backfills") or 0)
+    )
+    pending_corpus_count = int(author_summary.get("pending_backfills") or 0)
     stale_backfill_targets = [
         {
             "id": str(author.get("author_id") or ""),
@@ -1439,18 +1467,40 @@ def _build_operational_snapshot(
         }
         for author in corpus_health
         if str(author.get("author_id") or "").strip()
-        and str(author.get("state") or "") in {"stale", "thin", "pending", "failed", "unverified"}
+        and str(author.get("state") or "") in {"stale", "thin", "failed", "unverified"}
     ][:3]
-    if stale_backfill_targets:
+    if stale_corpus_count > 0:
+        pending_note = (
+            f" {pending_corpus_count} more are queued and run when the system is idle."
+            if pending_corpus_count > 0
+            else ""
+        )
         states.append(
             {
                 "id": "followed_author_corpus_stale",
                 "label": "Some followed-author historical corpora need maintenance",
                 "severity": "warning",
-                "detail": f"{len(stale_backfill_targets)} tracked authors have stale, thin, or missing historical backfills.",
+                "detail": (
+                    f"{stale_corpus_count} tracked authors have a stale, thin, or failed "
+                    f"historical backfill.{pending_note}"
+                ),
                 "page": "authors",
                 "params": {"followed": "true"},
                 "targets": stale_backfill_targets,
+            }
+        )
+    elif pending_corpus_count > 0:
+        states.append(
+            {
+                "id": "followed_author_corpus_queued",
+                "label": "Author backfills are queued",
+                "severity": "info",
+                "detail": (
+                    f"{pending_corpus_count} tracked-author backfills are queued and run "
+                    "in the background — no action needed."
+                ),
+                "page": "authors",
+                "params": {"followed": "true"},
             }
         )
     # Embedding readiness + staleness are DATA-completeness issues now owned by
@@ -1522,6 +1572,11 @@ def _build_operational_snapshot(
                 "targets": plugin_targets,
             }
         )
+    failed_alert_rows = [
+        item
+        for item in alert_top
+        if str(item.get("alert_id") or "").strip() and int(item.get("failed_runs") or 0) > 0
+    ]
     failed_alert_targets = [
         {
             "id": str(item.get("alert_id") or item.get("alert_name") or ""),
@@ -1530,16 +1585,16 @@ def _build_operational_snapshot(
             "action": "evaluate_alert",
             "alert_id": str(item.get("alert_id") or ""),
         }
-        for item in alert_top
-        if str(item.get("alert_id") or "").strip() and int(item.get("failed_runs") or 0) > 0
+        for item in failed_alert_rows
     ][:3]
-    if failed_alert_targets:
+    if failed_alert_rows:
         states.append(
             {
                 "id": "failed_alert_delivery",
                 "label": "Some alerts have recent delivery failures",
                 "severity": "warning",
-                "detail": f"{len(failed_alert_targets)} alerts show recent failed runs and should be re-evaluated or repaired.",
+                # Count the matching rows, not the [:3]-capped button list.
+                "detail": f"{len(failed_alert_rows)} alerts show recent failed runs and should be re-evaluated or repaired.",
                 "page": "alerts",
                 "params": {"section": "history"},
                 "targets": failed_alert_targets,

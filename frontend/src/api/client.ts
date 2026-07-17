@@ -2300,6 +2300,8 @@ export interface InsightsDiagnostics {
       pending_backfills?: number
       stale_backfills?: number
       thin_backfills?: number
+      failed_backfills?: number
+      unverified_backfills?: number
     }
     degraded: Array<{
       author_id?: string | null

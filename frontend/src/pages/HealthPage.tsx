@@ -184,7 +184,9 @@ export function HealthPage() {
     onError: (err) => errorToast('Could not update setting', String(err)),
   })
 
-  const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY)
+  // ['insights-diag'] included: the System status band below reads the eight
+  // diagnostics-section queries — an explicit Refresh must refresh it too.
+  const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY, ['insights-diag'])
   const runningKey = runMutation.isPending ? (runMutation.variables?.key ?? null) : null
   // H-11: the op whose auto-config write is in flight (shows a "Saving…" hint so
   // the post-save snap to server truth doesn't look like a glitch).

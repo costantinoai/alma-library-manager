@@ -162,12 +162,17 @@ export function HealthDimensionDrilldown({
   const fixActionKey = dim?.actions.find((a) => a.kind === 'run_now')?.operation_key ?? null
   const runActions = dim?.actions.filter((a) => a.kind === 'run_now') ?? []
 
+  // Library keys included: edits/removals here change Library membership, so
+  // the Library page must not keep serving its pre-edit cache.
   const refreshHealth = () =>
     invalidateQueries(
       queryClient,
       ['health-dim-items', dim?.key],
       ['health', 'snapshot'],
       ['health', 'operations'],
+      ['papers'],
+      ['library-saved'],
+      ['library-workflow-summary'],
     )
 
   const saveMutation = useMutation({

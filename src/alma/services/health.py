@@ -846,6 +846,12 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     # no-abstract/no-S2 floor shows as "N uncoverable" instead of a stuck warning.
     cov_exhausted: int | None = None
     cov_queued: int | None = None
+    # Readiness shown in totals must agree with how the DIMENSION is graded:
+    # both judge coverage on the attainable denominator (uncoverable papers
+    # excluded). The raw `coverage["ready"]` (all standalone papers) could say
+    # "not ready" while the dimension read ok — two contradicting signals on
+    # the same page. A queued gap stays not-ready: vectors genuinely absent.
+    cov_ready_effective = bool(coverage["ready"])
     if cov_measured:
         papers_ct = int(coverage["papers_count"] or 0)
         emb_ct = int(coverage["embeddings_count"] or 0)
@@ -863,6 +869,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         else:
             attainable = max(0, papers_ct - unc)
             adj_pct = round(emb_ct / attainable * 100.0, 1) if attainable > 0 else 100.0
+            cov_ready_effective = adj_pct >= EMBEDDINGS_READY_THRESHOLD
             ready = int(EMBEDDINGS_READY_THRESHOLD)
             if adj_pct >= EMBEDDINGS_READY_THRESHOLD:
                 cov_sev, cov_reason = "ok", f"{adj_pct}% of coverable papers embedded (ready at ≥{ready}%)."
@@ -991,7 +998,7 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             "without_openalex_id": without_oa,
             "eligible_now": int(enr.get("eligible_now") or 0),
             "embedding_coverage_pct": coverage["coverage_pct"],
-            "embeddings_ready": coverage["ready"],
+            "embeddings_ready": cov_ready_effective,
             "dimensions_by_severity": by_severity,
         },
         "dimensions": dims,
@@ -1122,7 +1129,9 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     def _count_affiliation_conflicts() -> int:
         from alma.application.author_affiliation import list_affiliation_conflicts
 
-        return len(list_affiliation_conflicts(conn, limit=500) or [])
+        # limit=None: the dimension count is a TOTAL — a capped list length
+        # silently clipped the count (and attention_total) at the cap.
+        return len(list_affiliation_conflicts(conn, limit=None) or [])
 
     merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
     affiliation_conflicts, affil_ok = _safe_assess(

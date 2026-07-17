@@ -107,6 +107,9 @@ interface SystemComponent {
   metric: string
   /** Optional measurement caveat shown in the popup (e.g. the diagnostics window). */
   note?: string
+  /** Overrides the static HEALTHY_NOTE when the healthy text depends on data
+   *  (e.g. AI with no provider configured). */
+  healthyNote?: string
   states: OperationalState[]
   reviewItems: ReviewItem[]
   /** Count of review rows beyond the capped `reviewItems` slice ("+N more"). */
@@ -118,12 +121,25 @@ interface SystemComponent {
 // Loosely-typed diagnostics rows — the section payloads are dynamic JSON; we
 // read only the fields we render.
 interface MonitorRow {
+  label?: string | null
+  author_name?: string | null
   health?: string
+  health_reason?: string | null
+  last_error?: string | null
+  last_checked_at?: string | null
 }
 interface AuthorRow {
   author_name?: string
   health_reason?: string
   last_error?: string
+  last_checked_at?: string | null
+}
+// One followed author's historical-corpus state (authors section `corpus_health`).
+interface CorpusRow {
+  author_name?: string | null
+  state?: string
+  detail?: string | null
+  last_success_at?: string | null
 }
 interface SourceRow {
   source?: string
@@ -176,6 +192,43 @@ const RATE_LIMIT_ADVICE: Record<string, string> = {
     'ALMa paces arXiv calls (~1 per 3 s) and retries — arXiv has no API keys, so throttling clears on its own.',
 }
 const DEFAULT_RATE_LIMIT_ADVICE = 'ALMa backs off and retries.'
+
+// Machine health_reason codes → plain English. Raw tokens like
+// "missing_openalex_id_for_scholar_monitor" told the user nothing about why a
+// monitor/author was flagged; unknown codes fall through verbatim.
+const REASON_LABEL: Record<string, string> = {
+  missing_openalex_id_for_scholar_monitor:
+    'Scholar monitor is missing its OpenAlex bridge id — refreshes cannot resolve this author',
+  missing_author_id: 'monitor lost its link to the author record',
+  missing_author_monitor: 'no feed monitor is mirroring this followed author',
+  operation_failed: 'the last refresh attempt failed',
+}
+const humanizeReason = (reason?: string | null): string | undefined =>
+  reason ? REASON_LABEL[reason] ?? reason : undefined
+
+// Corpus backfill state → what it means for the "maintenance due" flag.
+const CORPUS_STATE_LABEL: Record<string, string> = {
+  stale: 'backfill is stale — new papers since the last successful run',
+  thin: 'backfill looks thin — fewer papers than this author has published',
+  failed: 'last backfill failed',
+  unverified: 'backfill never verified — coverage unknown',
+  pending: 'backfill queued — runs when the system is idle',
+  running: 'backfill running now',
+}
+
+// Secondary line for a degraded monitor/author row: cause + age, never a bare
+// machine token. `last_error` (an exception string) only adds signal when the
+// reason itself is a failure.
+const describeDegraded = (r: {
+  health_reason?: string | null
+  last_error?: string | null
+  last_checked_at?: string | null
+}): string => {
+  const reason = humanizeReason(r.health_reason) ?? 'degraded'
+  const err = r.health_reason === 'operation_failed' && r.last_error ? ` — ${r.last_error}` : ''
+  const checked = r.last_checked_at ? ` · last checked ${formatPaperDate(r.last_checked_at)}` : ''
+  return `${reason}${err}${checked}`
+}
 
 // A source whose newest error is older than this is history, not a live
 // problem: the diagnostics window is count-based (the last 45 feed + 45
@@ -430,10 +483,39 @@ export function SystemStatusCards() {
     }
     const at = (id: string) => grouped.get(id) ?? []
 
-    const monitorsDegraded = ((sections.feed.data?.monitors ?? []) as unknown as MonitorRow[]).filter(
+    // Monitors: the `monitors` list is a top-20 UI slice — the summary count is
+    // the uncapped truth, so the chip metric and the "+N more" math use it.
+    const monitorRows = ((sections.feed.data?.monitors ?? []) as unknown as MonitorRow[]).filter(
       (m) => m.health && m.health !== 'ready' && m.health !== 'disabled',
-    ).length
+    )
+    const monitorsDegraded = Math.max(
+      sections.feed.data?.summary?.degraded_monitors ?? 0,
+      monitorRows.length,
+    )
+    // Authors: same pattern — `degraded` / `corpus_health` are capped lists,
+    // the summary counters are uncapped.
+    const authorsSummary = sections.authors.data?.summary
     const degradedAuthors = (sections.authors.data?.degraded ?? []) as unknown as AuthorRow[]
+    const degradedAuthorsTotal = Math.max(
+      authorsSummary?.degraded_tracked ?? 0,
+      degradedAuthors.length,
+    )
+    const corpusRows = (sections.authors.data?.corpus_health ?? []) as unknown as CorpusRow[]
+    const corpusAttentionRows = corpusRows.filter((c) =>
+      ['stale', 'thin', 'failed', 'unverified'].includes(c.state ?? ''),
+    )
+    const corpusBacklogTotal = Math.max(
+      (authorsSummary?.stale_backfills ?? 0) +
+        (authorsSummary?.thin_backfills ?? 0) +
+        (authorsSummary?.failed_backfills ?? 0) +
+        (authorsSummary?.unverified_backfills ?? 0),
+      corpusAttentionRows.length,
+    )
+    const pendingBackfills = authorsSummary?.pending_backfills ?? 0
+    // AI: the chip is the provider's operational state — saying "operational"
+    // with NO provider configured was untrue (AI is opt-in, so absence is a
+    // neutral fact, not an error — but it must be said).
+    const aiProvider = sections.ai.data?.summary?.embedding_provider ?? 'none'
     const erroredSources = ((sections.discovery.data?.source_diagnostics ?? []) as unknown as SourceRow[]).filter(
       (s) => (s.http_errors ?? 0) > 0 || (s.transport_errors ?? 0) > 0,
     )
@@ -471,8 +553,16 @@ export function SystemStatusCards() {
           name: 'Feed monitors',
           icon: Rss,
           description: 'The followed-author + search monitors that pull new papers into the Feed.',
+          note: 'Health reflects the last refresh attempt — a fixed monitor stays flagged until its next successful refresh.',
           states: at('monitors'),
-          reviewItems: [],
+          // Name EVERY degraded monitor with cause + age — the actionable state
+          // above only carries refresh buttons for the first few.
+          reviewItems: monitorRows.slice(0, 12).map((m, i) => ({
+            id: String(i),
+            primary: m.label || m.author_name || 'Monitor',
+            secondary: describeDegraded(m),
+          })),
+          reviewOverflow: Math.max(0, monitorsDegraded - Math.min(monitorRows.length, 12)),
           ownerPage: 'authors',
           ownerParams: { focus: 'needs-attention' },
         },
@@ -506,13 +596,14 @@ export function SystemStatusCards() {
         },
         {
           count: badSources.length,
-          countLabel: 'with errors',
-          healthyLabel:
-            staleSources.length > 0
-              ? 'no recent errors'
-              : disabledSources > 0
-                ? `${disabledSources} disabled`
-                : 'all reachable',
+          // "recent" is load-bearing: errors older than STALE_ERROR_DAYS are
+          // listed in the popup (dated) but don't count here.
+          countLabel: 'with recent errors',
+          healthyLabel: staleSources.length > 0 ? 'no recent errors' : 'all reachable',
+          // Disabled sources raise an info state, so severity is never 'ok'
+          // and the healthyLabel can't render — name the actual situation
+          // instead of a vague "needs attention".
+          attentionLabel: disabledSources > 0 ? `${disabledSources} disabled` : 'needs attention',
         },
       ),
       mk(
@@ -523,12 +614,23 @@ export function SystemStatusCards() {
           // Coverage backlog is data-health — it lives in the ribbon caption and
           // the repair cards below; this card is the provider's OPERATIONAL state.
           description: 'The embedding provider behind Discovery similarity and the paper map.',
+          healthyNote:
+            aiProvider === 'none'
+              ? 'No embedding provider is configured — Discovery similarity and the paper map are off. AI is opt-in: enable a provider under Settings → AI.'
+              : undefined,
           states: at('ai'),
           reviewItems: [],
           ownerPage: 'settings',
           ownerParams: { anchor: 'ai-config' },
         },
-        { count: 0, countLabel: 'issues', healthyLabel: 'operational', attentionLabel: 'needs attention' },
+        {
+          count: 0,
+          countLabel: 'issues',
+          // "operational" with no provider configured was untrue — absence is a
+          // neutral opt-in fact, stated plainly.
+          healthyLabel: aiProvider === 'none' ? 'no provider configured' : 'operational',
+          attentionLabel: 'needs attention',
+        },
       ),
       mk(
         {
@@ -536,21 +638,41 @@ export function SystemStatusCards() {
           name: 'Tracked authors',
           icon: Users,
           description: 'Followed authors whose identity bridge or historical corpus needs maintenance.',
+          note: 'Flags persist until the next successful refresh or backfill — fixing the cause does not clear them instantly.',
           states: at('authors'),
-          reviewItems: degradedAuthors.slice(0, 12).map((a, i) => ({
-            id: String(i),
-            primary: a.author_name || 'Author',
-            secondary: a.last_error || a.health_reason,
-          })),
-          reviewOverflow: Math.max(0, degradedAuthors.length - 12),
+          // Per-author WHY: degraded monitors (cause + age) first, then each
+          // corpus whose backfill is stale/thin/failed (state + last success).
+          reviewItems: [
+            ...degradedAuthors.slice(0, 12).map((a, i) => ({
+              id: `deg-${i}`,
+              primary: a.author_name || 'Author',
+              secondary: describeDegraded(a),
+            })),
+            ...corpusAttentionRows.map((c, i) => ({
+              id: `corpus-${i}`,
+              primary: c.author_name || 'Author',
+              secondary: `${CORPUS_STATE_LABEL[c.state ?? ''] ?? c.state}${
+                c.detail ? ` — ${c.detail}` : ''
+              } · last successful backfill ${formatPaperDate(c.last_success_at ?? undefined) || 'never'}`,
+            })),
+          ],
+          reviewOverflow:
+            Math.max(0, degradedAuthorsTotal - Math.min(degradedAuthors.length, 12)) +
+            Math.max(0, corpusBacklogTotal - corpusAttentionRows.length),
           ownerPage: 'authors',
           ownerParams: { focus: 'needs-attention' },
         },
         {
-          count: degradedAuthors.length,
+          count: degradedAuthorsTotal,
           countLabel: 'degraded',
           healthyLabel: 'all healthy',
-          attentionLabel: 'maintenance due',
+          // "maintenance due" said nothing about WHY — name the backlog.
+          attentionLabel:
+            corpusBacklogTotal > 0
+              ? `${corpusBacklogTotal} corpora need backfill`
+              : pendingBackfills > 0
+                ? `${pendingBackfills} backfills queued`
+                : 'maintenance due',
         },
       ),
     ]
@@ -619,7 +741,13 @@ export function SystemStatusCards() {
 
     // Worst-first so a critical/degraded card leads the grid.
     return list.sort((a, b) => severityRank(a.severity) - severityRank(b.severity))
-  }, [sections.operational.data, sections.feed.data, sections.authors.data, sections.discovery.data])
+  }, [
+    sections.operational.data,
+    sections.feed.data,
+    sections.authors.data,
+    sections.discovery.data,
+    sections.ai.data,
+  ])
 
   if (sections.operational.loading) {
     return (
@@ -761,7 +889,9 @@ export function SystemStatusCards() {
                 /* Healthy — explain in plain English what "healthy" means here. */
                 <Alert variant="success">
                   <CheckCircle2 className="h-4 w-4" />
-                  <AlertDescription>{HEALTHY_NOTE[openComp.id] ?? `${openComp.name} is healthy.`}</AlertDescription>
+                  <AlertDescription>
+                    {openComp.healthyNote ?? HEALTHY_NOTE[openComp.id] ?? `${openComp.name} is healthy.`}
+                  </AlertDescription>
                 </Alert>
               )}
 
