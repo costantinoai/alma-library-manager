@@ -2174,7 +2174,8 @@ def run_corpus_metadata_rehydration(
             if not target_ids and not _yield_sink and followup_trigger != "user":
                 reconcile_satisfied_pending(conn)
                 queued_row = conn.execute(
-                    f"SELECT COUNT(*) AS c FROM papers p WHERE {queued_metadata_exists_sql('p')}"
+                    f"SELECT COUNT(*) AS c FROM papers p "
+                    f"WHERE {standalone_paper_sql('p')} AND {queued_metadata_exists_sql('p')}"
                 ).fetchone()
                 queued_remaining = int((queued_row["c"] if queued_row else 0) or 0)
                 if queued_remaining > 0:

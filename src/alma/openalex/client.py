@@ -16,7 +16,16 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, TypeVar
 
+from alma.core.components import link_orphan_components, resolve_component
 from alma.core.db_write import write_section
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    classify_preprint_source,
+    is_component_row,
+    promote_matching_preprints,
+    purge_orphan_subordinate_state,
+    resolve_paper_root_id,
+)
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
     normalize_doi as _normalize_doi,
@@ -831,6 +840,18 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
     abstract = clean_display_text((w.get("abstract") or "").strip())
     year = w.get("year")
     pub_date = w.get("publication_date")
+    work_type = str(w.get("work_type") or w.get("type") or "").strip() or None
+    component_type, parent_paper_id = resolve_component(
+        conn,
+        doi=doi,
+        work_type=work_type,
+        relation_parent_doi=w.get("relation_parent_doi"),
+    )
+    preprint_source = classify_preprint_source(
+        doi,
+        preprint_source=w.get("preprint_source"),
+        work_type=work_type,
+    )
     topics = w.get("topics") or []
     institutions = w.get("institutions") or []
     authorships = w.get("authorships") or []
@@ -886,7 +907,13 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
                 "abstract": abstract,
                 "url": url,
                 "publication_date": pub_date,
+                "work_type": work_type,
+                "preprint_source": preprint_source,
             }
+            if component_type:
+                fill["component_type"] = component_type
+                if parent_paper_id:
+                    fill["parent_paper_id"] = parent_paper_id
             if include_identifiers:
                 if doi is not None:
                     fill["doi"] = doi
@@ -930,12 +957,14 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
                 """INSERT OR IGNORE INTO papers (
                     id, title, authors, year, journal, abstract, url, doi,
                     publication_date, openalex_id, cited_by_count, source_id,
-                    fetched_at, created_at, updated_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    fetched_at, created_at, updated_at, status, work_type,
+                    preprint_source, component_type, parent_paper_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     paper_id, title, authors_str, year, journal, abstract, url, doi,
                     pub_date, openalex_id, cites, source_id,
-                    now, now, now, 'tracked',
+                    now, now, now, 'tracked', work_type, preprint_source,
+                    component_type, parent_paper_id,
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -961,6 +990,29 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
                 # Still can't find it — give up on this row, don't abort.
                 return None
 
+    persisted = conn.execute(
+        "SELECT id, doi, work_type, preprint_source, component_type, "
+        "parent_paper_id FROM papers WHERE id = ?",
+        (paper_id,),
+    ).fetchone()
+    if persisted is not None and is_component_row(persisted):
+        parent_id = str(persisted["parent_paper_id"] or "").strip()
+        if parent_id:
+            absorb_paper_group(
+                conn, str(paper_id), parent_id, reason="openalex_component_ingest"
+            )
+        else:
+            purge_orphan_subordinate_state(conn, str(paper_id))
+        return str(paper_id)
+
+    promote_matching_preprints(conn, str(paper_id))
+    paper_id = resolve_paper_root_id(conn, str(paper_id), strict=False)
+    root_doi_row = conn.execute("SELECT doi FROM papers WHERE id = ?", (paper_id,)).fetchone()
+    link_orphan_components(
+        conn,
+        parent_paper_id=str(paper_id),
+        parent_doi=str(root_doi_row["doi"] or "") if root_doi_row else None,
+    )
     upsert_work_sidecars(
         conn,
         paper_id,

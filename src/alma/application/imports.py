@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.library.importer import unconfirmed_staged_import_sql
 
 
@@ -24,7 +24,7 @@ def _resolution_queue_where(unresolved_only: bool) -> str:
             COALESCE(added_from, '') = 'import'
             OR COALESCE(notes, '') LIKE 'Imported from %'
         )""",
-        canonical_paper_filter("papers"),
+        standalone_paper_sql("papers"),
     ]
     if unresolved_only:
         where.append(

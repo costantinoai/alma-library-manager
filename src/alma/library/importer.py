@@ -16,7 +16,13 @@ from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any
 
+from alma.core.components import resolve_component
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    purge_orphan_subordinate_state,
+    resolve_paper_root_id,
+)
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     clean_display_text,
@@ -32,6 +38,20 @@ from alma.core.utils import (
 logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD = 0.70
+
+
+def _import_work_type(raw_type: object) -> str | None:
+    """Map source-specific item kinds onto the persisted work taxonomy."""
+    value = str(raw_type or "").strip().lower().replace("_", "-")
+    if value in {"dataset", "data-set"}:
+        return "dataset"
+    if value in {"preprint", "posted-content", "postedcontent"}:
+        return "preprint"
+    if value in {"peer-review", "peerreview", "review-response"}:
+        return "peer-review"
+    if value in {"supplement", "supplementary-materials", "supporting-information"}:
+        return "supplementary-materials"
+    return value or None
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -308,6 +328,7 @@ def import_bibtex(
                     journal=norm["journal"],
                     abstract=norm["abstract"],
                     url=norm["url"],
+                    work_type=_import_work_type(norm.get("entry_type")),
                     fuzzy_match=fuzzy,
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
@@ -316,7 +337,7 @@ def import_bibtex(
                 # collection_items holds the membership as a deferred link and
                 # get_collection_papers hides it until the row is confirmed into
                 # the Library, so the collection target survives staging.
-                if collection_id:
+                if collection_id and outcome != "component":
                     _add_to_collection(
                         conn,
                         collection_id,
@@ -324,7 +345,7 @@ def import_bibtex(
                     )
 
                 # Import BibTeX keywords as local tags.
-                if outcome != "staged":
+                if outcome not in {"staged", "component"}:
                     for tag_name in norm.get("keywords", []):
                         _find_or_create_tag_and_assign(
                             conn,
@@ -638,13 +659,14 @@ def import_zotero(
                     journal=norm["journal"],
                     abstract=norm["abstract"],
                     url=norm["url"],
+                    work_type=_import_work_type(norm.get("item_type")),
                     fuzzy_match=fuzzy,
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, norm)
 
                 # Add to local collection. Staged rows included (deferred
                 # membership, hidden until confirmed — see BibTeX loop above).
-                if local_collection_id:
+                if local_collection_id and outcome != "component":
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -665,7 +687,7 @@ def import_zotero(
                     )
 
                 # Import Zotero tags as local tags
-                if outcome != "staged":
+                if outcome not in {"staged", "component"}:
                     for tag_name in norm.get("zotero_tags", []):
                         _find_or_create_tag_and_assign(
                             conn,
@@ -1307,13 +1329,14 @@ def import_zotero_rdf(
                     journal=item.get("journal"),
                     abstract=item.get("abstract"),
                     url=item.get("url"),
+                    work_type=_import_work_type(item.get("item_type")),
                     fuzzy_match=fuzzy,
                 )
                 _record_import_outcome(result, postprocess_refs, paper_id, outcome, item)
 
                 # Staged rows included (deferred membership, hidden until
                 # confirmed — see BibTeX loop for the rationale).
-                if local_collection_id:
+                if local_collection_id and outcome != "component":
                     _add_to_collection(
                         conn,
                         local_collection_id,
@@ -1339,7 +1362,7 @@ def import_zotero_rdf(
                         paper_id,
                     )
 
-                if outcome != "staged":
+                if outcome not in {"staged", "component"}:
                     for tag_name in item.get("keywords", []):
                         _find_or_create_tag_and_assign(
                             conn,
@@ -1728,6 +1751,7 @@ def _import_or_stage_paper(
     abstract: str | None = None,
     url: str | None = None,
     openalex_id: str = "",
+    work_type: str | None = None,
     fuzzy_match: _FuzzyTitleMatch | None = None,
 ) -> tuple[str, str]:
     """Apply D4 import semantics and return ``(paper_id, outcome)``.
@@ -1736,8 +1760,55 @@ def _import_or_stage_paper(
     ``staged`` (low-confidence title-only row held for confirmation), and
     ``skipped`` (already saved Library row).
     """
+    component_type, parent_paper_id = resolve_component(
+        conn, doi=doi, work_type=work_type
+    )
     existing_id = _find_existing_paper(conn, doi, openalex_id, title, year)
+    if component_type:
+        from alma.application import library as library_app
+
+        component_id = existing_id or library_app.create_paper(
+            conn,
+            title=title,
+            authors=authors,
+            doi=doi,
+            year=year,
+            journal=journal,
+            abstract=abstract,
+            url=url,
+            notes=notes,
+            status="tracked",
+            rating=0,
+            added_from="import",
+            work_type=work_type,
+            component_type=component_type,
+            parent_paper_id=parent_paper_id,
+        )
+        if existing_id:
+            conn.execute(
+                "UPDATE papers SET work_type = COALESCE(?, work_type), "
+                "component_type = ?, parent_paper_id = COALESCE(?, parent_paper_id) "
+                "WHERE id = ?",
+                (work_type, component_type, parent_paper_id, component_id),
+            )
+        if parent_paper_id:
+            absorb_paper_group(
+                conn,
+                component_id,
+                parent_paper_id,
+                reason="import_component",
+            )
+            component_id = resolve_paper_root_id(conn, component_id, strict=False)
+        else:
+            purge_orphan_subordinate_state(conn, component_id)
+        return component_id, "component"
     if existing_id:
+        if work_type:
+            conn.execute(
+                "UPDATE papers SET work_type = COALESCE(NULLIF(TRIM(work_type), ''), ?) "
+                "WHERE id = ?",
+                (work_type, existing_id),
+            )
         existing_row = _existing_import_row(conn, existing_id)
         incoming_identified = bool(_normalize_doi_value(doi) or (openalex_id or "").strip())
         if existing_row and _is_unconfirmed_staged_import(existing_row) and not incoming_identified:
@@ -1842,6 +1913,7 @@ def _import_or_stage_paper(
         journal=journal,
         abstract=abstract,
         url=url,
+        work_type=work_type,
     )
     return paper_id, "imported"
 
@@ -1864,6 +1936,10 @@ def _record_import_outcome(
     elif outcome == "staged":
         postprocess_refs.append(paper_id)
         result.staged += 1
+    elif outcome == "component":
+        # The pointer row is retained but never hydrated, collected, or exposed
+        # as an independent Library item.
+        result.imported += 1
     else:
         result.skipped += 1
     result.items.append({"paper_id": paper_id, "outcome": outcome, **item})
@@ -1881,6 +1957,7 @@ def _create_library_paper(
     journal: str | None = None,
     abstract: str | None = None,
     url: str | None = None,
+    work_type: str | None = None,
 ) -> str:
     """Create a saved Library paper with import provenance.
 
@@ -1929,6 +2006,7 @@ def _create_library_paper(
         openalex_resolution_status="pending_enrichment",
         openalex_resolution_reason="imported_metadata_only",
         openalex_resolution_updated_at=now,
+        work_type=work_type,
     )
     # Caller-owns-transaction: inside the import loops' write_section this
     # no-ops (the loop owns the commit); standalone callers commit with retry.
