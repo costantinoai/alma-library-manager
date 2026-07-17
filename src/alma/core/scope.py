@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from alma.core.sql_helpers import standalone_paper_sql
+
 
 class Scope(StrEnum):
     """Which papers an analytics view covers.
@@ -54,18 +56,16 @@ class Scope(StrEnum):
             return fallback
 
     def paper_filter(self, alias: str = "p", *, leading_and: bool = True) -> str:
-        """SQL fragment restricting a ``papers`` query to this scope.
+        """SQL fragment restricting a graph ``papers`` query to this scope.
 
-        ``library`` → ``" AND <alias>.status = 'library'"`` (or without the leading
-        ``AND`` when ``leading_and=False``, for use as the first predicate after
-        ``WHERE``); ``corpus`` → ``""`` (no restriction). This is the canonical
-        replacement for the scattered ``" AND p.status = 'library'" if scope ==
-        "library" else ""`` expressions — keeping the Library filter impossible to
-        forget and impossible to mis-spell.
+        ``library`` restricts to saved Library rows; ``corpus`` widens to the
+        stored first-class corpus. Both exclude subordinate rows through
+        ``standalone_paper_sql`` so preprint twins, datasets, figures, and other
+        child pointers never become graph nodes or cache-fingerprint inputs.
         """
-        if self is Scope.corpus:
-            return ""
-        clause = f"{alias}.status = 'library'"
+        clause = standalone_paper_sql(alias)
+        if self is Scope.library:
+            clause = f"{alias}.status = 'library' AND {clause}"
         return f" AND {clause}" if leading_and else clause
 
     def view_key(self, graph_type: str) -> str:

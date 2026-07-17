@@ -26,6 +26,12 @@ from alma.core.database import (
     get_authors_json,
 )
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.paper_groups import (
+    promote_matching_preprints,
+    purge_orphan_subordinate_state,
+    resolve_action_paper_id,
+    resolve_paper_root_id,
+)
 from alma.core.utils import generate_paper_id
 
 logger = logging.getLogger(__name__)
@@ -526,6 +532,13 @@ def save_updated_cache(
                         paper_id = recovered
                     else:
                         continue
+
+            root_id = resolve_action_paper_id(conn, paper_id)
+            if not root_id:
+                purge_orphan_subordinate_state(conn, paper_id)
+                continue
+            promote_matching_preprints(conn, root_id)
+            paper_id = resolve_paper_root_id(conn, root_id, strict=False)
 
             conn.execute(
                 """INSERT OR IGNORE INTO publication_authors (paper_id, openalex_id, display_name)

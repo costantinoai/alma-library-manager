@@ -29,6 +29,11 @@ from __future__ import annotations
 import re
 import sqlite3
 
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    purge_orphan_subordinate_state,
+    resolve_paper_root_id,
+)
 from alma.core.utils import (
     clean_display_text,
     is_doi_shaped,
@@ -148,6 +153,16 @@ def resolve_component(
     parent_paper_id: str | None = None
     if parent_doi:
         parent_paper_id = resolve_existing_paper_id(conn, doi=parent_doi)
+        if parent_paper_id:
+            parent_paper_id = resolve_paper_root_id(
+                conn, parent_paper_id, strict=False
+            )
+            parent_row = conn.execute(
+                "SELECT component_type FROM papers WHERE id = ?",
+                (parent_paper_id,),
+            ).fetchone()
+            if parent_row is None or str(parent_row["component_type"] or "").strip():
+                parent_paper_id = None
     return component_type, parent_paper_id
 
 
@@ -166,6 +181,12 @@ def link_orphan_components(
     its parent). Relation-linked components (datasets) are linked on their own
     Crossref hydration pass instead — they carry no parent pointer in their DOI.
     """
+    parent_paper_id = resolve_paper_root_id(conn, parent_paper_id, strict=False)
+    parent_row = conn.execute(
+        "SELECT component_type FROM papers WHERE id = ?", (parent_paper_id,)
+    ).fetchone()
+    if parent_row is None or str(parent_row["component_type"] or "").strip():
+        return 0
     pdoi = normalize_doi(parent_doi)
     if not pdoi:
         return 0
@@ -178,11 +199,14 @@ def link_orphan_components(
     for row in rows:
         _, derived_parent = classify_component(row["doi"], None)
         if derived_parent and normalize_doi(derived_parent) == pdoi:
-            conn.execute(
-                "UPDATE papers SET parent_paper_id = ? WHERE id = ?",
-                (parent_paper_id, row["id"]),
+            result = absorb_paper_group(
+                conn,
+                str(row["id"]),
+                parent_paper_id,
+                reason="component_parent_link",
             )
-            linked += 1
+            if not result.get("skipped"):
+                linked += 1
     return linked
 
 
@@ -244,35 +268,81 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
             params.append(row["id"])
             conn.execute(f"UPDATE papers SET {', '.join(sets)} WHERE id = ?", params)
 
-    # Enforce "a subordinate row carries no vector and no graph-cluster row" on
-    # the data itself. The read-gates (standalone_paper_sql) already exclude
-    # these rows everywhere downstream; this is the durable cleanup of any
-    # embedding / cluster computed BEFORE the row became subordinate (a freshly
-    # classified component, or a preprint whose vector was merged up to its
-    # canonical twin). Lazy import — sql_helpers imports not_component_sql from
-    # THIS module, so a top-level import would be a cycle.
+    # Normalize every relationship and strip all independent app state now —
+    # not only vectors/clusters and not on a later maintenance run.
     from alma.core.sql_helpers import standalone_paper_sql
 
     subordinate_ids_sql = f"SELECT id FROM papers p WHERE NOT ({standalone_paper_sql('p')})"
-    purged_vectors = purged_clusters = 0
+    before_vectors = before_clusters = 0
     try:
-        purged_vectors = max(
-            0,
+        before_vectors = int(
             conn.execute(
-                f"DELETE FROM publication_embeddings WHERE paper_id IN ({subordinate_ids_sql})"
-            ).rowcount,
+                f"SELECT COUNT(*) FROM publication_embeddings WHERE paper_id IN ({subordinate_ids_sql})"
+            ).fetchone()[0]
+            or 0
         )
     except sqlite3.OperationalError:
         pass
     try:
-        purged_clusters = max(
-            0,
+        before_clusters = int(
             conn.execute(
-                f"DELETE FROM publication_clusters WHERE paper_id IN ({subordinate_ids_sql})"
-            ).rowcount,
+                f"SELECT COUNT(*) FROM publication_clusters WHERE paper_id IN ({subordinate_ids_sql})"
+            ).fetchone()[0]
+            or 0
         )
     except sqlite3.OperationalError:
-        pass  # publication_clusters may be absent on a minimal DB
+        pass
+    cleaned_sidecars = reparented = 0
+    subordinate_rows = conn.execute(
+        "SELECT id, parent_paper_id, component_type FROM papers "
+        "WHERE COALESCE(TRIM(component_type), '') <> ''"
+    ).fetchall()
+    for row in subordinate_rows:
+        paper_id = str(row["id"])
+        parent_id = str(row["parent_paper_id"] or "").strip()
+        if parent_id:
+            result = absorb_paper_group(
+                conn, paper_id, parent_id, reason="component_reconcile"
+            )
+            cleaned_sidecars += int(result.get("cleaned_sidecars") or 0)
+            reparented += int(result.get("reparented") or 0)
+        else:
+            cleaned_sidecars += purge_orphan_subordinate_state(conn, paper_id)
+    version_rows = conn.execute(
+        "SELECT id, canonical_paper_id FROM papers "
+        "WHERE COALESCE(TRIM(canonical_paper_id), '') <> ''"
+    ).fetchall()
+    for row in version_rows:
+        result = absorb_paper_group(
+            conn,
+            str(row["id"]),
+            str(row["canonical_paper_id"]),
+            reason="version_reconcile",
+        )
+        cleaned_sidecars += int(result.get("cleaned_sidecars") or 0)
+        reparented += int(result.get("reparented") or 0)
+
+    after_vectors = after_clusters = 0
+    try:
+        after_vectors = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM publication_embeddings WHERE paper_id IN ({subordinate_ids_sql})"
+            ).fetchone()[0]
+            or 0
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        after_clusters = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM publication_clusters WHERE paper_id IN ({subordinate_ids_sql})"
+            ).fetchone()[0]
+            or 0
+        )
+    except sqlite3.OperationalError:
+        pass
+    purged_vectors = max(0, before_vectors - after_vectors)
+    purged_clusters = max(0, before_clusters - after_clusters)
 
     return {
         "scanned": len(rows),
@@ -281,4 +351,6 @@ def backfill_components(conn: sqlite3.Connection) -> dict:
         "cleaned": cleaned,
         "purged_vectors": purged_vectors,
         "purged_clusters": purged_clusters,
+        "cleaned_sidecars": cleaned_sidecars,
+        "reparented": reparented,
     }

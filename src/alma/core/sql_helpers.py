@@ -9,6 +9,8 @@ shipping everywhere.
 
 from __future__ import annotations
 
+import sqlite3
+
 from alma.core.components import not_component_sql
 
 
@@ -85,5 +87,32 @@ def standalone_paper_sql(alias: str = "p", *, leading_and: bool = False) -> str:
     ``alias`` is the ``papers`` table alias; ``leading_and=True`` prepends
     ``" AND "`` for appending onto an existing ``WHERE``.
     """
-    clause = f"{canonical_paper_filter(alias)} AND {not_component_sql(alias)}"
+    clause = (
+        f"{canonical_paper_filter(alias)} "
+        f"AND COALESCE({alias}.parent_paper_id, '') = '' "
+        f"AND {not_component_sql(alias)}"
+    )
+    return f" AND {clause}" if leading_and else clause
+
+
+def standalone_paper_sql_for_db(
+    conn: sqlite3.Connection,
+    alias: str = "p",
+    *,
+    table: str = "papers",
+    leading_and: bool = False,
+) -> str:
+    """Schema-aware standalone predicate.
+
+    Production databases have the relationship columns used by
+    :func:`standalone_paper_sql`. A few focused unit tests build deliberately
+    minimal ``papers`` tables; in those contexts there is no child axis to
+    filter, so every row is treated as standalone.
+    """
+    try:
+        columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.OperationalError:
+        columns = set()
+    required = {"canonical_paper_id", "parent_paper_id", "component_type"}
+    clause = standalone_paper_sql(alias) if required.issubset(columns) else "1=1"
     return f" AND {clause}" if leading_and else clause

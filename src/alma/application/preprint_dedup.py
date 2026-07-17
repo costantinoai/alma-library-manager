@@ -2,8 +2,9 @@
 
 Single responsibility: collapse pairs where the same work exists as both
 a preprint (arXiv / bioRxiv / psyRxiv / chemRxiv / OSF) row and a
-published journal row into one canonical (journal) row, migrating all
-FK data so Library + Discovery surfaces see exactly one card.
+published journal row into one canonical (journal) row. This is the only
+paper-group collapse that absorbs metadata, feedback, and preferences from
+the child row into the root.
 
 Detection signals (in decreasing confidence):
 
@@ -20,12 +21,10 @@ Detection signals (in decreasing confidence):
 Every merge is idempotent:
 - Preprint row keeps its UUID (FK integrity for historical feedback).
 - Preprint row gets ``canonical_paper_id = <journal_id>`` stamped.
-- Library / Discovery reads filter ``canonical_paper_id IS NULL``.
-- FK children (publication_authors, publication_topics,
-  publication_references, publication_embeddings, recommendations,
-  feedback_events, collection_items, publication_tags) migrate from
-  preprint → canonical via ``UPDATE OR IGNORE`` patterns so duplicates
-  collapse cleanly.
+- Library / Discovery reads filter subordinate rows via ``standalone_paper_sql``.
+- Preprint sidecars, feedback, and preference profiles migrate from preprint →
+  canonical via ``UPDATE OR IGNORE`` / merge patterns. Other duplicate/component
+  child rows are pointer-only and donate no state.
 
 Monotonic-signal fields (``cited_by_count``, ``rating``,
 ``reading_status``) take the stronger value. Author-supplied fields
@@ -37,26 +36,19 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
 from typing import Any
 
 from alma.core.db_write import write_section
-from alma.core.sql_helpers import canonical_paper_filter
+from alma.core.paper_groups import (
+    absorb_paper_group,
+    classify_preprint_source,
+    resolve_paper_root_id,
+)
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
 
-
-# DOI prefixes that identify a preprint venue. The first segment after
-# `10.` is the registrant — each preprint server has a fixed one.
-PREPRINT_DOI_PREFIXES: dict[str, str] = {
-    "10.48550/arxiv": "arxiv",
-    "10.1101/": "biorxiv",  # Covers both bioRxiv and medRxiv (same registrant).
-    "10.31234/": "psyrxiv",
-    "10.31219/": "osf",
-    "10.26434/chemrxiv": "chemrxiv",
-    "10.20944/preprints": "mdpi_preprints",
-}
 
 # Year proximity allowed between preprint and published version.
 _YEAR_TOLERANCE = 2
@@ -65,17 +57,6 @@ _YEAR_TOLERANCE = 2
 # key by default — the key already collapses punctuation/whitespace, so
 # any non-match almost certainly means genuinely different works.
 _TITLE_EXACT = 1.0
-
-
-def classify_preprint_source(doi: str | None) -> str | None:
-    """Return the preprint source tag for a DOI, or None for published journals."""
-    if not doi:
-        return None
-    lowered = doi.strip().lower()
-    for prefix, tag in PREPRINT_DOI_PREFIXES.items():
-        if lowered.startswith(prefix):
-            return tag
-    return None
 
 
 # -- detection ----------------------------------------------------------------
@@ -103,9 +84,10 @@ def find_preprint_twin_candidates(
         scope = "corpus"
 
     sql = f"""
-        SELECT id, title, year, doi, status, canonical_paper_id
+        SELECT id, title, year, doi, status, canonical_paper_id,
+               preprint_source, work_type, component_type
         FROM papers
-        WHERE {canonical_paper_filter('papers')}
+        WHERE {standalone_paper_sql('papers')}
           AND COALESCE(title, '') <> ''
           AND year IS NOT NULL
           AND doi IS NOT NULL AND TRIM(doi) <> ''
@@ -118,7 +100,11 @@ def find_preprint_twin_candidates(
         key = (normalize_title_key(row["title"]), int(row["year"]))
         if not key[0]:
             continue
-        source = classify_preprint_source(row["doi"])
+        source = classify_preprint_source(
+            row["doi"],
+            preprint_source=row["preprint_source"],
+            work_type=row["work_type"],
+        )
         bucket = preprint_rows if source else canonical_rows
         bucket.setdefault(key[0], []).append(row)
 
@@ -149,7 +135,11 @@ def find_preprint_twin_candidates(
                     "canonical_id": best_canonical["id"],
                     "preprint_doi": preprint["doi"],
                     "canonical_doi": best_canonical["doi"],
-                    "preprint_source": classify_preprint_source(preprint["doi"]),
+                    "preprint_source": classify_preprint_source(
+                        preprint["doi"],
+                        preprint_source=preprint["preprint_source"],
+                        work_type=preprint["work_type"],
+                    ),
                     "title": str(preprint["title"] or "").strip()[:240],
                     "year": int(preprint["year"]),
                     "confidence": round(confidence, 3),
@@ -164,148 +154,6 @@ def find_preprint_twin_candidates(
 # -- merge --------------------------------------------------------------------
 
 
-_FK_TABLES_TO_MIGRATE: list[tuple[str, tuple[str, ...]]] = [
-    # (table, unique-key columns used to collapse duplicates on migration)
-    ("publication_authors", ("paper_id", "openalex_id")),
-    ("publication_topics", ("paper_id", "term")),
-    ("publication_references", ("paper_id", "referenced_work_id")),
-    ("publication_embeddings", ("paper_id", "model", "source")),
-    ("publication_tags", ("paper_id", "tag_id")),
-    ("publication_institutions", ("paper_id", "openalex_id")),
-    ("collection_items", ("collection_id", "paper_id")),
-    ("publication_clusters", ("paper_id",)),
-]
-
-# Tables with a standalone unique ``id`` PK (NOT a paper-scoped composite key):
-# the ``_migrate_fk_rows`` INSERT-copy helper would clone the loser's ``id`` and
-# self-collide on the PK (OR IGNORE → row dropped, then DELETE loses it), so
-# these repoint ``paper_id`` in place via UPDATE OR IGNORE + DELETE instead.
-#  - recommendations: UNIQUE(lens_id, paper_id, suggestion_set_id)
-#  - feed_items: UNIQUE(paper_id, author_id). MUST migrate — the Feed read does
-#    NOT filter canonical rows, so an un-migrated feed_item keeps the hidden
-#    loser visible in the inbox (the v0.19.0 duplicate symptom).
-_ID_PK_TABLES_TO_REPOINT: tuple[str, ...] = ("recommendations", "feed_items")
-
-
-def _repoint_paper_id(conn: sqlite3.Connection, table: str, loser_id: str, keeper_id: str) -> None:
-    """Move a standalone-``id`` table's rows loser → keeper in place.
-
-    UPDATE OR IGNORE rewrites ``paper_id`` (keeping each row's own PK ``id``);
-    a UNIQUE collision leaves the loser row, which the DELETE then drops."""
-    try:
-        conn.execute(
-            f"UPDATE OR IGNORE {table} SET paper_id = ? WHERE paper_id = ?",
-            (keeper_id, loser_id),
-        )
-        conn.execute(f"DELETE FROM {table} WHERE paper_id = ?", (loser_id,))
-    except sqlite3.OperationalError as exc:
-        logger.debug("repoint skipped on %s: %s", table, exc)
-
-
-def _migrate_fk_rows(
-    conn: sqlite3.Connection,
-    preprint_id: str,
-    canonical_id: str,
-    *,
-    table: str,
-    unique_cols: tuple[str, ...],
-) -> int:
-    """Re-point FK rows from preprint_id to canonical_id.
-
-    Uses `INSERT OR IGNORE ... SELECT` to copy only rows the canonical
-    doesn't already have, then DELETE the preprint-side rows.
-    """
-    try:
-        cols = [
-            r[1]
-            for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        ]
-    except sqlite3.OperationalError:
-        return 0
-    if not cols:
-        return 0
-
-    col_csv = ", ".join(cols)
-    select_cols = ", ".join(
-        "?" if c == "paper_id" else c for c in cols
-    )
-    sql_insert = (
-        f"INSERT OR IGNORE INTO {table} ({col_csv}) "
-        f"SELECT {select_cols} FROM {table} WHERE paper_id = ?"
-    )
-    try:
-        # Insert the canonical-side copies first, then drop preprint-side rows.
-        conn.execute(sql_insert, (canonical_id, preprint_id))
-        deleted = conn.execute(
-            f"DELETE FROM {table} WHERE paper_id = ?",
-            (preprint_id,),
-        ).rowcount
-        return int(deleted or 0)
-    except sqlite3.OperationalError as exc:
-        logger.debug("fk migrate skipped on %s: %s", table, exc)
-        return 0
-
-
-def _upgrade_canonical_from_preprint(
-    conn: sqlite3.Connection,
-    preprint_id: str,
-    canonical_id: str,
-) -> None:
-    """Copy missing fields from preprint → canonical via COALESCE.
-
-    The canonical row (journal version) has priority for every field.
-    Only populate canonical fields that are currently empty/null.
-    Library status and rating are upgraded: if the preprint was in
-    Library, the canonical gets promoted too.
-    """
-    try:
-        conn.execute(
-            """
-            UPDATE papers
-            SET
-                abstract = CASE
-                    WHEN COALESCE(abstract, '') = ''
-                    THEN (SELECT abstract FROM papers WHERE id = ?)
-                    ELSE abstract
-                END,
-                url = CASE
-                    WHEN COALESCE(url, '') = ''
-                    THEN (SELECT url FROM papers WHERE id = ?)
-                    ELSE url
-                END,
-                cited_by_count = MAX(
-                    COALESCE(cited_by_count, 0),
-                    COALESCE((SELECT cited_by_count FROM papers WHERE id = ?), 0)
-                ),
-                rating = MAX(
-                    COALESCE(rating, 0),
-                    COALESCE((SELECT rating FROM papers WHERE id = ?), 0)
-                ),
-                notes = CASE
-                    WHEN COALESCE(notes, '') = ''
-                    THEN (SELECT notes FROM papers WHERE id = ?)
-                    ELSE notes
-                END,
-                status = CASE
-                    WHEN status = 'library' THEN status
-                    WHEN (SELECT status FROM papers WHERE id = ?) = 'library' THEN 'library'
-                    ELSE status
-                END,
-                added_at = COALESCE(added_at, (SELECT added_at FROM papers WHERE id = ?)),
-                added_from = COALESCE(added_from, (SELECT added_from FROM papers WHERE id = ?)),
-                updated_at = ?
-            WHERE id = ?
-            """,
-            (
-                preprint_id, preprint_id, preprint_id, preprint_id,
-                preprint_id, preprint_id, preprint_id, preprint_id,
-                datetime.utcnow().isoformat(), canonical_id,
-            ),
-        )
-    except sqlite3.OperationalError as exc:
-        logger.warning("canonical upgrade failed: %s", exc)
-
-
 def merge_duplicate_paper_rows(
     conn: sqlite3.Connection,
     loser_id: str,
@@ -315,7 +163,7 @@ def merge_duplicate_paper_rows(
 ) -> dict[str, Any]:
     """Soft-merge a duplicate paper row (``loser_id``) into its keeper.
 
-    The ONE generic FK-rewiring collapse shared by every duplicate-pair
+    The ONE generic relationship collapse shared by every duplicate-pair
     merge: preprint↔journal twins (:func:`merge_preprint_into_canonical`),
     same-``openalex_id`` duplicate-identity pairs discovered during title
     resolution (``title_resolution`` / ``corpus_rehydrate``), and the
@@ -328,79 +176,16 @@ def merge_duplicate_paper_rows(
     its ``removed`` signal. Idempotent — a second call on an already-merged
     pair is a no-op.
 
-    Migrates every FK child + ``feedback_events`` + ``recommendations`` from
-    loser → keeper, fills the keeper's empty scalars from the loser (keeper
-    wins on conflict), then stamps the pointer. ``reason`` (when given) is
-    recorded in the loser's ``openalex_resolution_reason`` for the Corpus
+    Only preprint→published-paper promotion absorbs metadata, sidecars,
+    feedback, and preference profiles. Other losers are stamped as inert
+    pointers and their behavioral sidecars are purged. ``reason`` (when given)
+    is recorded in the loser's ``openalex_resolution_reason`` for the Corpus
     explorer without overwriting an existing reason.
 
     Returns a summary dict; ``{"skipped": True, "reason": ...}`` when the pair
     is invalid or already merged.
     """
-    if not loser_id or not keeper_id or loser_id == keeper_id:
-        return {"skipped": True, "reason": "same_id"}
-
-    row = conn.execute(
-        "SELECT canonical_paper_id FROM papers WHERE id = ?",
-        (loser_id,),
-    ).fetchone()
-    if row is None:
-        return {"skipped": True, "reason": "loser_missing"}
-    if str(row["canonical_paper_id"] or "").strip() == keeper_id:
-        return {"skipped": True, "reason": "already_merged"}
-    if conn.execute(
-        "SELECT 1 FROM papers WHERE id = ?", (keeper_id,)
-    ).fetchone() is None:
-        return {"skipped": True, "reason": "keeper_missing"}
-
-    # 1. Migrate FK children first (INSERT OR IGNORE + DELETE per table) so the
-    #    keeper acquires everything before its scalar upgrade.
-    migrated: dict[str, int] = {}
-    for table, unique_cols in _FK_TABLES_TO_MIGRATE:
-        migrated[table] = _migrate_fk_rows(
-            conn, loser_id, keeper_id, table=table, unique_cols=unique_cols
-        )
-
-    # 2. feedback_events keyed by (entity_type, entity_id) — NOT a `paper_id`
-    #    column — so the loser's likes/dismisses move to the keeper via a bare
-    #    UPDATE on entity_id (not unique, so no collision to guard).
-    try:
-        conn.execute(
-            "UPDATE feedback_events SET entity_id = ? "
-            "WHERE entity_type IN ('publication', 'paper') AND entity_id = ?",
-            (keeper_id, loser_id),
-        )
-    except sqlite3.OperationalError:
-        pass
-
-    # 3. Standalone-`id` tables (recommendations, feed_items): repoint paper_id
-    #    in place so the row keeps its own PK (see _ID_PK_TABLES_TO_REPOINT).
-    for table in _ID_PK_TABLES_TO_REPOINT:
-        _repoint_paper_id(conn, table, loser_id, keeper_id)
-
-    # 4. Scalar upgrade: copy the loser's fields into the keeper's empty ones.
-    _upgrade_canonical_from_preprint(conn, loser_id, keeper_id)
-
-    # 5. Stamp the soft-merge pointer (no hard delete — D3).
-    conn.execute(
-        """
-        UPDATE papers
-        SET canonical_paper_id = ?,
-            openalex_resolution_reason = CASE
-                WHEN ? <> '' AND COALESCE(TRIM(openalex_resolution_reason), '') = ''
-                THEN ? ELSE openalex_resolution_reason
-            END,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (keeper_id, reason or "", reason or "", datetime.utcnow().isoformat(), loser_id),
-    )
-    return {
-        "skipped": False,
-        "loser_id": loser_id,
-        "keeper_id": keeper_id,
-        "fk_migrated": migrated,
-    }
+    return absorb_paper_group(conn, loser_id, keeper_id, reason=reason)
 
 
 def merge_preprint_into_canonical(
@@ -420,14 +205,16 @@ def merge_preprint_into_canonical(
 
     # Infer the venue source tag before the merge (needs the loser's DOI).
     preprint_row = conn.execute(
-        "SELECT id, doi, preprint_source FROM papers WHERE id = ?",
+        "SELECT id, doi, preprint_source, work_type FROM papers WHERE id = ?",
         (preprint_id,),
     ).fetchone()
     if not preprint_row:
         return {"skipped": True, "reason": "preprint_missing"}
     preprint_source = (
         str(preprint_row["preprint_source"] or "").strip()
-        or classify_preprint_source(preprint_row["doi"])
+        or classify_preprint_source(
+            preprint_row["doi"], work_type=preprint_row["work_type"]
+        )
         or "unknown"
     )
 
@@ -444,9 +231,11 @@ def merge_preprint_into_canonical(
     return {
         "skipped": False,
         "preprint_id": preprint_id,
-        "canonical_id": canonical_id,
+        "canonical_id": result.get("root_id") or canonical_id,
         "preprint_source": preprint_source,
         "fk_migrated": result.get("fk_migrated", {}),
+        "reparented": result.get("reparented", 0),
+        "cleaned_sidecars": result.get("cleaned_sidecars", 0),
     }
 
 
@@ -464,16 +253,7 @@ def resolve_canonical_paper_id(
     through this helper so a user's save on the preprint card resolves
     to the journal row transparently.
     """
-    if not paper_id:
-        return paper_id
-    row = conn.execute(
-        "SELECT canonical_paper_id FROM papers WHERE id = ?",
-        (paper_id,),
-    ).fetchone()
-    if not row:
-        return paper_id
-    canonical = str(row["canonical_paper_id"] or "").strip()
-    return canonical or paper_id
+    return resolve_paper_root_id(conn, paper_id, strict=False)
 
 
 def count_preprint_twins(conn: sqlite3.Connection, scope: str = "library") -> int:
