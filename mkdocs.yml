@@ -152,6 +152,7 @@ nav:
       - Background jobs: operations/background-jobs.md
       - Performance: operations/performance.md
       - Deployment: operations/deployment.md
+      - Docker volume ownership: operations/docker-volume-ownership.md
   - Development:
       - development/index.md
       - Architecture: development/architecture.md

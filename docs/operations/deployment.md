@@ -91,7 +91,7 @@ cd alma-library-manager
 cp .env.example .env             # API_KEY, OPENALEX_EMAIL, etc.
 
 # Pin a specific version in production (avoid surprise upgrades)
-ALMA_IMAGE_TAG=0.12.1 \
+ALMA_IMAGE_TAG=0.20.1 \
   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
@@ -103,7 +103,8 @@ locally, etc.).
 
 The image is multi-stage: a builder layer compiles the frontend,
 the runtime layer carries only the Python app + the built
-frontend. Final image is around 400 MB.
+frontend. The full image (with torch + CUDA) is large (~2 GB
+on-disk); the `lite` flavour, which drops the AI stack, is ~300 MB.
 
 ## Secrets
 
@@ -163,9 +164,9 @@ deployed install: a weekly cron that calls
 ```bash
 # /etc/cron.weekly/alma-backup
 #!/usr/bin/env bash
+# Backups are auto-named with a server timestamp; there is no name param.
 curl -fsS -X POST \
   -H "X-API-Key: ${ALMA_API_KEY}" \
-  -d '{"name":"weekly-'$(date +%F)'"}' \
   http://127.0.0.1:8000/api/v1/library-mgmt/backup
 ```
 
@@ -176,7 +177,8 @@ curl -fsS -X POST \
 * **Don't share `data/scholar.db` across two ALMa instances.**
   SQLite WAL doesn't survive concurrent writers from two processes.
 * **Don't run as `root` in Docker.** The compose file already
-  sets `user: "${UID}:${GID}"`.
+  pins `user: "10001:10001"` (the fixed image UID/GID). See
+  [Docker volume ownership](docker-volume-ownership.md).
 * **Don't disable the migration check on start-up.** Old DBs
   occasionally need a column added; the check is what makes that
   safe.

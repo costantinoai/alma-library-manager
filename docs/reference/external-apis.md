@@ -15,8 +15,11 @@ sideways.
 [OpenAlex](https://docs.openalex.org/) is ALMa's primary source for
 metadata, citations, topics, institutions, and the works graph.
 
-* **Endpoints used**: `/works`, `/works/{id}`, `/works/{id}/related-works`,
-  `/authors`, `/authors/{id}`, `/topics`, `/sources`, `/institutions`.
+* **Endpoints used**: `/works`, `/works/{id}`, `/authors`,
+  `/authors/{id}`. Topics, sources, and institutions arrive **embedded**
+  via `select=` on `/works` and `/authors` — they are not separate calls.
+  Related works come from `/works/{id}` with `select=related_works`,
+  then a bulk-by-ID fetch of those IDs.
 * **No semantic `/find/works`**: the natural-language `/find/works`
   semantic call was removed — it 404s and is a separate paid product
   (~1000 credits/call). Hybrid search is now purely the lexical
@@ -51,16 +54,20 @@ metadata, citations, topics, institutions, and the works graph.
 
 [Semantic Scholar](https://api.semanticscholar.org/) covers what
 OpenAlex doesn't: pre-computed SPECTER2 vectors, paper-level
-recommendations, author recommendations, related papers.
+recommendations, and the reference/citation graph.
 
 * **Endpoints used**:
   * `/paper/batch` for bulk metadata + `specter_v2` vectors.
   * `/paper/search/bulk` for broad non-interactive monitor/lane
-    retrieval.
-  * `/paper/{id}/related` and `/paper/{id}/citations`.
-  * `/recommendations/v1/papers/forpaper/{id}` for the
-    `s2_related` recommendation channel.
-  * `/author/{id}/papers` and `/author/{id}/recommendations`.
+    retrieval; `/paper/search` for the title-search rescue.
+  * `/paper/{id}/references` and `/paper/{id}/citations` for the
+    graph lane.
+  * `/recommendations/v1/papers/forpaper/{id}` (single seed) and
+    `POST /recommendations/v1/papers` (positive + negative seeds) for
+    the `s2_related` recommendation channel — a different host path
+    than the rest of the graph API.
+  * `/author/batch`, `/author/search`, and `/author/{id}/papers` for
+    author identity resolution.
 * **Bulk search is two-step (bulk → batch)**: `/paper/search/bulk`
   hard-400s (`Unrecognized or unsupported fields`) on `tldr` and
   `embedding.specter_v2`, so ALMa requests only a bulk-supported field
@@ -97,14 +104,14 @@ recommendations, author recommendations, related papers.
     `terminal_no_match`. The legacy default (silent empty list) is
     preserved for non-critical callers like interactive search.
 * **Adaptive throttle**: any 429 observed by the shared HTTP client
-  (`core/http_sources.SourceHttpClient`) engages a 30-second floor
-  on the per-request interval for the next 60 seconds. Retries: 5
+  (`core/http_sources.SourceHttpClient`) engages a 10-second floor
+  on the per-request interval for the next 30 seconds. Retries: 5
   attempts, jittered exponential backoff capped at 60 seconds. Fresh
   429s within the cooldown re-arm the floor. While the cooldown is
   armed, Discovery and Feed **drop the S2 source for the rest of that
   refresh pass** (via `is_in_adaptive_cooldown()`) instead of having
-  each lane queue behind the 30s floor and wait out its deadline; the
-  window self-clears after 60s (`discovery/source_search.py`).
+  each lane queue behind the floor and wait out its deadline; the
+  window self-clears after 30s (`discovery/source_search.py`).
 * **Terminal statuses** for vector fetch: `unmatched`,
   `missing_vector`, `lookup_error`, `bad_local_doi`.
   `bad_local_doi` is set before any HTTP call when the local DOI
@@ -117,10 +124,10 @@ recommendations, author recommendations, related papers.
   a paper hydration step that finds a better DOI re-enters the
   fetch pool automatically.
 * **Title-search rescue**: papers that miss `/paper/batch` get one
-  `/paper/search` call each (Jaccard 0.92 + |Δyear|≤1). Per-run
-  budget cap: 50 calls (`TITLE_RESCUE_PER_RUN_BUDGET` in
-  `services/s2_vectors.py`). The first 429 short-circuits the rest of
-  the batch's rescue.
+  `/paper/search` call each (Jaccard 0.92 + |Δyear|≤1). This lives in
+  `services/title_resolution.py` (not `s2_vectors.py`, which delegates
+  to it), capped at `TITLE_RESOLUTION_PER_RUN_BUDGET` = 500 papers per
+  run. The first 429 short-circuits the rest of the batch's rescue.
 * **Identity resolution (OpenAlex-first)**: the *Resolve missing
   identity* sweep (`services/title_resolution.py`) handles title-only
   papers with no usable identifier. It tries OpenAlex `/works?search`
@@ -211,8 +218,8 @@ fetches.
 ## OpenAI
 
 OpenAI is optional and currently used as an embedding provider. Configure
-it in **Settings → AI & embeddings** and store the key in `.env` or the
-secret store. See [AI capabilities](../concepts/ai.md).
+it in **Settings → Intelligence → AI provider** and store the key in
+`.env` or the secret store. See [AI capabilities](../concepts/ai.md).
 
 ## Slack
 

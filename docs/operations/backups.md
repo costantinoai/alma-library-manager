@@ -29,16 +29,16 @@ backup paths below — you'll get an inconsistent snapshot otherwise.
 
 ## Online backup (UI)
 
-**Settings → Data & system → Library management → Backup**:
+**Settings → Data & system → Library maintenance → Backup**:
 
 * **Create backup** — uses SQLite's online backup API. Safe while
-  ALMa is running. Writes a timestamped snapshot to
-  `data/backups/scholar-YYYY-MM-DD-HHMMSS.db`.
+  ALMa is running. Writes a gzip-compressed, timestamped snapshot to
+  `data/backups/scholar_<timestamp>.db.gz`.
 * **List backups** — shows existing snapshots with size and
   timestamp.
-* **Restore from backup** — replaces the live `scholar.db` with
-  the chosen snapshot. **Backend will restart**; in-flight jobs
-  abort.
+* **Restore from backup** — decompresses the chosen snapshot and
+  overwrites the live `scholar.db` in place. Restart ALMa afterwards
+  so it reopens the restored file cleanly.
 
 Online backups are atomic at the SQLite page level — no risk of a
 torn read.
@@ -47,16 +47,18 @@ torn read.
 
 Same operations via REST:
 
+The backup name is a server-generated timestamp (returned as
+`backup_name`); there is no custom-name parameter.
+
 ```bash
-# create
-curl -X POST http://localhost:8000/api/v1/library-mgmt/backup \
-  -d '{"name":"pre-migration-2026-04-25"}'
+# create — returns {"success": true, "backup_name": "20260425_143000", ...}
+curl -X POST http://localhost:8000/api/v1/library-mgmt/backup
 
-# list
-curl http://localhost:8000/api/v1/library-mgmt/backup
+# list — the `backups` array in the info payload
+curl http://localhost:8000/api/v1/library-mgmt/info
 
-# restore
-curl -X POST http://localhost:8000/api/v1/library-mgmt/restore/pre-migration-2026-04-25
+# restore — pass a returned backup name
+curl -X POST http://localhost:8000/api/v1/library-mgmt/restore/20260425_143000
 ```
 
 ## Offline backup (file copy)
@@ -131,7 +133,7 @@ A reasonable default for a personal install:
 * **File-copy backup**: monthly to off-machine storage (cloud
   bucket, second drive).
 * **Before any risky operation**: manual backup right before
-  Settings → Library management → Reset / dedup / large bulk import.
+  Settings → Library maintenance → Reset / dedup / large bulk import.
 
 ## What's not backed up by default
 

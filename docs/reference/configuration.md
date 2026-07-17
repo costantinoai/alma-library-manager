@@ -33,11 +33,11 @@ and Node environments.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `API_HOST` | `127.0.0.1` | Host the backend binds to. |
+| `API_HOST` | `0.0.0.0` | Host the backend binds to. |
 | `API_PORT` | `8000` | Port the backend binds to. |
 | `API_KEY` | *(unset)* | If set, every request must include `X-API-Key: <value>`. Use it when exposing ALMa beyond localhost. |
-| `DB_PATH` | `./data/scholar.db` | SQLite file path. |
-| `DATA_DIR` | `./data` | Where caches, logs, and `secrets.json` go. |
+| `DB_PATH` | *(platform data dir)* | SQLite file path. Docker pins `./data/scholar.db`; bare-metal defaults to the OS data dir (`~/.local/share/alma/scholar.db` on Linux). |
+| `DATA_DIR` | *(platform data dir)* | Where caches, logs, and `secrets.json` go. Docker pins `./data`; bare-metal uses the OS data dir. |
 | `DEBUG` | `false` | Verbose logging + tracebacks in API responses. |
 
 ### External APIs
@@ -56,8 +56,8 @@ and Node environments.
 |---|---|
 | `OPENAI_API_KEY` | Optional OpenAI embedding provider key. |
 
-Local SPECTER2 is configured through **Settings → AI & embeddings**,
-including the dependency environment path.
+Local SPECTER2 is configured through **Settings → Intelligence → AI
+provider**, including the dependency environment path.
 
 ### Slack
 
@@ -92,9 +92,9 @@ port 465.
 | `SCHEDULER_ENABLED` | `true` | Set to `false` to disable background jobs. Useful in tests. |
 | `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
 | `AUTHOR_REFRESH_HOUR` | `3` | Hour-of-day (UTC) for nightly author refresh. |
-| `ALERT_CHECK_INTERVAL_HOURS` | `6` | How often the alert dispatcher runs. |
+| `ALERT_CHECK_INTERVAL_HOURS` | `1` | How often the alert dispatcher runs. |
 | `ALMA_DEEP_REFRESH_WORKERS` | `4` | Concurrency for the per-author deep-refresh fan-out (clamped 1–16). |
-| `SCHOLAR_RETRY_DELAYS` | `1,2,4,8` | Comma-separated retry backoff for `scholarly`. |
+| `SCHOLAR_RETRY_DELAYS` | `20,40,60` | Comma-separated retry backoff (seconds) for external fetches. |
 
 ### Secrets file
 
@@ -107,11 +107,11 @@ Settings cards (so they never land in `settings.json`):
 
 | Key | Set from | Holds |
 |---|---|---|
-| `slack.bot_token` | Settings → Channels | Slack bot OAuth token. |
+| `slack.bot_token` | Settings → Delivery channels | Slack bot OAuth token. |
 | `smtp.password` | Settings → Email digests | SMTP auth password (overridable by `SMTP_PASSWORD`). |
 | `semantic_scholar.api_key` | Settings → External APIs | Semantic Scholar API key. |
 | `openalex.api_key` | Settings → External APIs | OpenAlex API key. |
-| `openai.api_key` | Settings → AI & embeddings | OpenAI embedding key. |
+| `openai.api_key` | Settings → Intelligence → AI provider | OpenAI embedding key. |
 | `zotero.api_key` | Settings → External APIs | Zotero API key. |
 
 ## `.env.example`
@@ -130,10 +130,9 @@ Auto-created on first run. The committed example is
 
 ```json
 {
-  "database": "./data/scholar.db",
   "slack_config_path": "./config/slack.config",
   "api_call_delay": "1.0",
-  "backend": "scholar",
+  "backend": "openalex",
   "openalex_email": null,
   "fetch_full_history": false,
   "from_year": null,
@@ -141,9 +140,14 @@ Auto-created on first run. The committed example is
   "id_resolution_semantic_scholar_enabled": true,
   "id_resolution_orcid_enabled": true,
   "id_resolution_scholar_scrape_auto_enabled": false,
-  "id_resolution_scholar_scrape_manual_enabled": true
+  "id_resolution_scholar_scrape_manual_enabled": false
 }
 ```
+
+The `database` key is deliberately omitted — the DB path is computed
+(`DB_PATH` env → explicit settings value → OS data dir), so a fresh
+install resolves to the platform data dir rather than a CWD-relative
+`./data`.
 
 `settings.json` only holds bootstrap values. Discovery weights, AI
 provider selection, and other UI-tuned product settings live in the
@@ -155,11 +159,11 @@ Settings page.
 | UI surface | Storage |
 |---|---|
 | Settings → External APIs | `.env`, `settings.json` (`openalex_email`), and the secret store |
-| Settings → AI & embeddings | `discovery_settings` keys (`ai.provider`, `ai.local_model`, `ai.python_env_path`, …) |
+| Settings → Intelligence → AI provider | `discovery_settings` keys (`ai.provider`, `ai.local_model`, `ai.python_env_path`, …) |
 | Settings → Discovery weights | `discovery_settings` (`discovery.weights.*`, `discovery.strategies.*`, `discovery.limits.*`) |
 | Settings → Discovery weights → Branch behaviour | `discovery_settings` (`discovery.branches.*`) |
 | Settings → Discovery weights → Feed monitor defaults | `discovery_settings` (`feed.*`) |
-| Settings → Channels | `data/secrets.json` (Slack bot token, key `slack.bot_token`) and `settings.json` (`slack_channel`, `check_interval_hours`) |
+| Settings → Delivery channels | `data/secrets.json` (Slack bot token, key `slack.bot_token`) and `settings.json` (`slack_channel`, `check_interval_hours`) |
 | Settings → Email digests | `settings.json` (`smtp_host`, `smtp_port`, `smtp_username`, `smtp_from`, `smtp_to`, `smtp_use_tls`) and `data/secrets.json` (SMTP password, key `smtp.password`) |
 | Settings → Data & system → Corpus Explorer | (no setting; opens modal) |
 | Settings → Data & system → Backup / restore | (no setting; runs operations) |
@@ -169,5 +173,3 @@ Settings page.
 ```bash
 curl http://localhost:8000/api/v1/settings
 ```
-
-Or, from the UI: **Settings → Status → Show raw config**.

@@ -153,20 +153,16 @@ fed by your actions, so a few small habits make a big difference:
    as your interests shift. Co-authorship overlap counts as a very
    light penalty (≈0.8/paper) — you stay free to follow people the
    dismissed author wrote with.
-4. **Refresh network buckets.** The `openalex_related` and
-   `s2_related` buckets read from a cache that's refreshed
-   asynchronously. Use **Authors → ⋯ → Refresh network buckets**
-   when you want fresh external candidates beyond what your
-   Library co-author / citation graph already shows.
-5. **Tune bucket weights** in
-   **Settings → Discovery → Author suggestion weights** if you
-   want to tilt the rail toward discovery (boost
-   `openalex_related` / `s2_related`) or toward your existing
-   reading (boost `library_core` / `cited_by_high_signal`).
-   Defaults are deliberately tilted toward `library_core`
-   because it's the strongest evidence; equal-weight network
-   buckets at 0.9 give external sources real airtime without
-   overrunning your Library signal.
+4. **Network buckets refresh automatically.** The `openalex_related`
+   and `s2_related` buckets read from a cache that the suggestions
+   rail refreshes asynchronously each time you open the Authors page,
+   pulling fresh external candidates beyond what your Library
+   co-author / citation graph already shows — no manual button.
+
+The per-bucket weights are backend defaults tilted toward
+`library_core` (the strongest evidence), with the network buckets at
+0.9 so external sources still get real airtime; they are not
+user-configurable in the UI today.
 
 A candidate working in your **#1 library topic** will rank far
 higher than one sharing a fringe topic — the system weights
@@ -185,9 +181,9 @@ authors you keep: a bucket where Follows dominate gets pushed
 toward 1.5×; one where Dismisses dominate gets pulled toward 0.5×.
 The chip on each card (e.g. **↑ bucket 1.18×** / **↓ bucket 0.74×**)
 shows the current multiplier — it appears only once the multiplier
-has moved meaningfully away from 1.0. The static **Author
-suggestion weights** above are the prior; this calibration is the
-posterior, multiplied in. On a fresh DB nothing changes — the
+has moved meaningfully away from 1.0. The default bucket weights are
+the prior; this calibration is the posterior, multiplied in. On a
+fresh DB nothing changes — the
 system needs a few weeks of rail-side feedback to warm up.
 
 ## Removing

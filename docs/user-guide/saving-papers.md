@@ -75,9 +75,8 @@ hide things — so a Dismiss verb wouldn't make sense there.
 
 The Online search panel inside the Import dialog is also a save
 surface. Same vocabulary, same monotonic rule, same Dislike
-semantics on already-saved papers. Internally these flow through
-`alma.application.openalex_manual.save_online_search_result`, the
-canonical helper that all surfaces use.
+semantics on already-saved papers — it uses the same save path as
+everywhere else.
 
 ## Bulk
 

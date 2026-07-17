@@ -20,7 +20,8 @@ description: React 19 + Vite + TypeScript + Tailwind 4 + shadcn primitives. The 
 * **`@tanstack/react-table`** — DataTable primitive.
 * **`@dnd-kit/sortable`** — drag-reorder for table headers.
 * **`recharts`** — Insights charts.
-* **`reaviz`** — clustered embedding graph.
+* **`react-force-graph-2d` / `react-force-graph-3d`** — clustered
+  embedding graph (paper map).
 * **`lucide-react`** — icons.
 
 ## Routing
@@ -47,6 +48,7 @@ One file per top-level surface, in `frontend/src/pages/`:
 | `AuthorsPage.tsx` | `#/authors` |
 | `LibraryPage.tsx` | `#/library` |
 | `InsightsPage.tsx` | `#/insights` |
+| `HealthPage.tsx` | `#/health` |
 | `AlertsPage.tsx` | `#/alerts` |
 | `SettingsPage.tsx` | `#/settings` |
 
@@ -56,8 +58,22 @@ plus shared primitives from `components/shared/` and
 
 ## Primitives
 
-The Settings page introduced a small palette of primitives that
-the rest of the app re-uses:
+Canonical, app-wide primitives — reach for these before hand-rolling:
+
+* `MetricTile` (`components/shared/MetricTile.tsx`) — the one number
+  tile. Bordered + icon-led variants; tones `neutral / success /
+  warning / critical / info / accent`. Settings' `StatTile` is a thin
+  shim that delegates here.
+* `ConceptCallout` (`components/ui/concept-callout.tsx`) — the in-page
+  "What is this?" explainer for a complex feature. Once per surface,
+  near the top. Never nested.
+* `JargonHint` (`components/shared`) — per-term info popover for a
+  single word of jargon inside a paragraph or label.
+* `Card` / `SubPanel` / `Surface` (`components/ui/`) — the surface
+  primitives that drive the elevation ladder (`Card` lifts one level,
+  `SubPanel` lifts + recesses). Never hand-write a surface background.
+
+Settings-scoped helpers the rest of the app also re-uses:
 
 * `SettingsCard` — titled card.
 * `SettingsSection` — collapsible disclosure.
@@ -65,7 +81,7 @@ the rest of the app re-uses:
 * `ToggleRow` — labelled switch row.
 * `OptionCard` — selectable card.
 * `SettingsNumberField` — spinner-input.
-* `StatTile`, `KeyValueRow`, `PackageChip`.
+* `KeyValueRow`, `PackageChip`.
 
 For paper rows: `PaperCard` (compact / default / detailed variants),
 `PaperActionBar` (the rating verbs), `StatusBadge` (the only badge
@@ -123,7 +139,13 @@ Distinctive over generic. ALMa is a research tool, not a SaaS
 landing page. Rules of thumb:
 
 * No glassy gradients, no marketing-style hero sections.
-* Restrained colour — `slate` / `alma-*` / `gold-*` ramps.
+* One neutral elevation ladder decides every surface colour
+  (`bg-surface-N` / `border-edge-N`) — never a hand-picked
+  `bg-white` / `bg-slate-*`. Colour meaning routes through semantic
+  tokens (`accent` = the single interactive identity, `primary` = the
+  one heavy navy fill, `success / warning / critical / info`,
+  `gold` = trim only); `slate-*` is the text ramp, never a surface.
+  The `surface-guard` test fails CI on raw surface/semantic classes.
 * Tabular numerics where it matters (counts, scores, citations).
 * Tooltips and HoverCards over modals when surfacing detail.
 * Empty states are explicit ("No suggestions — refresh this
@@ -131,18 +153,18 @@ landing page. Rules of thumb:
 
 ## Tests
 
-Frontend tests are sparse — most behaviour is exercised by Python
-integration tests against the backend. The two checks worth running:
+Frontend logic and rendering are covered by **Vitest** — `*.test.ts(x)`
+files that live beside the code (`src/lib/*.test.ts`,
+`src/components/**/*.test.tsx`, guards like
+`src/test/surface-guard.test.ts`). Broader behaviour is exercised by
+the Python integration suite against the backend.
 
 ```bash
 cd frontend
-npx tsc --noEmit             # type check
+npm run test                 # Vitest, single run
+npx tsc --noEmit             # type check (strict mode)
 npm run build                # full Vite production build
 ```
 
-Both are fast (under a minute on a typical machine) and catch the
-overwhelming majority of regressions.
-
-For UI smoke tests, the project uses Playwright in
-`tests/e2e/`. They mock the backend, drive the SPA, and capture
-screenshots per viewport.
+All three are fast and catch the overwhelming majority of regressions.
+See [Testing](testing.md) for the full picture.

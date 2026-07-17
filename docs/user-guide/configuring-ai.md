@@ -15,7 +15,8 @@ the app with no embedding provider at all, but enabling one improves:
 
 ## Where to start
 
-Open **Settings → AI & embeddings**.
+Open **Settings → Intelligence → AI provider** (the *AI & Embeddings*
+card).
 
 That card controls three things:
 
@@ -62,7 +63,7 @@ If you want the `openai` provider:
 
 1. add `OPENAI_API_KEY` to `.env`, or set it through the Settings UI
 2. choose `openai` as the provider
-3. use **Recheck environment** to refresh the status card
+3. use **Recheck** to refresh the status card
 
 OpenAI is optional and currently used for embeddings only in the public
 build.
@@ -156,7 +157,7 @@ You can keep using the app while those jobs run.
 
 After configuring:
 
-1. **Settings → AI & embeddings → Status** should show the selected
+1. **Settings → Intelligence → AI provider** should show the selected
    provider and environment as healthy.
 2. On **Health**, **Fetch missing S2 vectors** should land vectors for
    the subset Semantic Scholar already knows.
@@ -166,4 +167,4 @@ After configuring:
    state once enough embeddings exist.
 
 If something looks wrong, inspect the Activity logs for the failed job
-or use **Recheck environment** in the AI card.
+or use **Recheck** in the AI card.

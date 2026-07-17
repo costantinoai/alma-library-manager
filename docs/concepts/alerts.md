@@ -186,7 +186,7 @@ Delivery via a Slack Bot User OAuth Token through `SlackNotifier`.
 The bot token is stored in the unified secret store
 (`data/secrets.json`, key `slack.bot_token`). The DM target lives
 in `data/settings.json` under `slack_channel`. Both are editable
-from **Settings → Channels**; no environment variable hand-edits
+from **Settings → Delivery channels**; no environment variable hand-edits
 needed.
 
 ### Email
@@ -221,7 +221,7 @@ cached for the lifetime of the process. A wrong name produces a
 precise `channel_not_found` error in the Activity row, not a
 generic "API failed."
 
-## Current limits (v0.10.x)
+## Current limits
 
 - Single global Slack DM target. Per-alert channel override is on
   the roadmap — today every alert delivers to whatever

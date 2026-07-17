@@ -42,22 +42,14 @@ nothing to build.
    the same save format (one of them needs updating); a compatible connector
    stays silent.
 
+Once installed, the **ALMa** icon (an open book) appears in your
+toolbar. If you don't see it, click the **puzzle-piece** / extensions
+icon and **pin** ALMa Connector so it's always visible.
+
 ??? note "Running from source? (contributors)"
     To load the unpackaged extension during development: **`about:debugging`**
     → **This Firefox** → **Load Temporary Add-on…** → pick
     `extension/manifest.json`. It's removed when Firefox restarts.
-
-1. Make sure **ALMa is running** (open `http://localhost:8000` — or your
-   address — and confirm the app loads).
-2. In Firefox, type **`about:debugging`** in the address bar and press
-   ++enter++.
-3. In the left sidebar, click **This Firefox**.
-4. Click **Load Temporary Add-on…**.
-5. Browse to the `extension/` folder from the repo and select the
-   **`manifest.json`** file, then click **Open**.
-6. The **ALMa** icon (an open book) appears in your toolbar. If you don't
-   see it, click the **puzzle-piece** / extensions icon in the toolbar
-   and **pin** ALMa Connector so it's always visible.
 
 !!! tip "Pin it for one-click saving"
     Pinning the icon to the toolbar turns saving into a single click on

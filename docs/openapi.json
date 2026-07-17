@@ -436,6 +436,167 @@
         }
       }
     },
+    "/api/v1/authors/suggestions/merge-into": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Import a duplicate suggestion into the followed author it matches",
+        "description": "For a suggestion flagged `duplicate_of` an existing followed author: fold the suggested external OpenAlex profile into that author (reassign its papers, record its id as an alias) instead of following it as a new person. Foreground write via run_write_unit.",
+        "operationId": "merge_suggestion_into_endpoint_api_v1_authors_suggestions_merge_into_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeSuggestionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/suggestions/not-duplicate": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Mark a flagged duplicate suggestion as NOT a duplicate",
+        "description": "The user says a suggestion flagged `duplicate_of` is actually a different person. Records the OpenAlex id so it's no longer flagged \u2014 it returns to the normal 'follow a new author' rail instead of being suppressed. Foreground write via run_write_unit.",
+        "operationId": "mark_suggestion_not_duplicate_endpoint_api_v1_authors_suggestions_not_duplicate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotDuplicateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/suggestions/reject": {
       "post": {
         "tags": [
@@ -1369,6 +1530,255 @@
         }
       }
     },
+    "/api/v1/authors/merge-candidates": {
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "List pending author merge candidates (the review queue)",
+        "description": "The duplicate author pairs the scan recorded and that haven't been merged yet \u2014 each with both names, its `source` ('orcid'/'name') + `confidence`, and the number of papers the merge would reassign. Drives the Merge card's review dialog. Defined before /{author_id} so the static path isn't shadowed.",
+        "operationId": "list_merge_candidates_endpoint_api_v1_authors_merge_candidates_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/merge-candidates/{candidate_id}/reject": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Reject one merge suggestion (permanent \u2014 never resurfaced)",
+        "description": "The user says 'these two are NOT the same person'. Records a permanent rejection of the unordered author pair and drops the candidate, so every future scan skips it. Foreground write through the request's gated connection (run_write_unit).",
+        "operationId": "reject_merge_candidate_endpoint_api_v1_authors_merge_candidates__candidate_id__reject_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/merge-candidates/{candidate_id}/merge": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Apply one merge suggestion (the per-row \u2713 Merge)",
+        "description": "Merge this candidate's alt \u2192 primary (richer/followed profile wins, the other's papers reassigned) and consume the candidate. Destructive, not reversed automatically. Foreground write through the request's gated connection (run_write_unit).",
+        "operationId": "merge_one_candidate_endpoint_api_v1_authors_merge_candidates__candidate_id__merge_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/{author_id}": {
       "get": {
         "tags": [
@@ -1494,6 +1904,88 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/remove": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Soft-remove an author",
+        "description": "Soft-remove an author (status='removed', D3): the row + provenance stay for the Corpus explorer and Discovery's negative signal, and it drops out of active author views. Reversible. This is the normal-flow removal (e.g. the suggestion-detail Delete, alongside the suggestion dismiss); the hard DELETE is reserved for explicit purges.",
+        "operationId": "remove_author_api_v1_authors__author_id__remove_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "401": {
             "description": "Unauthorized",
@@ -2453,6 +2945,88 @@
         }
       }
     },
+    "/api/v1/authors/{author_id}/neighbourhood": {
+      "get": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Author neighbourhood ego-network (3D explorer)",
+        "description": "On-demand ego-network around one author: co-authors, citation neighbours, and semantically-similar authors, plus the co-authorship edges among them. Computed lazily (only when requested) and bounded per relation. Shape: {center, nodes[], links[], counts}.",
+        "operationId": "get_author_neighbourhood_api_v1_authors__author_id__neighbourhood_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/{author_id}/dossier": {
       "get": {
         "tags": [
@@ -3105,13 +3679,187 @@
         }
       }
     },
+    "/api/v1/authors/{author_id}/affiliation": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Lock an author's display affiliation to a chosen institution",
+        "description": "Terminal resolution for the 'affiliation evidence disagrees across sources' needs-attention flag (the `pick_affiliation` action). Records the choice as an authoritative manual evidence row that outranks every auto source and survives future refreshes, so the display affiliation sticks and the conflict clears for good. Gated write + Activity row.",
+        "operationId": "pick_author_affiliation_api_v1_authors__author_id__affiliation_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PickAffiliationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/accept-unidentified": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Accept an author as unidentifiable (terminal \u2014 stops needs-attention flagging)",
+        "description": "Terminal acknowledgment for an identity gap the resolver genuinely can't close (no_match / needs_manual_review / error / followed-without-id). Sets id_resolution_status='dismissed' so the author stops surfacing in needs-attention and the author-health counts \u2014 WITHOUT inventing an identifier. The user can still resolve it later by pasting an id (which flips it to resolved_manual). Gated write + Activity row.",
+        "operationId": "accept_author_unidentified_api_v1_authors__author_id__accept_unidentified_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/authors/dedup-by-orcid": {
       "post": {
         "tags": [
           "authors"
         ],
-        "summary": "Dedup followed authors by ORCID (auto-merge + alias record)",
-        "description": "Manual sweep that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) auto-merges if another currently-followed author already holds that openalex_id (richer-profile-wins), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Activity-enveloped \u2014 runs in the background and the Activity panel shows per-author progress.",
+        "summary": "Scan followed authors for ORCID duplicates (record candidates)",
+        "description": "Manual NON-destructive scan that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) if it is another local author row, RECORDS the mergeable pair in `author_merge_candidates` for review (apply via the Merge card), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Never merges. Activity-enveloped \u2014 runs in the background and the Activity panel shows per-author progress.",
         "operationId": "dedup_authors_by_orcid_endpoint_api_v1_authors_dedup_by_orcid_post",
         "security": [
           {
@@ -3215,6 +3963,100 @@
               "title": "Dry Run"
             },
             "description": "Preview without writing"
+          },
+          {
+            "name": "background",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Run as background job and track in Activity",
+              "default": true,
+              "title": "Background"
+            },
+            "description": "Run as background job and track in Activity"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/authors/{author_id}/identity-profile-refresh": {
+      "post": {
+        "tags": [
+          "authors"
+        ],
+        "summary": "Refresh author identity/profile",
+        "description": "Refreshes identity and profile metadata only. Does not paginate works, fetch S2 vectors, or recompute the centroid unless the resolved identity changes.",
+        "operationId": "identity_profile_refresh_author_api_v1_authors__author_id__identity_profile_refresh_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "author_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Author Id"
+            }
           },
           {
             "name": "background",
@@ -4665,6 +5507,100 @@
         }
       }
     },
+    "/api/v1/papers/{paper_id}/undo-feedback": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Undo one dimension of a paper's user feedback",
+        "description": "Per-aspect toggle-off: each action button undoes only its own effect. `aspect=membership` removes from library; `rating` clears the like/love/dislike rating; `reading` clears the reading-list state; `all` is a full neutral reset. Each deletes the matching signal events.",
+        "operationId": "undo_paper_feedback_endpoint_api_v1_papers__paper_id__undo_feedback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "aspect",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "membership | rating | reading | all",
+              "default": "all",
+              "title": "Aspect"
+            },
+            "description": "membership | rating | reading | all"
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/papers/{paper_id}/details": {
       "get": {
         "tags": [
@@ -4673,6 +5609,88 @@
         "summary": "Get full paper details",
         "description": "Return a single paper row plus the semantic topics attached to it.",
         "operationId": "get_paper_details_api_v1_papers__paper_id__details_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/papers/{paper_id}/detach": {
+      "post": {
+        "tags": [
+          "papers"
+        ],
+        "summary": "Promote a merged duplicate / component back to a standalone paper",
+        "description": "Clears the structural links (canonical_paper_id for a dedup/import duplicate twin; parent_paper_id + component_type for a part-of component) so the row becomes a first-class paper again. Backs the \"Not a duplicate\" / \"Not a child\" actions in the paper detail popup.",
+        "operationId": "detach_paper_api_v1_papers__paper_id__detach_post",
         "security": [
           {
             "HTTPBearer": []
@@ -6569,6 +7587,118 @@
         }
       }
     },
+    "/api/v1/settings/openalex/status": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Openalex Status",
+        "description": "Report whether the OpenAlex API key is configured and, if so, whether\na live probe accepts it. Drives the connection pill in Settings \u2192\nConnections \u2192 OpenAlex, mirroring the Semantic Scholar status contract.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False`` \u2014 no key set (env or secret store).\n  - ``valid=True``       \u2014 probe returned 200, or 429 (key authenticated\n                           before the rate limiter applied).\n  - ``valid=False``      \u2014 OpenAlex rejected the key (401 / 403).\n  - ``valid=None``       \u2014 probe could not complete / unexpected status.\n\nThe probe hits ``/rate-limit`` directly (bypasses the response cache) so\na manual re-check always re-probes with the current key.",
+        "operationId": "get_openalex_status_api_v1_settings_openalex_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/semantic-scholar/status": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Semantic Scholar Status",
+        "description": "Report whether the Semantic Scholar key is configured and, if so,\nwhether a live authenticated probe accepts it. Drives the connection dot\nin Settings \u2192 Connections \u2192 Semantic Scholar.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False``         \u2014 no key set (env or secret store).\n  - ``valid=True``               \u2014 probe returned 200, OR 429 (the key\n                                   was accepted; S2 authenticates before\n                                   applying the 1 req/s throttle).\n  - ``valid=False``              \u2014 S2 rejected the key (401 / 403).\n  - ``valid=None``               \u2014 probe could not complete (network /\n                                   timeout / unexpected status); unknown.\n\nThe probe is a single cheapest-possible `/paper/search?limit=1` call with\na short timeout and no retries \u2014 it is on-demand only (card mount / manual\nrefresh), so it doesn't meaningfully spend the 1 req/s budget.",
+        "operationId": "get_semantic_scholar_status_api_v1_settings_semantic_scholar_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/settings/test/scholar": {
       "get": {
         "tags": [
@@ -7529,6 +8659,81 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/papers/{paper_id}/collections": {
+      "post": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Save a paper and add it to selected collections",
+        "description": "Compound paper-card action: Library promotion plus memberships.",
+        "operationId": "save_paper_to_collections_api_v1_library_papers__paper_id__collections_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_AddPaperToCollectionsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -8616,7 +9821,7 @@
           "library"
         ],
         "summary": "List followed authors",
-        "description": "Return all followed authors, joining with the authors table for display names.",
+        "description": "Return all followed authors, joining with the authors table for display names.\n\nDeliberately fast: the canonical author *signal* is computed by the\nseparate ``/followed-authors/signals`` endpoint so the grid (which drives\noff this list) never waits on the signal context build, and a dismiss that\ninvalidates this list updates the grid instantly.",
         "operationId": "list_followed_authors_api_v1_library_followed_authors_get",
         "security": [
           {
@@ -8676,7 +9881,7 @@
           "library"
         ],
         "summary": "Follow an author",
-        "description": "Start following an author.",
+        "description": "Start following an author.\n\nIdempotent: following an already-followed author returns the existing\nfollow instead of erroring \u2014 the user's intent (\"this author should be\nfollowed\") is already satisfied, and a 409 here turned harmless client\nretries / double-submits into scary error toasts.",
         "operationId": "follow_author_api_v1_library_followed_authors_post",
         "security": [
           {
@@ -8719,6 +9924,62 @@
                 "schema": {
                   "$ref": "#/components/schemas/FollowedAuthorResponse"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/followed-authors/signals": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "summary": "Canonical author signals for every followed author",
+        "description": "Batched author-signal map keyed by author_id. Split from the followed-authors list so the (slow) signal context build never blocks the (fast) list that drives the grid. Computed on demand.",
+        "operationId": "list_followed_author_signals_api_v1_library_followed_authors_signals_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -8970,6 +10231,278 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/preflight/bibtex": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Preview enrichment cost for a BibTeX file upload",
+        "description": "Parse a BibTeX file without writing rows and forecast enrichment cost.",
+        "operationId": "preflight_bibtex_file_endpoint_api_v1_library_import_preflight_bibtex_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_preflight_bibtex_file_endpoint_api_v1_library_import_preflight_bibtex_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/preflight/bibtex/text": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Preview enrichment cost for pasted BibTeX text",
+        "description": "Parse pasted BibTeX without writing rows and forecast enrichment cost.",
+        "operationId": "preflight_bibtex_text_endpoint_api_v1_library_import_preflight_bibtex_text_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BibtexTextImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/preflight/zotero/rdf": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Preview enrichment cost for a Zotero RDF export",
+        "description": "Parse Zotero RDF without writing rows and forecast enrichment cost.",
+        "operationId": "preflight_zotero_rdf_file_endpoint_api_v1_library_import_preflight_zotero_rdf_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_preflight_zotero_rdf_file_endpoint_api_v1_library_import_preflight_zotero_rdf_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library/import/preflight/zotero": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Preview enrichment cost for a Zotero library import",
+        "description": "Fetch Zotero metadata without writing rows and forecast enrichment cost.",
+        "operationId": "preflight_zotero_endpoint_api_v1_library_import_preflight_zotero_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoteroImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPreflightResponse"
+                }
               }
             }
           },
@@ -9242,113 +10775,12 @@
       }
     },
     "/api/v1/library/import/zotero/collections": {
-      "get": {
-        "tags": [
-          "library-import"
-        ],
-        "summary": "List Zotero collections",
-        "description": "Backward-compatible GET wrapper for listing Zotero collections.",
-        "operationId": "list_zotero_collections_get_endpoint_api_v1_library_import_zotero_collections_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "library_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "description": "Zotero user/group library ID",
-              "title": "Library Id"
-            },
-            "description": "Zotero user/group library ID"
-          },
-          {
-            "name": "api_key",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Zotero API key",
-              "title": "Api Key"
-            },
-            "description": "Zotero API key"
-          },
-          {
-            "name": "library_type",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "Zotero library type: user or group",
-              "default": "user",
-              "title": "Library Type"
-            },
-            "description": "Zotero library type: user or group"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ZoteroCollectionResponse"
-                  },
-                  "title": "Response List Zotero Collections Get Endpoint Api V1 Library Import Zotero Collections Get"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
       "post": {
         "tags": [
           "library-import"
         ],
         "summary": "List Zotero collections",
-        "description": "Fetch Zotero collections via POST to avoid API key in query strings.",
+        "description": "Fetch Zotero collections via POST to avoid API key in query strings.\n\nPOST-only by design (43.3): the deleted GET wrapper took the API key as a\nquery parameter and PERSISTED it via `_resolve_zotero_api_key` \u2192 `set_secret`\n\u2014 a secret written from a URL on a read verb. The frontend only ever called\nthis POST; persisting the key belongs to the request body, not a query\nstring.",
         "operationId": "list_zotero_collections_post_endpoint_api_v1_library_import_zotero_collections_post",
         "security": [
           {
@@ -9633,6 +11065,73 @@
         }
       }
     },
+    "/api/v1/library/import/staged/{paper_id}/confirm": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Save a staged low-confidence import to Library",
+        "description": "Promote a reviewed low-confidence import through the Library write path.",
+        "operationId": "confirm_staged_import_api_v1_library_import_staged__paper_id__confirm_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "paper_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Paper Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmStagedImportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/import/resolve-openalex": {
       "post": {
         "tags": [
@@ -9704,7 +11203,7 @@
           "library-import"
         ],
         "summary": "Search online sources (OpenAlex + S2 + Crossref + arXiv + bioRxiv)",
-        "description": "Return a ranked list of papers matching the query across all enabled discovery sources. Results are cross-source deduplicated (canonical triple) and each is decorated with `in_library`, `paper_id`, `sources` (provenance chip), and a personal `like_score` computed against the user's library profile. No writes.",
+        "description": "Return a list of papers matching the query across all enabled discovery sources, ranked by query relevance (cross-source RRF + query-text match \u2014 search-engine semantics). Results are cross-source deduplicated (canonical triple) and each is decorated with `in_library`, `paper_id`, `sources` (provenance chip), `relevance`, and a personal `like_score` for the why-chips. No writes.",
         "operationId": "online_source_search_api_v1_library_import_search_post",
         "security": [
           {
@@ -9836,13 +11335,79 @@
         }
       }
     },
+    "/api/v1/library/import/search/authors/top-works": {
+      "post": {
+        "tags": [
+          "library-import"
+        ],
+        "summary": "Top-cited paper titles for a set of OpenAlex authors",
+        "description": "Returns `{openalex_id: [titles]}` \u2014 the N most-cited works per author (one small OpenAlex /works call each, run concurrently). Split from the author-search endpoint so it can be fetched non-blocking: the search cards render immediately and the titles fill in after. Pure read.",
+        "operationId": "author_top_cited_works_api_v1_library_import_search_authors_top_works_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorTopWorksRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/library/import/search/stream": {
       "post": {
         "tags": [
           "library-import"
         ],
         "summary": "Streaming variant of /import/search (NDJSON, per-source events)",
-        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons \u2192 partial results \u2192 final ranked list incrementally. Each newline-delimited JSON object carries a `type` field \u2014 `scorer_ready`, `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
+        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons \u2192 partial results \u2192 final query-relevance-ranked list incrementally. Each newline-delimited JSON object carries a `type` field \u2014 `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
         "operationId": "online_source_search_stream_api_v1_library_import_search_stream_post",
         "security": [
           {
@@ -11156,7 +12721,7 @@
           "discovery"
         ],
         "summary": "Discovery refresh status",
-        "description": "Return lightweight discovery status, including the last successful refresh.\n\n``last_refresh_at`` is the latest ``finished_at`` across the two operation\nkeys the system actually writes for a recommendation refresh: per-lens\nuser-triggered refreshes (``discovery.lens.refresh:<lens_id>``) and the\nperiodic scheduler job (``discovery.refresh_periodic``). Returns ``None``\nonly when neither has ever completed.",
+        "description": "Return lightweight discovery status, including the last successful refresh.\n\n``new_count`` and recommendation ``is_new`` use this same refresh window.",
         "operationId": "get_discovery_status_api_v1_discovery_status_get",
         "security": [
           {
@@ -11583,7 +13148,7 @@
           "discovery"
         ],
         "summary": "Search online sources by query/title/author/link (Activity-backed)",
-        "description": "Queue a multi-source online search as an Activity job and return its envelope.\n\nFans out across OpenAlex, Semantic Scholar, Crossref, arXiv, and bioRxiv\nvia the shared ``search_across_sources`` stack and returns deduplicated\nresults ranked by personal fit. Runs on the APS scheduler pool so the\nrequest thread is released before the remote round-trips. Frontend\ncallers poll ``GET /activity/{job_id}`` and read the ``result`` payload\nonce the status turns ``completed``.",
+        "description": "Queue a multi-source online search as an Activity job and return its envelope.\n\nFans out across OpenAlex, Semantic Scholar, Crossref, arXiv, and bioRxiv\nvia the shared ``search_online_sources`` stack and returns deduplicated\nresults ranked by query relevance (cross-source RRF + query-text match;\npersonal fit rides along as chip data). Runs on the APS scheduler pool so the\nrequest thread is released before the remote round-trips. Frontend\ncallers poll ``GET /activity/{job_id}`` and read the ``result`` payload\nonce the status turns ``completed``.",
         "operationId": "manual_discovery_search_api_v1_discovery_manual_search_post",
         "security": [
           {
@@ -12422,6 +13987,130 @@
         }
       }
     },
+    "/api/v1/feed/settings": {
+      "get": {
+        "tags": [
+          "feed"
+        ],
+        "summary": "Get feed auto-refresh settings",
+        "description": "Return the feed inbox auto-refresh opt-in + interval.",
+        "operationId": "get_feed_settings_api_v1_feed_settings_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "feed"
+        ],
+        "summary": "Update feed auto-refresh settings",
+        "description": "Persist the feed auto-refresh settings and (re)register the periodic job.\n\nThe two KV upserts run in one gated write unit (SQLite write discipline);\nrescheduling happens after the commit so the live scheduler matches the new\nsetting without a restart.",
+        "operationId": "update_feed_settings_api_v1_feed_settings_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/feed": {
       "get": {
         "tags": [
@@ -13050,6 +14739,23 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FeedAddRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -13210,6 +14916,134 @@
         ],
         "summary": "Dislike feed paper and send a negative signal",
         "operationId": "dislike_feed_item_api_v1_feed__feed_item_id__dislike_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "feed_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feed Item Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feed/{feed_item_id}/dismiss": {
+      "post": {
+        "tags": [
+          "feed"
+        ],
+        "summary": "Dismiss feed paper \u2014 hide from Feed forever + small negative signal",
+        "operationId": "dismiss_feed_item_api_v1_feed__feed_item_id__dismiss_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "feed_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feed Item Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feed/{feed_item_id}/undo-dismiss": {
+      "post": {
+        "tags": [
+          "feed"
+        ],
+        "summary": "Undo a feed dismissal \u2014 restore to inbox + drop the negative signal",
+        "operationId": "undo_feed_dismiss_api_v1_feed__feed_item_id__undo_dismiss_post",
         "security": [
           {
             "HTTPBearer": []
@@ -13921,6 +15755,24 @@
             }
           },
           {
+            "name": "resolution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 3.0,
+                  "minimum": 0.5
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resolution"
+            }
+          },
+          {
             "name": "x-api-key",
             "in": "header",
             "required": false,
@@ -14219,6 +16071,177 @@
         }
       }
     },
+    "/api/v1/insights/papers": {
+      "get": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Papers behind an Insights figure (drilldown)",
+        "description": "Paginated paper list for ONE Insights figure \u2014 a graph cluster, or a topic / journal / institution / year / source bar. Pure read; rows are the standard Publication shape.",
+        "operationId": "get_insights_papers_api_v1_insights_papers_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "filter_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "cluster | topic | journal | institution | country | year | source | all",
+              "title": "Filter Type"
+            },
+            "description": "cluster | topic | journal | institution | country | year | source | all"
+          },
+          {
+            "name": "filter_value",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "the figure's value (cluster id, topic name, \u2026); ignored for 'all'",
+              "title": "Filter Value"
+            },
+            "description": "the figure's value (cluster id, topic name, \u2026); ignored for 'all'"
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "library | corpus \u2014 only affects cluster",
+              "default": "library",
+              "title": "Scope"
+            },
+            "description": "library | corpus \u2014 only affects cluster"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 30,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/insights/health": {
+      "get": {
+        "tags": [
+          "insights",
+          "insights"
+        ],
+        "summary": "Canonical corpus data-health snapshot",
+        "description": "The single source of truth for corpus data-health (task 24, Pillar 1). Returns uniform dimension records \u2014 each with a count, severity, a plain-language explanation/impact, and the fix actions \u2014 so every surface (Health page, needs-attention, operational status) renders the same numbers and guidance. Served via the materialised-view layer (<1s cached read, background rebuild on change; no external calls).",
+        "operationId": "get_corpus_health_api_v1_insights_health_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/insights/diagnostics": {
       "get": {
         "tags": [
@@ -14402,6 +16425,560 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/dimensions/{key}/items": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Papers affected by a health dimension",
+        "description": "Paginated list of the papers a Data Health dimension is flagging, so the Health page can drill down to which papers and offer fixes.",
+        "operationId": "get_dimension_items_api_v1_health_dimensions__key__items_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/operations": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Maintenance operations status",
+        "description": "Every registered maintenance task with its enabled / daily-cap config, the canonical count of papers it would address, and its most-recent run.",
+        "operationId": "get_operations_api_v1_health_operations_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/governance": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Background-ops governance knobs (idle-wait + API reserve)",
+        "operationId": "get_governance_settings_api_v1_health_governance_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Update background-ops governance knobs",
+        "description": "Persist the two knobs (one gated write unit; SQLite write discipline). The\ngate reads them live per check, so no restart/reschedule is needed.",
+        "operationId": "update_governance_settings_api_v1_health_governance_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GovernanceSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceSettings"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/operations/{key}/estimate": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Recompute a maintenance op's pending count + ETA for chosen params",
+        "description": "Cheap recompute of just ``candidates_pending`` + ``eta`` for a given ``scope`` / ``dry_run`` \u2014 lets the UI refresh the ETA when the user changes a control without re-listing every operation.",
+        "operationId": "estimate_operation_api_v1_health_operations__key__estimate_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dry Run"
+            }
+          },
+          {
+            "name": "max_items",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Items"
+            }
+          },
+          {
+            "name": "request_batch_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Batch Size"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/operations/{key}/run": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Run a maintenance task now",
+        "description": "Schedule one bounded run (trigger_source='user'). Idempotent \u2014 returns the in-flight job if the same operation is already running. An optional body restricts the run to specific paper ids.",
+        "operationId": "run_operation_api_v1_health_operations__key__run_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunMaintenanceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/operations/{key}/config": {
+      "post": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Configure a maintenance task",
+        "description": "Set the auto-enable flag and/or the daily cap for one task.",
+        "operationId": "set_operation_config_api_v1_health_operations__key__config_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MaintenanceConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/health/threads": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Dump all backend thread stacks (diagnostic)",
+        "description": "Read-only diagnostic for write-lock stalls: returns every live thread's name + current stack so the holder of the SQLite writer (or the process writer gate) can be identified while reads still flow. No DB access \u2014 usable even when the writer is wedged.",
+        "operationId": "dump_thread_stacks_api_v1_health_threads_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }
@@ -14788,6 +17365,65 @@
         "summary": "Deduplicate authors and publications",
         "description": "Run deduplication and stable-ID maintenance as a background job.",
         "operationId": "deduplicate_database_api_v1_library_mgmt_deduplicate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal Server Error"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/library-mgmt/backfill-components": {
+      "post": {
+        "tags": [
+          "library-management"
+        ],
+        "summary": "Reconcile paper groups (published papers / preprints / components)",
+        "description": "Run the corpus-wide parent/child reconciliation pass: published journal papers become the root when present, preprints and components point to that root, and child rows lose vectors / graph state / preference sidecars. Runs as a background job.",
+        "operationId": "backfill_components_route_api_v1_library_mgmt_backfill_components_post",
         "security": [
           {
             "HTTPBearer": []
@@ -15381,6 +18017,71 @@
         }
       }
     },
+    "/api/v1/activity/{job_id}/stop": {
+      "post": {
+        "tags": [
+          "activity"
+        ],
+        "summary": "Gracefully stop an operation",
+        "description": "Request a GRACEFUL stop for a running operation: the worker keeps control, finishes its in-flight batch, commits the work done so far and exits at its next cooperative checkpoint. No thread interrupt is sent (contrast with /cancel, which kills the worker thread). Queued jobs are unscheduled immediately.",
+        "operationId": "stop_operation_api_v1_activity__job_id__stop_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ai/status": {
       "get": {
         "tags": [
@@ -15711,6 +18412,76 @@
         }
       }
     },
+    "/api/v1/ai/title-resolution-sweep": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "summary": "Title Resolution Sweep",
+        "description": "Resolve paper identity via Semantic Scholar /paper/search.\n\nDistinct from `/backfill-s2-vectors`: this sweep handles papers\nwithout a usable s2_id / DOI (or stamped `unmatched` /\n`bad_local_doi`). It writes the resolved identity back to the\n`papers` row so the next vector sweep can pick the paper up.",
+        "operationId": "title_resolution_sweep_api_v1_ai_title_resolution_sweep_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputeEmbeddingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/ai/embeddings/inactive": {
       "delete": {
         "tags": [
@@ -15835,7 +18606,7 @@
           "graphs"
         ],
         "summary": "Get Paper Map",
-        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, no topic overlay) are served via the materialised-view layer:\ncache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations bypass the cache and build inline \u2014 those are\nrare, ad-hoc views where caching every variant would be wasteful.",
+        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, resolution 1.0) are served via the materialised-view\nlayer: cache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations (incl. a non-default cluster_resolution) bypass the\ncache and build inline \u2014 those are rare, ad-hoc views where caching every\nvariant would be wasteful.",
         "operationId": "get_paper_map_api_v1_graphs_paper_map_get",
         "security": [
           {
@@ -15849,11 +18620,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "Label mode: cluster or topic",
+              "description": "Label mode: cluster (c-TF-IDF over title text)",
               "default": "cluster",
               "title": "Label Mode"
             },
-            "description": "Label mode: cluster or topic"
+            "description": "Label mode: cluster (c-TF-IDF over title text)"
           },
           {
             "name": "color_by",
@@ -15892,18 +18663,6 @@
             "description": "Show edges between nodes"
           },
           {
-            "name": "show_topics",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Show topic nodes overlaid on paper map",
-              "default": false,
-              "title": "Show Topics"
-            },
-            "description": "Show topic nodes overlaid on paper map"
-          },
-          {
             "name": "scope",
             "in": "query",
             "required": false,
@@ -15914,6 +18673,62 @@
               "title": "Scope"
             },
             "description": "library (default: Library-only papers) or corpus (every stored paper)"
+          },
+          {
+            "name": "cluster_resolution",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 3.0,
+              "minimum": 0.5,
+              "description": "Cluster detail (default 1.5): >1 finer (more clusters), <1 coarser. Non-1.0 serves from the durable variant cache.",
+              "default": 1.5,
+              "title": "Cluster Resolution"
+            },
+            "description": "Cluster detail (default 1.5): >1 finer (more clusters), <1 coarser. Non-1.0 serves from the durable variant cache."
+          },
+          {
+            "name": "w_semantic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: semantic-similarity weight in the fused layout",
+              "default": 1.0,
+              "title": "W Semantic"
+            },
+            "description": "PROTOTYPE: semantic-similarity weight in the fused layout"
+          },
+          {
+            "name": "w_coauthorship",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)",
+              "default": 0.0,
+              "title": "W Coauthorship"
+            },
+            "description": "PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"
+          },
+          {
+            "name": "w_bibliographic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: bibliographic-coupling weight in the fused layout",
+              "default": 0.0,
+              "title": "W Bibliographic"
+            },
+            "description": "PROTOTYPE: bibliographic-coupling weight in the fused layout"
           },
           {
             "name": "x-api-key",
@@ -15965,7 +18780,7 @@
           "graphs"
         ],
         "summary": "Get Author Network",
-        "description": "Get author network visualization data, served via materialised view.",
+        "description": "Get author network visualization data.\n\nThe default (resolution 1.0, pure-semantic layout) is served from the\nmaterialised view. A non-default cluster_resolution OR a fused layout (a\nnon-zero co-authorship / bib-coupling weight) is a variant \u2014 served from the\nSAME durable, proportionally-invalidated cache as the paper map (task #20):\nbuild once, reuse across restarts, rebuild only when a real proportion of the\nunderlying papers has changed. The build itself is a pure read (no\npublication-layout persistence), mirroring the paper map (I-2).",
         "operationId": "get_author_network_api_v1_graphs_author_network_get",
         "security": [
           {
@@ -15986,63 +18801,61 @@
             "description": "library (default) or corpus"
           },
           {
-            "name": "x-api-key",
-            "in": "header",
+            "name": "cluster_resolution",
+            "in": "query",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphData"
-                }
-              }
-            }
+              "type": "number",
+              "maximum": 3.0,
+              "minimum": 0.5,
+              "description": "Cluster detail: >1 finer (more clusters), <1 coarser",
+              "default": 1.0,
+              "title": "Cluster Resolution"
+            },
+            "description": "Cluster detail: >1 finer (more clusters), <1 coarser"
           },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graphs/topic-map": {
-      "get": {
-        "tags": [
-          "graphs"
-        ],
-        "summary": "Get Topic Map",
-        "description": "Get topic co-occurrence map visualization data, served via materialised view.",
-        "operationId": "get_topic_map_api_v1_graphs_topic_map_get",
-        "security": [
           {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
+            "name": "w_semantic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: semantic weight in the fused author layout",
+              "default": 1.0,
+              "title": "W Semantic"
+            },
+            "description": "PROTOTYPE: semantic weight in the fused author layout"
+          },
+          {
+            "name": "w_coauthorship",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: co-authorship weight in the fused author layout",
+              "default": 0.0,
+              "title": "W Coauthorship"
+            },
+            "description": "PROTOTYPE: co-authorship weight in the fused author layout"
+          },
+          {
+            "name": "w_bibliographic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "description": "PROTOTYPE: bibliographic-coupling weight in the fused author layout",
+              "default": 0.0,
+              "title": "W Bibliographic"
+            },
+            "description": "PROTOTYPE: bibliographic-coupling weight in the fused author layout"
+          },
           {
             "name": "x-api-key",
             "in": "header",
@@ -16159,7 +18972,7 @@
           "graphs"
         ],
         "summary": "Rebuild Graphs",
-        "description": "Rebuild all graph caches.",
+        "description": "Rebuild the graph caches for the requested scope (I-3: scope-aware).",
         "operationId": "rebuild_graphs_api_v1_graphs_rebuild_post",
         "security": [
           {
@@ -16167,6 +18980,18 @@
           }
         ],
         "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "library (default) or corpus \u2014 the scope to rebuild",
+              "default": "library",
+              "title": "Scope"
+            },
+            "description": "library (default) or corpus \u2014 the scope to rebuild"
+          },
           {
             "name": "background",
             "in": "query",
@@ -17744,10 +20569,743 @@
         }
       }
     },
+    "/api/v1/extension/ping": {
+      "get": {
+        "tags": [
+          "extension"
+        ],
+        "summary": "Connector handshake / health check",
+        "description": "Lets the browser connector confirm it is talking to an ALMa build that exposes this endpoint and that the save contract is compatible. Pure read.",
+        "operationId": "ping_api_v1_extension_ping_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/extension/save": {
+      "post": {
+        "tags": [
+          "extension"
+        ],
+        "summary": "Save the paper open in the browser into ALMa",
+        "description": "Resolves the scraped paper (DOI \u2192 OpenAlex preferred, scraped metadata as fallback) and applies the shared add/like/love \u2192 3/4/5 contract via the canonical save helper, stamped `added_from='browser_extension'`. `destination='reading_list'` additionally lands the paper on the reading list.",
+        "operationId": "save_from_extension_api_v1_extension_save_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/extension/lookup": {
+      "post": {
+        "tags": [
+          "extension"
+        ],
+        "summary": "Check membership + resolve a paper's metadata (read-only)",
+        "description": "Resolves the scraped identifiers against the local corpus and reports membership ('already in Library / Reading list'). Returns the title/authors/year/journal from the local row when present; with `resolve=true` it also fetches them from OpenAlex when the paper isn't local yet (so a PDF's title can be shown before saving). Pure read \u2014 never writes.",
+        "operationId": "lookup_from_extension_api_v1_extension_lookup_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionLookupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/extension/undo": {
+      "post": {
+        "tags": [
+          "extension"
+        ],
+        "summary": "Reverse a connector save",
+        "description": "Restores the paper to the state captured before the save (or, for a row the save created, reverts it to a tracked, non-Library row) and removes the positive feedback signal the save recorded. Never hard-deletes (D3).",
+        "operationId": "undo_from_extension_api_v1_extension_undo_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionUndoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/status": {
+      "get": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Get Onboarding Status",
+        "description": "First-run state + the counts the gate and step copy read.",
+        "operationId": "get_onboarding_status_api_v1_onboarding_status_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/profile": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Set Onboarding Profile",
+        "description": "Store the user's display name (local greeting; no external call).",
+        "operationId": "set_onboarding_profile_api_v1_onboarding_profile_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/complete": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Complete Onboarding",
+        "description": "Mark onboarding done so the gate stops showing, then start the\nMANDATORY convergence chain (audit 39 finding #4): the coordinator walks\nthe maintenance registry's dependency order \u2014 identity \u2192 metadata \u2192\nvectors \u2192 local embeddings \u2192 centroids \u2192 reference graph \u2192 cluster\nlabels \u2192 topic normalization \u2014 until nothing actionable remains, so the\nfresh library ends healthy, not \"queued\". Its `auto:onboarding_complete`\ntrigger is user-facing (never yields to the idle gate) and survives\nrestarts via the orphan-resume path.",
+        "operationId": "complete_onboarding_api_v1_onboarding_complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/reset": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Reset Onboarding",
+        "description": "Clear the completed flag so Settings \u2192 Restart re-shows the flow.",
+        "operationId": "reset_onboarding_api_v1_onboarding_reset_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/resolve-owner": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Resolve Owner Identity",
+        "description": "Resolve an ORCID or OpenAlex id to a profile for the confirm card.\n\nRead-only \u2014 no follow, no write. The frontend shows the resolved name +\naffiliation + works count, then calls ``/ingest-owner`` on confirm.",
+        "operationId": "resolve_owner_identity_api_v1_onboarding_resolve_owner_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveOwnerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/ingest-owner": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Ingest Owner",
+        "description": "Follow the user's own author profile + schedule the full backfill.\n\nReuses the canonical follow path (``apply_follow_state`` +\n``schedule_followed_author_historical_backfill``) so all three follow\ntables and the deep-refresh job behave exactly as a normal follow \u2014 then\nmarks the row as the single owner. The owner's papers are promoted to the\nLibrary by ``/promote-owner-papers`` once the backfill has landed them.",
+        "operationId": "ingest_owner_api_v1_onboarding_ingest_owner_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestOwnerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestOwnerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/promote-owner-papers": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Promote Owner Papers",
+        "description": "Save the owner's backfilled papers into the Library (idempotent).\n\nCalled by the frontend once the owner backfill job completes. Selects every\npaper attributed to the owner via ``publication_authors`` and routes it\nthrough ``add_to_library`` (monotonic rating, provenance preserved).",
+        "operationId": "promote_owner_papers_api_v1_onboarding_promote_owner_papers_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteOwnerResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/paper-feedback": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Onboarding Paper Feedback",
+        "description": "Apply the D6 triage contract to any corpus paper.\n\nFills the gap for paper-level triage from a surface that is neither Feed nor\nDiscovery. Delegates to the canonical library use-cases so ratings stay\nmonotonic and Feed/Discovery rows for the same paper stay reconciled:\n\n- ``add``  \u2192 save (rating 3)\n- ``like`` \u2192 save (rating 4)\n- ``love`` \u2192 save (rating 5)\n- ``dislike`` \u2192 signal only (rating 1, stays in corpus)\n- ``dismiss`` \u2192 hide (status ``dismissed``, rating 1)\n- ``undo`` \u2192 reverse the above: back to a neutral corpus row (tracked,\n  rating 0) AND delete the onboarding-generated signal, so re-clicking an\n  applied action toggles it fully off.",
+        "operationId": "onboarding_paper_feedback_api_v1_onboarding_paper_feedback_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaperFeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaperFeedbackResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/{full_path}": {
       "get": {
         "summary": "Serve Frontend",
-        "description": "Serve a real dist file if it exists, else the SPA index.",
+        "description": "Serve a real dist file if it exists, else 404.",
         "operationId": "serve_frontend__full_path__get",
         "parameters": [
           {
@@ -18676,6 +22234,30 @@
         "title": "AuthorFollowFromPaperResponse",
         "description": "Follow-author result for paper-card actions."
       },
+      "AuthorMergeMatch": {
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "title": "Author Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "confidence": {
+            "type": "string",
+            "title": "Confidence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "author_id",
+          "name",
+          "confidence"
+        ],
+        "title": "AuthorMergeMatch",
+        "description": "The followed author a suggestion is a likely name-duplicate of."
+      },
       "AuthorResponse": {
         "properties": {
           "id": {
@@ -19119,6 +22701,16 @@
             ],
             "title": "Known Author Type"
           },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuthorMergeMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "shared_paper_count": {
             "type": "integer",
             "title": "Shared Paper Count",
@@ -19274,6 +22866,28 @@
         "title": "AuthorSuggestionSignal",
         "description": "One piece of evidence backing an author suggestion.\n\nT7 (2026-04-24) \u2014 replaces the single opaque `suggestion_type`\nlabel with a priority-ordered list of concrete evidence chips.\n`label` is the user-facing string; `kind` is a stable machine\ntag for analytics / future targeting. `count` / `value` /\n`subject` are optional numeric / string facets the UI can use\nfor tooltip-rich rendering."
       },
+      "AuthorTopWorksRequest": {
+        "properties": {
+          "openalex_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 25,
+            "title": "Openalex Ids"
+          },
+          "per_author": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Per Author",
+            "default": 2
+          }
+        },
+        "type": "object",
+        "title": "AuthorTopWorksRequest",
+        "description": "Resolve the two most-cited papers for a set of OpenAlex author ids."
+      },
       "AuthorTypeUpdateRequest": {
         "properties": {
           "author_type": {
@@ -19355,7 +22969,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "A .bib file to import"
           },
@@ -19375,7 +22989,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "format": "binary",
+            "contentMediaType": "application/octet-stream",
             "title": "File",
             "description": "A Zotero RDF (.rdf) export file"
           },
@@ -19390,6 +23004,36 @@
           "file"
         ],
         "title": "Body_import_zotero_rdf_file_endpoint_api_v1_library_import_zotero_rdf_post"
+      },
+      "Body_preflight_bibtex_file_endpoint_api_v1_library_import_preflight_bibtex_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "A .bib file to preview"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_preflight_bibtex_file_endpoint_api_v1_library_import_preflight_bibtex_post"
+      },
+      "Body_preflight_zotero_rdf_file_endpoint_api_v1_library_import_preflight_zotero_rdf_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "A Zotero RDF (.rdf) export file to preview"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_preflight_zotero_rdf_file_endpoint_api_v1_library_import_preflight_zotero_rdf_post"
       },
       "BranchPreviewItem": {
         "properties": {
@@ -19895,6 +23539,17 @@
             ],
             "title": "Scholar Id"
           },
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          },
           "status": {
             "type": "string",
             "title": "Status",
@@ -19927,6 +23582,24 @@
           "openalex_id"
         ],
         "title": "ConfirmOpenAlexRequest"
+      },
+      "ConfirmStagedImportResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "paper_id"
+        ],
+        "title": "ConfirmStagedImportResponse"
       },
       "DeleteInactiveEmbeddingsResponse": {
         "properties": {
@@ -20022,6 +23695,13 @@
             "title": "Max Results",
             "default": 50
           },
+          "min_score": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Min Score",
+            "default": 0.0
+          },
           "max_candidates_per_strategy": {
             "type": "integer",
             "maximum": 50.0,
@@ -20100,12 +23780,17 @@
       },
       "DiscoverySchedule": {
         "properties": {
+          "refresh_enabled": {
+            "type": "boolean",
+            "title": "Refresh Enabled",
+            "default": false
+          },
           "refresh_interval_hours": {
             "type": "integer",
             "maximum": 168.0,
             "minimum": 0.0,
             "title": "Refresh Interval Hours",
-            "default": 0
+            "default": 6
           },
           "graph_maintenance_interval_hours": {
             "type": "integer",
@@ -20117,7 +23802,7 @@
         },
         "type": "object",
         "title": "DiscoverySchedule",
-        "description": "Schedule settings for automatic recommendation refresh."
+        "description": "Schedule settings for automatic recommendation refresh.\n\nAuto-refresh is opt-in: the periodic job registers only when\n``refresh_enabled`` is true AND ``refresh_interval_hours`` > 0. The\nDiscovery page toggle drives ``refresh_enabled``; the interval lives in\nSettings."
       },
       "DiscoverySettingsResponse": {
         "properties": {
@@ -20479,6 +24164,208 @@
         ],
         "title": "ErrorResponse"
       },
+      "ExtensionLookupRequest": {
+        "properties": {
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "openalex_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openalex Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "resolve": {
+            "type": "boolean",
+            "title": "Resolve",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ExtensionLookupRequest",
+        "description": "Identify a paper to check membership + (optionally) resolve metadata."
+      },
+      "ExtensionSaveRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "title": "Action",
+            "description": "add | like | love \u2192 3/4/5 stars",
+            "default": "add"
+          },
+          "destination": {
+            "type": "string",
+            "title": "Destination",
+            "description": "library (untriaged) | reading_list (reading_status='reading')",
+            "default": "library"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "openalex_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openalex Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "authors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authors"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          }
+        },
+        "type": "object",
+        "title": "ExtensionSaveRequest",
+        "description": "A single paper scraped from the page the user has open.\n\nAt least one resolvable identifier is required (``doi`` /\n``openalex_id`` / ``title``). The remaining scraped fields are passed\nthrough as the ``candidate`` fallback so a DOI-less page (some\npreprints, working papers) still saves with the metadata we could\nread off the page."
+      },
+      "ExtensionUndoRequest": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          },
+          "prior": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id"
+        ],
+        "title": "ExtensionUndoRequest",
+        "description": "Reverse a connector save using the token returned by /save."
+      },
+      "FeedAddRequest": {
+        "properties": {
+          "collection_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Collection Ids"
+          }
+        },
+        "type": "object",
+        "title": "FeedAddRequest"
+      },
       "FeedBulkActionRequest": {
         "properties": {
           "feed_item_ids": {
@@ -20602,6 +24489,25 @@
         "title": "FeedMonitorUpdateRequest",
         "description": "Request model for updating a feed monitor."
       },
+      "FeedSettings": {
+        "properties": {
+          "auto_refresh_enabled": {
+            "type": "boolean",
+            "title": "Auto Refresh Enabled",
+            "default": false
+          },
+          "refresh_interval_hours": {
+            "type": "integer",
+            "maximum": 168.0,
+            "minimum": 0.0,
+            "title": "Refresh Interval Hours",
+            "default": 6
+          }
+        },
+        "type": "object",
+        "title": "FeedSettings",
+        "description": "Opt-in auto-refresh settings for the feed inbox.\n\nPersisted in the shared ``discovery_settings`` KV store under the\n``schedule.feed_refresh_*`` keys. The Feed page toggle drives\n``auto_refresh_enabled``; the interval lives in Settings. Default OFF \u2014 the\nperiodic job registers only when enabled AND interval > 0."
+      },
       "FollowAuthorRequest": {
         "properties": {
           "author_id": {
@@ -20612,6 +24518,17 @@
             "type": "boolean",
             "title": "Notify New Papers",
             "default": true
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           }
         },
         "type": "object",
@@ -20619,7 +24536,7 @@
           "author_id"
         ],
         "title": "FollowAuthorRequest",
-        "description": "Request model for following an author."
+        "description": "Request model for following an author.\n\n``author_id`` accepts any author reference the canonical resolver\nunderstands (local ``authors.id`` or an OpenAlex author id \u2014 the row is\ncreated when missing). ``name`` is the display name to stamp on a row\ncreated this way; without it the row would be named after the raw id\nuntil the historical backfill hydrates it."
       },
       "FollowedAuthorResponse": {
         "properties": {
@@ -20634,6 +24551,11 @@
           "notify_new_papers": {
             "type": "boolean",
             "title": "Notify New Papers"
+          },
+          "is_owner": {
+            "type": "boolean",
+            "title": "Is Owner",
+            "default": false
           },
           "name": {
             "anyOf": [
@@ -20655,6 +24577,29 @@
         ],
         "title": "FollowedAuthorResponse",
         "description": "Response model for a followed author."
+      },
+      "GovernanceSettings": {
+        "properties": {
+          "idle_wait_minutes": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 0.0,
+            "title": "Idle Wait Minutes",
+            "description": "Minutes the app must be idle (no user request) before a background sweep may run. 0 = run as soon as nothing else is active.",
+            "default": 3
+          },
+          "reserved_api_calls": {
+            "type": "integer",
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Reserved Api Calls",
+            "description": "External-API calls (OpenAlex daily quota) a background sweep always leaves for your manual operations.",
+            "default": 200
+          }
+        },
+        "type": "object",
+        "title": "GovernanceSettings",
+        "description": "Background-ops governance knobs (task 37) \u2014 Settings \u2192 Data & system.\n\nKV-backed in the shared `discovery_settings` store; the shipped constants are\nthe defaults. The gate reads `idle_wait_minutes`; the per-sweep reserve + the\nHealth budget read `reserved_api_calls`."
       },
       "GraphData": {
         "properties": {
@@ -20700,6 +24645,11 @@
             "type": "number",
             "title": "Weight",
             "default": 1.0
+          },
+          "edge_type": {
+            "type": "string",
+            "title": "Edge Type",
+            "default": "semantic"
           }
         },
         "type": "object",
@@ -20761,6 +24711,11 @@
             "title": "Node Type",
             "default": "paper"
           },
+          "in_library": {
+            "type": "boolean",
+            "title": "In Library",
+            "default": true
+          },
           "metadata": {
             "additionalProperties": true,
             "type": "object",
@@ -20815,6 +24770,125 @@
           "database_ok"
         ],
         "title": "HealthResponse"
+      },
+      "ImportPreflightResponse": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "total_entries": {
+            "type": "integer",
+            "title": "Total Entries"
+          },
+          "valid_entries": {
+            "type": "integer",
+            "title": "Valid Entries"
+          },
+          "parse_errors": {
+            "type": "integer",
+            "title": "Parse Errors"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "identifiers": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Identifiers"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "dedup": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Dedup"
+          },
+          "likely_source_calls": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Likely Source Calls"
+          },
+          "eta": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Eta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "total_entries",
+          "valid_entries",
+          "parse_errors",
+          "identifiers",
+          "metadata",
+          "dedup",
+          "likely_source_calls",
+          "eta"
+        ],
+        "title": "ImportPreflightResponse"
+      },
+      "IngestOwnerRequest": {
+        "properties": {
+          "openalex_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Openalex Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "openalex_id"
+        ],
+        "title": "IngestOwnerRequest"
+      },
+      "IngestOwnerResponse": {
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "title": "Author Id"
+          },
+          "openalex_id": {
+            "type": "string",
+            "title": "Openalex Id"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "author_id",
+          "openalex_id"
+        ],
+        "title": "IngestOwnerResponse"
       },
       "JobCreate": {
         "properties": {
@@ -21012,6 +25086,11 @@
             "type": "number",
             "title": "Temperature",
             "default": 0.0
+          },
+          "resolution": {
+            "type": "number",
+            "title": "Resolution",
+            "default": 1.0
           },
           "generated_at": {
             "type": "string",
@@ -21269,6 +25348,61 @@
         "title": "LensUpdate",
         "description": "Request model for updating a discovery lens."
       },
+      "MaintenanceConfigRequest": {
+        "properties": {
+          "auto_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Enabled",
+            "description": "Allow safe idle repair"
+          },
+          "auto_daily_cap": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Daily Cap"
+          },
+          "remembered_manual_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remembered Manual Limit"
+          },
+          "request_batch_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Batch Size"
+          }
+        },
+        "type": "object",
+        "title": "MaintenanceConfigRequest",
+        "description": "Partial update \u2014 only provided fields change."
+      },
       "ManualAddRequest": {
         "properties": {
           "openalex_id": {
@@ -21359,13 +25493,29 @@
               "type": "string"
             },
             "type": "array",
-            "minItems": 1,
             "title": "Alt Author Ids"
+          },
+          "alt_openalex_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alt Openalex Ids"
+          },
+          "field_choices": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Field Choices"
           }
         },
         "type": "object",
         "title": "MergeProfilesRequest",
-        "description": "Body for `POST /authors/{primary_id}/merge-profiles`. Each\n`alt_author_ids` entry is an `authors.id` value (NOT an OpenAlex\nID) so the frontend can pass through `alt_profiles[].author_id`\nfrom the needs-attention payload directly."
+        "description": "Body for `POST /authors/{primary_id}/merge-profiles`. Each\n`alt_author_ids` entry is an `authors.id` value (NOT an OpenAlex\nID) so the frontend can pass through `alt_profiles[].author_id`\nfrom the needs-attention payload directly. `alt_openalex_ids`\nabsorbs identities with NO local row (suggestion-rail duplicates):\npapers reattach + the id is recorded as an alias of the primary.\nAt least one of the two lists must be non-empty."
       },
       "MergeRequest": {
         "properties": {
@@ -21380,6 +25530,76 @@
         ],
         "title": "MergeRequest",
         "description": "Request body for merging two topics."
+      },
+      "MergeSuggestionRequest": {
+        "properties": {
+          "openalex_id": {
+            "type": "string",
+            "title": "Openalex Id"
+          },
+          "primary_author_id": {
+            "type": "string",
+            "title": "Primary Author Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "openalex_id",
+          "primary_author_id"
+        ],
+        "title": "MergeSuggestionRequest"
+      },
+      "NotDuplicateRequest": {
+        "properties": {
+          "openalex_id": {
+            "type": "string",
+            "title": "Openalex Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "openalex_id"
+        ],
+        "title": "NotDuplicateRequest"
+      },
+      "OnboardingStatusResponse": {
+        "properties": {
+          "completed": {
+            "type": "boolean",
+            "title": "Completed"
+          },
+          "has_owner": {
+            "type": "boolean",
+            "title": "Has Owner"
+          },
+          "library_count": {
+            "type": "integer",
+            "title": "Library Count"
+          },
+          "followed_count": {
+            "type": "integer",
+            "title": "Followed Count"
+          },
+          "user_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "completed",
+          "has_owner",
+          "library_count",
+          "followed_count"
+        ],
+        "title": "OnboardingStatusResponse"
       },
       "OnlineAuthorSearchResult": {
         "properties": {
@@ -21445,6 +25665,36 @@
             "type": "boolean",
             "title": "Already Followed",
             "default": false
+          },
+          "existing_author_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Author Id"
+          },
+          "existing_author_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Existing Author Type"
+          },
+          "top_cited_titles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Top Cited Titles",
+            "default": []
           }
         },
         "type": "object",
@@ -21578,6 +25828,26 @@
             ],
             "title": "Candidate",
             "description": "Full multi-source search candidate (fields as returned by `/library/import/search`). Used as a fallback when OpenAlex cannot resolve the paper but another source (Semantic Scholar, Crossref, arXiv, bioRxiv) already provided full metadata."
+          },
+          "collection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Name",
+            "description": "Optional local collection name. When set and the paper lands in Library (add/like/love), the collection is created/found and the paper is added to it. Ignored for dislike."
+          },
+          "collection_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Collection Ids",
+            "description": "Existing collection ids selected by the paper-card chooser."
           }
         },
         "type": "object",
@@ -21585,6 +25855,121 @@
           "action"
         ],
         "title": "OnlineSearchSaveRequest"
+      },
+      "OwnerProfileResponse": {
+        "properties": {
+          "openalex_id": {
+            "type": "string",
+            "title": "Openalex Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "institution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution"
+          },
+          "works_count": {
+            "type": "integer",
+            "title": "Works Count",
+            "default": 0
+          },
+          "cited_by_count": {
+            "type": "integer",
+            "title": "Cited By Count",
+            "default": 0
+          },
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "openalex_id"
+        ],
+        "title": "OwnerProfileResponse"
+      },
+      "PaperFeedbackRequest": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Paper Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id",
+          "action"
+        ],
+        "title": "PaperFeedbackRequest"
+      },
+      "PaperFeedbackResponse": {
+        "properties": {
+          "paper_id": {
+            "type": "string",
+            "title": "Paper Id"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paper_id",
+          "action"
+        ],
+        "title": "PaperFeedbackResponse"
       },
       "PaperResponse": {
         "properties": {
@@ -21902,6 +26287,42 @@
         "title": "PaperResponse",
         "description": "Response model for a paper."
       },
+      "PickAffiliationRequest": {
+        "properties": {
+          "institution_name": {
+            "type": "string",
+            "title": "Institution Name",
+            "description": "Institution to display for this author"
+          },
+          "institution_openalex_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Openalex Id"
+          },
+          "institution_ror": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institution Ror"
+          }
+        },
+        "type": "object",
+        "required": [
+          "institution_name"
+        ],
+        "title": "PickAffiliationRequest"
+      },
       "PluginConfigUpdate": {
         "properties": {
           "config": {
@@ -21967,6 +26388,34 @@
         ],
         "title": "PluginInfo",
         "description": "Response model for plugin information."
+      },
+      "ProfileRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ProfileRequest"
+      },
+      "PromoteOwnerResponse": {
+        "properties": {
+          "promoted": {
+            "type": "integer",
+            "title": "Promoted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "promoted"
+        ],
+        "title": "PromoteOwnerResponse"
       },
       "PublicationRef": {
         "properties": {
@@ -22207,6 +26656,21 @@
               }
             ],
             "title": "Rating"
+          },
+          "collection_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Ids",
+            "description": "On save: also file the paper into these local collections (create-then-add is done client-side; ids only here)."
           }
         },
         "type": "object",
@@ -22259,6 +26723,12 @@
             "type": "number",
             "title": "Score",
             "description": "Recommendation score (0-100)"
+          },
+          "in_library": {
+            "type": "boolean",
+            "title": "In Library",
+            "description": "Paper is already a saved Library paper (collection lenses surface these so they can be added to the linked collection).",
+            "default": false
           },
           "score_breakdown": {
             "anyOf": [
@@ -22363,6 +26833,11 @@
           "created_at": {
             "type": "string",
             "title": "Created At"
+          },
+          "is_new": {
+            "type": "boolean",
+            "title": "Is New",
+            "default": false
           },
           "paper": {
             "anyOf": [
@@ -22507,6 +26982,115 @@
           "scholar_id"
         ],
         "title": "ResolveOpenAlexRequest"
+      },
+      "ResolveOwnerRequest": {
+        "properties": {
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          },
+          "openalex_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openalex Id"
+          }
+        },
+        "type": "object",
+        "title": "ResolveOwnerRequest"
+      },
+      "RunMaintenanceRequest": {
+        "properties": {
+          "target_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Ids"
+          },
+          "max_items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Items"
+          },
+          "request_batch_size": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Batch Size"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          },
+          "confirmation_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmation Token"
+          },
+          "plan_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Fingerprint"
+          }
+        },
+        "type": "object",
+        "title": "RunMaintenanceRequest",
+        "description": "Atomic run controls. The visible values travel with the Run click."
       },
       "SavePublicationsRequest": {
         "properties": {
@@ -22744,6 +27328,92 @@
             "title": "Slack Channel",
             "description": "Default Slack channel for notifications"
           },
+          "smtp_host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Host",
+            "description": "SMTP server host for email digests"
+          },
+          "smtp_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Port",
+            "description": "SMTP port (587 = STARTTLS, 465 = implicit TLS)",
+            "default": 587
+          },
+          "smtp_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Username",
+            "description": "SMTP auth username"
+          },
+          "smtp_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Password",
+            "description": "SMTP auth password (stored in the secret store)"
+          },
+          "smtp_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp From",
+            "description": "From address for digest emails"
+          },
+          "smtp_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp To",
+            "description": "Recipient list (comma / newline separated)"
+          },
+          "smtp_use_tls": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smtp Use Tls",
+            "description": "Use STARTTLS (ignored on port 465)",
+            "default": true
+          },
           "openalex_api_key": {
             "anyOf": [
               {
@@ -22754,7 +27424,19 @@
               }
             ],
             "title": "Openalex Api Key",
-            "description": "OpenAlex API key for premium access"
+            "description": "OpenAlex API key (required \u2014 get one free at openalex.org/settings/api)"
+          },
+          "semantic_scholar_api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Scholar Api Key",
+            "description": "Semantic Scholar API key (strongly recommended \u2014 avoids shared-pool 429s)"
           },
           "id_resolution_semantic_scholar_enabled": {
             "anyOf": [
@@ -22805,8 +27487,8 @@
               }
             ],
             "title": "Id Resolution Scholar Scrape Manual Enabled",
-            "description": "Allow manual Google Scholar scraping from the Authors UI",
-            "default": true
+            "description": "Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default \u2014 D14)",
+            "default": false
           }
         },
         "type": "object",
@@ -23103,32 +27785,7 @@
         ],
         "title": "TopicCreateRequest"
       },
-      "TopicDomainNode-Input": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "paper_count": {
-            "type": "integer",
-            "title": "Paper Count"
-          },
-          "fields": {
-            "items": {
-              "$ref": "#/components/schemas/TopicFieldNode"
-            },
-            "type": "array",
-            "title": "Fields"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "paper_count"
-        ],
-        "title": "TopicDomainNode"
-      },
-      "TopicDomainNode-Output": {
+      "TopicDomainNode": {
         "properties": {
           "name": {
             "type": "string",
@@ -23220,7 +27877,7 @@
         "properties": {
           "domains": {
             "items": {
-              "$ref": "#/components/schemas/TopicDomainNode-Output"
+              "$ref": "#/components/schemas/TopicDomainNode"
             },
             "type": "array",
             "title": "Domains"
@@ -23357,6 +28014,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
@@ -23519,6 +28183,22 @@
           "paper_id"
         ],
         "title": "_AddItemBody"
+      },
+      "_AddPaperToCollectionsBody": {
+        "properties": {
+          "collection_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Collection Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection_ids"
+        ],
+        "title": "_AddPaperToCollectionsBody"
       },
       "_AssignTagBody": {
         "properties": {

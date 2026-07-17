@@ -91,10 +91,11 @@ OpenAlex **requires an API key** (since 2026-02-13 — keyless requests get
 is strongly recommended too — without it S2 shares the anonymous worldwide
 pool and 429s often, stalling Discovery.
 
-Go to **Settings → Connections**, paste your [OpenAlex key](https://openalex.org/settings/api)
-into **OpenAlex** and (optionally) your S2 key into **Semantic Scholar**,
-then **Save connection settings**. You should see a green "OK" indicator
-next to OpenAlex in the **Settings → Status** card.
+Go to **Settings → Connections → External APIs**, paste your
+[OpenAlex key](https://openalex.org/settings/api) into **OpenAlex** and
+(optionally) your S2 key into **Semantic Scholar**, then save. The
+connection status shows a green "OK" indicator next to OpenAlex in the
+same card.
 
 If you started the container with `-e OPENALEX_API_KEY=...` (or
 `env_file:`), this is already set — no UI step needed.
@@ -146,7 +147,7 @@ expected budget.
 ### 6. (Optional) Configure an AI provider
 
 For semantic similarity, cluster labels, and auto-tagging, configure
-at least one AI provider in **Settings → AI & embeddings**:
+at least one AI provider in **Settings → Intelligence → AI provider**:
 
 * **Semantic Scholar** — no setup required; ALMa fetches pre-computed
   SPECTER2 vectors from S2 for any paper that has one.

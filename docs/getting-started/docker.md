@@ -203,7 +203,7 @@ ALMA_IMAGE_TAG=latest-lite \
   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 
 # Pin a specific version
-ALMA_IMAGE_TAG=0.12.1 \
+ALMA_IMAGE_TAG=0.20.1 \
   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
@@ -286,7 +286,7 @@ app — only the bundled embedding stack differs.
 
 | | `normal` CPU (default) | `normal` GPU | `lite` |
 |---|---|---|---|
-| Tag | `:latest`, `:0.15.0` | `:latest-gpu`, `:0.15.0-gpu` | `:latest-lite`, `:0.15.0-lite` |
+| Tag | `:latest`, `:0.20.1` | `:latest-gpu`, `:0.20.1-gpu` | `:latest-lite`, `:0.20.1-lite` |
 | Compressed image | ~1.4 GB | ~3.2 GB | ~1.2 GB |
 | Peak runtime memory | ~2 GB | ~3 GB (more on GPU init) | ~1 GB |
 | Local SPECTER2 encoder | yes (CPU) | yes (CUDA when host GPU is exposed; CPU otherwise) | no |
@@ -506,7 +506,7 @@ docker volume ls | grep alma         # check what's stored
 ## Backups
 
 The `data/` directory is the source of truth. The fastest backup
-path is the **Settings → Library Management → Backup** button, which
+path is the **Settings → Library maintenance → Backup** button, which
 writes a gzipped, transactionally-consistent SQLite snapshot into
 `data/backups/scholar_<timestamp>.db.gz`. By default, only the last
 five snapshots are kept (override with `-e ALMA_BACKUP_RETAIN=20`).

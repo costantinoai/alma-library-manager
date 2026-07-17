@@ -105,15 +105,19 @@ Range: 0…1.
 
 ### `citation_quality`
 
-Log-scaled citation count:
+Log-scaled citation count, with an "influential citation" floor:
 
 $$
-\text{citation\_quality}(c) = \frac{\log(1 + \text{cited\_by})}{\log(1 + 10000)}
+\text{eff} = \max(\text{cited\_by},\ 2 \times \text{influential\_citations})
+$$
+$$
+\text{citation\_quality} = \min\!\left(1,\ \frac{\log(\text{eff} + 1)}{\log(1000)}\right)
 $$
 
-A paper with 10k citations gets ≈1.0; a paper with 0 gets 0. The
-denominator is fixed so the function is interpretable across
-candidates.
+A paper with ~1000 effective citations gets ≈1.0; a paper with 0 gets
+0. The `2 × influential_citation_count` floor lets a highly-influential
+paper score well even with a modest raw count. The denominator is fixed
+so the function is interpretable across candidates.
 
 Range: 0…1.
 
@@ -155,14 +159,17 @@ Each prior feedback event contributes:
 * **Positive** (rating ≥ 4) → small boost.
 * **Negative** (rating ≤ 2) → small penalty.
 
-Decayed over time using two windows:
+Two configurable windows exist as defaults:
 
 | Window | Default | Weight |
 |---|---|---|
-| `feedback_decay_days_full` | 30 | 1.0 |
-| `feedback_decay_days_half` | 90 | 0.5 |
+| `feedback_decay_days_full` | 90 | 1.0 |
+| `feedback_decay_days_half` | 180 | 0.5 |
 
-Beyond `_half` days, weight tapers to 0.
+Note: the projection path that actually drives author-suggestion and
+paper feedback (`application/signal_projection.py`) does **not** read
+these settings — it hardcodes a tanh decay with a **180-day half-life**
+and a **730-day max age**, beyond which weight tapers to 0.
 
 Range before normalization: -1…+1. The weighted scorer stores it as a
 0…1 value in the final score, and the explanation payload includes

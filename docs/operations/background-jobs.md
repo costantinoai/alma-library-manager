@@ -181,10 +181,10 @@ Some jobs run on a schedule, not just on demand:
 | Job | Default schedule | Env var |
 |---|---|---|
 | Nightly author refresh | 3 AM UTC | `AUTHOR_REFRESH_HOUR` |
-| Alert evaluation | every 6 hours | `ALERT_CHECK_INTERVAL_HOURS` |
+| Alert evaluation | every hour (default) | `ALERT_CHECK_INTERVAL_HOURS` |
 | Feed refresh (per-monitor) | per-monitor interval | UI |
 
-Scheduler health is at `GET /api/v1/scheduler` — shows next-run
+Scheduler health is at `GET /api/v1/scheduler/status` — shows next-run
 timestamps for each job and whether the scheduler is alive.
 
 ### Orphaned-sweep resume

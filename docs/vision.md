@@ -117,11 +117,19 @@ the user has configured. The only outbound calls are to public
 scholarly APIs (OpenAlex, Crossref, arXiv, bioRxiv, Semantic
 Scholar) and, optionally, an LLM provider the user has set up.
 
-Imports come from Zotero, Mendeley, RIS, and BibTeX, and exports
-go back out the same way. The library is portable in both
-directions.
+Imports come from Zotero and BibTeX, and exports go back out as
+BibTeX or JSON. The library is portable in both directions.
 
 ## The lifecycle model
+
+A paper's state is two orthogonal axes, never overloaded into one
+status. **Membership** tracks how a paper relates to your library
+(tracked → library, or dismissed / removed as negative signal).
+**Reading** tracks where it sits in your workflow (unread → reading →
+done, or excluded). Every user action maps to exactly one canonical
+transition, and removal is a soft signal Discovery reads — nothing is
+hard-deleted in normal flows. See
+[Paper lifecycle](concepts/paper-lifecycle.md) for the full model.
 
 ## Design principles
 
@@ -168,7 +176,7 @@ prominently with the chosen fallback explained. The
 
 ## In practice
 
-The whole backend is one FastAPI app with about 25 route modules;
+The whole backend is one FastAPI app with about 30 route modules;
 the database is one file; the frontend is one Vite SPA.
 
 Because the same database holds the monitors, the library, and

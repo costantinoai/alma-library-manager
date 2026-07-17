@@ -63,7 +63,7 @@ here — subsystem *trends and analytics* are in
 
 The bulk of the page: the bounded background jobs that actually fix the corpus.
 Grouping and order come **entirely from the backend plan** (`GET
-/health/operations` returns ordered `stages`) — the full repair DAG, 15
+/health/operations` returns ordered `stages`) — the full repair DAG, 18
 operations across 11 dependency-ordered stages (author identity → canonicalization
 → works → paper identity → metadata → canonicalize → S2 vectors → local embeddings
 → derived data → cleanup → housekeeping). The frontend renders those stages

@@ -171,7 +171,7 @@ envelope here; if it doesn't, that's a bug.
 
 ```
 GET /api/v1/insights                                      # full overview (Stats)
-GET /api/v1/graphs/library                                # Graph (paper map)
+GET /api/v1/graphs/paper-map                              # Graph (paper map)
 GET /api/v1/reports/weekly-brief
 GET /api/v1/reports/collection-intelligence
 GET /api/v1/reports/topic-drift

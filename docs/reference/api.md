@@ -102,7 +102,7 @@ parameters and response shapes.
 | `PUT` | `/library/saved/{id}` | Update notes / rating |
 | `DELETE` | `/library/saved/{id}` | Soft-remove from Library |
 | `GET` | `/library/reading-queue` | Reading-list view |
-| `POST` | `/library/papers/{id}/reading-status` | Set reading status |
+| `PATCH` | `/library/papers/{id}/reading-status` | Set reading status |
 | `GET` | `/library/workflow-summary` | Landing-card counters |
 | `POST` | `/library/bulk/clear-rating` | Bulk: set rating to 0 |
 | `POST` | `/library/bulk/remove` | Bulk: soft-remove |
@@ -120,7 +120,7 @@ parameters and response shapes.
 | `POST` | `/library/import/bibtex/text` | Paste BibTeX text |
 | `POST` | `/library/import/zotero` | Pull a Zotero library |
 | `POST` | `/library/import/zotero/rdf` | Upload a Zotero RDF export |
-| `GET` | `/library/import/zotero/collections` | List Zotero collections (preview) |
+| `POST` | `/library/import/zotero/collections` | List Zotero collections (preview) |
 | `POST` | `/library/import/search` | Online OpenAlex search |
 | `POST` | `/library/import/search/save` | Save an online search result |
 | `POST` | `/library/import/resolve-openalex` | Re-resolve unresolved imports |
@@ -131,8 +131,8 @@ parameters and response shapes.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/library-mgmt/info` | DB size, paper count, last backup |
-| `GET` `POST` `DELETE` | `/library-mgmt/backup[/…]` | Backups |
+| `GET` | `/library-mgmt/info` | DB size, paper count, backup list |
+| `POST` `DELETE` | `/library-mgmt/backup[/…]` | Create / delete a backup (list is in `/library-mgmt/info`) |
 | `POST` | `/library-mgmt/restore/{name}` | Restore from a backup |
 | `POST` | `/library-mgmt/deduplicate` | Run preprint↔journal dedup |
 | `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
@@ -243,7 +243,7 @@ parameters and response shapes.
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
 | `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options served from cache; custom options bypass cache. SWR flags ride inside `metadata`. |
 | `GET` | `/graphs/author-network` | Co-authorship clusters. Cached. |
-| `GET` | `/graphs/topic-map` | Topic co-occurrence graph. Cached. |
+| `POST` | `/graphs/cluster-labels/refresh` | Re-label paper-map clusters. |
 | `POST` | `/graphs/rebuild` | Force a full rebuild of all graph caches (re-cluster + re-project). |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
@@ -276,7 +276,6 @@ parameters and response shapes.
 | `POST` | `/ai/recheck-environment` | Re-introspect runtime |
 | `POST` | `/ai/backfill-s2-vectors` | Bulk fetch SPECTER2 from S2 |
 | `POST` | `/ai/compute-embeddings` | Local SPECTER2 fallback |
-| `GET` | `/ai/embeddings/inactive` | Papers missing vectors |
 | `DELETE` | `/ai/embeddings/inactive` | Drop unused vectors |
 
 ### Activity & operations
@@ -299,7 +298,8 @@ carry two grouping fields:
 The Activity panel groups all rows sharing a `chain_id` under the
 member with the lowest `chain_step` rank (the starter), with the
 remaining steps rendered as children inside one envelope.
-| `GET` | `/scheduler` | Scheduler health + next runs |
+| `GET` | `/scheduler/status` | Scheduler health + next runs |
+| `POST` | `/scheduler/trigger/{job_id}` | Manually trigger a scheduled job |
 | `GET` | `/logs` | Application log ring buffer |
 
 ### Settings
@@ -309,13 +309,15 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/settings` | Full settings document |
 | `PUT` | `/settings` | Update a section |
 | `GET` | `/settings/openalex/usage` | Live OpenAlex quota state |
-| `GET` | `/settings/runtimes` | Detected Python runtimes for AI |
+| `GET` | `/settings/openalex/status` | OpenAlex connection status |
+| `GET` | `/settings/semantic-scholar/status` | Semantic Scholar connection status |
+| `GET` | `/settings/export` | Export the settings document |
 
 ### Other
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/papers/{id}` | Paper detail |
+| `GET` | `/papers/{id}/details` | Paper detail |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |
@@ -325,7 +327,7 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |
 | `GET` | `/plugins` | Plugin inventory (Slack, etc.) |
-| `GET` `POST` `DELETE` | `/operations[/…]` | Bulk operation endpoints |
+| `GET` `POST` | `/fetch[/…]` | Fetch / bulk operation endpoints |
 
 ### Browser connector (extension)
 

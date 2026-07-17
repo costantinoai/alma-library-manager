@@ -111,7 +111,7 @@ POST   /api/v1/lenses              # create
 PUT    /api/v1/lenses/{id}         # update weights / branch controls
 DELETE /api/v1/lenses/{id}         # delete
 
-POST   /api/v1/discovery/lenses/{id}/refresh   # Activity-backed refresh
+POST   /api/v1/lenses/{id}/refresh             # Activity-backed refresh
 GET    /api/v1/discovery/recommendations?lens_id={id}
 ```
 

@@ -28,7 +28,9 @@ alma/
 │   ├── ai/                       # Embedding providers and dependency probes
 │   ├── openalex/                 # OpenAlex HTTP client + helpers
 │   ├── services/                 # Thin domain services (S2 vectors, signal lab)
-│   ├── plugins/                  # Plugin layer (Slack)
+│   ├── plugins/                  # Plugin registry (wraps the transports below)
+│   ├── slack/                    # Slack notifier client
+│   ├── mailer/                   # SMTP / email digest client
 │   ├── cli/                      # `alma` CLI entry point
 │   └── config.py                 # Centralised configuration loading
 │

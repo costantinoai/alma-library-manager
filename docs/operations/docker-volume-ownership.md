@@ -1,3 +1,8 @@
+---
+title: Docker volume ownership
+description: Fixing named-volume permissions when upgrading a deployment that previously ran as root.
+---
+
 # Docker volume ownership (upgrading an existing deployment)
 
 The container runs as the non-root app user **`10001:10001`** (`user:` in

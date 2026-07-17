@@ -17,8 +17,7 @@ Concept pages explain *what* something is. The pages here explain
 
 -   **[Reading workflow](reading-workflow.md)**
 
-    Queue, currently reading, done, excluded — the orthogonal axis
-    to saving.
+    Reading, done, excluded — the orthogonal axis to saving.
 
 -   **[Browser connector](browser-connector.md)**
 

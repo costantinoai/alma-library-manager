@@ -70,9 +70,9 @@ Scholar doesn't have a vector for.
 You can install AI extras later — ALMa will detect them and light up
 the matching settings.
 
-For source installs, Settings → AI & embeddings defaults the selected
-Python environment to this repo-local `.venv`. Docker builds use the
-container-internal `/opt/venv` instead.
+For source installs, Settings → Intelligence → AI provider defaults the
+selected Python environment to this repo-local `.venv`. Docker builds
+use the container-internal `/opt/venv` instead.
 
 ## 3. Frontend build
 

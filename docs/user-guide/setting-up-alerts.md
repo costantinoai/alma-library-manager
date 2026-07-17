@@ -28,7 +28,7 @@ hand-editing.
 
 ## 2. Configure Slack in ALMa
 
-Go to **Settings → Channels** and fill:
+Go to **Settings → Delivery channels** and fill:
 
 - **Slack Bot Token** — paste the `xoxb-…` token. ALMa stores it in
   the unified secret store at `data/secrets.json` (gitignored,
@@ -118,12 +118,11 @@ A **rule** is the matching predicate for one source.
   digest (step 5), so this can be left at the default.
 - **Enabled** — on.
 
-Save. Use **Test fire** on the rule row to dry-match: ALMa runs
-the rule against the database (without the cold-start watermark)
-and shows you the first 20 paper titles that would be eligible
-under Layer 1 alone (publication-date window). This is the right
-button for "is this rule scoped sensibly?" before you wire it
-into a digest.
+Save. To sanity-check scope before wiring a rule into a digest,
+assign it to an alert and use the alert's **Dry Run** button: ALMa
+evaluates the alert against the database and shows the matching
+papers **without sending anything**. This answers "is this scoped
+sensibly?" before it goes live.
 
 You can create as many rules as you want — typically one per
 monitor you care about.
@@ -268,8 +267,8 @@ second click returns the same `job_id` with status
 
 Check the Activity row for the precise error:
 
-- `Slack token not configured` — go back to Settings → Channels
-  and save the token.
+- `Slack token not configured` — go back to Settings → Delivery
+  channels and save the token.
 - `channel_not_found: '…'` — the resolver tried `conversations.list`
   then `users.list` and didn't find a match. Verify (a) the bot is
   in the channel for channel-name targets, and (b) the

@@ -41,9 +41,10 @@ OpenAlex work via DOI first, then by canonical title.
 
 * **Resolved entries** land in Library with full OpenAlex
   metadata (topics, institutions, citation count).
-* **Unresolved entries** still land in Library, with a
-  `not_openalex_resolved` status badge in the Imports staging
-  panel. Use the **Resolve OpenAlex** action later to retry.
+* **Unresolved entries** still land in Library, flagged in the
+  Imports staging panel (e.g. "Pending enrichment", or a "we tried,
+  nothing matched" warning). Use the **Resolve OpenAlex** action
+  later to retry.
 
 ## Zotero (web API) flow
 
