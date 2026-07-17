@@ -180,19 +180,18 @@ export function LibraryManagementCard() {
     onError: () => errorToast('Error', 'Failed to start deduplication.'),
   })
 
-  // Reconcile existing rows into the part-of model: classify figures / SI /
-  // datasets / preprints, link them to their parent, and purge any vector /
-  // cluster row from a subordinate paper (alma.core.components.backfill_components).
+  // Reconcile paper groups: published rows win over preprints, components point
+  // at their root paper, and subordinate rows lose independent app sidecars.
   const backfillComponentsMutation = useMutation({
     mutationFn: () => api.post<{ job_id: string }>('/library-mgmt/backfill-components'),
     onSuccess: (data) => {
       toast({
-        title: 'Component reconcile started',
+        title: 'Paper-group reconcile started',
         description: `Job ${data.job_id} is now visible in Activity.`,
       })
       void invalidateQueries(queryClient, ['activity-operations'])
     },
-    onError: () => errorToast('Error', 'Failed to start component reconcile.'),
+    onError: () => errorToast('Error', 'Failed to start paper-group reconcile.'),
   })
 
   const [importDialogOpen, setImportDialogOpen] = useState(false)
@@ -279,7 +278,7 @@ export function LibraryManagementCard() {
                 pending={backfillComponentsMutation.isPending}
                 onClick={() => backfillComponentsMutation.mutate()}
               >
-                Reconcile Components
+                Reconcile Paper Groups
               </AsyncButton>
             </div>
 

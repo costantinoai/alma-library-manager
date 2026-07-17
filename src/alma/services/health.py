@@ -400,6 +400,14 @@ _REPAIR_ACTIONS: dict[str, list[dict[str, str]]] = {
             "target": "/api/v1/health/operations/title_resolution/run",
         }
     ],
+    "paper_group_reconcile": [
+        {
+            "label": "Reconcile paper groups",
+            "kind": "run_now",
+            "operation_key": "paper_group_reconcile",
+            "target": "/api/v1/health/operations/paper_group_reconcile/run",
+        }
+    ],
 }
 
 
@@ -707,7 +715,13 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
     local_computable, local_ok = _safe_assess(
         "local_specter2_candidates", lambda: _count_local_specter2_candidates(conn)
     )
-    orphans, orphans_ok = _safe_assess("canonical_orphans", lambda: _count_canonical_orphans(conn))
+    from alma.core.paper_groups import relationship_integrity_counts
+
+    group_integrity, group_integrity_ok = _safe_assess(
+        "paper_group_integrity", lambda: relationship_integrity_counts(conn)
+    )
+    group_integrity = group_integrity or {}
+    group_defects = sum(max(0, int(value or 0)) for value in group_integrity.values())
     without_oa = int(enr.get("without_openalex_id") or 0)
     retryable_waiting = int(enr.get("retryable_waiting") or 0)
     # identity.unresolved now counts the population title_resolution ACTUALLY
@@ -774,26 +788,32 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
             repair_task="title_resolution",
         )
     )
-    if orphans_ok and orphans:  # on assessor failure: skip (already loud in the log), don't claim 0
+    if group_integrity_ok and group_defects:  # on assessor failure: skip (already loud in the log), don't claim 0
         # Integrity tier: a single dangling pointer silently hides a paper, so any
         # occurrence warns (≥2% of the corpus escalates to critical).
-        orph_sev, _, orph_reason = _assess_gap(orphans, papers_total, impact="integrity")
+        group_sev, _, group_reason = _assess_gap(group_defects, papers_total, impact="integrity")
+        detail = ", ".join(
+            f"{key.replace('_', ' ')}: {value}"
+            for key, value in sorted(group_integrity.items())
+            if int(value or 0) > 0
+        )
         dims.append(
             _dimension(
-                key="identity.canonical_orphans",
+                key="identity.paper_group_integrity",
                 entity="identity",
-                label="Orphaned merge pointers",
-                count=orphans,
+                label="Paper group integrity",
+                count=group_defects,
                 total=papers_total,
-                severity=orph_sev,
-                severity_reason=orph_reason,
+                severity=group_sev,
+                severity_reason=group_reason,
                 impact_tier="integrity",
                 explanation=(
-                    f"{orphans} papers point to a canonical (merged) paper that no "
-                    "longer exists — they'll be hidden from normal views."
+                    "Some paper-group pointers are inconsistent: "
+                    f"{detail}. Run reconciliation to promote published papers over "
+                    "preprints, flatten chains, and purge child sidecars."
                 ),
-                impact="Orphaned merge pointers make papers silently disappear.",
-                repair_task=None,
+                impact="Broken paper-group pointers can hide papers or let child rows affect graphs, counts, and preferences.",
+                repair_task="paper_group_reconcile",
             )
         )
 
@@ -1030,9 +1050,11 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
 # The queued input itself is already captured — a never-attempted row becoming
 # attempted bumps paper_enrichment_status.updated_at (below) — so only the logic
 # literal needs the bump to force one rebuild onto the new assessment.
+# v11→v12: relationship integrity now uses the full paper-group defect summary
+# and exposes the paper_group_reconcile repair operation.
 _HEALTH_CORPUS_FINGERPRINT_SQL = f"""
     SELECT
-      'health-logic-v11',
+      'health-logic-v12',
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}),
       (SELECT COALESCE(MAX(updated_at),'') FROM papers),
       (SELECT COUNT(*) FROM paper_enrichment_status),

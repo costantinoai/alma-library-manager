@@ -258,6 +258,15 @@ def _run_dedup_preprint_twins(job_id: str, cap: int, target_paper_ids=None, para
     return run_preprint_dedup(_db_path(), limit=cap, scope=scope)
 
 
+def _run_paper_group_reconcile(job_id: str, cap: int, target_paper_ids=None, params=None):
+    from alma.core.db_write import write_section
+    from alma.services.paper_group_reconcile import reconcile_paper_groups
+
+    with _maintenance_conn() as conn:
+        with write_section(conn, label="papers.reconcile_groups"):
+            return reconcile_paper_groups(conn, limit=cap)
+
+
 def _run_collapse_duplicate_identity(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Collapse the LEGACY same-openalex_id duplicate backlog (non-destructive)."""
     from alma.api.deps import _db_path
@@ -474,6 +483,15 @@ def _count_reference_graph(conn: sqlite3.Connection, params=None) -> int:
         return 0
 
 
+def _count_paper_group_reconcile(conn: sqlite3.Connection, params=None) -> int:
+    from alma.services.paper_group_reconcile import count_paper_group_reconcile_candidates
+
+    try:
+        return int(count_paper_group_reconcile_candidates(conn) or 0)
+    except sqlite3.OperationalError:
+        return 0
+
+
 def _count_topic_normalize(conn: sqlite3.Connection, params=None) -> int:
     """Topic terms not yet linked to a canonical `topics` row."""
     try:
@@ -488,12 +506,15 @@ def _count_topic_normalize(conn: sqlite3.Connection, params=None) -> int:
 def _count_library_dedup(conn: sqlite3.Connection, params=None) -> int:
     """Cheap duplicate proxy: papers sharing a normalized DOI beyond the first.
     A non-zero value means the destructive full dedup pass has real work."""
+    from alma.core.sql_helpers import standalone_paper_sql
+
     try:
         row = conn.execute(
-            """
+            f"""
             SELECT COALESCE(SUM(c - 1), 0) AS n FROM (
-                SELECT COUNT(*) AS c FROM papers
+                SELECT COUNT(*) AS c FROM papers p
                 WHERE COALESCE(TRIM(doi), '') <> ''
+                  AND {standalone_paper_sql("p")}
                 GROUP BY lower(trim(doi)) HAVING COUNT(*) > 1
             )
             """
@@ -905,6 +926,33 @@ REGISTRY: dict[str, MaintenanceTask] = {
             default_auto_daily_cap=100,
             auto_chunk_size=25,
             destructive=True,
+        ),
+        MaintenanceTask(
+            key="paper_group_reconcile",
+            label="Reconcile paper groups",
+            description=(
+                "Run the corpus-wide paper group pass: published journal rows win over "
+                "preprints, components/datasets attach to their parent paper, existing "
+                "chains are flattened, and child rows lose vectors, graph state, health "
+                "state, and preference sidecars so only the parent paper remains active."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="papers.reconcile_groups",
+            job_id_prefix="maint_paper_groups",
+            cost=COST_CHEAP,
+            runner=_run_paper_group_reconcile,
+            stage=MaintenanceStage.PAPER_CANONICALIZATION,
+            order=56,
+            unit=MaintenanceUnit.PAPER,
+            target_kind=TargetKind.NONE,
+            supports_targets=False,
+            count_fn=_count_paper_group_reconcile,
+            default_manual_limit=1_000,
+            max_manual_limit=20_000,
+            default_auto_daily_cap=1_000,
+            auto_chunk_size=500,
+            destructive=False,
         ),
         MaintenanceTask(
             key="collapse_duplicate_identity",

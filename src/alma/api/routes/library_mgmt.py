@@ -25,6 +25,7 @@ from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit, write_section
+from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +275,9 @@ def db_info(
         authors_count = db.execute("SELECT COUNT(*) AS c FROM authors").fetchone()["c"]
 
         # Publications count
-        publications_count = db.execute("SELECT COUNT(*) AS c FROM papers").fetchone()["c"]
+        publications_count = db.execute(
+            f"SELECT COUNT(*) AS c FROM papers p WHERE {standalone_paper_sql('p')}"
+        ).fetchone()["c"]
 
         # Optional related table counts (may not exist yet)
         topics_count = 0
@@ -706,18 +709,18 @@ def deduplicate_database(
 
 @router.post(
     "/backfill-components",
-    summary="Reconcile paper components (figures / SI / datasets / preprints)",
+    summary="Reconcile paper groups (published papers / preprints / components)",
     description=(
-        "Classify existing rows into the part-of model (figures / supplementary "
-        "/ datasets / peer-review), link them to their parent paper, and purge "
-        "any vector / graph-cluster row from a subordinate paper so it stays an "
-        "inert appendix. Runs as a background job."
+        "Run the corpus-wide parent/child reconciliation pass: published journal "
+        "papers become the root when present, preprints and components point to "
+        "that root, and child rows lose vectors / graph state / preference sidecars. "
+        "Runs as a background job."
     ),
 )
 def backfill_components_route(
     user: dict = Depends(get_current_user),
 ):
-    """Schedule a background one-time component reconcile (see alma.core.components)."""
+    """Schedule the backward-compatible Settings paper-group reconcile action."""
     from alma.api.scheduler import (
         activity_envelope,
         find_active_job,
@@ -725,38 +728,35 @@ def backfill_components_route(
         set_job_status,
     )
 
-    operation_key = "library.backfill_components"
+    operation_key = "papers.reconcile_groups"
     existing = find_active_job(operation_key)
     if existing:
         return activity_envelope(
             str(existing.get("job_id") or ""),
             status="already_running",
             operation_key=operation_key,
-            message="Component reconcile already running",
+            message="Paper-group reconcile already running",
         )
 
-    job_id = f"backfill_components_{uuid.uuid4().hex[:10]}"
+    job_id = f"paper_groups_{uuid.uuid4().hex[:10]}"
     set_job_status(
         job_id,
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
         started_at=datetime.utcnow().isoformat(),
-        message="Reconciling paper components",
+        message="Reconciling paper groups",
     )
 
     def _runner():
         from alma.api.scheduler import set_job_status
-        from alma.core.components import backfill_components
+        from alma.services.paper_group_reconcile import reconcile_paper_groups
 
         try:
             conn = open_db_connection()
             try:
-                # backfill_components is caller-owns-transaction (no internal
-                # commit), so the background writer gates it in one write_section
-                # — BEGIN IMMEDIATE → classify/link/clean/purge → commit.
-                with write_section(conn, label="library.backfill_components"):
-                    summary = backfill_components(conn)
+                with write_section(conn, label=operation_key):
+                    summary = reconcile_paper_groups(conn)
             finally:
                 conn.close()
             set_job_status(
@@ -764,18 +764,19 @@ def backfill_components_route(
                 status="completed",
                 finished_at=datetime.utcnow().isoformat(),
                 message=(
-                    f"Component reconcile complete: {summary.get('classified', 0)} classified, "
-                    f"{summary.get('linked', 0)} linked, {summary.get('purged_vectors', 0)} vectors purged"
+                    "Paper-group reconcile complete: "
+                    f"{summary.get('defects_before', 0)} defects before, "
+                    f"{summary.get('defects_after', 0)} after"
                 ),
                 result=summary,
             )
         except Exception as exc:
-            logger.exception("Component reconcile job %s failed: %s", job_id, exc)
+            logger.exception("Paper-group reconcile job %s failed: %s", job_id, exc)
             set_job_status(
                 job_id,
                 status="failed",
                 finished_at=datetime.utcnow().isoformat(),
-                message="Component reconcile failed",
+                message="Paper-group reconcile failed",
                 error=str(exc),
             )
 
@@ -784,5 +785,5 @@ def backfill_components_route(
         job_id,
         status="queued",
         operation_key=operation_key,
-        message="Component reconcile queued",
+        message="Paper-group reconcile queued",
     )

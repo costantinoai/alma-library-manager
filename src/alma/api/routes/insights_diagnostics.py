@@ -71,6 +71,7 @@ from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
     count_outcomes,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 
 # ── Section keys ----------------------------------------------------------
 
@@ -174,18 +175,20 @@ def _fetch_branch_source_mix(db: sqlite3.Connection) -> dict[str, list[dict[str,
         return {}
     try:
         rows = db.execute(
-            """
+            f"""
             SELECT
-                COALESCE(NULLIF(branch_id, ''), '') AS branch_id,
-                COALESCE(NULLIF(branch_label, ''), '') AS branch_label,
-                COALESCE(NULLIF(source_type, ''), 'unknown') AS source_type,
+                COALESCE(NULLIF(r.branch_id, ''), '') AS branch_id,
+                COALESCE(NULLIF(r.branch_label, ''), '') AS branch_label,
+                COALESCE(NULLIF(r.source_type, ''), 'unknown') AS source_type,
                 COUNT(*) AS count
-            FROM recommendations
-            WHERE COALESCE(branch_id, '') <> '' OR COALESCE(branch_label, '') <> ''
+            FROM recommendations r
+            JOIN papers p ON p.id = r.paper_id
+            WHERE (COALESCE(r.branch_id, '') <> '' OR COALESCE(r.branch_label, '') <> '')
+              AND {standalone_paper_sql('p')}
             GROUP BY
-                COALESCE(NULLIF(branch_id, ''), ''),
-                COALESCE(NULLIF(branch_label, ''), ''),
-                COALESCE(NULLIF(source_type, ''), 'unknown')
+                COALESCE(NULLIF(r.branch_id, ''), ''),
+                COALESCE(NULLIF(r.branch_label, ''), ''),
+                COALESCE(NULLIF(r.source_type, ''), 'unknown')
             """
         ).fetchall()
     except sqlite3.OperationalError:
@@ -1399,11 +1402,26 @@ _FEED_FINGERPRINT_SQL = """
       ), '')
 """
 
-_DISCOVERY_FINGERPRINT_SQL = """
+_DISCOVERY_FINGERPRINT_SQL = f"""
     SELECT
-      COALESCE((SELECT COUNT(*) FROM recommendations), 0),
-      COALESCE((SELECT MAX(action_at) FROM recommendations), ''),
-      COALESCE((SELECT MAX(created_at) FROM recommendations), ''),
+      COALESCE((
+        SELECT COUNT(*)
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), 0),
+      COALESCE((
+        SELECT MAX(r.action_at)
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), ''),
+      COALESCE((
+        SELECT MAX(r.created_at)
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), ''),
       COALESCE((
         SELECT MAX(COALESCE(finished_at, updated_at, started_at))
         FROM operation_status
@@ -1412,13 +1430,28 @@ _DISCOVERY_FINGERPRINT_SQL = """
       COALESCE((SELECT MAX(created_at) FROM suggestion_sets), '')
 """
 
-_AI_FINGERPRINT_SQL = """
+_AI_FINGERPRINT_SQL = f"""
     SELECT
-      COALESCE((SELECT COUNT(*) FROM papers), 0),
-      COALESCE((SELECT COUNT(*) FROM publication_embeddings), 0),
-      COALESCE((SELECT MAX(created_at) FROM publication_embeddings), ''),
+      COALESCE((SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql('p')}), 0),
+      COALESCE((
+        SELECT COUNT(*)
+        FROM publication_embeddings pe
+        JOIN papers p ON p.id = pe.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), 0),
+      COALESCE((
+        SELECT MAX(pe.created_at)
+        FROM publication_embeddings pe
+        JOIN papers p ON p.id = pe.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), ''),
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'embedding_model'), ''),
-      COALESCE((SELECT MAX(created_at) FROM recommendations), '')
+      COALESCE((
+        SELECT MAX(r.created_at)
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE {standalone_paper_sql('p')}
+      ), '')
 """
 
 _AUTHORS_FINGERPRINT_SQL = """
@@ -1468,7 +1501,7 @@ _OPERATIONAL_FINGERPRINT_SQL = """
       COALESCE((SELECT value FROM discovery_settings WHERE key = 'sources.biorxiv.enabled'), '')
 """
 
-_EVALUATION_FINGERPRINT_SQL = """
+_EVALUATION_FINGERPRINT_SQL = f"""
     SELECT
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feed'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:discovery'), ''),
@@ -1478,7 +1511,7 @@ _EVALUATION_FINGERPRINT_SQL = """
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feedback'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:operational'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'health:corpus'), ''),
-      COALESCE((SELECT COUNT(*) FROM papers WHERE status = 'library'), 0)
+      COALESCE((SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}), 0)
 """
 
 
