@@ -225,6 +225,16 @@ def update_plugin_config(
         # Clear cached instance to force recreation with new config
         registry.clear_cache()
 
+        # Plugin health feeds the cached operational diagnostics, whose
+        # fingerprint cannot see config files — force a rebuild so the Health
+        # page reflects the new config now, not at the next hour bucket.
+        try:
+            from alma.application import materialized_views as mv
+
+            mv.enqueue_rebuild("insights:diag:operational")
+        except Exception as exc:  # noqa: BLE001 — best-effort freshness, never block the save
+            logger.warning("operational diagnostics rebuild enqueue failed: %s", exc)
+
         # Try to create instance with new config to validate
         try:
             registry.create_instance(plugin_name, config_update.config)

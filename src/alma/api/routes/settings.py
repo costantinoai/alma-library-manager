@@ -501,6 +501,15 @@ def update_settings(payload: SettingsModel):
                 _sync_slack_plugin_config_from_settings(_read_settings())
             except Exception as exc:
                 logger.warning("Failed to sync Slack plugin config from settings: %s", exc)
+            # Slack config feeds the cached operational diagnostics (the
+            # slack_unconfigured state); its fingerprint cannot see settings.json,
+            # so force a rebuild for instant Health-page feedback.
+            try:
+                from alma.application import materialized_views as mv
+
+                mv.enqueue_rebuild("insights:diag:operational")
+            except Exception as exc:  # noqa: BLE001 — best-effort freshness, never block the save
+                logger.warning("operational diagnostics rebuild enqueue failed: %s", exc)
 
         if data.get("database"):
             _ensure_db(get_db_path())

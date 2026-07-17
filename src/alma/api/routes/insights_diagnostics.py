@@ -1447,8 +1447,14 @@ _FEEDBACK_FINGERPRINT_SQL = """
 
 _OPERATIONAL_FINGERPRINT_SQL = """
     SELECT
-      'op-logic-v2',  -- logic-version token: bump when the states-list logic changes
+      'op-logic-v3',  -- logic-version token: bump when the states-list logic changes
                       -- (data fingerprints can't see code changes — task 24 de-dupe).
+      strftime('%Y-%m-%dT%H', 'now'),
+                      -- Hour bucket: the payload embeds now()-relative facts the data
+                      -- fingerprints can't see — the 24h failed-ops window aging out,
+                      -- and Slack/plugin config read from files outside the DB. The
+                      -- bucket bounds that staleness to <=1h (config-save paths also
+                      -- force a rebuild for instant feedback).
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:feed'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:ai'), ''),
       COALESCE((SELECT fingerprint FROM materialized_views WHERE view_key = 'insights:diag:authors'), ''),
