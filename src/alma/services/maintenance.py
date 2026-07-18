@@ -319,6 +319,91 @@ def _run_author_works(job_id: str, cap: int, target_paper_ids=None, params=None)
     )
 
 
+def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Bulk historical-corpus backfill for followed authors whose corpus needs
+    maintenance (stale-first, then failed / unverified / thin) — the canonical
+    ``author_attention`` pool, capped at ``cap`` authors per run.
+
+    Each author's deep refresh runs INLINE and sequentially, stamped as a
+    child operation row under the canonical ``authors.deep_refresh:{id}`` key —
+    the SAME key the per-author action path uses — so
+    ``get_followed_author_backfill_status`` recognizes the success and the
+    author actually leaves the stale pool. One opaque parent-only job would
+    leave every author permanently stale.
+    """
+    import uuid as _uuid
+
+    from alma.api.deps import open_db_connection
+    from alma.api.scheduler import (
+        add_job_log,
+        find_active_job,
+        is_cancellation_requested,
+        set_job_status,
+    )
+    from alma.services import author_attention
+
+    _STATE_PRIORITY = {"stale": 0, "failed": 1, "unverified": 2, "thin": 3}
+    with _maintenance_conn() as conn:
+        _counts, rows = author_attention.corpus_backfill_rows(conn)
+    candidates = sorted(
+        (r for r in rows if str(r.get("state") or "") in author_attention.CORPUS_ACTIONABLE_STATES),
+        key=lambda r: _STATE_PRIORITY.get(str(r.get("state") or ""), 9),
+    )[: max(0, int(cap or 0))]
+
+    total = len(candidates)
+    set_job_status(job_id, total=total, processed=0, message=f"Backfilling {total} followed-author corpora")
+    done = failed = skipped = 0
+    for idx, cand in enumerate(candidates):
+        if is_cancellation_requested(job_id):
+            add_job_log(job_id, "Cancellation requested — stopping between authors", step="cancelled")
+            break
+        author_id = str(cand.get("author_id") or "")
+        name = str(cand.get("author_name") or author_id)
+        op_key = f"authors.deep_refresh:{author_id}"
+        if find_active_job(op_key):
+            skipped += 1
+            add_job_log(job_id, f"{name}: refresh already in flight — skipped", step="author_skipped")
+            set_job_status(job_id, processed=idx + 1)
+            continue
+        child_id = f"author_deep_refresh_{_uuid.uuid4().hex[:10]}"
+        started = datetime.utcnow().isoformat()
+        set_job_status(
+            child_id,
+            status="running",
+            started_at=started,
+            updated_at=started,
+            operation_key=op_key,
+            trigger_source="auto:maintenance",
+            current_author=author_id,
+            message=f"Historical backfill for {name} ({cand.get('state')})",
+        )
+        conn2 = open_db_connection()
+        try:
+            from alma.api.routes.authors import _refresh_author_cache_impl
+            from alma.core.db_write import commit_with_retry
+
+            _refresh_author_cache_impl(conn2, author_id, mode="deep", job_id=child_id)
+            commit_with_retry(conn2, label="corpus_backfill_stale_author")
+            set_job_status(child_id, status="completed", finished_at=datetime.utcnow().isoformat())
+            done += 1
+            add_job_log(job_id, f"{name}: backfill completed", step="author_done")
+        except Exception as exc:  # keep going — one flaky author must not sink the batch
+            set_job_status(child_id, status="failed", error=str(exc), finished_at=datetime.utcnow().isoformat())
+            failed += 1
+            add_job_log(job_id, f"{name}: backfill failed — {exc}", step="author_failed")
+        finally:
+            conn2.close()
+        set_job_status(job_id, processed=idx + 1)
+
+    summary = (
+        f"Backfilled {done}/{total} corpora"
+        + (f", {failed} failed" if failed else "")
+        + (f", {skipped} skipped (already running)" if skipped else "")
+    )
+    set_job_status(job_id, message=summary)
+    return {"processed": done, "failed": failed, "skipped": skipped, "total": total}
+
+
 def _run_author_centroids(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Centroid recompute (step 9): refresh stale/missing author centroids from
     EXISTING local embeddings only — no network, no works re-pagination."""
@@ -398,6 +483,25 @@ def _run_housekeeping(job_id: str, cap: int, target_paper_ids=None, params=None)
 
 
 # --- count_fn wrappers (cheap reads; signature (conn, params=None) -> int) ----
+
+
+def _count_corpus_backfill_stale(conn: sqlite3.Connection, params=None) -> int:
+    """Followed authors whose historical corpus needs maintenance (stale /
+    thin / failed / unverified) — the canonical ``author_attention`` pool, so
+    this card, the Health popup, and the Authors page count the SAME authors.
+    Walks each followed author's operation history (bounded by the followed
+    count — tens, not thousands)."""
+    from alma.services import author_attention
+
+    try:
+        _counts, rows = author_attention.corpus_backfill_rows(conn)
+    except sqlite3.OperationalError:
+        return 0
+    return sum(
+        1
+        for r in rows
+        if str(r.get("state") or "") in author_attention.CORPUS_ACTIONABLE_STATES
+    )
 
 
 def _count_author_works(conn: sqlite3.Connection, params=None) -> int:
@@ -831,6 +935,42 @@ REGISTRY: dict[str, MaintenanceTask] = {
             sources=(SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR),
             local_compute=True,
             # Reuse the per-author multi-source rate profile for a truthful ETA.
+            eta_key="refresh_authors",
+        ),
+        MaintenanceTask(
+            key="corpus_backfill_stale",
+            label="Backfill stale author corpora",
+            description=(
+                "Re-pull the historical corpus of followed authors nothing has "
+                "pulled in over 4 months (no monitor refresh, no backfill) — "
+                "plus corpora whose last backfill failed, was never verified, "
+                "or looks thin. Stale-first, one author at a time, via the same "
+                "deep refresh the per-author Backfill button runs. Opt in to "
+                "auto-repair to let the idle healer keep the library's corpora "
+                "current in the background."
+            ),
+            health_dimensions=(),
+            candidate_path="",
+            operation_key="authors.corpus_backfill_stale",
+            job_id_prefix="maint_corpus_backfill",
+            cost=COST_NETWORK,
+            runner=_run_corpus_backfill_stale,
+            stage=MaintenanceStage.AUTHOR_WORKS,
+            order=31,
+            unit=MaintenanceUnit.AUTHOR,
+            target_kind=TargetKind.AUTHOR,
+            supports_targets=False,
+            prerequisites=("dedup_orcid",),
+            optional=True,
+            count_fn=_count_corpus_backfill_stale,
+            # A deep refresh paginates an author's full works — heavy. Small
+            # defaults; the daily cap bounds the unattended background spend.
+            default_manual_limit=10,
+            max_manual_limit=200,
+            default_auto_daily_cap=5,
+            auto_chunk_size=2,
+            sources=(SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR),
+            # Same per-author multi-source rate profile as author_works.
             eta_key="refresh_authors",
         ),
         MaintenanceTask(
