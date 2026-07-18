@@ -387,7 +387,10 @@ def health_check():
 
     return HealthResponse(
         status=service_status,
-        version=API_VERSION,
+        # The release version (pyproject-derived), not the HTTP contract
+        # version — "which build is running" is what a health probe answers.
+        # The contract version stays available at /api/v1/version.
+        version=APP_VERSION,
         uptime_seconds=uptime,
         database_ok=database_ok
     )
