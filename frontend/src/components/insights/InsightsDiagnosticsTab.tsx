@@ -1,7 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
+  Activity,
   Brain,
   ChartLine,
+  CheckCircle2,
+  ChevronDown,
   Clock3,
   Compass,
   Gauge,
@@ -37,13 +40,16 @@ import type {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { scoreStatusTone } from '@/components/ui/status-badge-tones'
 import { MetricTile, SectionHeader } from '@/components/shared'
-import { navigateTo } from '@/lib/hashRoute'
+import { navigateTo, parseHashRoute } from '@/lib/hashRoute'
 import { formatTimestamp } from '@/lib/utils'
 
 // ── Trend / palette types ---------------------------------------------------
@@ -164,6 +170,165 @@ function RefreshEntryRow({
   )
 }
 
+// ── Trend chart gate --------------------------------------------------------
+//
+// A trend chart earns its axes only when there is a trend to see. With fewer
+// than three periods carrying signal, bars read as one or two giant blocks
+// (noise dressed as analysis) — below that threshold we state the totals in a
+// sentence instead, and the chart appears once real history accumulates.
+function trendSignalCount(rows: Array<Record<string, unknown>>, keys: string[]): number {
+  return rows.filter((r) => keys.some((k) => Number((r as Record<string, unknown>)[k] ?? 0) > 0)).length
+}
+
+// ── Background operations (last 24 h) ---------------------------------------
+//
+// The one operational card this analytics tab carries — deliberately: the
+// Health page's "Background jobs" popup deep-links here ("Open in Activity",
+// `#/insights?tab=activity&focus=failed`), and that click must land on the
+// failures THEMSELVES (what failed, when, why), not on a count with no body.
+function FailedOperationsCard({
+  operational,
+}: {
+  operational: SectionState<DiagnosticsOperationalSection>
+}) {
+  const focusFailed = parseHashRoute().params.get('focus') === 'failed'
+  const ref = useRef<HTMLDivElement | null>(null)
+  const failed = operational.data?.failed_operations ?? []
+  const count = operational.data?.summary?.recent_failed_operations_24h ?? 0
+
+  // Deep-link focus: scroll the card into view once its data is present.
+  useEffect(() => {
+    if (focusFailed && !operational.loading && ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [focusFailed, operational.loading])
+
+  return (
+    <div ref={ref} className="scroll-mt-6">
+      <Card className={focusFailed ? 'ring-2 ring-alma-folio' : undefined}>
+        <SectionHeader
+          icon={Activity}
+          accent={count > 0 ? 'text-critical-600' : 'text-success-600'}
+          title="Background operations"
+          description="Scheduler job outcomes over the last 24 hours — maintenance, hydration, embedding and refresh runs."
+        />
+        <CardContent>
+          <SectionGate section={operational} skeletonHeight={120}>
+            {(data) => {
+              const rows = data.failed_operations ?? []
+              if (rows.length === 0) {
+                return (
+                  <p className="flex items-center gap-2 text-sm text-slate-600">
+                    <CheckCircle2 className="h-4 w-4 text-success-600" />
+                    No failed operations in the last 24 hours.
+                  </p>
+                )
+              }
+              // A row is expandable only when it carries a step-log tail or a
+              // distinct error string. When none do, the trigger is disabled —
+              // so the "click a row" hint below must not promise otherwise.
+              const rowHasDetail = (op: (typeof rows)[number]): boolean => {
+                const tail = op.log_tail ?? []
+                return tail.length > 0 || !!(op.error && op.message && op.error !== op.message)
+              }
+              const anyExpandable = rows.some(rowHasDetail)
+              return (
+                <div className="space-y-3">
+                  <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                    {rows.map((op) => {
+                      const summaryLine = op.error || op.message
+                      const tail = op.log_tail ?? []
+                      const hasDetail = rowHasDetail(op)
+                      return (
+                        <Collapsible key={op.job_id}>
+                          {/* Progressive disclosure: the row states what + when;
+                              the WHY (error + step-log tail) expands on demand. */}
+                          <CollapsibleTrigger
+                            className="group w-full px-3 py-2.5 text-left"
+                            disabled={!hasDetail}
+                          >
+                            <span className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="h-2 w-2 shrink-0 rounded-full bg-critical-500" />
+                                <span className="truncate font-mono text-xs font-medium text-alma-800">
+                                  {op.operation_key || op.job_id}
+                                </span>
+                                {op.trigger_source ? (
+                                  <StatusBadge tone="neutral" size="sm">
+                                    {op.trigger_source}
+                                  </StatusBadge>
+                                ) : null}
+                              </span>
+                              <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
+                                {formatTimestamp(op.finished_at)}
+                                {hasDetail ? (
+                                  <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
+                                ) : null}
+                              </span>
+                            </span>
+                            {summaryLine ? (
+                              <span
+                                title={summaryLine}
+                                className="mt-1 block truncate pl-4 text-xs leading-relaxed text-slate-500"
+                              >
+                                {summaryLine}
+                              </span>
+                            ) : null}
+                          </CollapsibleTrigger>
+                          {hasDetail ? (
+                            <CollapsibleContent>
+                              <div className="space-y-2 px-3 pb-3 pl-7">
+                                {op.error && op.message && op.error !== op.message ? (
+                                  <p className="text-xs leading-relaxed text-critical-700">{op.error}</p>
+                                ) : null}
+                                {tail.length > 0 ? (
+                                  <SubPanel padded={false} className="px-2.5 py-2">
+                                    <ol className="space-y-1">
+                                      {tail.map((line, i) => (
+                                        <li key={i} className="flex items-baseline gap-2 text-[11px] leading-relaxed">
+                                          <span className="shrink-0 font-mono text-slate-400">
+                                            {formatTimestamp(line.timestamp)?.split(', ')[1] ?? ''}
+                                          </span>
+                                          <span
+                                            className={
+                                              (line.level ?? '').toLowerCase() === 'error'
+                                                ? 'text-critical-700'
+                                                : 'text-slate-600'
+                                            }
+                                          >
+                                            {line.step ? <span className="font-medium">{line.step}: </span> : null}
+                                            {line.message}
+                                          </span>
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  </SubPanel>
+                                ) : (
+                                  <p className="text-xs italic text-slate-500">
+                                    The run recorded no step log before failing.
+                                  </p>
+                                )}
+                              </div>
+                            </CollapsibleContent>
+                          ) : null}
+                        </Collapsible>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    {anyExpandable ? 'Click a row for its error and step log; complete' : 'Complete'} run
+                    history lives in the Activity panel (top bar).
+                  </p>
+                </div>
+              )
+            }}
+          </SectionGate>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 // ── Tone derivation helpers -------------------------------------------------
 
 function alertUsefulnessTone(score: number): 'good' | 'attention' | 'critical' {
@@ -189,11 +354,12 @@ export function InsightsDiagnosticsTab({
   colors,
   tooltipStyle,
 }: InsightsDiagnosticsTabProps) {
-  // `operational` is intentionally not destructured — operational health moved
-  // to the Health page's Status tab; this tab is analytics only (I-27). The
-  // evaluation section still carries operational_health / recommended_actions /
-  // automation_opportunities, but those are deliberately NOT rendered here for
-  // the same reason (see the Evaluation Scorecards block below).
+  // Operational HEALTH lives on the Health page's Status tab (I-27); this tab
+  // is analytics. The ONE exception is the FailedOperationsCard at the top:
+  // Health's "Background jobs" popup deep-links here and must land on the
+  // named failures, not a count. The evaluation section's operational_health /
+  // recommended_actions / automation_opportunities stay unrendered (see the
+  // Evaluation Scorecards block below).
   const { feed, discovery, ai, authors, alerts, feedback, evaluation } = sections
 
   // Headline tiles depend on feed + discovery.
@@ -219,10 +385,37 @@ export function InsightsDiagnosticsTab({
     [discovery.data?.branch_quality],
   )
 
+  // One intake story, one chart: Feed items and new Discovery recs were two
+  // side-by-side near-twin charts; merged here by date so arrival volume
+  // reads as a single picture.
+  const intakeTrend = useMemo(() => {
+    const byDate = new Map<string, { date: string; items_created: number; new_recommendations: number }>()
+    for (const r of feed.data?.feed_refresh_trend ?? []) {
+      const key = String((r as { date?: string }).date ?? '')
+      if (!key) continue
+      byDate.set(key, {
+        date: key,
+        items_created: Number((r as { items_created?: number }).items_created ?? 0),
+        new_recommendations: 0,
+      })
+    }
+    for (const r of discovery.data?.discovery_refresh_trend ?? []) {
+      const key = String((r as { date?: string }).date ?? '')
+      if (!key) continue
+      const row = byDate.get(key) ?? { date: key, items_created: 0, new_recommendations: 0 }
+      row.new_recommendations = Number((r as { new_recommendations?: number }).new_recommendations ?? 0)
+      byDate.set(key, row)
+    }
+    return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+  }, [feed.data?.feed_refresh_trend, discovery.data?.discovery_refresh_trend])
+
   const windowDays = 30
 
   return (
     <div className="space-y-6">
+      {/* ── Background operations (last 24 h) — deep-link target ── */}
+      <FailedOperationsCard operational={sections.operational} />
+
       {/* ── Headline metrics ── */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {feed.loading && !feed.data ? (
@@ -397,40 +590,43 @@ export function InsightsDiagnosticsTab({
                     />
                   </div>
 
-                  <div className="grid gap-4 xl:grid-cols-2">
-                    <div className="rounded-sm border border-[var(--color-border)] p-4">
-                      <p className="font-medium text-alma-800">Similarity profile</p>
-                      <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                        <span>Avg text similarity: {data.summary.avg_text_similarity}</span>
-                        <span>Avg semantic raw: {data.summary.avg_semantic_raw}</span>
-                        <span>Avg semantic support: {data.summary.avg_semantic_support_raw}</span>
-                        <span>Avg lexical term raw: {data.summary.avg_lexical_term_raw}</span>
-                        <span>
-                          Candidate embeddings ready:{' '}
-                          {Math.round((data.summary.embedding_candidate_ready_rate ?? 0) * 100)}%
-                        </span>
-                        <span>
-                          Low-similarity rate:{' '}
-                          {Math.round((data.summary.low_similarity_rate ?? 0) * 100)}%
-                        </span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge variant="outline">
-                          semantic {Math.round((data.summary.semantic_only_rate ?? 0) * 100)}%
-                        </Badge>
-                        <Badge variant="outline">
-                          lexical {Math.round((data.summary.lexical_only_rate ?? 0) * 100)}%
-                        </Badge>
-                        <Badge variant="outline">
+                  {/* Progressive disclosure: the tiles above answer "is AI
+                      helping?"; the raw similarity numbers are reference
+                      detail, folded until asked for. (Was a half-empty
+                      two-column grid holding one hand-rolled box.) */}
+                  <Collapsible>
+                    <SubPanel padded={false}>
+                      <CollapsibleTrigger className="group flex w-full items-center justify-between px-3 py-2.5 text-left">
+                        <span className="text-sm font-medium text-alma-800">Similarity profile</span>
+                        <span className="flex items-center gap-2 text-xs text-slate-500">
+                          semantic {Math.round((data.summary.semantic_only_rate ?? 0) * 100)}% ·
+                          lexical {Math.round((data.summary.lexical_only_rate ?? 0) * 100)}% ·
                           hybrid {Math.round((data.summary.hybrid_text_rate ?? 0) * 100)}%
-                        </Badge>
-                        <Badge variant="outline">
-                          dims {data.summary.dominant_embedding_dimension || 'n/a'} /{' '}
-                          {data.summary.embedding_dimension_variants} variants
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
+                          <ChevronDown className="h-3.5 w-3.5 transition-transform group-data-[state=open]:rotate-180" />
+                        </span>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <div className="grid gap-2 px-3 pb-3 text-xs text-slate-500 sm:grid-cols-2">
+                          <span>Avg text similarity: {data.summary.avg_text_similarity}</span>
+                          <span>Avg semantic raw: {data.summary.avg_semantic_raw}</span>
+                          <span>Avg semantic support: {data.summary.avg_semantic_support_raw}</span>
+                          <span>Avg lexical term raw: {data.summary.avg_lexical_term_raw}</span>
+                          <span>
+                            Candidate embeddings ready:{' '}
+                            {Math.round((data.summary.embedding_candidate_ready_rate ?? 0) * 100)}%
+                          </span>
+                          <span>
+                            Low-similarity rate:{' '}
+                            {Math.round((data.summary.low_similarity_rate ?? 0) * 100)}%
+                          </span>
+                          <span className="sm:col-span-2">
+                            Embedding dims: {data.summary.dominant_embedding_dimension || 'n/a'} /{' '}
+                            {data.summary.embedding_dimension_variants} variants
+                          </span>
+                        </div>
+                      </CollapsibleContent>
+                    </SubPanel>
+                  </Collapsible>
                 </>
               )}
             </SectionGate>
@@ -471,6 +667,16 @@ export function InsightsDiagnosticsTab({
                     <MetricTile
                       label="Background corpus papers"
                       value={data.summary.background_corpus_papers ?? 0}
+                    />
+                    <MetricTile
+                      label="Identity attention"
+                      value={(data.summary as { identity_attention_count?: number }).identity_attention_count ?? 0}
+                      hint="Authors needing a manual identity fix"
+                      tone={
+                        ((data.summary as { identity_attention_count?: number }).identity_attention_count ?? 0) > 0
+                          ? 'warning'
+                          : 'neutral'
+                      }
                     />
                   </div>
                   {/* Degraded-author detail moved to Health → Status. */}
@@ -532,7 +738,7 @@ export function InsightsDiagnosticsTab({
                     />
                   </div>
                   {data.long_horizon?.summary ? (
-                    <div className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+                    <SubPanel className="p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="font-medium text-alma-800">90-day usefulness baseline</p>
@@ -557,7 +763,7 @@ export function InsightsDiagnosticsTab({
                           {data.long_horizon.summary.delta_vs_30d.toFixed(0)}
                         </span>
                       </div>
-                    </div>
+                    </SubPanel>
                   ) : null}
                   {(data.top_alerts ?? []).length > 0 ? (
                     <div className="space-y-3">
@@ -682,317 +888,217 @@ export function InsightsDiagnosticsTab({
         </Card>
       </div>
 
-      {/* ── Feed & Discovery trends ── */}
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionHeader
-            icon={ChartLine}
-            accent="text-success-600"
-            title="Feed Trend"
-            description={`Daily monitor intake over the last ${windowDays} days.`}
-          />
-          <CardContent>
-            <SectionGate section={feed} skeletonHeight={220}>
-              {(data) =>
-                (data.feed_refresh_trend ?? []).length === 0 ? (
-                  <EmptyState title="No Feed refresh trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.feed_refresh_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <YAxis
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 11 }}
-                        allowDecimals={false}
-                      />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        yAxisId="left"
-                        dataKey="items_created"
-                        name="Items created"
-                        fill={colors.green}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Line
-                        yAxisId="right"
-                        type="monotone"
-                        dataKey="papers_found"
-                        name="Papers found"
-                        stroke={colors.blue}
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={Compass}
-            accent="text-accent"
-            title="Discovery Refresh Trend"
-            description={`Daily recommendation refresh output over the last ${windowDays} days.`}
-          />
-          <CardContent>
-            <SectionGate section={discovery} skeletonHeight={220}>
-              {(data) =>
-                (data.discovery_refresh_trend ?? []).length === 0 ? (
-                  <EmptyState title="No Discovery refresh trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.discovery_refresh_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <YAxis
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 11 }}
-                        allowDecimals={false}
-                      />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        yAxisId="left"
-                        dataKey="new_recommendations"
-                        name="New recs"
-                        fill={colors.purple}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Line
-                        yAxisId="right"
-                        type="monotone"
-                        dataKey="total_recommendations"
-                        name="Total retained"
-                        stroke={colors.indigo}
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={TrendingUp}
-            accent="text-accent"
-            title="Discovery Action Trend"
-            description="Daily recommendation outcomes across seen, saved, likes, and dismissals."
-          />
-          <CardContent>
-            <SectionGate section={discovery} skeletonHeight={220}>
-              {(data) =>
-                (data.recommendation_action_trend ?? []).length === 0 ? (
-                  <EmptyState title="No recommendation-action trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.recommendation_action_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        dataKey="liked"
-                        name="Likes"
-                        stackId="actions"
-                        fill={colors.green}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Bar dataKey="saved" name="Saves" stackId="actions" fill={colors.blue} />
-                      <Bar
-                        dataKey="dismissed"
-                        name="Dismissals"
-                        stackId="actions"
-                        fill={colors.red}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="seen"
-                        name="Seen"
-                        stroke={colors.slate}
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={Radio}
-            accent="text-warning-600"
-            title="Alert Delivery Trend"
-            description={`Delivery history across sent, empty, skipped, and failed alert runs.${
-              (alerts.data?.alert_history_weekly_90d?.length ?? 0) > 0
-                ? ' Weekly 90-day baselines are also tracked for longer-horizon evaluation.'
-                : ''
-            }`}
-          />
-          <CardContent>
-            <SectionGate section={alerts} skeletonHeight={220}>
-              {(data) =>
-                (data.alert_history_trend ?? []).length === 0 ? (
-                  <EmptyState title="No alert-history trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.alert_history_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        dataKey="sent"
-                        name="Sent"
-                        stackId="alert-history"
-                        fill={colors.green}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Bar
-                        dataKey="empty"
-                        name="Empty"
-                        stackId="alert-history"
-                        fill={colors.slate}
-                      />
-                      <Bar
-                        dataKey="skipped"
-                        name="Skipped"
-                        stackId="alert-history"
-                        fill={colors.amber}
-                      />
-                      <Bar
-                        dataKey="failed"
-                        name="Failed"
-                        stackId="alert-history"
-                        fill={colors.red}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── Author growth + Feedback-learning trends ── */}
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <SectionHeader
-            icon={UserRound}
-            accent="text-success-500"
-            title="Followed Author Growth"
-            description="Daily expansion of the monitored-author corpus."
-          />
-          <CardContent>
-            <SectionGate section={authors} skeletonHeight={220}>
-              {(data) =>
-                (data.author_follow_trend ?? []).length === 0 ? (
-                  <EmptyState title="No followed-author trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.author_follow_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        dataKey="follows"
-                        name="Follows"
-                        fill={colors.green}
-                        radius={[4, 4, 0, 0]}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <SectionHeader
-            icon={Waves}
-            accent="text-accent"
-            title="Feedback Activity"
-            description="Daily learning volume across feed actions, topic tuning, and ratings."
-          />
-          <CardContent>
-            <SectionGate section={feedback} skeletonHeight={220}>
-              {(data) =>
-                (data.feedback_learning_trend ?? []).length === 0 ? (
-                  <EmptyState title="No feedback-learning trend yet" />
-                ) : (
-                  <ResponsiveContainer width="100%" height={220}>
-                    <ComposedChart data={data.feedback_learning_trend ?? []}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                      <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <YAxis
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 11 }}
-                        allowDecimals={false}
-                      />
-                      <Tooltip {...tooltipStyle} />
-                      <Legend />
-                      <Bar
-                        yAxisId="left"
-                        dataKey="feed_actions"
-                        name="Feed actions"
-                        stackId="signal"
-                        fill={colors.blue}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Bar
-                        yAxisId="left"
-                        dataKey="topic_tunes"
-                        name="Topic tunes"
-                        stackId="signal"
-                        fill={colors.amber}
-                      />
-                      <Bar
-                        yAxisId="left"
-                        dataKey="ratings"
-                        name="Ratings"
-                        stackId="signal"
-                        fill={colors.purple}
-                      />
-                      <Line
-                        yAxisId="right"
-                        type="monotone"
-                        dataKey="interactions"
-                        name="Total interactions"
-                        stroke={colors.green}
-                        strokeWidth={2}
-                        dot={false}
-                      />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                )
-              }
-            </SectionGate>
-          </CardContent>
-        </Card>
-      </div>
+      {/* ── Activity trends ─────────────────────────────────────────────
+          One spec list drives BOTH the chart grid and the awaiting-history
+          strip: only charts with a real trend (3+ active days) get a card,
+          so a sparse chart can never punch a half-empty hole into the
+          grid; everything still warming up shares one compact ledger. */}
+      {(() => {
+        const trendSpecs = [
+          {
+            key: 'intake',
+            icon: ChartLine,
+            accent: 'text-success-600',
+            title: 'Intake Trend',
+            description: `What arrived each day over the last ${windowDays} days — Feed monitor items and new Discovery recommendations side by side.`,
+            loading: (feed.loading && !feed.data) || (discovery.loading && !discovery.data),
+            rows: intakeTrend as unknown as Array<Record<string, unknown>>,
+            series: [
+              { key: 'items_created', label: 'Feed items' },
+              { key: 'new_recommendations', label: 'New recommendations' },
+            ],
+            chart: (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={intakeTrend}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend />
+                  <Bar dataKey="items_created" name="Feed items" fill={colors.green} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="new_recommendations" name="New recs" fill={colors.amber} radius={[4, 4, 0, 0]} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ),
+          },
+          {
+            key: 'actions',
+            icon: TrendingUp,
+            accent: 'text-accent',
+            title: 'Discovery Action Trend',
+            description: 'Daily recommendation outcomes across seen, saved, likes, and dismissals.',
+            loading: discovery.loading && !discovery.data,
+            rows: (discovery.data?.recommendation_action_trend ?? []) as unknown as Array<Record<string, unknown>>,
+            series: [
+              { key: 'liked', label: 'Likes' },
+              { key: 'saved', label: 'Saves' },
+              { key: 'dismissed', label: 'Dismissals' },
+              { key: 'seen', label: 'Seen' },
+            ],
+            chart: (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={discovery.data?.recommendation_action_trend ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend />
+                  <Bar dataKey="liked" name="Likes" stackId="actions" fill={colors.green} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="saved" name="Saves" stackId="actions" fill={colors.amber} />
+                  <Bar dataKey="dismissed" name="Dismissals" stackId="actions" fill={colors.red} />
+                  <Line type="monotone" dataKey="seen" name="Seen" stroke={colors.slate} strokeWidth={2} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ),
+          },
+          {
+            key: 'alerts',
+            icon: Radio,
+            accent: 'text-warning-600',
+            title: 'Alert Delivery Trend',
+            description: 'Delivery history across sent, empty, skipped, and failed alert runs.',
+            loading: alerts.loading && !alerts.data,
+            rows: (alerts.data?.alert_history_trend ?? []) as unknown as Array<Record<string, unknown>>,
+            series: [
+              { key: 'sent', label: 'Sent' },
+              { key: 'empty', label: 'Empty' },
+              { key: 'skipped', label: 'Skipped' },
+              { key: 'failed', label: 'Failed' },
+            ],
+            chart: (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={alerts.data?.alert_history_trend ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend />
+                  <Bar dataKey="sent" name="Sent" stackId="alert-history" fill={colors.green} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="empty" name="Empty" stackId="alert-history" fill={colors.slate} />
+                  <Bar dataKey="skipped" name="Skipped" stackId="alert-history" fill={colors.amber} />
+                  <Bar dataKey="failed" name="Failed" stackId="alert-history" fill={colors.red} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ),
+          },
+          {
+            key: 'follows',
+            icon: UserRound,
+            accent: 'text-success-500',
+            title: 'Followed Author Growth',
+            description: 'Daily expansion of the monitored-author corpus.',
+            loading: authors.loading && !authors.data,
+            rows: (authors.data?.author_follow_trend ?? []) as unknown as Array<Record<string, unknown>>,
+            series: [{ key: 'follows', label: 'Follows' }],
+            chart: (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={authors.data?.author_follow_trend ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend />
+                  <Bar dataKey="follows" name="Follows" fill={colors.green} radius={[4, 4, 0, 0]} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ),
+          },
+          {
+            key: 'feedback',
+            icon: Waves,
+            accent: 'text-accent',
+            title: 'Feedback Activity',
+            description: 'Daily learning volume across feed actions, topic tuning, and ratings.',
+            loading: feedback.loading && !feedback.data,
+            rows: (feedback.data?.feedback_learning_trend ?? []) as unknown as Array<Record<string, unknown>>,
+            series: [
+              { key: 'feed_actions', label: 'Feed actions' },
+              { key: 'topic_tunes', label: 'Topic tunes' },
+              { key: 'ratings', label: 'Ratings' },
+              { key: 'interactions', label: 'Interactions' },
+            ],
+            chart: (
+              <ResponsiveContainer width="100%" height={220}>
+                <ComposedChart data={feedback.data?.feedback_learning_trend ?? []}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip {...tooltipStyle} />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="feed_actions" name="Feed actions" stackId="signal" fill={colors.blue} radius={[4, 4, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="topic_tunes" name="Topic tunes" stackId="signal" fill={colors.amber} />
+                  <Bar yAxisId="left" dataKey="ratings" name="Ratings" stackId="signal" fill={colors.cyan} />
+                  <Line yAxisId="right" type="monotone" dataKey="interactions" name="Total interactions" stroke={colors.green} strokeWidth={2} dot={false} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ),
+          },
+        ]
+        const ready = trendSpecs.filter(
+          (t) => !t.loading && trendSignalCount(t.rows, t.series.map((x) => x.key)) >= 3,
+        )
+        const loadingSpecs = trendSpecs.filter((t) => t.loading)
+        const waiting = trendSpecs.filter((t) => !t.loading && !ready.includes(t))
+        return (
+          <>
+            {ready.length > 0 || loadingSpecs.length > 0 ? (
+              <div className="grid gap-6 xl:grid-cols-2">
+                {ready.map((t) => {
+                  const Icon = t.icon
+                  return (
+                    <Card key={t.key} className={ready.length === 1 ? 'xl:col-span-2' : undefined}>
+                      <SectionHeader icon={Icon} accent={t.accent} title={t.title} description={t.description} />
+                      <CardContent>{t.chart}</CardContent>
+                    </Card>
+                  )
+                })}
+                {loadingSpecs.map((t) => (
+                  <Skeleton key={t.key} className="h-72" />
+                ))}
+              </div>
+            ) : null}
+            {waiting.length > 0 ? (
+              <Card>
+                <SectionHeader
+                  icon={Clock3}
+                  accent="text-slate-400"
+                  title="Trends awaiting history"
+                  description="A trend chart appears once three or more days carry activity. Until then, the totals so far:"
+                />
+                <CardContent>
+                  <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                    {waiting.map((t) => {
+                      const active = trendSignalCount(t.rows, t.series.map((x) => x.key))
+                      const totals = t.series
+                        .map((x) => ({
+                          label: x.label,
+                          total: t.rows.reduce((sum, r) => sum + Number(r[x.key] ?? 0), 0),
+                        }))
+                        .filter((x) => x.total > 0)
+                      return (
+                        <div
+                          key={t.key}
+                          className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3 py-2.5"
+                        >
+                          <span className="text-sm font-medium text-alma-800">{t.title}</span>
+                          <span className="text-xs tabular-nums text-slate-500">
+                            {t.rows.length === 0 || totals.length === 0
+                              ? 'no activity recorded yet'
+                              : `${active === 1 ? 'one active day' : `${active} active days`} — ${totals
+                                  .map((x) => `${x.total.toLocaleString()} ${x.label.toLowerCase()}`)
+                                  .join(' · ')}`}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+          </>
+        )
+      })()}
 
       {/* ── Source & Branch Quality ── */}
       <div className="grid gap-6 xl:grid-cols-2">
@@ -1009,25 +1115,25 @@ export function InsightsDiagnosticsTab({
                 (data.source_quality ?? []).length === 0 ? (
                   <EmptyState title="No discovery source quality data available" />
                 ) : (
-                  <div className="space-y-3">
+                  <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
                     {data.source_quality.map((source) => (
                       <div
                         key={`${source.source_type}-${source.source_api}`}
-                        className="rounded-sm border border-[var(--color-border)] p-3"
+                        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-3 py-2.5"
                       >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium text-alma-800">{source.source_type}</p>
-                            <p className="text-xs text-slate-500">{source.source_api}</p>
-                          </div>
-                          <Badge variant="secondary">{source.count} recs</Badge>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                          <span>Avg score: {source.avg_score.toFixed(2)}</span>
-                          <span>Engagement: {(source.engagement_rate * 100).toFixed(0)}%</span>
-                          <span>Liked: {source.liked}</span>
-                          <span>Dismissed: {source.dismissed}</span>
-                        </div>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-alma-800">
+                            {source.source_type}
+                          </span>
+                          <span className="block truncate text-xs text-slate-500">{source.source_api}</span>
+                        </span>
+                        <span className="flex shrink-0 flex-wrap items-center gap-x-3 text-xs tabular-nums text-slate-500">
+                          <span>{source.count} rec{source.count === 1 ? '' : 's'}</span>
+                          <span>score {source.avg_score.toFixed(2)}</span>
+                          <span>{(source.engagement_rate * 100).toFixed(0)}% engaged</span>
+                          <span className="text-success-700">{source.liked} liked</span>
+                          <span className="text-critical-700">{source.dismissed} dismissed</span>
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -1049,7 +1155,7 @@ export function InsightsDiagnosticsTab({
               {(data) => (
                 <>
                   {data.cold_start_topic_validation && data.cold_start_topic_validation.total_runs > 0 ? (
-                    <div className="mb-4 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3">
+                    <SubPanel className="mb-4 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="font-medium text-alma-800">Topic cold-start validation</p>
@@ -1068,33 +1174,40 @@ export function InsightsDiagnosticsTab({
                           </Badge>
                         ))}
                       </div>
-                    </div>
+                    </SubPanel>
                   ) : null}
                   {(data.branch_quality ?? []).length === 0 ? (
                     <EmptyState title="No branch quality data available yet" />
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-2">
+                      {/* Progressive disclosure: the row answers "is this branch
+                          healthy?"; the full stat sheet, source mix, and tuning
+                          hint expand on demand. */}
                       {data.branch_quality.map((branch) => (
-                        <div
-                          key={branch.branch_id ?? branch.branch_label}
-                          className="rounded-sm border border-[var(--color-border)] p-3"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <p className="font-medium text-alma-800">{branch.branch_label}</p>
-                              <p className="text-xs text-slate-500">
-                                {branch.branch_id ?? 'no branch id'}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Badge variant="secondary">{branch.count} recs</Badge>
-                              <StatusBadge
-                                tone={scoreStatusTone(branchQualityTone(branch.quality_state))}
-                              >
-                                {branch.quality_state}
-                              </StatusBadge>
-                            </div>
-                          </div>
+                        <Collapsible key={branch.branch_id ?? branch.branch_label}>
+                          <SubPanel padded={false}>
+                            <CollapsibleTrigger className="group flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2.5 text-left">
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-medium text-alma-800">
+                                  {branch.branch_label}
+                                </span>
+                                <span className="block text-xs text-slate-500">
+                                  {(branch.engagement_rate * 100).toFixed(0)}% engaged ·{' '}
+                                  {(branch.positive_rate * 100).toFixed(0)}% positive
+                                </span>
+                              </span>
+                              <span className="flex shrink-0 items-center gap-2">
+                                <Badge variant="secondary">{branch.count} rec{branch.count === 1 ? '' : 's'}</Badge>
+                                <StatusBadge
+                                  tone={scoreStatusTone(branchQualityTone(branch.quality_state))}
+                                >
+                                  {branch.quality_state}
+                                </StatusBadge>
+                                <ChevronDown className="h-3.5 w-3.5 text-slate-400 transition-transform group-data-[state=open]:rotate-180" />
+                              </span>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <div className="border-t border-[var(--color-border)] px-3 pb-3">
                           <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
                             <span>Avg score: {branch.avg_score.toFixed(2)}</span>
                             <span>Engagement: {(branch.engagement_rate * 100).toFixed(0)}%</span>
@@ -1144,7 +1257,10 @@ export function InsightsDiagnosticsTab({
                               Tune in Discovery
                             </Button>
                           </div>
-                        </div>
+                              </div>
+                            </CollapsibleContent>
+                          </SubPanel>
+                        </Collapsible>
                       ))}
                     </div>
                   )}
@@ -1165,70 +1281,123 @@ export function InsightsDiagnosticsTab({
         />
         <CardContent>
           <SectionGate section={discovery} skeletonHeight={260}>
-            {(data) =>
-              (data.branch_trends ?? []).length === 0 ? (
-                <EmptyState title="No branch trend data available yet" />
-              ) : (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {data.branch_trends.map((branch) => (
-                    <div
-                      key={`trend-${branch.branch_id ?? branch.branch_label}`}
-                      className="rounded-sm border border-[var(--color-border)] p-4"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-alma-800">{branch.branch_label}</p>
-                          <p className="text-xs text-slate-500">
-                            7d positive {(branch.recent_7d_positive_rate * 100).toFixed(0)}% vs{' '}
-                            {(branch.prior_7d_positive_rate * 100).toFixed(0)}%
-                          </p>
-                        </div>
-                        <StatusBadge
-                          tone={scoreStatusTone(branchDeltaTone(branch.delta_positive_rate))}
+            {(data) => {
+              const branches = data.branch_trends ?? []
+              if (branches.length === 0) {
+                return <EmptyState title="No branch trend data available yet" />
+              }
+              // Same rule as every trend on this tab: a chart earns its axes
+              // only with 3+ active days. One-bar (or empty) mini charts per
+              // branch were noise dressed as analysis — quiet branches share
+              // a one-line ledger instead.
+              const activeDays = (b: (typeof branches)[number]) =>
+                (b.daily ?? []).filter((d) => Number(d.total ?? 0) > 0).length
+              const charted = branches.filter((b) => activeDays(b) >= 3)
+              const quiet = branches.filter((b) => activeDays(b) < 3)
+              return (
+                <div className="space-y-4">
+                  {charted.length > 0 ? (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      {charted.map((branch) => (
+                        <SubPanel
+                          key={`trend-${branch.branch_id ?? branch.branch_label}`}
+                          className="p-4"
                         >
-                          {branch.delta_positive_rate >= 0 ? '+' : ''}
-                          {(branch.delta_positive_rate * 100).toFixed(0)} pts
-                        </StatusBadge>
-                      </div>
-                      <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
-                        <span>Recent 7d volume: {branch.recent_7d_total}</span>
-                        <span>Prior 7d volume: {branch.prior_7d_total}</span>
-                      </div>
-                      <div className="mt-3 h-44">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={branch.daily}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                            <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
-                            <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
-                            <YAxis
-                              yAxisId="right"
-                              orientation="right"
-                              tick={{ fontSize: 11 }}
-                              domain={[0, 1]}
-                            />
-                            <Tooltip {...tooltipStyle} />
-                            <Bar
-                              yAxisId="left"
-                              dataKey="total"
-                              fill={colors.blue}
-                              radius={[4, 4, 0, 0]}
-                            />
-                            <Line
-                              yAxisId="right"
-                              type="monotone"
-                              dataKey="positive_rate"
-                              stroke={colors.green}
-                              strokeWidth={2}
-                              dot={false}
-                            />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      </div>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-medium text-alma-800">{branch.branch_label}</p>
+                              <p className="text-xs text-slate-500">
+                                7d positive {(branch.recent_7d_positive_rate * 100).toFixed(0)}% vs{' '}
+                                {(branch.prior_7d_positive_rate * 100).toFixed(0)}% · volume{' '}
+                                {branch.recent_7d_total} vs {branch.prior_7d_total}
+                              </p>
+                            </div>
+                            <StatusBadge
+                              tone={scoreStatusTone(branchDeltaTone(branch.delta_positive_rate))}
+                            >
+                              {branch.delta_positive_rate >= 0 ? '+' : ''}
+                              {(branch.delta_positive_rate * 100).toFixed(0)} pts
+                            </StatusBadge>
+                          </div>
+                          <div className="mt-3 h-44">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <ComposedChart data={branch.daily}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                                <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" minTickGap={30} />
+                                <YAxis yAxisId="left" tick={{ fontSize: 11 }} allowDecimals={false} />
+                                <YAxis
+                                  yAxisId="right"
+                                  orientation="right"
+                                  tick={{ fontSize: 11 }}
+                                  domain={[0, 1]}
+                                />
+                                <Tooltip {...tooltipStyle} />
+                                <Bar
+                                  yAxisId="left"
+                                  dataKey="total"
+                                  name="Recommendations"
+                                  fill={colors.cyan}
+                                  radius={[4, 4, 0, 0]}
+                                />
+                                <Line
+                                  yAxisId="right"
+                                  type="monotone"
+                                  dataKey="positive_rate"
+                                  name="Positive rate"
+                                  stroke={colors.green}
+                                  strokeWidth={2}
+                                  dot={false}
+                                />
+                              </ComposedChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </SubPanel>
+                      ))}
                     </div>
-                  ))}
+                  ) : null}
+                  {quiet.length > 0 ? (
+                    <div>
+                      {charted.length > 0 ? (
+                        <EyebrowLabel tone="muted" className="mb-1.5">
+                          Not enough movement to chart
+                        </EyebrowLabel>
+                      ) : null}
+                      <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                        {quiet.map((branch) => {
+                          const total = branch.recent_7d_total + branch.prior_7d_total
+                          const delta = branch.delta_positive_rate
+                          return (
+                            <div
+                              key={`quiet-${branch.branch_id ?? branch.branch_label}`}
+                              className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-3 py-2.5"
+                            >
+                              <span className="text-sm font-medium text-alma-800">
+                                {branch.branch_label}
+                              </span>
+                              <span className="flex shrink-0 items-baseline gap-2 text-xs tabular-nums text-slate-500">
+                                {total === 0
+                                  ? 'no recommendations in the last 14 days'
+                                  : `${branch.recent_7d_total} rec${branch.recent_7d_total === 1 ? '' : 's'} this week (${branch.prior_7d_total} prior) · positive ${(branch.recent_7d_positive_rate * 100).toFixed(0)}% vs ${(branch.prior_7d_positive_rate * 100).toFixed(0)}%`}
+                                {total > 0 && Math.abs(delta) >= 0.005 ? (
+                                  <StatusBadge tone={scoreStatusTone(branchDeltaTone(delta))} size="sm">
+                                    {delta >= 0 ? '+' : ''}
+                                    {(delta * 100).toFixed(0)} pts
+                                  </StatusBadge>
+                                ) : null}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <p className="mt-2 text-xs text-slate-500">
+                        A branch gets its own chart once three or more of its last 14 days carry
+                        recommendations.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               )
-            }
+            }}
           </SectionGate>
         </CardContent>
       </Card>

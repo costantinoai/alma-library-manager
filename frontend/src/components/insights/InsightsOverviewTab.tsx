@@ -19,12 +19,9 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   ComposedChart,
   Legend,
   Line,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -72,7 +69,6 @@ interface InsightsOverviewTabProps {
   data: InsightsData
   aiStatus?: AIStatus
   colors: Palette
-  pieColors: string[]
   tooltipStyle: TooltipStyle
 }
 
@@ -84,11 +80,23 @@ function EmptyChart({ message }: { message: string }) {
   )
 }
 
+// Single-line y-axis tick for horizontal bar charts. Recharts' default tick
+// wraps category labels on spaces inside the axis width — long topic /
+// journal / institution names became two clipped lines of mush. A raw
+// <text> node never wraps; label length is controlled via truncate() and
+// the full name is restored by the tooltip.
+function SingleLineTick({ x, y, payload }: { x?: number; y?: number; payload?: { value?: string } }) {
+  return (
+    <text x={x} y={y} dy={4} textAnchor="end" fontSize={11} fill="#152642">
+      {payload?.value ?? ''}
+    </text>
+  )
+}
+
 export function InsightsOverviewTab({
   data,
   aiStatus,
   colors,
-  pieColors,
   tooltipStyle,
 }: InsightsOverviewTabProps) {
   const {
@@ -288,20 +296,20 @@ export function InsightsOverviewTab({
             ) : (
               <ResponsiveContainer width="100%" height={Math.max(250, top_topics.length * 28)}>
                 <BarChart
-                  data={top_topics.map((t) => ({ ...t, term: truncate(t.term, 25), drillValue: t.term }))}
+                  data={top_topics.map((t) => ({ ...t, term: truncate(t.term, 30), drillValue: t.term }))}
                   layout="vertical"
                   margin={{ left: 10 }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <YAxis dataKey="term" type="category" width={140} tick={{ fontSize: 11, fill: '#152642' }} stroke="#D9CBAF" />
+                  <YAxis dataKey="term" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
                   {/* Topic names are long and the axis truncates them; the tooltip
                       restores the FULL name on hover (mirrors the Institutions chart). */}
                   <Tooltip
                     {...tooltipStyle}
                     formatter={(value: number) => [value, 'Papers']}
                     labelFormatter={(label: string) => {
-                      const t = top_topics.find((x) => truncate(x.term, 25) === label)
+                      const t = top_topics.find((x) => truncate(x.term, 30) === label)
                       return t ? t.term : label
                     }}
                   />
@@ -350,7 +358,7 @@ export function InsightsOverviewTab({
                     stroke="#D9CBAF"
                     domain={[0, Math.ceil(visibleJournalMax * 1.1)]}
                   />
-                  <YAxis dataKey="journal" type="category" width={150} tick={{ fontSize: 11, fill: '#152642' }} stroke="#D9CBAF" />
+                  <YAxis dataKey="journal" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
                   <Tooltip {...tooltipStyle} />
                   <Legend />
                   <Bar
@@ -387,7 +395,7 @@ export function InsightsOverviewTab({
                 <BarChart
                   data={top_institutions.map((i) => ({
                     ...i,
-                    label: truncate(i.institution_name, 25),
+                    label: truncate(i.institution_name, 30),
                     drillValue: i.institution_name,
                   }))}
                   layout="vertical"
@@ -395,13 +403,13 @@ export function InsightsOverviewTab({
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <YAxis dataKey="label" type="category" width={150} tick={{ fontSize: 11, fill: '#152642' }} stroke="#D9CBAF" />
+                  <YAxis dataKey="label" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
                   <Tooltip
                     {...tooltipStyle}
                     formatter={(value: number) => [value, 'Publications']}
                     labelFormatter={(label: string) => {
                       const inst = top_institutions.find(
-                        (i) => truncate(i.institution_name, 25) === label,
+                        (i) => truncate(i.institution_name, 30) === label,
                       )
                       return inst ? `${inst.institution_name} (${inst.country_code})` : label
                     }}
@@ -440,28 +448,45 @@ export function InsightsOverviewTab({
               <div className="grid gap-6 sm:grid-cols-2">
                 {(recommendations.by_lens ?? []).length > 0 && (
                   <div className="min-w-0">
-                    <ResponsiveContainer width="100%" height={220}>
-                      <PieChart>
-                        <Pie
-                          data={(recommendations.by_lens ?? []).map(
-                            (s: { lens_id: string; count: number }) => ({
-                              name: s.lens_id === 'unknown' ? 'Global' : s.lens_id,
-                              value: s.count,
-                            }),
-                          )}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={50}
-                          outerRadius={80}
-                          paddingAngle={3}
-                          dataKey="value"
-                        >
-                          {(recommendations.by_lens ?? []).map((_: unknown, i: number) => (
-                            <Cell key={i} fill={pieColors[i % pieColors.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip {...tooltipStyle} />
-                      </PieChart>
+                    {/* Sorted horizontal bars, not a pie: lens shares are a
+                        ranking, and bars make magnitudes comparable at a
+                        glance (same recipe as Top Topics). */}
+                    <ResponsiveContainer
+                      width="100%"
+                      height={Math.max(160, (recommendations.by_lens ?? []).length * 34)}
+                    >
+                      <BarChart
+                        data={[...(recommendations.by_lens ?? [])]
+                          .sort(
+                            (a: { count: number }, b: { count: number }) => b.count - a.count,
+                          )
+                          .map((s: { lens_id: string; count: number }) => ({
+                            name: s.lens_id === 'unknown' ? 'Global' : s.lens_id,
+                            count: s.count,
+                          }))}
+                        layout="vertical"
+                        margin={{ left: 10 }}
+                      >
+                        <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
+                        <XAxis
+                          type="number"
+                          tick={{ fontSize: 12, fill: '#152642' }}
+                          stroke="#D9CBAF"
+                          allowDecimals={false}
+                        />
+                        <YAxis
+                          dataKey="name"
+                          type="category"
+                          width={110}
+                          tick={{ fontSize: 11, fill: '#152642' }}
+                          stroke="#D9CBAF"
+                        />
+                        <Tooltip
+                          {...tooltipStyle}
+                          formatter={(value: number) => [value, 'Recommendations']}
+                        />
+                        <Bar dataKey="count" name="Recommendations" fill={colors.purple} radius={[0, 2, 2, 0]} />
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
                 )}
@@ -498,10 +523,6 @@ export function InsightsOverviewTab({
                           i: number,
                         ) => (
                           <div key={s.lens_id} className="flex min-w-0 items-center gap-2 text-xs">
-                            <span
-                              className="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-[var(--color-border)]"
-                              style={{ backgroundColor: pieColors[i % pieColors.length] }}
-                            />
                             <span className="min-w-0 flex-1 truncate text-slate-500">
                               {s.lens_id === 'unknown' ? 'Global' : s.lens_id}
                             </span>

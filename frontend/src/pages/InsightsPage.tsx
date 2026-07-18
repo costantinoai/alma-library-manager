@@ -17,7 +17,7 @@ import {
   getTopicDrift,
   getSignalImpact,
 } from '@/api/client'
-import { COLORS, PIE_COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
+import { COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
 import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 
 // ── Main Page ──
@@ -128,7 +128,6 @@ export function InsightsPage() {
               data={data}
               aiStatus={aiStatus}
               colors={COLORS}
-              pieColors={PIE_COLORS}
               tooltipStyle={TOOLTIP_STYLE}
             />
           ) : null}

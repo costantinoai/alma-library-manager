@@ -2488,6 +2488,24 @@ export interface InsightsDiagnostics {
       is_healthy?: boolean | null
     }>
     disabled_sources: string[]
+    /** The last-24h failed operations themselves (capped, newest first) —
+     *  the Activity tab names each failure instead of dead-ending on the
+     *  `recent_failed_operations_24h` count. */
+    failed_operations?: Array<{
+      job_id: string
+      operation_key: string
+      message?: string | null
+      error?: string | null
+      trigger_source?: string | null
+      finished_at?: string | null
+      /** Chronological tail of the run's step log — the recorded WHY. */
+      log_tail?: Array<{
+        timestamp?: string | null
+        level?: string | null
+        step?: string | null
+        message: string
+      }>
+    }>
   }
   trends: {
     window_days: number

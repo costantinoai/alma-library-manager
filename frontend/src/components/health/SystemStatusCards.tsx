@@ -50,6 +50,7 @@ import {
 } from '@/api/client'
 import { useDiagnosticsSections } from '@/components/insights/useDiagnosticsSections'
 import { AsyncButton } from '@/components/settings/primitives'
+import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import {
   Dialog,
   DialogContent,
@@ -134,6 +135,14 @@ interface AuthorRow {
   last_error?: string
   last_checked_at?: string | null
 }
+// One identity-resolution attention row (authors section `identity_attention`),
+// from the same canonical builder the Authors page needs-attention list uses.
+interface IdentityRow {
+  author_name?: string | null
+  status?: string
+  reason?: string | null
+  updated_at?: string | null
+}
 // One followed author's historical-corpus state (authors section `corpus_health`).
 interface CorpusRow {
   author_name?: string | null
@@ -161,6 +170,62 @@ interface SourceRow {
 const worstSeverity = (states: OperationalState[], floor: Severity): Severity => {
   const ranked = [floor, ...states.map((s) => (s.severity as Severity) ?? 'warning')]
   return ranked.reduce((worst, s) => (severityRank(s) < severityRank(worst) ? s : worst), 'ok')
+}
+
+// ── Detail-popup ledger model ────────────────────────────────────────────────
+// One row per remediation TARGET (an author, a monitor, a source…), its cause
+// line joined from the review list by name. Previously the same entity showed
+// up TWICE in the popup — a "Repair Alice Smith" button in a state card, and an
+// unexplained "Alice Smith" review card further down — with no link between
+// action and reason.
+interface IssueRow {
+  key: string
+  name: string
+  severity: Severity
+  causes: string[]
+  targets: OperationalTarget[]
+}
+const sameEntity = (a: string, b: string): boolean => {
+  const x = a.trim().toLowerCase()
+  const y = b.trim().toLowerCase()
+  return x === y || x.startsWith(y) || y.startsWith(x)
+}
+function buildIssueRows(comp: SystemComponent): {
+  rows: IssueRow[]
+  broadcast: OperationalState[]
+  review: ReviewItem[]
+} {
+  const consumed = new Set<string>()
+  const rows: IssueRow[] = []
+  const broadcast: OperationalState[] = [] // states with no per-entity target (e.g. slack_unconfigured)
+  for (const s of comp.states) {
+    const targets = s.targets ?? []
+    if (!targets.length) {
+      broadcast.push(s)
+      continue
+    }
+    // Group a target's multiple actions (repair + backfill) into ONE row.
+    const byLabel = new Map<string, OperationalTarget[]>()
+    for (const t of targets) byLabel.set(t.label, [...(byLabel.get(t.label) ?? []), t])
+    for (const [label, ts] of byLabel) {
+      const causes: string[] = []
+      for (const r of comp.reviewItems) {
+        if (!consumed.has(r.id) && r.secondary && sameEntity(r.primary, label)) {
+          causes.push(r.secondary)
+          consumed.add(r.id)
+        }
+      }
+      if (!causes.length && s.detail) causes.push(s.detail)
+      rows.push({
+        key: `${s.id}-${label}`,
+        name: label,
+        severity: (s.severity as Severity) ?? 'warning',
+        causes: causes.slice(0, 2),
+        targets: ts,
+      })
+    }
+  }
+  return { rows, broadcast, review: comp.reviewItems.filter((r) => !consumed.has(r.id)) }
 }
 
 // HTTP status code → short reason, for spelling out the error mix.
@@ -412,18 +477,19 @@ export function SystemStatusCards() {
       if (!handlePhantomTarget(err, 'Monitor')) errorToast('Monitor refresh failed', getApiErrorMessage(err))
     },
   })
+  const enableSource = async (sourceName: string) => {
+    const current = await getDiscoverySettings()
+    const currentSources = current.sources as unknown as Record<string, { enabled: boolean; weight: number }>
+    return updateDiscoverySettings({
+      ...current,
+      sources: {
+        ...current.sources,
+        [sourceName]: { ...(currentSources[sourceName] ?? { enabled: false, weight: 1 }), enabled: true },
+      },
+    })
+  }
   const enableSourceMutation = useMutation({
-    mutationFn: async (sourceName: string) => {
-      const current = await getDiscoverySettings()
-      const currentSources = current.sources as unknown as Record<string, { enabled: boolean; weight: number }>
-      return updateDiscoverySettings({
-        ...current,
-        sources: {
-          ...current.sources,
-          [sourceName]: { ...(currentSources[sourceName] ?? { enabled: false, weight: 1 }), enabled: true },
-        },
-      })
-    },
+    mutationFn: enableSource,
     onSuccess: () => {
       invalidateOperational(['discovery-settings'])
       toast({ title: 'Source enabled', description: 'Discovery source re-enabled.' })
@@ -451,24 +517,68 @@ export function SystemStatusCards() {
     onError: () => errorToast('Plugin test failed'),
   })
 
-  // action → how to extract its argument, which mutation to fire, its label.
+  // action → how to extract its argument, which mutation to fire, its verb.
+  // Verbs are SHORT — the dialog renders one row per entity with the name on
+  // the row, so "Repair Alice Smith" would say the name twice.
   type RemediationEntry = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mutation: UseMutationResult<any, unknown, any, unknown>
     getArg: (t: OperationalTarget) => string | undefined
-    label: (t: OperationalTarget) => string
+    verb: string
     argless?: boolean
     icon?: React.ReactNode
   }
   const remediation: Record<string, RemediationEntry> = {
-    repair_author: { mutation: repairAuthorMutation, getArg: (t) => t.author_id ?? undefined, label: (t) => `Repair ${t.label ?? 'author'}` },
-    backfill_author: { mutation: historyBackfillMutation, getArg: (t) => t.author_id ?? undefined, label: (t) => `Backfill ${t.label ?? 'author'}` },
-    refresh_monitor: { mutation: refreshMonitorMutation, getArg: (t) => t.monitor_id ?? undefined, label: (t) => `Refresh ${t.label ?? 'monitor'}` },
-    enable_source: { mutation: enableSourceMutation, getArg: (t) => t.source ?? undefined, label: (t) => `Enable ${t.label ?? 'source'}` },
-    evaluate_alert: { mutation: evaluateAlertMutation, getArg: (t) => t.alert_id ?? undefined, label: (t) => `Re-run ${t.label ?? 'alert'}` },
-    test_plugin: { mutation: testPluginMutation, getArg: (t) => t.plugin_name ?? undefined, label: (t) => `Test ${t.label ?? 'plugin'}` },
-    compute_stale_embeddings: { mutation: computeStaleEmbeddingsMutation, getArg: () => 'compute_stale_embeddings', label: (t) => `AI Refresh ${t.label ?? 'embeddings'}`, argless: true, icon: <Cpu className="mr-1 h-4 w-4" /> },
-    clear_similarity_cache: { mutation: clearSimilarityCacheMutation, getArg: () => 'clear_similarity_cache', label: (t) => `Clear ${t.label ?? 'similarity cache'}`, argless: true },
+    repair_author: { mutation: repairAuthorMutation, getArg: (t) => t.author_id ?? undefined, verb: 'Repair' },
+    backfill_author: { mutation: historyBackfillMutation, getArg: (t) => t.author_id ?? undefined, verb: 'Backfill' },
+    refresh_monitor: { mutation: refreshMonitorMutation, getArg: (t) => t.monitor_id ?? undefined, verb: 'Refresh' },
+    enable_source: { mutation: enableSourceMutation, getArg: (t) => t.source ?? undefined, verb: 'Enable' },
+    evaluate_alert: { mutation: evaluateAlertMutation, getArg: (t) => t.alert_id ?? undefined, verb: 'Re-run' },
+    test_plugin: { mutation: testPluginMutation, getArg: (t) => t.plugin_name ?? undefined, verb: 'Test' },
+    compute_stale_embeddings: { mutation: computeStaleEmbeddingsMutation, getArg: () => 'compute_stale_embeddings', verb: 'Recompute', argless: true, icon: <Cpu className="mr-1 h-4 w-4" /> },
+    clear_similarity_cache: { mutation: clearSimilarityCacheMutation, getArg: () => 'clear_similarity_cache', verb: 'Clear', argless: true },
+  }
+
+  // ── "Fix all": run every row's action once, sequentially (kind to the
+  // backend's writer gate), with ONE summary toast + ONE refetch at the end —
+  // going through the per-row mutations would fire a toast per entity.
+  const [fixAllPending, setFixAllPending] = useState(false)
+  const directRun: Record<string, (t: OperationalTarget) => Promise<unknown> | null> = {
+    repair_author: (t) => (t.author_id ? repairAuthor(t.author_id) : null),
+    backfill_author: (t) => (t.author_id ? queueAuthorHistoryBackfill(t.author_id) : null),
+    refresh_monitor: (t) => (t.monitor_id ? refreshFeedMonitor(t.monitor_id) : null),
+    enable_source: (t) => (t.source ? enableSource(t.source) : null),
+    evaluate_alert: (t) => (t.alert_id ? evaluateAlert(t.alert_id) : null),
+    test_plugin: (t) => (t.plugin_name ? testPluginConnection(t.plugin_name) : null),
+    compute_stale_embeddings: () => api.post('/ai/compute-embeddings?scope=stale'),
+    clear_similarity_cache: () => clearDiscoverySimilarityCache(),
+  }
+  const runnableTargets = (rows: IssueRow[]): OperationalTarget[] =>
+    rows.flatMap((r) => r.targets).filter((t) => !!directRun[t.action] && !!remediation[t.action]?.getArg(t))
+  async function fixAll(rows: IssueRow[]) {
+    const targets = rows.flatMap((r) => r.targets)
+    setFixAllPending(true)
+    let ok = 0
+    let failed = 0
+    for (const t of targets) {
+      const fn = directRun[t.action]
+      if (!fn) continue
+      try {
+        const p = fn(t)
+        if (!p) continue
+        await p
+        ok++
+      } catch {
+        failed++ // a 404 phantom or transient failure — the refetch below re-syncs the list
+      }
+    }
+    setFixAllPending(false)
+    invalidateOperational(['authors'], ['feed-monitors'], ['feed-inbox'], ['alerts'], ['discovery-settings'])
+    if (failed === 0) {
+      toast({ title: `Queued ${ok} fix${ok === 1 ? '' : 'es'}`, description: 'Track progress in Activity.' })
+    } else {
+      errorToast(`Queued ${ok}, ${failed} failed`, 'The list refreshes with what remains.')
+    }
   }
 
   // ── Build the component model from the canonical diagnostics sections.
@@ -500,6 +610,18 @@ export function SystemStatusCards() {
       authorsSummary?.degraded_tracked ?? 0,
       degradedAuthors.length,
     )
+    // Identity-resolution attention — same canonical rows the Authors page
+    // shows, so this popup and that page can never name different authors.
+    const identityRows = (sections.authors.data?.identity_attention ?? []) as unknown as IdentityRow[]
+    const identityTotal = Math.max(
+      (authorsSummary as { identity_attention_count?: number } | undefined)?.identity_attention_count ?? 0,
+      identityRows.length,
+    )
+    const IDENTITY_STATUS_LABEL: Record<string, string> = {
+      error: 'last identity refresh failed',
+      no_match: 'OpenAlex found no match for this name',
+      needs_manual_review: 'identity candidates need a manual pick',
+    }
     const corpusRows = (sections.authors.data?.corpus_health ?? []) as unknown as CorpusRow[]
     const corpusAttentionRows = corpusRows.filter((c) =>
       ['stale', 'thin', 'failed', 'unverified'].includes(c.state ?? ''),
@@ -640,9 +762,18 @@ export function SystemStatusCards() {
           description: 'Followed authors whose identity bridge or historical corpus needs maintenance.',
           note: 'Flags persist until the next successful refresh or backfill — fixing the cause does not clear them instantly.',
           states: at('authors'),
-          // Per-author WHY: degraded monitors (cause + age) first, then each
-          // corpus whose backfill is stale/thin/failed (state + last success).
+          // Per-author WHY: identity-resolution failures first (same rows the
+          // Authors page shows), then degraded monitors (cause + age), then
+          // each corpus whose backfill is stale/thin/failed.
           reviewItems: [
+            ...identityRows.map((a, i) => ({
+              id: `ident-${i}`,
+              primary: a.author_name || 'Author',
+              secondary:
+                (a.reason && a.reason.trim()) ||
+                IDENTITY_STATUS_LABEL[a.status ?? ''] ||
+                'identity needs manual attention',
+            })),
             ...degradedAuthors.slice(0, 12).map((a, i) => ({
               id: `deg-${i}`,
               primary: a.author_name || 'Author',
@@ -657,14 +788,15 @@ export function SystemStatusCards() {
             })),
           ],
           reviewOverflow:
+            Math.max(0, identityTotal - identityRows.length) +
             Math.max(0, degradedAuthorsTotal - Math.min(degradedAuthors.length, 12)) +
             Math.max(0, corpusBacklogTotal - corpusAttentionRows.length),
           ownerPage: 'authors',
           ownerParams: { focus: 'needs-attention' },
         },
         {
-          count: degradedAuthorsTotal,
-          countLabel: 'degraded',
+          count: degradedAuthorsTotal + identityTotal,
+          countLabel: 'need attention',
           healthyLabel: 'all healthy',
           // "maintenance due" said nothing about WHY — name the backlog.
           attentionLabel:
@@ -732,7 +864,9 @@ export function SystemStatusCards() {
             states: at('jobs'),
             reviewItems: [],
             ownerPage: 'insights',
-            ownerParams: { tab: 'activity' },
+            // focus=failed → the Activity tab scrolls to + rings the
+            // Background-operations card naming each failure.
+            ownerParams: { tab: 'activity', focus: 'failed' },
           },
           { count: failedJobs, countLabel: 'failed (24h)', healthyLabel: 'all healthy' },
         ),
@@ -818,7 +952,7 @@ export function SystemStatusCards() {
       {/* Centered per-component detail — what's healthy / how it's configured,
           or the degraded issues + one-click remediation. One Dialog, no route. */}
       <Dialog open={openComp != null} onOpenChange={(o) => !o && setOpenId(null)}>
-        <DialogContent className="max-w-lg bg-surface-1">
+        <DialogContent className="max-w-xl bg-surface-1">
           {openComp ? (
             <>
               <DialogHeader>
@@ -832,59 +966,119 @@ export function SystemStatusCards() {
                 <DialogDescription className="text-slate-600">{openComp.description}</DialogDescription>
               </DialogHeader>
 
-              {openComp.note ? <p className="-mt-1 text-xs italic text-slate-500">{openComp.note}</p> : null}
-
               {hasIssues(openComp) ? (
-                <div className="space-y-2">
-                  {/* Degraded states with their one-click remediation. */}
-                  {openComp.states.map((state) => (
-                    <div
-                      key={state.id}
-                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
-                    >
-                      <p className="text-sm font-medium text-alma-800">{state.label}</p>
-                      {state.detail ? <p className="mt-1 text-xs text-slate-500">{state.detail}</p> : null}
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {(state.targets ?? []).map((target) => {
-                          const handler = remediation[target.action]
-                          if (!handler) return null
-                          const arg = handler.getArg(target)
-                          if (!arg) return null
-                          const pending =
-                            handler.mutation.isPending && (handler.argless || handler.mutation.variables === arg)
-                          return (
-                            <AsyncButton
-                              key={`${state.id}-${target.id ?? arg}`}
-                              size="sm"
-                              variant="outline"
-                              icon={handler.icon}
-                              pending={pending}
-                              onClick={() => (handler.argless ? handler.mutation.mutate(undefined) : handler.mutation.mutate(arg))}
-                            >
-                              {handler.label(target)}
-                            </AsyncButton>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ))}
+                (() => {
+                  const { rows, broadcast, review } = buildIssueRows(openComp)
+                  const sectioned = rows.length > 0 && review.length > 0
+                  return (
+                    /* Ledger, not stacked cards: hairline-divided rows inside one
+                       quiet panel, capped height with internal scroll so a long
+                       author list can never push the dialog off screen. */
+                    <div className="max-h-[55vh] space-y-3 overflow-y-auto pr-1">
+                      {/* Component-wide conditions with no per-entity fix. */}
+                      {broadcast.map((state) => (
+                        <div
+                          key={state.id}
+                          className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2.5"
+                        >
+                          <p className="flex items-center gap-2 text-sm font-medium text-alma-800">
+                            <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[(state.severity as Severity) ?? 'warning'])} />
+                            {state.label}
+                          </p>
+                          {state.detail ? <p className="mt-1 pl-4 text-xs leading-relaxed text-slate-500">{state.detail}</p> : null}
+                        </div>
+                      ))}
 
-                  {/* Review-only items (no one-click fix) — e.g. rate-limited sources. */}
-                  {openComp.reviewItems.map((item) => (
-                    <div
-                      key={`review-${item.id}`}
-                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3"
-                    >
-                      <p className="text-sm font-medium text-alma-800">{item.primary}</p>
-                      {item.secondary ? <p className="mt-1 text-xs text-slate-500">{item.secondary}</p> : null}
+                      {/* One row per entity: name + status dot, its own action
+                          verbs on the right, the WHY directly underneath. */}
+                      {rows.length > 0 ? (
+                        <div>
+                          <div className="mb-1.5 flex items-center justify-between gap-3">
+                            <EyebrowLabel tone="muted">Fix now</EyebrowLabel>
+                            {runnableTargets(rows).length > 1 ? (
+                              <AsyncButton
+                                size="xs"
+                                variant="outline"
+                                pending={fixAllPending}
+                                onClick={() => fixAll(rows)}
+                              >
+                                Fix all · {runnableTargets(rows).length}
+                              </AsyncButton>
+                            ) : null}
+                          </div>
+                          <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                            {rows.map((row) => (
+                              <div key={row.key} className="px-3 py-2.5">
+                                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                                    <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[row.severity])} />
+                                    <span className="truncate text-sm font-medium text-alma-800">{row.name}</span>
+                                  </span>
+                                  <span className="flex shrink-0 flex-wrap gap-1.5">
+                                    {row.targets.map((target) => {
+                                      const handler = remediation[target.action]
+                                      if (!handler) return null
+                                      const arg = handler.getArg(target)
+                                      if (!arg) return null
+                                      const pending =
+                                        handler.mutation.isPending && (handler.argless || handler.mutation.variables === arg)
+                                      return (
+                                        <AsyncButton
+                                          key={`${row.key}-${target.id ?? arg}-${target.action}`}
+                                          size="sm"
+                                          variant="outline"
+                                          icon={handler.icon}
+                                          pending={pending}
+                                          disabled={fixAllPending}
+                                          onClick={() => (handler.argless ? handler.mutation.mutate(undefined) : handler.mutation.mutate(arg))}
+                                        >
+                                          {handler.verb}
+                                        </AsyncButton>
+                                      )
+                                    })}
+                                  </span>
+                                </div>
+                                {row.causes.map((cause, i) => (
+                                  <p key={i} title={cause} className="mt-1 line-clamp-2 pl-4 text-xs leading-relaxed text-slate-500">
+                                    {cause}
+                                  </p>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {/* Flagged but with no one-click fix (rate-limited sources,
+                          corpus backlog beyond the actionable slice…). */}
+                      {review.length > 0 ? (
+                        <div>
+                          {sectioned ? <EyebrowLabel tone="muted" className="mb-1.5">Also flagged</EyebrowLabel> : null}
+                          <div className="divide-y divide-[var(--color-border)] rounded-sm border border-[var(--color-border)] bg-surface-2">
+                            {review.map((item) => (
+                              <div key={`review-${item.id}`} className="px-3 py-2.5">
+                                <p className="flex items-center gap-2 text-sm font-medium text-alma-800">
+                                  <span className="h-2 w-2 shrink-0 rounded-full border border-warning-500" />
+                                  <span className="truncate">{item.primary}</span>
+                                </p>
+                                {item.secondary ? (
+                                  <p title={item.secondary} className="mt-1 line-clamp-2 pl-4 text-xs leading-relaxed text-slate-500">
+                                    {item.secondary}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {openComp.reviewOverflow ? (
+                        <p className="px-1 text-xs text-slate-500">
+                          +{openComp.reviewOverflow} more — open {OWNER_LABEL[openComp.ownerPage]?.replace('Open in ', '') ?? 'the owner'} to see all.
+                        </p>
+                      ) : null}
                     </div>
-                  ))}
-                  {openComp.reviewOverflow ? (
-                    <p className="px-1 text-xs text-slate-500">
-                      +{openComp.reviewOverflow} more — open {OWNER_LABEL[openComp.ownerPage]?.replace('Open in ', '') ?? 'the owner'} to see all.
-                    </p>
-                  ) : null}
-                </div>
+                  )
+                })()
               ) : (
                 /* Healthy — explain in plain English what "healthy" means here. */
                 <Alert variant="success">
@@ -895,11 +1089,17 @@ export function SystemStatusCards() {
                 </Alert>
               )}
 
-              <div className="flex justify-end">
+              {/* Footer: the measurement caveat sits with the exit action, out
+                  of the reading path. */}
+              <div className="flex items-center justify-between gap-4 border-t border-[var(--color-border)] pt-3">
+                {openComp.note ? (
+                  <p className="min-w-0 flex-1 text-[11px] italic leading-snug text-slate-500">{openComp.note}</p>
+                ) : <span />}
                 <AsyncButton
                   size="sm"
                   variant="outline"
                   icon={<Activity className="h-4 w-4" />}
+                  className="shrink-0"
                   onClick={() => {
                     const page = openComp.ownerPage
                     setOpenId(null)

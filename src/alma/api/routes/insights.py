@@ -20,7 +20,6 @@ from alma.api.helpers import (
     table_exists,
 )
 from alma.application import materialized_views as mv
-from alma.application.followed_authors import get_followed_author_backfill_status
 from alma.application.recommendation_outcomes import (
     build_recommendation_outcomes,
     count_outcomes,
@@ -811,6 +810,12 @@ class BranchTuningActionRequest(BaseModel):
 
 
 def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any]]) -> dict[str, Any]:
+    # Degraded monitors, corpus-backfill states, and identity attention all
+    # come from the canonical alma.services.author_attention builders — the
+    # SAME source the Authors page's /needs-attention endpoint composes from,
+    # so this snapshot (the Health popup's feed) can never disagree with it.
+    from alma.services import author_attention
+
     summary = {
         "total_rows": 0,
         "tracked_authors": 0,
@@ -819,6 +824,7 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
         "degraded_tracked": 0,
         "disabled_tracked": 0,
         "bridge_gap_count": 0,
+        "identity_attention_count": 0,
         "background_corpus_papers": 0,
         "fresh_backfills": 0,
         "running_backfills": 0,
@@ -864,17 +870,9 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
             summary["background_corpus_papers"] = int((row["c"] if row else 0) or 0)
         except sqlite3.OperationalError:
             summary["background_corpus_papers"] = 0
-    degraded = [
-        {
-            "author_id": monitor.get("author_id"),
-            "author_name": monitor.get("author_name") or monitor.get("label"),
-            "health_reason": monitor.get("health_reason"),
-            "last_error": monitor.get("last_error"),
-            "last_checked_at": monitor.get("last_checked_at"),
-        }
-        for monitor in author_monitors
-        if monitor.get("health") == "degraded"
-    ][:12]
+    degraded = author_attention.monitor_attention_rows(author_monitors)[:12]
+    summary["identity_attention_count"] = author_attention.identity_attention_count(db)
+    identity_attention = author_attention.identity_attention_rows(db, limit=12)
 
     try:
         from alma.application import authors as authors_app
@@ -894,94 +892,22 @@ def _build_authors_snapshot(db: sqlite3.Connection, monitors: list[dict[str, Any
     except Exception:
         suggestions = []
 
-    if table_exists(db, "followed_authors") and table_exists(db, "authors"):
-        try:
-            followed_rows = db.execute(
-                """
-                SELECT a.id, a.name, COALESCE(a.works_count, 0) AS works_count
-                FROM authors a
-                JOIN followed_authors fa ON fa.author_id = a.id
-                ORDER BY a.name
-                """
-            ).fetchall()
-        except sqlite3.OperationalError:
-            followed_rows = []
-
-        # Pre-compute background_publications for ALL followed authors in
-        # one grouped query. Each per-author call to
-        # ``get_followed_author_backfill_status`` would otherwise issue
-        # the same heavy 3-way JOIN (papers ⋈ publication_authors ⋈
-        # authors); with N followed authors that's an N+1 that ran the
-        # diagnostics tab into ~60 s on a 50-author corpus. Passing the
-        # count in as a kwarg lets the helper skip its own query.
-        bg_counts: dict[str, int] = {}
-        if (
-            table_exists(db, "publication_authors")
-            and table_exists(db, "authors")
-            and followed_rows
-        ):
-            try:
-                bg_rows = db.execute(
-                    """
-                    SELECT a.id AS author_id, COUNT(DISTINCT p.id) AS c
-                    FROM authors a
-                    JOIN followed_authors fa ON fa.author_id = a.id
-                    JOIN publication_authors pa
-                      ON lower(a.openalex_id) = lower(pa.openalex_id)
-                     AND a.openalex_id IS NOT NULL
-                     AND TRIM(a.openalex_id) <> ''
-                    JOIN papers p ON p.id = pa.paper_id
-                    WHERE p.status <> 'library'
-                    GROUP BY a.id
-                    """
-                ).fetchall()
-                bg_counts = {
-                    str(r["author_id"]): int(r["c"] or 0) for r in bg_rows
-                }
-            except sqlite3.OperationalError:
-                bg_counts = {}
-
-        for row in followed_rows:
-            author_id = str(row["id"] or "").strip()
-            if not author_id:
-                continue
-            status = get_followed_author_backfill_status(
-                db,
-                author_id,
-                works_count=int(row["works_count"] or 0),
-                background_publications=bg_counts.get(author_id, 0),
-            )
-            state = str(status.get("state") or "unknown")
-            if state == "fresh":
-                summary["fresh_backfills"] += 1
-            elif state == "running":
-                summary["running_backfills"] += 1
-            elif state == "pending":
-                summary["pending_backfills"] += 1
-            elif state == "stale":
-                summary["stale_backfills"] += 1
-            elif state == "thin":
-                summary["thin_backfills"] += 1
-            elif state == "failed":
-                summary["failed_backfills"] += 1
-            elif state == "unverified":
-                summary["unverified_backfills"] += 1
-            if state in {"stale", "thin", "pending", "failed", "unverified", "running"}:
-                corpus_health.append(
-                    {
-                        "author_id": author_id,
-                        "author_name": str(row["name"] or "").strip() or author_id,
-                        "state": state,
-                        "detail": str(status.get("detail") or "").strip() or None,
-                        "background_publications": int(status.get("background_publications") or 0),
-                        "coverage_ratio": status.get("coverage_ratio"),
-                        "last_success_at": status.get("last_success_at"),
-                    }
-                )
+    corpus_counts, corpus_health = author_attention.corpus_backfill_rows(db)
+    for state, key in (
+        ("fresh", "fresh_backfills"),
+        ("running", "running_backfills"),
+        ("pending", "pending_backfills"),
+        ("stale", "stale_backfills"),
+        ("thin", "thin_backfills"),
+        ("failed", "failed_backfills"),
+        ("unverified", "unverified_backfills"),
+    ):
+        summary[key] = int(corpus_counts.get(state) or 0)
 
     return {
         "summary": summary,
         "degraded": degraded,
+        "identity_attention": identity_attention,
         "suggestions": suggestions,
         "corpus_health": corpus_health[:12],
     }
@@ -1387,6 +1313,7 @@ def _build_operational_snapshot(
         plugins = []
 
     recent_failed_operations_24h = 0
+    failed_operations: list[dict[str, Any]] = []
     if table_exists(db, "operation_status"):
         cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
         row = db.execute(
@@ -1399,6 +1326,59 @@ def _build_operational_snapshot(
             (cutoff,),
         ).fetchone()
         recent_failed_operations_24h = int((row["c"] if row else 0) or 0)
+        # The failures themselves, not just the count — the Health popup's
+        # "Open in Activity" lands on a card that must NAME what failed and
+        # WHY. `message` alone is often just a restated label ("Periodic
+        # author refresh failed"), so each row also carries the tail of its
+        # step log — the closest thing to a cause the run recorded.
+        if recent_failed_operations_24h > 0:
+            failed_operations = [
+                {
+                    "job_id": str(r["job_id"] or ""),
+                    "operation_key": str(r["operation_key"] or ""),
+                    "message": str(r["message"] or "").strip() or None,
+                    "error": str(r["error"] or "").strip() or None,
+                    "trigger_source": str(r["trigger_source"] or "").strip() or None,
+                    "finished_at": str(r["finished_at"] or r["updated_at"] or r["started_at"] or "").strip() or None,
+                }
+                for r in db.execute(
+                    """
+                    SELECT job_id, operation_key, message, error, trigger_source,
+                           started_at, finished_at, updated_at
+                    FROM operation_status
+                    WHERE status = 'failed'
+                      AND COALESCE(finished_at, updated_at, started_at) >= ?
+                    ORDER BY COALESCE(finished_at, updated_at, started_at) DESC
+                    LIMIT 8
+                    """,
+                    (cutoff,),
+                ).fetchall()
+            ]
+            if failed_operations and table_exists(db, "operation_logs"):
+                for op in failed_operations:
+                    try:
+                        tail = db.execute(
+                            """
+                            SELECT timestamp, level, step, message
+                            FROM operation_logs
+                            WHERE job_id = ?
+                            ORDER BY id DESC
+                            LIMIT 5
+                            """,
+                            (op["job_id"],),
+                        ).fetchall()
+                    except sqlite3.OperationalError:
+                        tail = []
+                    op["log_tail"] = [
+                        {
+                            "timestamp": str(t["timestamp"] or "") or None,
+                            "level": str(t["level"] or "") or None,
+                            "step": str(t["step"] or "") or None,
+                            "message": str(t["message"] or "").strip(),
+                        }
+                        for t in reversed(tail)  # chronological order for reading
+                        if str(t["message"] or "").strip()
+                    ]
 
     if degraded_monitor_count > 0:
         degraded_targets = [
@@ -1674,6 +1654,10 @@ def _build_operational_snapshot(
         "states": states,
         "plugins": plugins,
         "disabled_sources": disabled_sources,
+        # The last-24h failures themselves (capped 8, newest first) — feeds
+        # the Activity tab's "Background operations" card so the failure
+        # count is never a dead end.
+        "failed_operations": failed_operations,
     }
 
 
