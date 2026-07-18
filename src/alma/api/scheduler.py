@@ -1304,6 +1304,22 @@ def evaluate_scheduled_alerts() -> None:
                     pass
                 logger.exception("Error evaluating alert %s", alert_id)
 
+        # Retention: trim history older than the application-defined window
+        # (kept well above the 90-day Insights trend horizon). Same own-
+        # connection commit discipline as the evaluations above.
+        pruned = 0
+        try:
+            pruned = alerts_app.prune_alert_history(conn)
+            if pruned:
+                commit_with_retry(conn, label="prune_alert_history")
+                logger.info("Pruned %d alert_history rows past retention", pruned)
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.exception("alert_history retention prune failed")
+
         conn.close()
         logger.info(
             "Alert evaluation sweep complete: %d/%d alerts evaluated",
@@ -1321,6 +1337,7 @@ def evaluate_scheduled_alerts() -> None:
                 "total": len(alerts),
                 "papers_sent": sent_total,
                 "papers_failed": failed_total,
+                "history_pruned": pruned,
             },
         )
 
@@ -1853,52 +1870,19 @@ def _is_due(
     last_evaluated_at: str | None,
     now: datetime,
 ) -> bool:
-    """Return True when the current schedule slot has not been processed."""
-    schedule_norm = (schedule or "").strip().lower()
-    config = schedule_config if isinstance(schedule_config, dict) else {}
+    """Return True when the current schedule slot has not been processed.
 
-    if schedule_norm == "daily":
-        hour, minute = _parse_schedule_time(str(config.get("time") or "09:00"))
-        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now < slot:
-            return False
-    elif schedule_norm == "weekly":
-        day_raw = str(config.get("day") or "monday").strip().lower()[:3]
-        target_weekday = {
-            "mon": 0,
-            "tue": 1,
-            "wed": 2,
-            "thu": 3,
-            "fri": 4,
-            "sat": 5,
-            "sun": 6,
-        }.get(day_raw, 0)
-        hour, minute = _parse_schedule_time(str(config.get("time") or "09:00"))
-        slot_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        days_since = (now.weekday() - target_weekday) % 7
-        slot = slot_today - timedelta(days=days_since)
-        if now < slot:
-            slot -= timedelta(days=7)
-    else:
-        return False
+    Thin delegate — the slot math lives in ``alma.application.alerts``
+    (single owner shared with the API's ``next_due_at`` field).
+    """
+    from alma.application.alerts import is_due
 
-    if not last_evaluated_at:
-        return True
-    try:
-        last_dt = datetime.fromisoformat(last_evaluated_at)
-    except (ValueError, TypeError):
-        return True
-    return last_dt < slot
-
-
-def _parse_schedule_time(raw: str) -> tuple[int, int]:
-    try:
-        hour_s, minute_s = raw.strip().split(":", 1)
-        hour = max(0, min(23, int(hour_s)))
-        minute = max(0, min(59, int(minute_s)))
-        return hour, minute
-    except Exception:
-        return 9, 0
+    return is_due(
+        schedule=schedule,
+        schedule_config=schedule_config,
+        last_evaluated_at=last_evaluated_at,
+        now=now,
+    )
 
 
 # ===================================================================
