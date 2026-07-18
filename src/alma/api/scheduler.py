@@ -1341,7 +1341,7 @@ def evaluate_scheduled_alerts() -> None:
             },
         )
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in evaluate_scheduled_alerts")
         set_job_status(
             job_id,
@@ -1350,7 +1350,9 @@ def evaluate_scheduled_alerts() -> None:
             operation_key=operation_key,
             finished_at=datetime.utcnow().isoformat(),
             message="Scheduled alert evaluation failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def refresh_authors_periodic() -> None:
@@ -1400,8 +1402,11 @@ def refresh_authors_periodic() -> None:
         finally:
             conn.close()
 
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in refresh_authors_periodic")
+        # Persist the WHY, not just the fact: the error column + a log line
+        # are what Health/Activity show the user — a bare "failed" message
+        # made the failure undiagnosable from the UI.
         set_job_status(
             job_id,
             status="failed",
@@ -1409,7 +1414,9 @@ def refresh_authors_periodic() -> None:
             operation_key=operation_key,
             finished_at=datetime.utcnow().isoformat(),
             message="Periodic author refresh failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def refresh_recommendations_periodic() -> None:
@@ -1538,7 +1545,7 @@ def refresh_recommendations_periodic() -> None:
                 "details": lens_results,
             },
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in refresh_recommendations_periodic")
         set_job_status(
             job_id,
@@ -1547,7 +1554,9 @@ def refresh_recommendations_periodic() -> None:
             operation_key=operation_key,
             finished_at=datetime.utcnow().isoformat(),
             message="Periodic recommendation refresh failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def refresh_feed_inbox_periodic() -> None:
@@ -1601,7 +1610,7 @@ def refresh_feed_inbox_periodic() -> None:
         logger.info(
             "Periodic feed inbox refresh complete: %d items created", items_created
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in refresh_feed_inbox_periodic")
         set_job_status(
             job_id,
@@ -1610,7 +1619,9 @@ def refresh_feed_inbox_periodic() -> None:
             operation_key=operation_key,
             finished_at=datetime.utcnow().isoformat(),
             message="Periodic feed inbox refresh failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def maintain_citation_graph_periodic() -> None:
@@ -1646,7 +1657,7 @@ def maintain_citation_graph_periodic() -> None:
             )
         finally:
             conn.close()
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in maintain_citation_graph_periodic")
         set_job_status(
             job_id,
@@ -1655,7 +1666,9 @@ def maintain_citation_graph_periodic() -> None:
             operation_key="graphs.reference_backfill",
             finished_at=datetime.utcnow().isoformat(),
             message="Periodic citation graph maintenance failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def _operation_log_retention_days() -> int:
@@ -1748,7 +1761,7 @@ def db_maintenance_periodic() -> None:
             message="DB maintenance complete",
             result=summary,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Fatal error in db_maintenance_periodic")
         set_job_status(
             job_id,
@@ -1757,7 +1770,9 @@ def db_maintenance_periodic() -> None:
             operation_key="db.maintenance",
             finished_at=datetime.utcnow().isoformat(),
             message="DB maintenance failed",
+            error=f"{type(exc).__name__}: {exc}",
         )
+        add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
 def drain_pending_hydration_periodic() -> None:
