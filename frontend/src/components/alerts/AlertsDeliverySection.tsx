@@ -7,8 +7,10 @@ import {
   Play,
   Loader2,
   AlertCircle,
+  CalendarClock,
   Hash,
   Send,
+  X,
   Zap,
 } from 'lucide-react'
 import {
@@ -37,8 +39,14 @@ import {
 import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate } from '@/lib/utils'
+import { StatusBadge } from './AlertBadges'
 
-export function AlertsDeliverySection() {
+interface AlertsDeliverySectionProps {
+  /** Open the History tab pre-filtered to one digest. */
+  onShowHistory?: (alertId: string) => void
+}
+
+export function AlertsDeliverySection({ onShowHistory }: AlertsDeliverySectionProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [editingAlert, setEditingAlert] = useState<Alert | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -194,6 +202,7 @@ export function AlertsDeliverySection() {
   }
 
   function openEdit(alert: Alert) {
+    updateMutation.reset()
     setEditingAlert(alert)
     setFormName(alert.name)
     setFormChannels(alert.channels)
@@ -279,6 +288,12 @@ export function AlertsDeliverySection() {
           />
           <span className="text-sm text-slate-700">Email</span>
         </label>
+        {formChannels.length === 0 && (
+          <p className="flex items-center gap-1.5 text-xs text-warning-700">
+            <AlertCircle className="h-3.5 w-3.5" />
+            No channel selected — this digest will evaluate but deliver nothing.
+          </p>
+        )}
       </div>
       <div className="space-y-2">
         <label className="text-sm font-medium text-slate-700">Schedule</label>
@@ -338,7 +353,7 @@ export function AlertsDeliverySection() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-alma-800">Digests</h2>
-        <Button onClick={() => { resetForm(); setCreateOpen(true) }}>
+        <Button onClick={() => { resetForm(); createMutation.reset(); setCreateOpen(true) }}>
           <Plus className="h-4 w-4" />
           New Digest
         </Button>
@@ -386,22 +401,33 @@ export function AlertsDeliverySection() {
                             {ch}
                           </Badge>
                         ))}
+                        {alert.channels.length === 0 && (
+                          <Badge variant="warning">
+                            <AlertCircle className="mr-1 h-3 w-3" />
+                            No channels — nothing will be delivered
+                          </Badge>
+                        )}
                       </div>
                       {alert.rules && alert.rules.length > 0 && (
                         <div className="mt-2 flex flex-wrap items-center gap-1">
                           <span className="text-xs text-slate-400">Rules:</span>
                           {alert.rules.map((rule) => (
-                            <Badge
+                            <button
                               key={rule.id}
-                              variant="default"
-                              className="cursor-pointer"
+                              type="button"
+                              aria-label={`Unassign ${rule.name}`}
+                              title="Click to unassign"
                               onClick={() =>
                                 unassignRuleMutation.mutate({ alertId: alert.id, ruleId: rule.id })
                               }
-                              title="Click to unassign"
+                              disabled={unassignRuleMutation.isPending}
+                              className="cursor-pointer"
                             >
-                              {rule.name} x
-                            </Badge>
+                              <Badge variant="default">
+                                {rule.name}
+                                <X className="ml-1 h-3 w-3" />
+                              </Badge>
+                            </button>
                           ))}
                         </div>
                       )}
@@ -428,11 +454,33 @@ export function AlertsDeliverySection() {
                           </Select>
                         </div>
                       )}
-                      {alert.last_evaluated_at && (
-                        <p className="mt-1.5 text-xs text-slate-400">
-                          Last evaluated: {formatDate(alert.last_evaluated_at)}
-                        </p>
-                      )}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        {alert.last_evaluated_at && (
+                          <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                            Last evaluated: {formatDate(alert.last_evaluated_at)}
+                            {alert.last_outcome && (
+                              <button
+                                type="button"
+                                onClick={() => onShowHistory?.(alert.id)}
+                                title="View this digest's history"
+                                aria-label={`View history for ${alert.name}`}
+                                className="cursor-pointer"
+                              >
+                                <StatusBadge status={alert.last_outcome} />
+                              </button>
+                            )}
+                          </span>
+                        )}
+                        {alert.next_due_at && (
+                          <span
+                            className="flex items-center gap-1 text-xs text-slate-400"
+                            title="Evaluated by the hourly sweep — delivery may lag the slot by up to an hour."
+                          >
+                            <CalendarClock className="h-3 w-3" />
+                            Next: {formatDate(alert.next_due_at)} UTC
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1">
                       <Button
@@ -611,6 +659,9 @@ export function AlertsDeliverySection() {
                     {Object.entries(evalResult.channel_results).map(([channel, result]) => (
                       <div key={channel} className="text-xs text-slate-700">
                         <span className="font-medium">{channel}</span>: {result.status}
+                        {result.papers_sent != null && result.status === 'sent'
+                          ? ` (${result.papers_sent} paper${result.papers_sent !== 1 ? 's' : ''})`
+                          : ''}
                         {result.error ? ` (${result.error})` : ''}
                       </div>
                     ))}
@@ -620,9 +671,32 @@ export function AlertsDeliverySection() {
               {evalResult.papers && evalResult.papers.length > 0 && (
                 <div className="max-h-48 overflow-y-auto rounded-lg bg-surface-2 p-3">
                   <p className="mb-2 text-xs font-medium text-slate-500">Papers:</p>
-                  <pre className="whitespace-pre-wrap text-xs text-slate-700">
-                    {JSON.stringify(evalResult.papers, null, 2)}
-                  </pre>
+                  <ul className="space-y-2">
+                    {evalResult.papers.map((paper, i) => {
+                      const title = String(paper.title ?? paper.paper_id ?? 'Untitled')
+                      const url = typeof paper.url === 'string' && paper.url ? paper.url : null
+                      const authors = typeof paper.authors === 'string' ? paper.authors : ''
+                      const year = paper.year != null ? String(paper.year) : ''
+                      const meta = [authors, year].filter(Boolean).join(' · ')
+                      return (
+                        <li key={String(paper.paper_id ?? i)} className="text-xs">
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-medium text-accent hover:underline"
+                            >
+                              {title}
+                            </a>
+                          ) : (
+                            <span className="font-medium text-slate-700">{title}</span>
+                          )}
+                          {meta && <p className="text-slate-500">{meta}</p>}
+                        </li>
+                      )
+                    })}
+                  </ul>
                 </div>
               )}
             </div>

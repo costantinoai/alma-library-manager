@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, BellRing, FolderOpen, GitBranch, Loader2, Rss, UserRound, Workflow } from 'lucide-react'
 
-import { api, getAlertTemplates, type Alert, type AlertAutomationTemplate, type AlertRule } from '@/api/client'
+import { applyAlertTemplate, getAlertTemplates, type AlertAutomationTemplate } from '@/api/client'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -32,19 +32,15 @@ export function AlertTemplatesSection() {
   })
 
   const createFromTemplateMutation = useMutation({
-    mutationFn: async (template: AlertAutomationTemplate) => {
-      const rule = await api.post<AlertRule>('/alerts/rules', template.rule)
-      const alert = await api.post<Alert>('/alerts/', {
-        ...template.alert,
-        rule_ids: [rule.id],
-      })
-      return { template, rule, alert }
-    },
-    onSuccess: async ({ template, alert }) => {
+    // Single atomic endpoint: the backend recomputes the template from its
+    // key and creates rule + digest in one transaction (no orphan rule when
+    // the second insert fails, no client-forged payloads).
+    mutationFn: (template: AlertAutomationTemplate) => applyAlertTemplate(template.key),
+    onSuccess: async (applied) => {
       await invalidateQueries(queryClient, ['alert-rules'], ['alerts'], ['alert-templates'])
       toast({
         title: 'Automation created',
-        description: `${template.title} is now active as ${alert.name}.`,
+        description: `${applied.template_title} is now active as ${applied.alert.name}.`,
       })
     },
     onError: () => {
@@ -115,7 +111,10 @@ export function AlertTemplatesSection() {
                     onClick={() => createFromTemplateMutation.mutate(template)}
                     disabled={createFromTemplateMutation.isPending}
                   >
-                    {createFromTemplateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    {createFromTemplateMutation.isPending &&
+                    createFromTemplateMutation.variables?.key === template.key ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
                     Create Automation
                   </Button>
                 </div>

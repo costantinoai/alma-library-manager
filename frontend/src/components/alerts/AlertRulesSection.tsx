@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
@@ -10,16 +9,22 @@ import {
   Edit3,
   Power,
   AlertCircle,
-  Hash,
+  FlaskConical,
+  Loader2,
 } from 'lucide-react'
 import {
   api,
   getInsightsDiagnostics,
   listCollections,
+  listFollowedAuthors,
+  testFireRule,
+  type Alert,
   type AlertRule,
   type Collection,
   type FeedMonitor,
+  type FollowedAuthor,
   type Lens,
+  type TestFireResult,
 } from '@/api/client'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -49,204 +54,22 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatMonitorTypeLabel } from '@/lib/utils'
 import { RuleTypeBadge } from './AlertBadges'
+import { orphanRuleIds } from './alertDerive'
+import {
+  EMPTY_FORM_VALUES,
+  RULE_TYPES,
+  RULE_TYPE_LABEL,
+  buildRuleConfig,
+  describeRuleConfig,
+  ruleFormSchema,
+  ruleToFormValues,
+  type RuleFormValues,
+  type RuleType,
+} from './ruleFormLogic'
 
-// ── Rule-type registry ─────────────────────────────────────────────────────
-// One source of truth for the 9 rule types: human label, placeholder, and
-// config-field key. Used by RULE_TYPE_OPTIONS (the Select dropdown) and by
-// the dynamic config-field renderer inside the form.
-
-const RULE_TYPES = [
-  'author',
-  'collection',
-  'keyword',
-  'topic',
-  'similarity',
-  'discovery_lens',
-  'feed_monitor',
-  'branch',
-  'library_workflow',
-] as const
-type RuleType = (typeof RULE_TYPES)[number]
-
-const RULE_TYPE_LABEL: Record<RuleType, string> = {
-  author: 'Author',
-  collection: 'Collection',
-  keyword: 'Keyword',
-  topic: 'Topic',
-  similarity: 'Similarity Score',
-  discovery_lens: 'Discovery Lens',
-  feed_monitor: 'Feed Monitor',
-  branch: 'Branch',
-  library_workflow: 'Library Workflow',
-}
-
-// ── Schema ────────────────────────────────────────────────────────────────
-// Flat form schema with per-type validation via superRefine. A
-// z.discriminatedUnion would give us a tighter compile-time guarantee but
-// makes react-hook-form's `reset` awkward (the branch switches shape on
-// rule_type change); flat + superRefine is the pragmatic tradeoff for
-// what the form needs.
-//
-// All type-specific fields default to '' so switching rule_type never
-// leaves a prior field in an inconsistent state — the form instance just
-// validates the field that the current rule_type actually reads, and
-// buildRuleConfig() (below) picks that single field on submit.
-
-const ruleFormSchema = z
-  .object({
-    name: z.string().trim().min(1, 'Name is required'),
-    rule_type: z.enum(RULE_TYPES),
-    slack: z.boolean(),
-    enabled: z.boolean(),
-    // Per-type config fields. Required only for whichever rule_type the
-    // user picked (enforced in superRefine). Plain `z.string()` instead of
-    // `.default('')` because zod 4's `.default()` splits input/output
-    // types, which produces a Resolver shape that no longer matches
-    // `useForm<TFieldValues>`'s expected single shape. `defaultValues`
-    // already seeds every field with '', so the runtime behaviour is
-    // identical.
-    author_id: z.string(),
-    collection_id: z.string(),
-    keywords: z.string(),
-    topic: z.string(),
-    min_score: z.string(),
-    lens_id: z.string(),
-    monitor_id: z.string(),
-    branch_id: z.string(),
-    workflow: z.string(),
-  })
-  .superRefine((data, ctx) => {
-    const addRequired = (field: keyof typeof data, message: string) => {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message })
-    }
-    switch (data.rule_type) {
-      case 'author':
-        if (!data.author_id.trim()) addRequired('author_id', 'Author ID is required.')
-        break
-      case 'collection':
-        if (!data.collection_id) addRequired('collection_id', 'Pick a collection.')
-        break
-      case 'keyword': {
-        const kws = data.keywords.split(',').map((k) => k.trim()).filter(Boolean)
-        if (kws.length === 0) addRequired('keywords', 'At least one keyword is required.')
-        break
-      }
-      case 'topic':
-        if (!data.topic.trim()) addRequired('topic', 'Topic text is required.')
-        break
-      case 'similarity': {
-        const raw = data.min_score.trim()
-        if (!raw) {
-          addRequired('min_score', 'Minimum score is required.')
-        } else {
-          const n = Number(raw)
-          if (Number.isNaN(n) || n < 0 || n > 100) {
-            addRequired('min_score', 'Score must be a number between 0 and 100.')
-          }
-        }
-        break
-      }
-      case 'discovery_lens':
-        if (!data.lens_id) addRequired('lens_id', 'Pick a discovery lens.')
-        break
-      case 'feed_monitor':
-        if (!data.monitor_id) addRequired('monitor_id', 'Pick a feed monitor.')
-        break
-      case 'branch':
-        if (!data.branch_id) addRequired('branch_id', 'Pick a branch.')
-        break
-      case 'library_workflow':
-        if (!data.workflow) addRequired('workflow', 'Pick a workflow state.')
-        break
-    }
-  })
-
-type RuleFormValues = z.infer<typeof ruleFormSchema>
-
-const EMPTY_FORM_VALUES: RuleFormValues = {
-  name: '',
-  rule_type: 'author',
-  slack: true,
-  enabled: true,
-  author_id: '',
-  collection_id: '',
-  keywords: '',
-  topic: '',
-  min_score: '',
-  lens_id: '',
-  monitor_id: '',
-  branch_id: '',
-  workflow: '',
-}
-
-// ── Form → API shape conversion ───────────────────────────────────────────
-// The API accepts a single `rule_config` object whose shape depends on
-// `rule_type`. This switch is the ONLY place we translate form fields into
-// that shape — so if a form field goes stale after a rule_type switch, it
-// is never sent to the API. The branch-narrowing means values.min_score
-// etc. are only read on the matching rule_type branch.
-
-function buildRuleConfig(values: RuleFormValues): Record<string, unknown> {
-  switch (values.rule_type) {
-    case 'author':
-      return { author_id: values.author_id.trim() }
-    case 'collection':
-      return { collection_id: values.collection_id }
-    case 'keyword':
-      return {
-        keywords: values.keywords.split(',').map((k) => k.trim()).filter(Boolean),
-      }
-    case 'topic':
-      return { topic: values.topic.trim() }
-    case 'similarity':
-      return { min_score: Number(values.min_score) }
-    case 'discovery_lens':
-      return { lens_id: values.lens_id }
-    case 'feed_monitor':
-      return { monitor_id: values.monitor_id, include_statuses: ['new'], lookback_days: 14 }
-    case 'branch':
-      return { branch_id: values.branch_id, min_score: 0.55 }
-    case 'library_workflow':
-      return { workflow: values.workflow, limit: 20 }
-  }
-}
-
-// Reverse direction: populate form state from an existing AlertRule when
-// opening the edit dialog. Any fields the rule's rule_type doesn't use are
-// left at their empty defaults.
-function ruleToFormValues(rule: AlertRule): RuleFormValues {
-  const cfg = rule.rule_config
-  const base: RuleFormValues = {
-    ...EMPTY_FORM_VALUES,
-    name: rule.name,
-    rule_type: rule.rule_type as RuleType,
-    slack: rule.channels.includes('slack'),
-    enabled: rule.enabled,
-  }
-  switch (rule.rule_type as RuleType) {
-    case 'author':
-      return { ...base, author_id: String(cfg.author_id ?? '') }
-    case 'collection':
-      return { ...base, collection_id: String(cfg.collection_id ?? cfg.collection_name ?? '') }
-    case 'keyword':
-      return {
-        ...base,
-        keywords: Array.isArray(cfg.keywords) ? (cfg.keywords as unknown[]).join(', ') : '',
-      }
-    case 'topic':
-      return { ...base, topic: String(cfg.topic ?? '') }
-    case 'similarity':
-      return { ...base, min_score: String(cfg.min_score ?? '') }
-    case 'discovery_lens':
-      return { ...base, lens_id: String(cfg.lens_id ?? '') }
-    case 'feed_monitor':
-      return { ...base, monitor_id: String(cfg.monitor_id ?? '') }
-    case 'branch':
-      return { ...base, branch_id: String(cfg.branch_id ?? cfg.branch_label ?? '') }
-    case 'library_workflow':
-      return { ...base, workflow: String(cfg.workflow ?? cfg.state ?? '') }
-  }
-}
+/** Sentinel for the "type an ID by hand" entry in the author Select —
+ * Radix forbids empty-string item values. */
+const CUSTOM_AUTHOR_VALUE = '__custom__'
 
 // ── Rule form dialog (shared between Create and Edit) ─────────────────────
 
@@ -266,6 +89,7 @@ interface RuleFormDialogProps {
   lenses: Lens[]
   collections: Collection[]
   monitors: FeedMonitor[]
+  authors: FollowedAuthor[]
   // The parent passes `BranchTuningRow[]` from the insights API, which has
   // `branch_id?: string | null` (the API returns explicit nulls). The
   // dialog only reads `branch_id`, `branch_label`, `count`, so we widen
@@ -288,6 +112,7 @@ function RuleFormDialog({
   lenses,
   collections,
   monitors,
+  authors,
   branches,
 }: RuleFormDialogProps) {
   const form = useForm<RuleFormValues>({
@@ -296,12 +121,24 @@ function RuleFormDialog({
     mode: 'onChange',
   })
 
+  // "Custom ID…" escape hatch for the author Select. Auto-engaged when the
+  // rule being edited targets an author we don't follow (the Select can't
+  // represent that id).
+  const [customAuthor, setCustomAuthor] = useState(false)
+
   // Re-seed the form whenever the dialog opens or its initial values change
   // (e.g. switching from one rule to another via Edit).
   useEffect(() => {
     if (open) {
       form.reset(initialValues)
+      setCustomAuthor(
+        initialValues.author_id !== '' &&
+          !authors.some((a) => a.author_id === initialValues.author_id),
+      )
     }
+    // `authors` deliberately excluded: a background refetch of the followed
+    // list must not flip an open form between select/custom modes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialValues, form])
 
   const ruleType = form.watch('rule_type')
@@ -370,10 +207,46 @@ function RuleFormDialog({
                 name="author_id"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Author ID</FormLabel>
-                    <FormControl>
-                      <Input placeholder="e.g. MG9cVagAAAAJ" {...field} />
-                    </FormControl>
+                    <FormLabel>Author</FormLabel>
+                    {authors.length > 0 && (
+                      <Select
+                        value={
+                          customAuthor
+                            ? CUSTOM_AUTHOR_VALUE
+                            : authors.some((a) => a.author_id === field.value)
+                              ? field.value
+                              : ''
+                        }
+                        onValueChange={(value) => {
+                          if (value === CUSTOM_AUTHOR_VALUE) {
+                            setCustomAuthor(true)
+                            field.onChange('')
+                          } else {
+                            setCustomAuthor(false)
+                            field.onChange(value)
+                          }
+                        }}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a followed author" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {authors.map((a) => (
+                            <SelectItem key={a.author_id} value={a.author_id}>
+                              {a.name || a.author_id}
+                            </SelectItem>
+                          ))}
+                          <SelectItem value={CUSTOM_AUTHOR_VALUE}>Custom ID…</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                    {(customAuthor || authors.length === 0) && (
+                      <FormControl>
+                        <Input placeholder="e.g. MG9cVagAAAAJ" {...field} />
+                      </FormControl>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -567,25 +440,6 @@ function RuleFormDialog({
 
             <FormField
               control={form.control}
-              name="slack"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Channels</FormLabel>
-                  <label className="flex items-center gap-2">
-                    <FormControl>
-                      <Checkbox
-                        checked={field.value}
-                        onCheckedChange={(v) => field.onChange(v === true)}
-                      />
-                    </FormControl>
-                    <span className="text-sm text-slate-700">Slack</span>
-                  </label>
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
               name="enabled"
               render={({ field }) => (
                 <FormItem>
@@ -630,10 +484,16 @@ function RuleFormDialog({
 
 // ── Main section ──────────────────────────────────────────────────────────
 
-export function AlertRulesSection() {
+interface AlertRulesSectionProps {
+  /** Jump to the Digests tab (where rules get assigned). */
+  onGoToDigests?: () => void
+}
+
+export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<AlertRule | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [testFireResult, setTestFireResult] = useState<TestFireResult | null>(null)
 
   const queryClient = useQueryClient()
   const { toast } = useToast()
@@ -642,6 +502,19 @@ export function AlertRulesSection() {
     queryKey: ['alert-rules'],
     queryFn: () => api.get<AlertRule[]>('/alerts/rules'),
     retry: 1,
+  })
+  // Digest assignments, to flag orphan rules (a rule outside every digest
+  // never runs). Shares the ['alerts'] cache with the Digests tab.
+  const alertsQuery = useQuery({
+    queryKey: ['alerts'],
+    queryFn: () => api.get<Alert[]>('/alerts/'),
+    retry: 1,
+  })
+  const authorsQuery = useQuery({
+    queryKey: ['followed-authors', 'rules-form'],
+    queryFn: listFollowedAuthors,
+    retry: 1,
+    staleTime: 60_000,
   })
   const lensesQuery = useQuery({
     queryKey: ['lenses', 'rules-form'],
@@ -721,18 +594,61 @@ export function AlertRulesSection() {
     },
   })
 
+  const testFireMutation = useMutation({
+    mutationFn: (id: string) => testFireRule(id),
+    onSuccess: (result) => {
+      setTestFireResult(result)
+    },
+    onError: () => {
+      errorToast('Error', 'Test-fire failed.')
+    },
+  })
+
   const rules = rulesQuery.data ?? []
   const lenses = lensesQuery.data ?? []
   const monitors = monitorsQuery.data ?? []
   const collections = collectionsQuery.data ?? []
+  const authors = authorsQuery.data ?? []
   const branches = diagnosticsQuery.data?.discovery.branch_quality ?? []
 
-  function bodyFromValues(values: RuleFormValues): AlertRuleBody {
+  const orphanIds = useMemo(
+    () => orphanRuleIds(rules, alertsQuery.data ?? []),
+    [rules, alertsQuery.data],
+  )
+  // id → human label maps for the per-card "what does this rule watch" line.
+  const describeLookups = useMemo(
+    () => ({
+      monitors: new Map(monitors.map((m) => [m.id, m.label])),
+      lenses: new Map(lenses.map((l) => [l.id, l.name])),
+      collections: new Map(collections.map((c) => [c.id, c.name])),
+      authors: new Map(
+        authors.filter((a) => a.name).map((a) => [a.author_id, a.name as string]),
+      ),
+    }),
+    [monitors, lenses, collections, authors],
+  )
+
+  // Memoized so the edit dialog's initialValues keep a stable identity across
+  // parent re-renders (query refetches, other mutations). Without this, the
+  // dialog's reset effect fires on every render and wipes in-progress edits.
+  const editInitialValues = useMemo(
+    () => (editingRule ? ruleToFormValues(editingRule) : EMPTY_FORM_VALUES),
+    [editingRule],
+  )
+
+  function bodyFromValues(values: RuleFormValues, baseRule?: AlertRule | null): AlertRuleBody {
+    // When editing without switching type, pass the existing rule_config as
+    // the merge base so extras the form doesn't surface (lookback_days,
+    // lens_id on a similarity rule, ...) survive the edit.
+    const baseConfig =
+      baseRule && baseRule.rule_type === values.rule_type ? baseRule.rule_config : {}
     return {
       name: values.name.trim(),
       rule_type: values.rule_type,
-      rule_config: buildRuleConfig(values),
-      channels: values.slack ? ['slack'] : [],
+      rule_config: buildRuleConfig(values, baseConfig),
+      // Delivery channels belong to the digest; rule-level channels are
+      // vestigial (evaluation never reads them) and stay empty.
+      channels: [],
       enabled: values.enabled,
     }
   }
@@ -772,18 +688,41 @@ export function AlertRulesSection() {
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <RuleTypeBadge type={rule.rule_type} />
-                      {rule.channels.map((ch) => (
-                        <Badge key={ch} variant="outline">
-                          <Hash className="mr-1 h-3 w-3" />
-                          {ch}
-                        </Badge>
-                      ))}
+                      {orphanIds.has(rule.id) && (
+                        <button
+                          type="button"
+                          onClick={onGoToDigests}
+                          title="Rules only run inside a digest. Click to open Digests and assign it."
+                          className="cursor-pointer"
+                        >
+                          <Badge variant="warning">
+                            <AlertCircle className="mr-1 h-3 w-3" />
+                            Not in any digest
+                          </Badge>
+                        </button>
+                      )}
                     </div>
-                    <p className="mt-1.5 text-xs text-slate-400">
+                    <p className="mt-1.5 text-sm text-slate-600">
+                      {describeRuleConfig(rule, describeLookups)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
                       Created {formatDate(rule.created_at)}
                     </p>
                   </div>
                   <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => testFireMutation.mutate(rule.id)}
+                      disabled={testFireMutation.isPending}
+                      title="Test rule (dry-run, nothing sent)"
+                    >
+                      {testFireMutation.isPending && testFireMutation.variables === rule.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-alma-500" />
+                      ) : (
+                        <FlaskConical className="h-4 w-4 text-alma-500" />
+                      )}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -820,7 +759,12 @@ export function AlertRulesSection() {
       {/* Create dialog */}
       <RuleFormDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open)
+          // Opening fresh should not show a stale error banner from the
+          // previous failed attempt.
+          if (open) createMutation.reset()
+        }}
         title="Create Alert Rule"
         description="Configure a new alert rule to detect publications."
         submitLabel="Create Rule"
@@ -832,6 +776,7 @@ export function AlertRulesSection() {
         lenses={lenses}
         collections={collections}
         monitors={monitors}
+        authors={authors}
         branches={branches}
       />
 
@@ -839,24 +784,69 @@ export function AlertRulesSection() {
       <RuleFormDialog
         open={editingRule !== null}
         onOpenChange={(open) => {
-          if (!open) setEditingRule(null)
+          if (!open) {
+            setEditingRule(null)
+            updateMutation.reset()
+          }
         }}
         title="Edit Alert Rule"
         description="Update the alert rule configuration."
         submitLabel="Save Changes"
-        initialValues={editingRule ? ruleToFormValues(editingRule) : EMPTY_FORM_VALUES}
+        initialValues={editInitialValues}
         isPending={updateMutation.isPending}
         isError={updateMutation.isError}
         errorMessage="Failed to update rule."
         onSubmit={(values) => {
           if (!editingRule) return
-          updateMutation.mutate({ id: editingRule.id, body: bodyFromValues(values) })
+          updateMutation.mutate({ id: editingRule.id, body: bodyFromValues(values, editingRule) })
         }}
         lenses={lenses}
         collections={collections}
         monitors={monitors}
+        authors={authors}
         branches={branches}
       />
+
+      {/* Test-fire result — dry-run matches for one rule */}
+      <Dialog open={testFireResult !== null} onOpenChange={(open) => !open && setTestFireResult(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Test Results</DialogTitle>
+            <DialogDescription>
+              Dry-run of this rule against the current corpus — nothing was sent.
+            </DialogDescription>
+          </DialogHeader>
+          {testFireResult && (
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-slate-700">
+                <span className="font-medium">{testFireResult.matches_found}</span> matching paper
+                {testFireResult.matches_found !== 1 ? 's' : ''}
+                {testFireResult.matches.length < testFireResult.matches_found
+                  ? ` (showing first ${testFireResult.matches.length})`
+                  : ''}
+              </p>
+              {testFireResult.matches.length > 0 && (
+                <ul className="max-h-64 space-y-1 overflow-y-auto rounded-lg bg-surface-2 p-3">
+                  {testFireResult.matches.map((title, i) => (
+                    <li key={`${i}-${title}`} className="text-sm text-slate-700">
+                      {title}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {testFireResult.rule_type === 'feed_monitor' && (
+                <p className="text-xs text-slate-500">
+                  A digest may deliver fewer papers: its cold-start watermark only counts feed
+                  items fetched after the digest was created.
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTestFireResult(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation */}
       <Dialog open={deleteId !== null} onOpenChange={(open) => !open && setDeleteId(null)}>
