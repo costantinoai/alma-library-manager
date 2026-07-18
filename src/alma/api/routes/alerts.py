@@ -17,6 +17,7 @@ from alma.api.models import (
     AlertRuleAssignment,
     AlertRuleCreate,
     AlertRuleResponse,
+    AlertTemplateApplyResponse,
     AlertUpdate,
 )
 from alma.application import alerts as alerts_app
@@ -256,7 +257,10 @@ def test_fire_rule(
 
     Returns a list of matching publication titles based on the rule configuration.
     """
-    result = alerts_app.test_fire_rule(db, rule_id)
+    try:
+        result = alerts_app.test_fire_rule(db, rule_id)
+    except Exception as e:
+        raise_internal("Failed to test-fire alert rule", e)
     if result is None:
         raise HTTPException(status_code=404, detail="Alert rule not found")
     return result
@@ -281,6 +285,57 @@ def list_alert_templates(
         return [AlertAutomationTemplate(**row) for row in rows]
     except Exception as e:
         raise_internal("Failed to list alert templates", e)
+
+
+@router.post(
+    "/templates/{template_key}/apply",
+    response_model=AlertTemplateApplyResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Apply a suggested alert automation",
+)
+def apply_alert_template(
+    template_key: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """Materialize one template suggestion: create its rule and digest atomically.
+
+    The template payload is recomputed server-side from ``template_key`` (the
+    client never sends rule/alert bodies), and both inserts share one
+    transaction — no orphan rule when the digest insert fails. 404 when the
+    key no longer resolves (already applied, or the source stopped qualifying).
+    """
+    runner = OperationRunner(db)
+
+    def _handler(_ctx):
+        applied = alerts_app.apply_alert_template(db, template_key)
+        if applied is None:
+            return OperationOutcome(
+                status="noop",
+                message="Template not found",
+                result={"template_key": template_key},
+            )
+        return OperationOutcome(
+            status="completed",
+            message=f"Created automation '{applied['template_title']}'",
+            result={
+                "template_key": template_key,
+                "rule_id": applied["rule"]["id"],
+                "alert_id": applied["alert"]["id"],
+                "applied": applied,
+            },
+        )
+
+    op = runner.run(
+        operation_key=f"alerts.template.apply:{template_key}",
+        handler=_handler,
+        trigger_source="user",
+        actor=str(user.get("username") or "api_user"),
+    )
+    if op["status"] == "noop":
+        raise HTTPException(status_code=404, detail="Alert template not found or already applied")
+    applied = (op.get("result") or {}).get("applied") or {}
+    return AlertTemplateApplyResponse(**applied)
 
 
 def _build_alert_response(alert_dict: dict, db: sqlite3.Connection) -> AlertResponse:

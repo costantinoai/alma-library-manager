@@ -817,7 +817,13 @@ class AlertRuleCreate(BaseModel):
     """Request model for creating an alert rule."""
 
     name: str
-    rule_type: str = Field(..., description="Rule type: author, keyword, topic, similarity, discovery_lens")
+    rule_type: str = Field(
+        ...,
+        description=(
+            "Rule type: author, collection, keyword, topic, similarity, "
+            "discovery_lens, feed_monitor, branch, library_workflow"
+        ),
+    )
     rule_config: dict
     channels: list[str]
     enabled: bool = True
@@ -870,6 +876,12 @@ class AlertResponse(BaseModel):
     enabled: bool
     created_at: str
     last_evaluated_at: str | None = None
+    # Worst status among the most recent evaluation's history rows
+    # (failed > skipped > sent > empty), so a failure is never hidden.
+    last_outcome: str | None = None
+    # Next slot the hourly sweep can fire this digest; None for manual or
+    # disabled digests.
+    next_due_at: str | None = None
     rules: list[AlertRuleResponse] | None = None
 
 
@@ -946,6 +958,15 @@ class AlertAutomationTemplate(BaseModel):
     metrics: dict = Field(default_factory=dict)
     rule: AlertAutomationTemplateRule
     alert: AlertAutomationTemplateDigest
+
+
+class AlertTemplateApplyResponse(BaseModel):
+    """Result of materializing a suggested automation (rule + digest)."""
+
+    template_key: str
+    template_title: str
+    rule: AlertRuleResponse
+    alert: AlertResponse
 
 
 # ============================================================================

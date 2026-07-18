@@ -49,19 +49,65 @@ def _validate_rule_config(rule_type: str, rule_config: dict) -> None:
     """Validate that ``rule_config`` carries the keys this rule_type needs.
 
     Raises ``ValueError`` on missing required fields. The route layer
-    converts the ValueError into a 400 response so the user sees a
+    converts the ValueError into a 422 response so the user sees a
     precise error rather than a silently-empty rule that matches nothing.
+
+    The accepted keys/aliases mirror exactly what ``_evaluate_rule`` reads
+    for each type — a config that passes here is guaranteed to reach a
+    real match query instead of degrading to ``return []``.
     """
-    if rule_type == "feed_monitor":
-        # Either monitor_id or monitor_name must be present so
+    cfg = rule_config or {}
+
+    def _has(*keys: str) -> bool:
+        return any(str(cfg.get(k) or "").strip() for k in keys)
+
+    def _require(condition: bool, message: str) -> None:
+        if not condition:
+            raise ValueError(message)
+
+    if rule_type == "author":
+        _require(_has("author_id", "openalex_id"), "author rules require rule_config.author_id (or openalex_id)")
+    elif rule_type == "collection":
+        _require(
+            _has("collection_id", "collection_name"),
+            "collection rules require rule_config.collection_id (or collection_name)",
+        )
+    elif rule_type == "keyword":
+        keywords = [str(k).strip() for k in (cfg.get("keywords") or []) if str(k).strip()]
+        _require(
+            bool(keywords) or _has("keyword"),
+            "keyword rules require a non-empty rule_config.keywords list (or keyword)",
+        )
+    elif rule_type == "topic":
+        _require(_has("topic", "term"), "topic rules require rule_config.topic (or term)")
+    elif rule_type == "similarity":
+        # min_score is optional (evaluation defaults it), but when present it
+        # must be a non-negative number, not free text.
+        raw = cfg.get("min_score")
+        if raw is not None and not isinstance(raw, bool):
+            try:
+                _require(float(raw) >= 0, "similarity rules require min_score >= 0")
+            except (TypeError, ValueError):
+                raise ValueError("similarity rules require a numeric min_score")
+        elif isinstance(raw, bool):
+            raise ValueError("similarity rules require a numeric min_score")
+    elif rule_type == "discovery_lens":
+        _require(_has("lens_id"), "discovery_lens rules require rule_config.lens_id")
+    elif rule_type == "feed_monitor":
+        # Either monitor_id or monitor_key/label must be present so
         # _resolve_feed_monitor_id can target a specific monitor.
-        monitor_id = str((rule_config or {}).get("monitor_id") or "").strip()
-        monitor_name = str((rule_config or {}).get("monitor_name") or "").strip()
-        if not monitor_id and not monitor_name:
-            raise ValueError(
-                "feed_monitor rules require rule_config.monitor_id "
-                "(or rule_config.monitor_name)"
-            )
+        _require(
+            _has("monitor_id", "monitor_key", "label"),
+            "feed_monitor rules require rule_config.monitor_id (or monitor_key / label)",
+        )
+    elif rule_type == "branch":
+        _require(_has("branch_id", "branch_label"), "branch rules require rule_config.branch_id (or branch_label)")
+    elif rule_type == "library_workflow":
+        workflow = str(cfg.get("workflow") or cfg.get("state") or "").strip().lower()
+        _require(
+            workflow in {"reading", "done", "excluded"},
+            "library_workflow rules require rule_config.workflow in {reading, done, excluded}",
+        )
 
 
 def create_rule(
@@ -217,11 +263,68 @@ def test_fire_rule(db: sqlite3.Connection, rule_id: str) -> dict | None:
 def list_alerts(db: sqlite3.Connection) -> list[dict]:
     """List alerts with their assigned rules."""
     rows = db.execute("SELECT * FROM alerts ORDER BY created_at DESC").fetchall()
-    return [build_alert_response(db, dict(r)) for r in rows]
+    # One grouped query for the latest outcome of every alert (avoids one
+    # history query per alert inside build_alert_response).
+    outcomes = _latest_history_outcomes(db, [str(r["id"]) for r in rows])
+    return [
+        build_alert_response(db, dict(r), last_outcome=outcomes.get(str(r["id"])))
+        for r in rows
+    ]
+
+
+#: Chip severity: when one evaluation writes rows for several channels, the
+#: card shows the WORST outcome so a failure is never hidden behind a success.
+_OUTCOME_SEVERITY = {"failed": 0, "skipped": 1, "pending": 2, "sent": 3, "empty": 4}
+
+
+def _latest_history_outcomes(db: sqlite3.Connection, alert_ids: list[str]) -> dict[str, str]:
+    """Worst status among each alert's most recent evaluation batch."""
+    if not alert_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in alert_ids)
+    rows = db.execute(
+        f"SELECT alert_id, status, sent_at FROM alert_history WHERE alert_id IN ({placeholders})",
+        alert_ids,
+    ).fetchall()
+    latest: dict[str, tuple[str, list[str]]] = {}
+    for r in rows:
+        aid = str(r["alert_id"] or "")
+        ts = str(r["sent_at"] or "")
+        if aid not in latest or ts > latest[aid][0]:
+            latest[aid] = (ts, [str(r["status"] or "")])
+        elif ts == latest[aid][0]:
+            latest[aid][1].append(str(r["status"] or ""))
+    return {
+        aid: min(statuses, key=lambda s: _OUTCOME_SEVERITY.get(s, 99))
+        for aid, (_, statuses) in latest.items()
+    }
+
+
+def _configured_channels() -> list[str]:
+    """Delivery channels with a working notifier right now."""
+    channels: list[str] = []
+    for name, sender in _CHANNEL_SENDERS.items():
+        try:
+            if sender["notifier"]().is_configured:
+                channels.append(name)
+        except Exception:
+            continue
+    return channels
 
 
 def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
-    """Suggest alert automations derived from current monitor, branch, and workflow state."""
+    """Suggest alert automations derived from current monitor, branch, and workflow state.
+
+    Suggestions are delivery-aware: digests propose exactly the channels that
+    are actually configured, and when NO channel is configured the list is
+    empty — a one-click automation that could never deliver is a half-working
+    fallback we don't offer (AI-is-opt-in analogue).
+    Rule payloads carry ``channels: []`` — delivery channels belong to the
+    digest; the rule-level column is vestigial.
+    """
+    delivery_channels = _configured_channels()
+    if not delivery_channels:
+        return []
     templates: list[dict[str, Any]] = []
 
     try:
@@ -254,12 +357,12 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
                                 "author_id": monitor["author_id"],
                                 "openalex_id": monitor.get("openalex_id"),
                             },
-                            "channels": ["slack"],
+                            "channels": [],
                             "enabled": True,
                         },
                         "alert": {
                             "name": f"Weekly author watch: {monitor['label']}",
-                            "channels": ["slack"],
+                            "channels": delivery_channels,
                             "schedule": "weekly",
                             "schedule_config": {"day": "monday", "time": "09:00"},
                             "format": "text",
@@ -288,12 +391,12 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
                             "include_statuses": ["new"],
                             "lookback_days": 14,
                         },
-                        "channels": ["slack"],
+                        "channels": [],
                         "enabled": True,
                     },
                     "alert": {
                         "name": f"Daily monitor digest: {monitor['label']}",
-                        "channels": ["slack"],
+                        "channels": delivery_channels,
                         "schedule": "daily",
                         "schedule_config": {"time": "09:00"},
                         "format": "text",
@@ -342,12 +445,12 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
                         "rule_config": {
                             "collection_id": row["id"],
                         },
-                        "channels": ["slack"],
+                        "channels": [],
                         "enabled": True,
                     },
                     "alert": {
                         "name": f"Weekly collection watch: {row['name']}",
-                        "channels": ["slack"],
+                        "channels": delivery_channels,
                         "schedule": "weekly",
                         "schedule_config": {"day": "friday", "time": "10:00"},
                         "format": "text",
@@ -406,12 +509,12 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
                             "branch_label": branch_label,
                             "min_score": 0.55,
                         },
-                        "channels": ["slack"],
+                        "channels": [],
                         "enabled": True,
                     },
                     "alert": {
                         "name": f"Weekly branch watch: {branch_label}",
-                        "channels": ["slack"],
+                        "channels": delivery_channels,
                         "schedule": "weekly",
                         "schedule_config": {"day": "monday", "time": "09:00"},
                         "format": "text",
@@ -428,7 +531,178 @@ def list_alert_templates(db: sqlite3.Connection) -> list[dict]:
     # automations. (Reading/done/excluded stay available as opt-in `library_workflow`
     # rule values for users who DO track reading — just not nagged-about by default.)
 
+    # Suggestions the user already materialized are dropped: keeping them
+    # listed would make "Create Automation" a one-click duplicate factory.
+    existing = _existing_rule_identities(db)
+    templates = [
+        t
+        for t in templates
+        if _rule_identity(t["rule"]["rule_type"], t["rule"]["rule_config"]) not in existing
+    ]
     return templates[:10]
+
+
+def _rule_identity(rule_type: str, rule_config: dict | None) -> tuple[str, str] | None:
+    """(rule_type, primary target) identity for suggestion dedup.
+
+    Two rules with the same identity watch the same entity, so an existing
+    rule makes the matching template suggestion redundant. Returns None for
+    rule types without a single-entity target (keyword, topic, ...), which
+    are never suggested as templates anyway.
+    """
+    cfg = rule_config or {}
+    primary_key = {
+        "author": "author_id",
+        "collection": "collection_id",
+        "feed_monitor": "monitor_id",
+        "discovery_lens": "lens_id",
+    }.get(rule_type)
+    if primary_key:
+        ref = str(cfg.get(primary_key) or "").strip()
+        return (rule_type, ref) if ref else None
+    if rule_type == "branch":
+        ref = str(cfg.get("branch_id") or cfg.get("branch_label") or "").strip()
+        return (rule_type, ref) if ref else None
+    return None
+
+
+def _existing_rule_identities(db: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Identities of every stored rule, for filtering template suggestions."""
+    identities: set[tuple[str, str]] = set()
+    for row in db.execute("SELECT rule_type, rule_config FROM alert_rules").fetchall():
+        config = _loads(row["rule_config"])
+        identity = _rule_identity(str(row["rule_type"] or ""), config if isinstance(config, dict) else {})
+        if identity:
+            identities.add(identity)
+    return identities
+
+
+def apply_alert_template(db: sqlite3.Connection, template_key: str) -> dict | None:
+    """Materialize one suggested automation: create its rule + digest atomically.
+
+    Recomputes the current template list server-side (never trusts a
+    client-forged payload) and applies the template matching ``template_key``.
+    Both inserts run on the caller's connection inside one transaction, so a
+    failure can never leave an orphan rule without its digest. Returns None
+    when the key no longer resolves — e.g. already applied or the underlying
+    monitor stopped qualifying.
+    """
+    template = next((t for t in list_alert_templates(db) if t["key"] == template_key), None)
+    if template is None:
+        return None
+    rule_payload = template["rule"]
+    alert_payload = template["alert"]
+    rule = create_rule(
+        db,
+        name=rule_payload["name"],
+        rule_type=rule_payload["rule_type"],
+        rule_config=rule_payload["rule_config"],
+        channels=rule_payload["channels"],
+        enabled=rule_payload["enabled"],
+    )
+    alert = create_alert(
+        db,
+        name=alert_payload["name"],
+        channels=alert_payload["channels"],
+        schedule=alert_payload["schedule"],
+        schedule_config=alert_payload.get("schedule_config"),
+        format_value=alert_payload.get("format", "text"),
+        enabled=alert_payload["enabled"],
+        rule_ids=[rule["id"]],
+    )
+    return {"template_key": template_key, "template_title": template["title"], "rule": rule, "alert": alert}
+
+
+def _is_unscheduled(schedule: str | None) -> bool:
+    """True for schedules that carry no time slot (manual / immediate).
+
+    Unscheduled digests must persist ``schedule_config = NULL`` — any stored
+    day/time is stale noise the UI would keep rendering as badges.
+    """
+    return str(schedule or "").strip().lower() in {"manual", "immediate"}
+
+
+# ── Schedule-slot math (single owner) ──────────────────────────────────────
+# The sweep's due-ness check and the API's "next run" field must agree, so
+# the slot computation lives here once; `alma.api.scheduler._is_due`
+# delegates to `is_due`.
+
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def _parse_schedule_time(raw: str) -> tuple[int, int]:
+    try:
+        hour_s, minute_s = raw.strip().split(":", 1)
+        return max(0, min(23, int(hour_s))), max(0, min(59, int(minute_s)))
+    except Exception:
+        return 9, 0
+
+
+def reference_slot(
+    schedule: str, schedule_config: dict | None, now: datetime
+) -> datetime | None:
+    """The slot boundary that decides due-ness at ``now``, or None.
+
+    Daily: today's slot once it has passed; None before it (a daily digest
+    never fires early, even when it has no evaluation history — shipped
+    behaviour, pinned by tests). Weekly: the most recent target-day slot at
+    or before ``now`` (rolls back across the week boundary). Manual /
+    immediate / unknown: None (the sweep never fires them).
+    """
+    schedule_norm = str(schedule or "").strip().lower()
+    config = schedule_config if isinstance(schedule_config, dict) else {}
+    hour, minute = _parse_schedule_time(str(config.get("time") or "09:00"))
+
+    if schedule_norm == "daily":
+        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return None if now < slot else slot
+    if schedule_norm == "weekly":
+        target = _WEEKDAYS.get(str(config.get("day") or "monday").strip().lower()[:3], 0)
+        slot_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        slot = slot_today - timedelta(days=(now.weekday() - target) % 7)
+        if now < slot:
+            slot -= timedelta(days=7)
+        return slot
+    return None
+
+
+def next_slot(schedule: str, schedule_config: dict | None, now: datetime) -> datetime | None:
+    """Next slot boundary strictly after ``now``; None for unscheduled."""
+    schedule_norm = str(schedule or "").strip().lower()
+    config = schedule_config if isinstance(schedule_config, dict) else {}
+    hour, minute = _parse_schedule_time(str(config.get("time") or "09:00"))
+
+    if schedule_norm == "daily":
+        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return slot if now < slot else slot + timedelta(days=1)
+    if schedule_norm == "weekly":
+        target = _WEEKDAYS.get(str(config.get("day") or "monday").strip().lower()[:3], 0)
+        slot_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        slot = slot_today + timedelta(days=(target - now.weekday()) % 7)
+        if slot <= now:
+            slot += timedelta(days=7)
+        return slot
+    return None
+
+
+def is_due(
+    *,
+    schedule: str,
+    schedule_config: dict | None,
+    last_evaluated_at: str | None,
+    now: datetime,
+) -> bool:
+    """True when the current schedule slot has not been processed yet."""
+    slot = reference_slot(schedule, schedule_config, now)
+    if slot is None:
+        return False
+    if not last_evaluated_at:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last_evaluated_at)
+    except (ValueError, TypeError):
+        return True
+    return last_dt < slot
 
 
 def create_alert(
@@ -443,6 +717,8 @@ def create_alert(
     rule_ids: list[str],
 ) -> dict:
     """Create an alert plus optional rule assignments."""
+    if _is_unscheduled(schedule):
+        schedule_config = None
     aid = uuid.uuid4().hex
     now = datetime.utcnow().isoformat()
     db.execute(
@@ -497,6 +773,16 @@ def update_alert(
     if not row:
         return None
     current = dict(row)
+    # Resolve the post-update schedule first: switching to manual must CLEAR
+    # any stored schedule_config, otherwise the old day/time keeps rendering
+    # as badges on a digest that no longer runs on a schedule.
+    final_schedule = schedule if schedule is not None else current["schedule"]
+    if schedule_config is not None:
+        final_config_json: str | None = json.dumps(schedule_config)
+    else:
+        final_config_json = current.get("schedule_config")
+    if _is_unscheduled(final_schedule):
+        final_config_json = None
     db.execute(
         """
         UPDATE alerts
@@ -506,8 +792,8 @@ def update_alert(
         (
             name if name is not None else current["name"],
             json.dumps(channels) if channels is not None else current["channels"],
-            schedule if schedule is not None else current["schedule"],
-            json.dumps(schedule_config) if schedule_config is not None else current.get("schedule_config"),
+            final_schedule,
+            final_config_json,
             format_value if format_value is not None else current.get("format", "grouped"),
             int(enabled) if enabled is not None else current["enabled"],
             alert_id,
@@ -552,20 +838,39 @@ def unassign_rule(db: sqlite3.Connection, alert_id: str, rule_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-async def evaluate_digest(
-    db: sqlite3.Connection,
-    digest_id: str,
-    *,
-    trigger_source: str = "user",
-) -> dict | None:
-    """Evaluate one digest and send notifications."""
-    alert_row = db.execute("SELECT * FROM alerts WHERE id = ?", (digest_id,)).fetchone()
-    if not alert_row:
-        return None
+# Channel dispatch table: notifier factory, send call, not-configured message.
+# The Slack and email flows are identical except for these three things, so
+# they live here once instead of as two copy-pasted branches.
+_CHANNEL_SENDERS: dict[str, dict] = {
+    # `notifier` thunks resolve the module-level factory BY NAME at call time
+    # (not a captured reference) so tests can monkeypatch
+    # `alerts.get_slack_notifier` / `alerts.get_email_notifier`.
+    "slack": {
+        "notifier": lambda: get_slack_notifier(),
+        "send": lambda n, papers, name: n.send_paper_alert(channel=None, papers=papers, alert_name=name),
+        "unconfigured": "Slack token not configured",
+        "failure": "Slack API returned failure",
+    },
+    "email": {
+        "notifier": lambda: get_email_notifier(),
+        "send": lambda n, papers, name: n.send_paper_alert(recipients=None, papers=papers, alert_name=name),
+        "unconfigured": "Email/SMTP not configured",
+        "failure": "Email send returned failure",
+    },
+}
 
-    alert = dict(alert_row)
+
+def _gather_digest_matches(
+    db: sqlite3.Connection, alert: dict
+) -> tuple[list[dict], list[tuple[str, dict]], dict[str, list[tuple[str, dict]]]]:
+    """Shared evaluate/dry-run read phase.
+
+    Returns (assigned enabled rules, deduped matches, per-channel NEW papers).
+    Dedup is per (alert, channel) — a paper delivered on Slack stays eligible
+    for email until email actually receives it.
+    """
     channels = _loads(alert["channels"]) or []
-    rule_rows = _get_assigned_enabled_rules(digest_id, db)
+    rule_rows = _get_assigned_enabled_rules(alert["id"], db)
 
     # Cold-start watermark (D-AL-9): the alert "starts caring" from the
     # moment it was created. Combined with the per-rule 30-day publication-
@@ -579,78 +884,98 @@ async def evaluate_digest(
         all_papers.extend(_evaluate_rule(rule, db, alert_created_at=alert_created_at))
 
     unique_papers = _deduplicate_papers(all_papers)
-    already_alerted = _get_already_alerted_keys(digest_id, db)
-    new_papers = [(key, paper) for key, paper in unique_papers if key not in already_alerted]
+    alerted = _already_alerted_by_channel(alert["id"], db)
+    new_by_channel = {
+        channel: [(key, paper) for key, paper in unique_papers if key not in alerted.get(channel, set())]
+        for channel in channels
+    }
+    return rule_rows, unique_papers, new_by_channel
 
-    papers_sent = 0
-    papers_failed = 0
-    now = datetime.utcnow().isoformat()
+
+async def evaluate_digest(
+    db: sqlite3.Connection,
+    digest_id: str,
+    *,
+    trigger_source: str = "user",
+) -> dict | None:
+    """Evaluate one digest and send notifications.
+
+    Two phases, per the SQLite write discipline: phase 1 gathers matches and
+    performs every network send WITHOUT touching the DB; phase 2 records
+    dedup rows / history / last_evaluated_at. The caller owns the commit.
+    """
+    alert_row = db.execute("SELECT * FROM alerts WHERE id = ?", (digest_id,)).fetchone()
+    if not alert_row:
+        return None
+
+    alert = dict(alert_row)
+    channels = _loads(alert["channels"]) or []
+    rule_rows, unique_papers, new_by_channel = _gather_digest_matches(db, alert)
+
+    # ── Phase 1: deliver (network only, no writes) ─────────────────────────
     channel_results: dict[str, dict] = {}
-
     for channel_name in channels:
-        if channel_name == "slack":
-            notifier = get_slack_notifier()
-            if not notifier.is_configured:
-                channel_results[channel_name] = {"status": "skipped", "error": "Slack token not configured"}
-                continue
-            if not new_papers:
-                channel_results[channel_name] = {"status": "empty", "error": None}
-                continue
-            payload = [paper for _, paper in new_papers]
-            try:
-                ok = await notifier.send_paper_alert(channel=None, papers=payload, alert_name=alert["name"])
-                if ok:
-                    papers_sent = len(new_papers)
-                    channel_results[channel_name] = {"status": "sent", "error": None}
-                else:
-                    papers_failed = len(new_papers)
-                    channel_results[channel_name] = {"status": "failed", "error": "Slack API returned failure"}
-            except Exception as exc:
-                papers_failed = len(new_papers)
-                channel_results[channel_name] = {"status": "failed", "error": str(exc)}
-        elif channel_name == "email":
-            # Sibling of the Slack branch — same payload, same dedup/history
-            # machinery; only the delivery client differs.
-            notifier = get_email_notifier()
-            if not notifier.is_configured:
-                channel_results[channel_name] = {"status": "skipped", "error": "Email/SMTP not configured"}
-                continue
-            if not new_papers:
-                channel_results[channel_name] = {"status": "empty", "error": None}
-                continue
-            payload = [paper for _, paper in new_papers]
-            try:
-                ok = await notifier.send_paper_alert(recipients=None, papers=payload, alert_name=alert["name"])
-                if ok:
-                    papers_sent = len(new_papers)
-                    channel_results[channel_name] = {"status": "sent", "error": None}
-                else:
-                    papers_failed = len(new_papers)
-                    channel_results[channel_name] = {"status": "failed", "error": "Email send returned failure"}
-            except Exception as exc:
-                papers_failed = len(new_papers)
-                channel_results[channel_name] = {"status": "failed", "error": str(exc)}
-        else:
+        new_papers = new_by_channel.get(channel_name, [])
+        sender = _CHANNEL_SENDERS.get(channel_name)
+        if sender is None:
             channel_results[channel_name] = {
                 "status": "skipped",
                 "error": f"Unsupported channel type: {channel_name}",
+                "papers_new": len(new_papers),
+                "papers_sent": 0,
+            }
+            continue
+        notifier = sender["notifier"]()
+        if not notifier.is_configured:
+            channel_results[channel_name] = {
+                "status": "skipped",
+                "error": sender["unconfigured"],
+                "papers_new": len(new_papers),
+                "papers_sent": 0,
+            }
+            continue
+        if not new_papers:
+            channel_results[channel_name] = {"status": "empty", "error": None, "papers_new": 0, "papers_sent": 0}
+            continue
+        payload = [paper for _, paper in new_papers]
+        try:
+            ok = await sender["send"](notifier, payload, alert["name"])
+            if ok:
+                channel_results[channel_name] = {
+                    "status": "sent",
+                    "error": None,
+                    "papers_new": len(new_papers),
+                    "papers_sent": len(new_papers),
+                }
+            else:
+                channel_results[channel_name] = {
+                    "status": "failed",
+                    "error": sender["failure"],
+                    "papers_new": len(new_papers),
+                    "papers_sent": 0,
+                }
+        except Exception as exc:
+            channel_results[channel_name] = {
+                "status": "failed",
+                "error": str(exc),
+                "papers_new": len(new_papers),
+                "papers_sent": 0,
             }
 
-    any_sent = any(result.get("status") == "sent" for result in channel_results.values())
-    if any_sent:
-        for key, _paper in new_papers:
-            db.execute(
-                """
-                INSERT OR IGNORE INTO alerted_publications (id, alert_id, paper_id, alerted_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (uuid.uuid4().hex, digest_id, key, now),
-            )
-
-    publication_ids = [key for key, _ in new_papers]
+    # ── Phase 2: record (writes only, network done) ────────────────────────
+    now = datetime.utcnow().isoformat()
     for channel_name in channels:
         ch_result = channel_results.get(channel_name, {"status": "unknown", "error": None})
-        status_value = ch_result["status"]
+        new_papers = new_by_channel.get(channel_name, [])
+        if ch_result["status"] == "sent":
+            for key, _paper in new_papers:
+                db.execute(
+                    """
+                    INSERT OR IGNORE INTO alerted_publications (id, alert_id, paper_id, channel, alerted_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (uuid.uuid4().hex, digest_id, key, channel_name, now),
+                )
         error_msg = ch_result.get("error")
         db.execute(
             """
@@ -664,28 +989,44 @@ async def evaluate_digest(
                 digest_id,
                 channel_name,
                 now,
-                status_value,
-                json.dumps(publication_ids),
+                ch_result["status"],
+                json.dumps([key for key, _ in new_papers]),
                 len(new_papers),
                 (
-                    f"Sent {papers_sent} papers via {channel_name}"
-                    if status_value == "sent"
-                    else f"{status_value}: {error_msg or 'no new papers'}"
+                    f"Sent {len(new_papers)} papers via {channel_name}"
+                    if ch_result["status"] == "sent"
+                    else f"{ch_result['status']}: {error_msg or 'no new papers'}"
                 ),
                 error_msg,
             ),
         )
 
     db.execute("UPDATE alerts SET last_evaluated_at = ? WHERE id = ?", (now, digest_id))
+
+    # Top-level counters are DISTINCT papers across channels; per-channel
+    # detail lives in channel_results.
+    new_ids = {key for papers in new_by_channel.values() for key, _ in papers}
+    sent_ids = {
+        key
+        for channel_name, papers in new_by_channel.items()
+        if channel_results.get(channel_name, {}).get("status") == "sent"
+        for key, _ in papers
+    }
+    failed_ids = {
+        key
+        for channel_name, papers in new_by_channel.items()
+        if channel_results.get(channel_name, {}).get("status") == "failed"
+        for key, _ in papers
+    }
     return {
         "alert_id": digest_id,
         "alert_name": alert["name"],
         "digest_id": digest_id,
         "digest_name": alert["name"],
         "papers_found": len(unique_papers),
-        "papers_new": len(new_papers),
-        "papers_sent": papers_sent,
-        "papers_failed": papers_failed,
+        "papers_new": len(new_ids),
+        "papers_sent": len(sent_ids),
+        "papers_failed": len(failed_ids),
         "matched_rules": len(rule_rows),
         "channels": channels,
         "channel_results": channel_results,
@@ -702,14 +1043,17 @@ def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> dict | None:
 
     alert = dict(alert_row)
     channels = _loads(alert["channels"]) or []
-    rule_rows = _get_assigned_enabled_rules(digest_id, db)
-    alert_created_at = str(alert.get("created_at") or "").strip() or None
-    all_papers: list = []
-    for rule in rule_rows:
-        all_papers.extend(_evaluate_rule(rule, db, alert_created_at=alert_created_at))
-    unique_papers = _deduplicate_papers(all_papers)
-    already_alerted = _get_already_alerted_keys(digest_id, db)
-    new_papers = [(key, paper) for key, paper in unique_papers if key not in already_alerted]
+    rule_rows, unique_papers, new_by_channel = _gather_digest_matches(db, alert)
+
+    # Union across channels, first-seen order — what at least one channel
+    # would deliver. A zero-channel digest truthfully previews nothing new.
+    seen: set[str] = set()
+    new_papers: list[tuple[str, dict]] = []
+    for channel_papers in new_by_channel.values():
+        for key, paper in channel_papers:
+            if key not in seen:
+                seen.add(key)
+                new_papers.append((key, paper))
     paper_details = [
         {
             "paper_id": key,
@@ -735,8 +1079,21 @@ def dry_run_digest(db: sqlite3.Connection, digest_id: str) -> dict | None:
         "dry_run": True,
         "papers": paper_details,
     }
-def build_alert_response(db: sqlite3.Connection, alert_row: dict) -> dict:
-    """Build alert payload with assigned rules."""
+_OUTCOME_NOT_PRECOMPUTED = object()
+
+
+def build_alert_response(
+    db: sqlite3.Connection,
+    alert_row: dict,
+    *,
+    last_outcome: object = _OUTCOME_NOT_PRECOMPUTED,
+) -> dict:
+    """Build alert payload with assigned rules, last outcome, and next run.
+
+    ``last_outcome`` may be precomputed by ``list_alerts`` (one grouped query
+    for all alerts); single-alert callers leave it unset and this fn fetches
+    it here.
+    """
     rows = db.execute(
         """
         SELECT ar.*
@@ -746,16 +1103,29 @@ def build_alert_response(db: sqlite3.Connection, alert_row: dict) -> dict:
         """,
         (alert_row["id"],),
     ).fetchall()
+    if last_outcome is _OUTCOME_NOT_PRECOMPUTED:
+        last_outcome = _latest_history_outcomes(db, [str(alert_row["id"])]).get(str(alert_row["id"]))
+    schedule = alert_row["schedule"]
+    schedule_config = _loads(alert_row.get("schedule_config"))
+    upcoming = next_slot(
+        schedule,
+        schedule_config if isinstance(schedule_config, dict) else {},
+        datetime.utcnow(),
+    )
     return {
         "id": alert_row["id"],
         "name": alert_row["name"],
         "channels": _loads(alert_row["channels"]) or [],
-        "schedule": alert_row["schedule"],
-        "schedule_config": _loads(alert_row.get("schedule_config")),
+        "schedule": schedule,
+        "schedule_config": schedule_config,
         "format": alert_row.get("format", "grouped"),
         "enabled": bool(alert_row["enabled"]),
         "created_at": alert_row["created_at"],
         "last_evaluated_at": alert_row.get("last_evaluated_at"),
+        "last_outcome": last_outcome,
+        # When the hourly sweep can next fire it; None for manual digests
+        # or when the digest is disabled (a disabled digest never fires).
+        "next_due_at": upcoming.isoformat() if upcoming and bool(alert_row["enabled"]) else None,
         "rules": [_to_rule_dict(r) for r in rows],
     }
 
@@ -821,12 +1191,40 @@ def _deduplicate_papers(all_papers: list[dict]) -> list[tuple[str, dict]]:
     return unique_papers
 
 
-def _get_already_alerted_keys(digest_id: str, db: sqlite3.Connection) -> set[str]:
+def _already_alerted_by_channel(digest_id: str, db: sqlite3.Connection) -> dict[str, set[str]]:
+    """Paper ids already delivered for this alert, keyed by channel."""
     rows = db.execute(
-        "SELECT paper_id FROM alerted_publications WHERE alert_id = ?",
+        "SELECT channel, paper_id FROM alerted_publications WHERE alert_id = ?",
         (digest_id,),
     ).fetchall()
-    return {str(r["paper_id"]) for r in rows if r["paper_id"]}
+    out: dict[str, set[str]] = {}
+    for r in rows:
+        if r["paper_id"]:
+            out.setdefault(str(r["channel"] or ""), set()).add(str(r["paper_id"]))
+    return out
+
+
+#: History horizon. Insights diagnostics reads a 90-day weekly trend from
+#: `alert_history`, so retention must never drop below 90 days.
+ALERT_HISTORY_RETENTION_DAYS = 180
+_ALERT_HISTORY_RETENTION_FLOOR_DAYS = 90
+
+
+def prune_alert_history(
+    db: sqlite3.Connection,
+    *,
+    retention_days: int = ALERT_HISTORY_RETENTION_DAYS,
+    now: datetime | None = None,
+) -> int:
+    """Delete alert_history rows older than the retention window.
+
+    Returns the number of rows removed. Called from the hourly scheduled-
+    alerts sweep; the caller owns the commit.
+    """
+    retention_days = max(int(retention_days), _ALERT_HISTORY_RETENTION_FLOOR_DAYS)
+    cutoff = ((now or datetime.utcnow()) - timedelta(days=retention_days)).isoformat()
+    cursor = db.execute("DELETE FROM alert_history WHERE sent_at < ?", (cutoff,))
+    return cursor.rowcount
 
 
 def _resolve_feed_monitor_id(db: sqlite3.Connection, config: dict[str, Any]) -> str:
@@ -1162,8 +1560,12 @@ def _evaluate_rule(
         ]
         params: list[Any] = [min_score]
         if branch_id:
-            clauses.append("r.branch_id = ?")
-            params.append(branch_id)
+            # The rule form stores whatever the branch Select carried, which
+            # falls back to the label when the diagnostics row has no
+            # branch_id. Match the label column too (only for rows without
+            # an id, so a real id can't collide with someone's label).
+            clauses.append("(r.branch_id = ? OR (COALESCE(r.branch_id, '') = '' AND r.branch_label = ?))")
+            params.extend([branch_id, branch_id])
         elif branch_label:
             clauses.append("r.branch_label = ?")
             params.append(branch_label)
@@ -1176,7 +1578,6 @@ def _evaluate_rule(
             FROM recommendations r
             JOIN papers p ON p.id = r.paper_id
             WHERE {' AND '.join(clauses)}
-              AND {standalone_paper_sql('p')}
             ORDER BY r.score DESC, r.created_at DESC
             LIMIT 500
             """,
