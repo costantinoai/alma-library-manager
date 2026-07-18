@@ -1615,6 +1615,10 @@ export interface Alert {
   enabled: boolean
   created_at: string
   last_evaluated_at?: string
+  /** Worst status of the most recent evaluation batch (failed > skipped > sent > empty). */
+  last_outcome?: string | null
+  /** Next slot the hourly sweep can fire this digest; null for manual/disabled. */
+  next_due_at?: string | null
   rules?: AlertRule[]
 }
 
@@ -1629,10 +1633,22 @@ export interface AlertEvaluationResult {
   papers_sent: number
   papers_failed?: number
   channels: string[]
-  channel_results?: Record<string, { status: string; error?: string | null }>
+  channel_results?: Record<
+    string,
+    { status: string; error?: string | null; papers_new?: number; papers_sent?: number }
+  >
   trigger_source?: string
   dry_run: boolean
   papers?: Record<string, unknown>[]
+}
+
+/** Dry-run result of one rule (no digest, no delivery, no dedup). */
+export interface TestFireResult {
+  rule_id: string
+  rule_type: AlertRule['rule_type']
+  matches_found: number
+  matches: string[]
+  note: string
 }
 
 export interface AlertHistory {
@@ -2734,7 +2750,10 @@ export async function evaluateAlert(alertId: string): Promise<AlertEvaluationRes
     `/alerts/${encodeURIComponent(alertId)}/evaluate`,
   )
   if (isJobEnvelope(resp)) {
-    if (resp.status === 'already_running') {
+    // The dedupe envelope keeps the job's real status ("running"/"queued")
+    // and flags the duplicate via `already_running` — status itself is never
+    // the string 'already_running'.
+    if (resp.already_running === true) {
       // Surface an interpretable error for callers; matches what the user
       // sees if they double-click "Evaluate".
       throw new Error('Alert is already being evaluated; check Activity for progress.')
@@ -3092,6 +3111,29 @@ export function updateDiscoverySettings(body: DiscoverySettings): Promise<Discov
 
 export function getAlertTemplates(): Promise<AlertAutomationTemplate[]> {
   return api.get<AlertAutomationTemplate[]>('/alerts/templates')
+}
+
+export interface AlertTemplateApplyResult {
+  template_key: string
+  template_title: string
+  rule: AlertRule
+  alert: Alert
+}
+
+/**
+ * Materialize one suggested automation. The backend recomputes the template
+ * from its key and creates the rule + digest in a single transaction, so a
+ * mid-flight failure can't leave an orphan rule behind.
+ */
+export function applyAlertTemplate(templateKey: string): Promise<AlertTemplateApplyResult> {
+  return api.post<AlertTemplateApplyResult>(
+    `/alerts/templates/${encodeURIComponent(templateKey)}/apply`,
+  )
+}
+
+/** Dry-run one rule: returns matching titles, sends nothing, records nothing. */
+export function testFireRule(ruleId: string): Promise<TestFireResult> {
+  return api.post<TestFireResult>(`/alerts/test/${encodeURIComponent(ruleId)}`)
 }
 
 export interface AIDependency {
