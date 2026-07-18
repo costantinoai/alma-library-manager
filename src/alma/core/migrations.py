@@ -903,6 +903,68 @@ def _m_0027_suggestion_not_duplicate(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0028_alerted_publications_channel(conn: sqlite3.Connection) -> None:
+    """Per-channel alert dedup (2026-07-18, task 46 §3.1).
+
+    `alerted_publications` gains a `channel` column with UNIQUE(alert_id,
+    paper_id, channel): a paper delivered on Slack stays eligible for email
+    until email actually receives it (previously one success on ANY channel
+    marked the paper alerted for ALL channels forever).
+
+    Rebuild (SQLite can't alter a UNIQUE constraint). Legacy rows are
+    expanded to one row per channel the alert currently declares — those
+    are the channels the historical send could have reached. Alerts with no
+    channels (or deleted alerts) fall back to 'slack', the only sender that
+    existed before email support, so their history can't re-fire."""
+    if not _table_exists(conn, "alerted_publications"):
+        return
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(alerted_publications)")}
+    if "channel" in cols:
+        return
+
+    import json as _json
+    import uuid as _uuid
+
+    conn.execute("ALTER TABLE alerted_publications RENAME TO alerted_publications_legacy")
+    conn.execute(
+        """
+        CREATE TABLE alerted_publications (
+            id TEXT PRIMARY KEY,
+            alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
+            paper_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            alerted_at TEXT NOT NULL,
+            UNIQUE(alert_id, paper_id, channel)
+        )
+        """
+    )
+    rows = conn.execute(
+        """
+        SELECT ap.id, ap.alert_id, ap.paper_id, ap.alerted_at, a.channels
+        FROM alerted_publications_legacy ap
+        LEFT JOIN alerts a ON a.id = ap.alert_id
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            channels = _json.loads(row[4]) if row[4] else []
+        except Exception:
+            channels = []
+        channels = [str(c) for c in channels if str(c).strip()] or ["slack"]
+        for i, channel in enumerate(channels):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO alerted_publications (id, alert_id, paper_id, channel, alerted_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (row[0] if i == 0 else _uuid.uuid4().hex, row[1], row[2], channel, row[3]),
+            )
+    conn.execute("DROP TABLE alerted_publications_legacy")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alerted_alert_paper ON alerted_publications(alert_id, paper_id)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -931,6 +993,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (25, "author_merge_candidates", _m_0025_author_merge_candidates),
     (26, "merge_candidate_source_and_rejections", _m_0026_merge_candidate_source_and_rejections),
     (27, "suggestion_not_duplicate", _m_0027_suggestion_not_duplicate),
+    (28, "alerted_publications_channel", _m_0028_alerted_publications_channel),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -1071,8 +1071,9 @@ def init_db_schema() -> None:
                     id TEXT PRIMARY KEY,
                     alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
                     paper_id TEXT NOT NULL,
+                    channel TEXT NOT NULL,
                     alerted_at TEXT NOT NULL,
-                    UNIQUE(alert_id, paper_id)
+                    UNIQUE(alert_id, paper_id, channel)
                 )"""
             )
             conn.execute(
