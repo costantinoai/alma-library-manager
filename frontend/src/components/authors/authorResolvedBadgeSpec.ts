@@ -1,4 +1,4 @@
-import { AlertCircle, AlertTriangle, BadgeCheck, HelpCircle } from 'lucide-react'
+import { AlertCircle, AlertTriangle, BadgeCheck, HelpCircle, History, RssIcon } from 'lucide-react'
 import type { StatusBadgeTone } from '@/components/ui/status-badge'
 
 export interface AuthorResolvedBadgeAuthor {
@@ -28,6 +28,25 @@ export function resolvedBadgeSpec(author: AuthorResolvedBadgeAuthor): BadgeSpec 
         method && confidence > 0
           ? `Resolved via ${method} (${(confidence * 100).toFixed(0)}% confidence)`
           : 'Identity resolved — OpenAlex / ORCID / Scholar IDs confirmed.',
+    }
+  }
+  // Operational attention rows from /authors/needs-attention (same canonical
+  // source as the Health popup) — not id-resolution states, but they flow
+  // through the same badge slot on the needs-attention list.
+  if (status === 'degraded_monitor') {
+    return {
+      tone: 'warning',
+      icon: RssIcon,
+      label: 'Monitor',
+      title: "This author's feed monitor is degraded — refreshes are not landing.",
+    }
+  }
+  if (status.startsWith('corpus_')) {
+    return {
+      tone: 'warning',
+      icon: History,
+      label: 'Corpus',
+      title: 'The historical-corpus backfill for this author needs maintenance.',
     }
   }
   if (status === 'needs_manual_review') {

@@ -99,7 +99,9 @@ export function AuthorsNeedsAttentionSection({
       <ul className="space-y-2">
         {rows.map((row) => (
           <NeedsAttentionRow
-            key={row.author_id}
+            // author_id alone collides now that one author can carry several
+            // attention dimensions (identity + monitor + corpus).
+            key={`${row.author_id}-${row.reason_code}-${row.conflict_id ?? ''}`}
             row={row}
             onAction={() => router.openForRow(row)}
             isRefreshing={router.isRefreshingFor(row.author_id)}

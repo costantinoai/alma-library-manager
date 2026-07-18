@@ -12,7 +12,13 @@ from typing import Any
 from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
-_AUTHOR_BACKFILL_STALE_AFTER_DAYS = 45
+# An author goes STALE when nothing has pulled them in over ~4 months —
+# where "pulled" means ANY successful ingest path: a full-history backfill
+# (operation_status success) OR the author's feed monitor completing a
+# refresh (feed_monitors.last_success_at). An author flowing through an
+# active monitor is being kept current and must not be called stale just
+# because the formal backfill is old.
+_AUTHOR_BACKFILL_STALE_AFTER_DAYS = 120
 _AUTHOR_BACKFILL_MIN_EXPECTED = 5
 _AUTHOR_BACKFILL_EXPECTED_RATIO = 0.20
 
@@ -491,7 +497,27 @@ def get_followed_author_backfill_status(
         background_count=background_count,
         total_works=total_works,
         operation_rows=rows,
+        monitor_last_pull_at=_monitor_last_pull_at(db, author_key),
     )
+
+
+def _monitor_last_pull_at(db: sqlite3.Connection, author_id: str) -> str | None:
+    """Newest successful feed-monitor pull for this author, or None."""
+    if not _table_exists(db, "feed_monitors"):
+        return None
+    try:
+        row = db.execute(
+            """
+            SELECT MAX(last_success_at) AS t
+            FROM feed_monitors
+            WHERE author_id = ? AND monitor_type = 'author'
+            """,
+            (author_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    value = str((row["t"] if row else "") or "").strip()
+    return value or None
 
 
 def _backfill_status_from_inputs(
@@ -501,6 +527,7 @@ def _backfill_status_from_inputs(
     background_count: int,
     total_works: int,
     operation_rows: list[sqlite3.Row],
+    monitor_last_pull_at: str | None = None,
 ) -> dict[str, Any]:
     base = {
         "author_id": author_key,
@@ -564,8 +591,21 @@ def _backfill_status_from_inputs(
     if success_at is not None:
         age_days = max(0, int((datetime.utcnow() - success_at).total_seconds() // 86400))
 
+    # "Last pulled" = the newest of ANY successful ingest for this author —
+    # full-history backfill or a feed-monitor pull. Staleness is judged on
+    # this, not on the backfill alone: a monitor-covered author is current.
+    monitor_pull = _parse_iso_datetime(monitor_last_pull_at)
+    pulled_at = max((d for d in (success_at, monitor_pull) if d is not None), default=None)
+    pull_age_days: int | None = None
+    if pulled_at is not None:
+        pull_age_days = max(0, int((datetime.utcnow() - pulled_at).total_seconds() // 86400))
+
     thin = bool(expected_floor and background_count < expected_floor)
-    stale = bool(success_at is not None and age_days is not None and age_days >= _AUTHOR_BACKFILL_STALE_AFTER_DAYS)
+    stale = bool(
+        success_at is not None
+        and pull_age_days is not None
+        and pull_age_days >= _AUTHOR_BACKFILL_STALE_AFTER_DAYS
+    )
 
     if active_run is not None:
         state = "running"
@@ -578,7 +618,10 @@ def _backfill_status_from_inputs(
         detail = "Background corpus exists, but ALMa has no successful full-history backfill recorded yet."
     elif stale:
         state = "stale"
-        detail = f"Last full-history backfill is {age_days} days old."
+        detail = (
+            f"No successful pull in {pull_age_days} days — no monitor refresh or "
+            f"backfill has touched this author (last backfill {age_days} days ago)."
+        )
     elif thin:
         state = "thin"
         if total_works > 0:
@@ -609,6 +652,8 @@ def _backfill_status_from_inputs(
         "last_started_at": str(latest["started_at"] or "").strip() if latest and str(latest["started_at"] or "").strip() else None,
         "last_finished_at": str(latest["finished_at"] or "").strip() if latest and str(latest["finished_at"] or "").strip() else None,
         "last_success_at": success_at.isoformat() if success_at is not None else None,
+        "last_pulled_at": pulled_at.isoformat() if pulled_at is not None else None,
+        "pull_age_days": pull_age_days,
         "last_error": str(latest_failure["error"] or latest_failure["message"] or "").strip() if latest_failure else None,
         "age_days": age_days,
         "detail": detail,
@@ -694,6 +739,27 @@ def get_followed_author_backfill_status_map(
             if author_id in operation_rows_by_author and len(operation_rows_by_author[author_id]) < 8:
                 operation_rows_by_author[author_id].append(row)
 
+    # Newest successful monitor pull per author, one grouped query — same
+    # signal the single-author path reads via _monitor_last_pull_at.
+    monitor_pulls: dict[str, str] = {}
+    if _table_exists(db, "feed_monitors") and author_ids:
+        placeholders = ",".join("?" for _ in author_ids)
+        try:
+            for row in db.execute(
+                f"""
+                SELECT author_id, MAX(last_success_at) AS t
+                FROM feed_monitors
+                WHERE monitor_type = 'author' AND author_id IN ({placeholders})
+                GROUP BY author_id
+                """,
+                author_ids,
+            ).fetchall():
+                value = str((row["t"] or "")).strip()
+                if value:
+                    monitor_pulls[str(row["author_id"] or "").strip()] = value
+        except sqlite3.OperationalError:
+            monitor_pulls = {}
+
     statuses: dict[str, dict[str, Any]] = {}
     for row in author_rows:
         author_id = str(row.get("id") or "").strip()
@@ -710,5 +776,6 @@ def get_followed_author_backfill_status_map(
             background_count=background_counts.get(author_id, 0) if author_id in followed_ids else 0,
             total_works=works_count,
             operation_rows=operation_rows_by_author.get(author_id, []),
+            monitor_last_pull_at=monitor_pulls.get(author_id),
         )
     return statuses

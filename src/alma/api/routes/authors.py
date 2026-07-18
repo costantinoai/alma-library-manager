@@ -71,7 +71,6 @@ from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
 from alma.openalex.client import resolve_openalex_candidates_from_scholar as _resolve_oa
 from alma.openalex.client import upsert_papers as _upsert_pubs
 from alma.plugins.helpers import get_slack_plugin
-from alma.services import health as health_service
 
 logger = logging.getLogger(__name__)
 
@@ -2792,33 +2791,14 @@ def list_authors_needs_attention(
     then no_match, then needs_manual_review, then missing-openalex-on-
     followed), within each bucket by most-recently-seen.
     """
-    # Severity ordering: error > no_match > needs_manual_review >
-    # unresolved/followed-but-no-openalex. Lower number = surface first.
-    # The severity CASE and the WHERE predicate come from the canonical
-    # author-attention ladder in alma.services.health, so assess_authors'
-    # counts and these rows can never select / rank different buckets.
-    # Both fragments are hardcoded SQL constants — safe to interpolate.
-    _author_severity_case = health_service.author_attention_severity_case_sql()
-    _author_attention_where = health_service.author_attention_where_sql()
-    ranked = db.execute(
-        f"""
-        SELECT
-            a.id AS author_id,
-            a.name AS author_name,
-            COALESCE(a.openalex_id, '') AS openalex_id,
-            COALESCE(a.id_resolution_status, '') AS status,
-            COALESCE(a.id_resolution_method, '') AS method,
-            COALESCE(a.id_resolution_confidence, 0.0) AS confidence,
-            COALESCE(a.id_resolution_reason, '') AS reason,
-            COALESCE(a.id_resolution_updated_at, a.last_fetched_at, '') AS updated_at,
-            {_author_severity_case}
-        FROM authors a
-        WHERE {_author_attention_where}
-        ORDER BY severity ASC, updated_at DESC, a.name ASC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+    # Identity rows come from the canonical attention builders in
+    # alma.services.author_attention — the SAME module the Health popup's
+    # diagnostics snapshot composes from, so the two surfaces can never
+    # select or rank different buckets. (The severity CASE + WHERE inside
+    # it are the shared alma.services.health ladder assess_authors uses.)
+    from alma.services import author_attention
+
+    ranked = author_attention.identity_attention_rows(db, limit=limit)
 
     # ── Split-profile detection ─────────────────────────────────────
     # Same human, multiple OpenAlex IDs followed/saved. Names are
@@ -3071,7 +3051,74 @@ def list_authors_needs_attention(
             }
         )
 
-    out = merge_conflicts + affiliation_conflicts + split_profiles + out
+    # ── Operational attention: degraded monitors + corpus backfills ──────
+    # The Health popup has always shown these; the page must show the SAME
+    # rows or the two surfaces disagree (the bug this composition fixes).
+    # Sourced from the same canonical builders as the diagnostics snapshot.
+    from alma.application.feed_monitors import list_feed_monitors
+
+    operational: list[dict] = []
+    for m in author_attention.monitor_attention_rows(list_feed_monitors(db)):
+        if not m.get("author_id"):
+            continue
+        reason = str(m.get("health_reason") or "").strip()
+        operational.append(
+            {
+                "author_id": str(m["author_id"]),
+                "author_name": m["author_name"],
+                "openalex_id": None,
+                "status": "degraded_monitor",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "degraded_monitor",
+                "reason": "Feed monitor is degraded — refreshes are not landing",
+                "reason_detail": (
+                    (f"Reason: {reason}. " if reason else "")
+                    + (f"Last error: {m['last_error']}. " if m.get("last_error") else "")
+                    or None
+                ),
+                "monitor_id": m.get("monitor_id"),
+                "suggested_action": {
+                    "code": "refresh_monitor",
+                    "label": "Refresh monitor",
+                    "hint": "Queue a refresh for this author's feed monitor now.",
+                },
+                "updated_at": str(m.get("last_checked_at") or "") or None,
+            }
+        )
+
+    _corpus_state_reason = {
+        "stale": "Historical backfill is stale — new papers since the last successful run",
+        "thin": "Historical backfill looks thin — fewer papers than this author has published",
+        "failed": "Last historical backfill failed",
+        "unverified": "Historical backfill never verified — coverage unknown",
+    }
+    _counts, corpus_rows = author_attention.corpus_backfill_rows(db)
+    for c in corpus_rows:
+        state = str(c.get("state") or "")
+        if state not in author_attention.CORPUS_ACTIONABLE_STATES:
+            continue  # pending/running inform in Health; they are not fixable rows
+        operational.append(
+            {
+                "author_id": str(c["author_id"]),
+                "author_name": c["author_name"],
+                "openalex_id": None,
+                "status": f"corpus_{state}",
+                "method": None,
+                "confidence": 0.0,
+                "reason_code": "corpus_backfill",
+                "reason": _corpus_state_reason.get(state, f"Historical backfill {state}"),
+                "reason_detail": str(c.get("detail") or "") or None,
+                "suggested_action": {
+                    "code": "backfill_author",
+                    "label": "Backfill corpus",
+                    "hint": "Queue a historical-corpus backfill for this author.",
+                },
+                "updated_at": str(c.get("last_success_at") or "") or None,
+            }
+        )
+
+    out = merge_conflicts + affiliation_conflicts + split_profiles + out + operational
     return {"total": len(out), "items": out}
 
 

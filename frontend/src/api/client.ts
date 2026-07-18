@@ -2914,6 +2914,8 @@ export interface AuthorNeedsAttentionRow {
   conflict_primary_value?: string
   conflict_alt_value?: string
   alt_openalex_id?: string
+  /** For `reason_code='degraded_monitor'`: the feed monitor to refresh. */
+  monitor_id?: string | null
   suggested_action: { code: string; label: string; hint: string }
   updated_at?: string | null
 }

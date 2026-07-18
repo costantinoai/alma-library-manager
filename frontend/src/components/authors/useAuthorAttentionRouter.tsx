@@ -1,6 +1,12 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, type Author, type AuthorNeedsAttentionRow } from '@/api/client'
+import {
+  api,
+  queueAuthorHistoryBackfill,
+  refreshFeedMonitor,
+  type Author,
+  type AuthorNeedsAttentionRow,
+} from '@/api/client'
 import {
   AddIdentifierDialog,
   AffiliationPickerDialog,
@@ -53,8 +59,47 @@ export function useAuthorAttentionRouter(
     onError: () => errorToast('Error', 'Could not queue refresh.'),
   })
 
+  // Operational fixes surfaced by the unified needs-attention feed (the same
+  // canonical rows the Health popup shows) — queue the fix directly, no dialog.
+  const monitorRefreshMutation = useMutation({
+    mutationFn: (monitorId: string) => refreshFeedMonitor(monitorId),
+    onSuccess: () => {
+      void invalidateQueries(
+        queryClient,
+        ['authors-needs-attention'],
+        ['feed-monitors'],
+        ['feed-inbox'],
+        ['insights-diag'],
+      )
+      toast({ title: 'Monitor refresh queued', description: 'Running in Activity.' })
+    },
+    onError: () => errorToast('Error', 'Monitor refresh failed.'),
+  })
+  const backfillMutation = useMutation({
+    mutationFn: (authorId: string) => queueAuthorHistoryBackfill(authorId),
+    onSuccess: () => {
+      void invalidateQueries(
+        queryClient,
+        ['authors-needs-attention'],
+        ['authors'],
+        ['insights-diag'],
+        ['activity-operations'],
+      )
+      toast({ title: 'Historical backfill queued', description: 'Track progress in Activity.' })
+    },
+    onError: () => errorToast('Error', 'Historical backfill failed.'),
+  })
+
   const openForRow = (row: AuthorNeedsAttentionRow) => {
     const code = row.suggested_action.code
+    if (code === 'refresh_monitor') {
+      if (row.monitor_id) monitorRefreshMutation.mutate(row.monitor_id)
+      return
+    }
+    if (code === 'backfill_author') {
+      backfillMutation.mutate(row.author_id)
+      return
+    }
     if (code === 'review_profiles') {
       setReviewRow(row)
       return
@@ -91,7 +136,8 @@ export function useAuthorAttentionRouter(
   return {
     openForRow,
     isRefreshingFor: (authorId) =>
-      refreshMutation.isPending && refreshMutation.variables === authorId,
+      (refreshMutation.isPending && refreshMutation.variables === authorId) ||
+      (backfillMutation.isPending && backfillMutation.variables === authorId),
     dialogs,
   }
 }
