@@ -105,24 +105,47 @@ nothing will match. Two ways to create monitors:
 After following an author, wait for the next feed refresh (or
 trigger one manually) so `feed_items` rows exist for that monitor.
 
+## Shortcut: suggested automations
+
+The card at the top of the Alerts page proposes **one-click
+automations** derived from what you already use: productive feed
+monitors, monitored authors, curated collections, and engaged
+Discovery branches. Clicking **Create Automation** creates the rule
+*and* its digest in a single transaction (a failure can never leave
+an orphan rule), after which the suggestion disappears — it can't
+become a duplicate factory. Suggestions are delivery-aware: they
+propose exactly the channels you have configured, and the card is
+empty until at least one channel (Slack or email) is set up.
+
 ## 4. Create a rule
 
-A **rule** is the matching predicate for one source.
+A **rule** is the matching predicate for one source. Delivery
+(channels, schedule) belongs entirely to the **digest** — rules
+carry no channel setting.
 
 **Alerts → Rules tab → + Create Rule**:
 
 - **Name** — anything human-readable; shown in history.
-- **Type** — pick `feed_monitor`.
-- **Monitor** — pick one of your feed monitors.
-- **Channels** — `slack`, `email`, or both. Delivery is set on the
-  digest (step 5), so this can be left at the default.
+- **Type** — pick `feed_monitor` (or any of the other 8 types).
+- **Monitor** — pick one of your feed monitors. (Author rules offer
+  a picker over your followed authors, with a "Custom ID…" escape
+  hatch for anyone you don't follow.)
 - **Enabled** — on.
 
-Save. To sanity-check scope before wiring a rule into a digest,
-assign it to an alert and use the alert's **Dry Run** button: ALMa
-evaluates the alert against the database and shows the matching
-papers **without sending anything**. This answers "is this scoped
-sensibly?" before it goes live.
+A config that could never match anything (e.g. a monitor rule
+without a monitor) is rejected at save time with a precise error —
+never stored as a silently-dead rule.
+
+Each rule card shows **what it watches** (monitor name, keywords,
+score threshold…), and a flask **Test** button dry-runs just that
+rule and lists the matching titles — nothing is sent, nothing is
+recorded. For feed-monitor rules the test shows the broader
+pre-watermark match set; a digest may deliver fewer (see the
+cold-start filters below).
+
+A rule that isn't assigned to any digest **never runs** — its card
+carries a "Not in any digest" warning that jumps you to the Digests
+tab to assign it.
 
 You can create as many rules as you want — typically one per
 monitor you care about.
@@ -142,8 +165,17 @@ delivery config. **Alerts → Digests tab → + Create Digest**:
 - **Rules** — assign one or more of the rules from step 4.
 - **Enabled** — on.
 
-Save. The digest appears in the list with its next-fire time (if
-scheduled).
+Leaving both channels unticked is allowed but warned about, in the
+dialog and on the card: such a digest evaluates and delivers
+nothing.
+
+Save. The digest card shows its schedule, a **next-run** line for
+scheduled digests (when the hourly sweep can next fire it — hidden
+while the digest is disabled), and after the first evaluation a
+**last-outcome chip** (the *worst* channel outcome of the latest
+run, so a failed email is never hidden behind a successful Slack
+send). Clicking the chip opens the History tab pre-filtered to that
+digest.
 
 ## 6. Fire it
 
@@ -159,9 +191,12 @@ Two ways:
   next due tick. The scheduler sweep records itself as
   `alerts.evaluate_scheduled` in Activity.
 
-Either way, every paper that ends up in `alerted_publications`
-for this digest is marked sent and will not appear in a future
-fire of the same digest.
+Either way, every paper that a channel actually receives is
+recorded in `alerted_publications` **for that digest and that
+channel**, and will not be re-sent there. Dedup is per-channel: if
+Slack delivered but email failed, the papers stay eligible for
+email and go out on the next fire — the Slack success doesn't
+consume them.
 
 ## What lands in Slack
 
@@ -215,21 +250,22 @@ the most common failure modes:
    month of backfill does not produce a 200-paper opening fire —
    only papers fetched from now onward count.
 
-Combined with the per-digest dedup
-(`alerted_publications(alert_id, paper_id)` UNIQUE), this is
-robust against the two classic foot-guns: backfill spam and
+Combined with the per-digest, per-channel dedup
+(`alerted_publications(alert_id, paper_id, channel)` UNIQUE), this
+is robust against the two classic foot-guns: backfill spam and
 "sent the same paper twice."
 
 ## Cross-digest delivery is independent
 
 The same paper *can* arrive through two different digests if both
 happen to match it. `alerted_publications` is keyed on the
-`(alert_id, paper_id)` pair, not on `paper_id` alone. This is
-deliberate: if you set up "topic: ML" and "follow: Alice", and
-Alice publishes in ML, you legitimately get the paper through
+`(alert_id, paper_id, channel)` triple, not on `paper_id` alone.
+This is deliberate: if you set up "topic: ML" and "follow: Alice",
+and Alice publishes in ML, you legitimately get the paper through
 both subscriptions.
 
-Inside a single digest, each paper is sent at most once.
+Inside a single digest, each paper reaches each channel at most
+once.
 
 ## Anatomy of an evaluate
 
@@ -242,7 +278,8 @@ When a digest fires (manually or on schedule), ALMa runs:
    digest, not from Test Fire -- Layer 2 (fetched_at >= alert.created_at).
 3. Deduplicate the merged paper list by paper_id, joining each
    paper's "alert_source" strings with ", ".
-4. Filter against alerted_publications for this digest.
+4. Compute each channel's NEW set: papers not yet in
+   alerted_publications for this (digest, channel).
 5. For each channel on the digest ("slack" and/or "email"):
      - slack: resolve the channel string -> Slack ID, render
        Block-Kit blocks, chunk into messages of <=15 papers each,
@@ -251,15 +288,17 @@ When a digest fires (manually or on schedule), ALMa runs:
        send it over SMTP via EmailNotifier.
      An unconfigured channel is recorded as "skipped" and does not
      block the others.
-6. On full success: INSERT alerted_publications rows for every
-   sent paper, INSERT an alert_history row, UPDATE
+6. AFTER all sends (writes never straddle network I/O): for every
+   channel that succeeded, INSERT its alerted_publications rows;
+   INSERT one alert_history row per channel; UPDATE
    alerts.last_evaluated_at.
 ```
 
 The whole thing runs on the scheduler thread pool. Concurrent
-re-fires of the same digest dedupe via `find_active_job` — the
-second click returns the same `job_id` with status
-`already_running`.
+re-fires of the same digest dedupe via `find_active_job` — a
+second click gets the running job's envelope flagged
+`already_running` and the UI tells you to watch Activity instead
+of starting a duplicate.
 
 ## Troubleshooting
 
@@ -306,6 +345,13 @@ tick (i.e. the digest fires late, not skipped). Configure
 default 1 hour is appropriate for daily digests; raise it only
 if you only run weekly digests.
 
+## History retention
+
+`alert_history` (the per-channel outcome log behind the History
+tab) is pruned automatically: the hourly sweep deletes entries
+older than 180 days. The floor is 90 days so the Insights weekly
+trend always has its full window.
+
 ## Reset history
 
 If you want to re-send a paper through a digest (e.g. you fixed
@@ -313,7 +359,11 @@ a wrong rule and want to backfill), delete the relevant
 `alerted_publications` rows for that digest:
 
 ```sql
+-- everything for the digest:
 DELETE FROM alerted_publications WHERE alert_id = '<digest_id>';
+-- or one channel only (dedup is per-channel):
+DELETE FROM alerted_publications
+ WHERE alert_id = '<digest_id>' AND channel = 'email';
 ```
 
 The next fire will treat every eligible paper as new again.

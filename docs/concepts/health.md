@@ -119,7 +119,10 @@ Every status row is clickable, drilling into the items it affects:
   Library papers; tracked-but-unsaved papers are read-only.)
 - **Author** dimensions jump to the **[Authors](authors.md)** page's
   needs-attention section — the canonical place to repair / merge those authors —
-  rather than duplicating author management in a health modal.
+  rather than duplicating author management in a health modal. Both surfaces
+  (and the Insights authors snapshot) compose from one attention model
+  (`alma.services.author_attention`: identity ladder, degraded monitors,
+  corpus-backfill states), so their counts and rows can never disagree.
 
 ## Observed — no automatic repair
 

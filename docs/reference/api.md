@@ -263,8 +263,16 @@ parameters and response shapes.
 | `POST` | `/alerts/test/{id}` | Test-fire a rule |
 | `POST` | `/alerts/{id}/rules` | Assign rules to alert |
 | `DELETE` | `/alerts/{id}/rules/{rid}` | Unassign rule |
-| `GET` | `/alerts/history` | Past dispatches |
-| `GET` | `/alerts/templates` | Suggested rule templates |
+| `GET` | `/alerts/history` | Past dispatches (per channel; pruned past 180 d) |
+| `GET` | `/alerts/templates` | Suggested automations (empty until a delivery channel is configured) |
+| `POST` | `/alerts/templates/{key}/apply` | Materialize a suggestion: creates rule + digest atomically; 404 once applied |
+
+Alert responses carry `last_outcome` (worst status of the latest
+evaluation batch) and `next_due_at` (next sweep-eligible slot; `null`
+for manual or disabled digests). Rule configs are validated per type at
+create/update — a config that would match nothing returns `422`.
+Delivery dedup (`alerted_publications`) is keyed per
+`(alert, paper, channel)`.
 
 ### AI
 

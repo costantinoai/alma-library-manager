@@ -144,6 +144,19 @@ Don't use `nohup uvicorn …` long-term; it has no restart-on-crash.
 
 ## Updating
 
+**Docker (the normal path)** — deploy a released version with the
+versioned script; it pulls `ghcr.io/costantinoai/alma-library-manager:
+X.Y.Z[-gpu|-lite]` (flavor autodetected), recreates the `alma`
+container preserving your env and the `alma-data` / `alma-config`
+volumes, health-polls, and verifies the container reports the
+requested release version:
+
+```bash
+scripts/deploy-prod.sh 0.21.0
+```
+
+**Bare metal**:
+
 ```bash
 git pull
 pip install -e ".[ai]"           # if AI extras already installed
@@ -154,6 +167,12 @@ systemctl restart alma           # or docker compose up -d
 
 Schema migrations run on backend start-up. If a migration fails,
 the backend exits non-zero — check the systemd / docker logs.
+
+**Cutting a release** (maintainer): write `docs/releases/vX.Y.Z.md`,
+then run `scripts/release.sh X.Y.Z` — preflight, tests, bump, tag,
+locally-signed connector built from the tag, push, GitHub release.
+Fully local; no CI secrets. Details in `extension/README.md` →
+"How releases work".
 
 ## Backups
 

@@ -136,10 +136,18 @@ misses real defects.
 
 ## Releasing
 
-ALMa doesn't ship versioned releases — it's a self-hosted personal
-tool. Updates roll forward via `git pull` + restart.
+Releases are versioned tags (`vX.Y.Z`). A tag push publishes the
+Docker flavors to GHCR (`.github/workflows/docker-publish.yml`),
+and `scripts/release.sh X.Y.Z` is the one command that cuts the
+whole thing: preflight gates → full test suite → version bump
+(`pyproject.toml` + connector manifests) → commit + tag → Firefox
+connector signed locally **from the tag** → push → GitHub release
+whose body is the committed `docs/releases/vX.Y.Z.md` → `.xpi`
+upload. The script is resumable after a partial failure and keeps
+the AMO signing key strictly local (no CI/repo secrets). Deploy the
+published image with `scripts/deploy-prod.sh X.Y.Z`.
 
 When a change requires user action on existing installs (a config
-key rename, a new env var), document it in the relevant
-[Reference](../reference/index.md) page and add a brief note to
-the README.
+key rename, a new env var), call it out in the release notes file
+and document it in the relevant [Reference](../reference/index.md)
+page.

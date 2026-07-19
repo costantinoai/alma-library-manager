@@ -110,10 +110,10 @@ sqlite3 data/scholar.db .schema > docs/_internal/schema.sql
 | Table | Purpose |
 |---|---|
 | `alerts` | Top-level alert definitions. |
-| `alert_rules` | Individual rules (author / keyword / topic / similarity / discovery_lens). |
+| `alert_rules` | Individual rules (author / collection / keyword / topic / similarity / discovery_lens / feed_monitor / branch / library_workflow). |
 | `alert_rule_assignments` | Many-to-many `alert ↔ rule`. |
-| `alert_history` | Every dispatch with the digest payload. |
-| `alerted_publications` | Per-paper history so the same paper isn't sent twice. |
+| `alert_history` | Every dispatch, one row per channel; pruned past 180 days by the hourly sweep. |
+| `alerted_publications` | Delivery dedup keyed `(alert_id, paper_id, channel)` — a paper delivered on one channel stays eligible for the others (migration 28). |
 
 ### Operations
 

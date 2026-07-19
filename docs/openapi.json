@@ -12111,6 +12111,73 @@
         }
       }
     },
+    "/api/v1/alerts/templates/{template_key}/apply": {
+      "post": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Apply a suggested alert automation",
+        "description": "Materialize one template suggestion: create its rule and digest atomically.\n\nThe template payload is recomputed server-side from ``template_key`` (the\nclient never sends rule/alert bodies), and both inserts share one\ntransaction \u2014 no orphan rule when the digest insert fails. 404 when the\nkey no longer resolves (already applied, or the source stopped qualifying).",
+        "operationId": "apply_alert_template_api_v1_alerts_templates__template_key__apply_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "template_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Key"
+            }
+          },
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertTemplateApplyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/alerts/": {
       "get": {
         "tags": [
@@ -20622,6 +20689,59 @@
         }
       }
     },
+    "/api/v1/extension/collections": {
+      "get": {
+        "tags": [
+          "extension"
+        ],
+        "summary": "List collections for the connector's picker (read-only)",
+        "description": "Compact collection list (id / name / saved-paper count) so the popup can offer 'Add to collection' at save time. Pure read. Connectors detect an older ALMa without this endpoint by the 404 and simply hide the picker.",
+        "operationId": "list_collections_for_extension_api_v1_extension_collections_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/extension/save": {
       "post": {
         "tags": [
@@ -21914,6 +22034,28 @@
             ],
             "title": "Last Evaluated At"
           },
+          "last_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Outcome"
+          },
+          "next_due_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Due At"
+          },
           "rules": {
             "anyOf": [
               {
@@ -21968,7 +22110,7 @@
           "rule_type": {
             "type": "string",
             "title": "Rule Type",
-            "description": "Rule type: author, keyword, topic, similarity, discovery_lens"
+            "description": "Rule type: author, collection, keyword, topic, similarity, discovery_lens, feed_monitor, branch, library_workflow"
           },
           "rule_config": {
             "additionalProperties": true,
@@ -22045,6 +22187,33 @@
         ],
         "title": "AlertRuleResponse",
         "description": "Response model for an alert rule."
+      },
+      "AlertTemplateApplyResponse": {
+        "properties": {
+          "template_key": {
+            "type": "string",
+            "title": "Template Key"
+          },
+          "template_title": {
+            "type": "string",
+            "title": "Template Title"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/AlertRuleResponse"
+          },
+          "alert": {
+            "$ref": "#/components/schemas/AlertResponse"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_key",
+          "template_title",
+          "rule",
+          "alert"
+        ],
+        "title": "AlertTemplateApplyResponse",
+        "description": "Result of materializing a suggested automation (rule + digest)."
       },
       "AlertUpdate": {
         "properties": {
@@ -24321,6 +24490,28 @@
               }
             ],
             "title": "Abstract"
+          },
+          "collection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Id"
+          },
+          "collection_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Name"
           }
         },
         "type": "object",
@@ -24344,6 +24535,20 @@
               }
             ],
             "title": "Prior"
+          },
+          "collections_added": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collections Added"
           }
         },
         "type": "object",
