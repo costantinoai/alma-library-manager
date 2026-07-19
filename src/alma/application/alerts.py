@@ -614,12 +614,15 @@ def apply_alert_template(db: sqlite3.Connection, template_key: str) -> dict | No
 
 
 def _is_unscheduled(schedule: str | None) -> bool:
-    """True for schedules that carry no time slot (manual / immediate).
+    """True for schedules that carry no time slot (today: manual only).
 
     Unscheduled digests must persist ``schedule_config = NULL`` — any stored
-    day/time is stale noise the UI would keep rendering as badges.
+    day/time is stale noise the UI would keep rendering as badges. (The
+    never-implemented 'immediate' vocabulary was deleted 2026-07-19, task 46
+    §3.3; unknown schedule strings never fire regardless — reference_slot
+    returns None for them.)
     """
-    return str(schedule or "").strip().lower() in {"manual", "immediate"}
+    return str(schedule or "").strip().lower() == "manual"
 
 
 # ── Schedule-slot math (single owner) ──────────────────────────────────────
@@ -647,7 +650,7 @@ def reference_slot(
     never fires early, even when it has no evaluation history — shipped
     behaviour, pinned by tests). Weekly: the most recent target-day slot at
     or before ``now`` (rolls back across the week boundary). Manual /
-    immediate / unknown: None (the sweep never fires them).
+    unknown: None (the sweep never fires them).
     """
     schedule_norm = str(schedule or "").strip().lower()
     config = schedule_config if isinstance(schedule_config, dict) else {}

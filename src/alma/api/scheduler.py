@@ -1237,7 +1237,7 @@ def evaluate_scheduled_alerts() -> None:
 
         try:
             alerts = conn.execute(
-                "SELECT * FROM alerts WHERE enabled = 1 AND schedule NOT IN ('manual', 'immediate')"
+                "SELECT * FROM alerts WHERE enabled = 1 AND schedule != 'manual'"
             ).fetchall()
         except sqlite3.OperationalError as exc:
             logger.warning("Cannot query alerts table (may not exist yet): %s", exc)
