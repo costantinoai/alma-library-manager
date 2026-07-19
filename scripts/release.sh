@@ -69,10 +69,12 @@ current_branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$current_branch" = "main" ] || fail "on '$current_branch', releases cut from main"
 
 # Bump commit for THIS version may already exist (resume); otherwise the
-# tree must be clean so the bump commit contains exactly the bump.
-if [ -z "$(git status --porcelain)" ]; then :; else
-  fail "working tree not clean — commit or stash first ('tests/' and 'tasks/' are gitignored and don't count)"
-fi
+# tree must be clean so the bump commit contains exactly the bump. The
+# not-yet-committed notes file is the one allowed exception — it is
+# committed BY the bump step together with the version files.
+dirty="$(git status --porcelain | grep -v "^?? docs/releases/" || true)"
+[ -z "$dirty" ] || fail "working tree not clean — commit or stash first:
+$dirty"
 
 current_version="$(grep -m1 -E '^version *= *"' pyproject.toml | sed -E 's/^version *= *"([^"]+)".*/\1/')"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
