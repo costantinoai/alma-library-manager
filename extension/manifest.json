@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ALMa Connector",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "Save the paper open in your browser straight into ALMa — like the Zotero connector, for your personal ALMa library.",
   "browser_specific_settings": {
     "gecko": {
@@ -28,7 +28,12 @@
     "open_in_tab": true
   },
   "background": {
-    "scripts": ["lib/extract.js", "lib/settings.js", "lib/outbox.js", "background.js"]
+    "scripts": [
+      "lib/extract.js",
+      "lib/settings.js",
+      "lib/outbox.js",
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
@@ -40,16 +45,27 @@
         "http://localhost:5173/*",
         "http://127.0.0.1:5173/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start"
     }
   ],
-  "permissions": ["activeTab", "alarms", "scripting", "storage", "tabs"],
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
   "host_permissions": [
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*",
     "http://localhost:8001/*",
     "http://127.0.0.1:8001/*"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*"]
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ]
 }
