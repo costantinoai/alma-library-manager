@@ -28,16 +28,23 @@ OUT="$ROOT/dist"
 REPO="costantinoai/alma-library-manager"
 CREDS="$HOME/.config/alma/amo.env"
 
+# Pinned signing toolchain. A floating `npx web-ext` would run whatever npm
+# published last night with the AMO key in its environment; pinning bounds
+# the local supply-chain exposure to a version we've actually used.
+WEB_EXT="web-ext@10.5.0"
+
 LOCAL_ONLY=0
 VERSION=""
 TARGET=""
+FROM_TAG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --local) LOCAL_ONLY=1 ;;
     --version) VERSION="${2:?--version needs a value}"; shift ;;
     --target) TARGET="${2:?--target needs a value}"; shift ;;
+    --from-tag) FROM_TAG="${2:?--from-tag needs a tag}"; shift ;;
     -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
-    *) echo "Unknown option: $1 (try --local / --version X / --help)"; exit 2 ;;
+    *) echo "Unknown option: $1 (try --local / --version X / --from-tag vX / --help)"; exit 2 ;;
   esac
   shift
 done
@@ -63,17 +70,27 @@ echo "ALMa connector $VERSION"
 # Stage a clean copy so we set the version WITHOUT touching the working tree,
 # and never ship dev/test/tooling files. Keys go to web-ext via WEB_EXT_* env
 # (never on the command line).
+#
+# With --from-tag the stage comes from `git archive <tag>` instead of the
+# working tree, so the signed artifact provably matches the tagged source
+# even when the tree is dirty. scripts/release.sh always uses this form.
 mkdir -p "$OUT"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-cp -r "$EXT/." "$STAGE/"
+if [ -n "$FROM_TAG" ]; then
+  git rev-parse -q --verify "refs/tags/$FROM_TAG" >/dev/null \
+    || { echo "Tag not found: $FROM_TAG"; exit 1; }
+  git archive "$FROM_TAG" extension | tar -x -C "$STAGE" --strip-components=1
+else
+  cp -r "$EXT/." "$STAGE/"
+fi
 rm -rf "$STAGE/test" "$STAGE/hooks" "$STAGE/node_modules" \
        "$STAGE/release.sh" "$STAGE/README.md" "$STAGE/package.json" "$STAGE/package-lock.json"
 node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));m.version=process.argv[2];fs.writeFileSync(process.argv[1],JSON.stringify(m,null,2)+"\n")' "$STAGE/manifest.json" "$VERSION"
 
-npx --yes web-ext lint --source-dir "$STAGE"
+npx --yes "$WEB_EXT" lint --source-dir "$STAGE"
 WEB_EXT_API_KEY="$AMO_JWT_ISSUER" WEB_EXT_API_SECRET="$AMO_JWT_SECRET" \
-  npx --yes web-ext sign --source-dir "$STAGE" --channel=unlisted --artifacts-dir "$OUT"
+  npx --yes "$WEB_EXT" sign --source-dir "$STAGE" --channel=unlisted --artifacts-dir "$OUT"
 cp "$(ls -t "$OUT"/*.xpi | head -1)" "$XPI"
 echo "Signed -> $XPI"
 

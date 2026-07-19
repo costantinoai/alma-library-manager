@@ -113,7 +113,13 @@ frontend/snap.mjs
 # These are local-only orchestration / profiling helpers; not part of
 # the shipped runtime, so they're untracked to keep the public repo
 # focused on what users actually run via Docker.
-scripts/
+# EXCEPT the release/deploy pipeline: that must be versioned — the old
+# per-clone pre-push hook failed silent-open precisely because it wasn't.
+# (scripts/* not scripts/ — git cannot un-ignore files inside an ignored
+# directory, only inside an ignored glob.)
+scripts/*
+!scripts/release.sh
+!scripts/deploy-prod.sh
 
 # Local docker-compose override (e.g. to use a published image instead of local build)
 docker-compose.override.yml

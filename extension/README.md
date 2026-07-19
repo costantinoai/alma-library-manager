@@ -90,16 +90,23 @@ One-time setup (kept out of the repo):
   export AMO_JWT_SECRET=...
   ```
 - **`gh`** (GitHub CLI), authenticated once: `gh auth login`.
-- Install the pre-push hook once, from the repo root:
-  ```bash
-  ln -sf ../../extension/hooks/pre-push .git/hooks/pre-push
-  ```
 
-Then a release is just the normal ALMa tag push — **bump the version in
-`pyproject.toml`, tag `v<version>`, and push the tag**. The hook builds +
-signs the connector locally, asks for a `y/N` confirmation, and attaches
-`alma-connector-<version>.xpi` to that release. (AMO signs each version
-once, so the version must be new — it always matches the ALMa version.)
+Then a release is **one explicit command** (this replaced the old
+per-clone pre-push hook, which failed silent-open when not installed):
+
+```bash
+# 1. write the notes first — they become the GitHub release body
+$EDITOR docs/releases/v0.22.0.md
+# 2. cut the release (preflight → tests → bump → tag → sign → push → publish)
+scripts/release.sh 0.22.0
+```
+
+The script signs the connector **from `git archive` of the tag** (never
+the working tree), is resumable after a partial failure (AMO signs each
+version exactly once, so re-runs reuse the signed artifact), and pins the
+`web-ext` toolchain version. The AMO key is only ever read from
+`~/.config/alma/amo.env` — no CI or repository secrets exist. Deploy the
+published image afterwards with `scripts/deploy-prod.sh <version>`.
 
 For a **connector-only** rebuild between ALMa releases (e.g. a fix in the
 add-on itself), AMO still needs a *new* version, so sign with a fourth
@@ -109,16 +116,6 @@ and doesn't imply a product bump:
 ```bash
 extension/release.sh --local --version 0.14.0.1   # connector patch on 0.14.0
 ```
-
-To run it by hand instead of via the hook:
-
-```bash
-extension/release.sh            # build, sign, then (after confirm) upload
-extension/release.sh --local    # build + sign only; no upload, no git writes
-```
-
-Signing is always local; the **only** write (creating the release/tag,
-uploading) is gated behind the confirmation.
 
 ## Choosing a server
 
