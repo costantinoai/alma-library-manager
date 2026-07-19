@@ -95,6 +95,10 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest,enable={{is_default_branch}}
+            # `stable` moves ONLY on v* release tags (never on main pushes),
+            # so auto-updaters (watchtower) track released builds — the full
+            # test gate — instead of every dev push that refreshes :latest.
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

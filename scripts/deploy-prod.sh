@@ -4,6 +4,8 @@
 #
 #   scripts/deploy-prod.sh 0.22.0          # pull + recreate + verify
 #   scripts/deploy-prod.sh 0.22.0 --lite   # force the lite flavor
+#   scripts/deploy-prod.sh stable          # release channel (watchtower
+#                                          # then keeps it current)
 #
 # Recreates the `alma` container from ghcr.io/<repo>:<version>[-gpu|-lite],
 # preserving the running container's operator env (API keys live there on
@@ -31,7 +33,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: scripts/deploy-prod.sh X.Y.Z [--gpu|--lite|--cpu]"; exit 2; }
+[[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+|stable)$ ]] || { echo "Usage: scripts/deploy-prod.sh X.Y.Z|stable [--gpu|--lite|--cpu]"; exit 2; }
 
 # Flavor autodetect (same rule as setup.sh) unless forced by a flag.
 GPU_FLAG=""
@@ -75,7 +77,9 @@ for _ in $(seq 1 60); do
   body="$(curl -fsS -m 2 http://localhost:8000/api/v1/health 2>/dev/null || true)"
   if [ -n "$body" ]; then
     echo "[deploy] health: $body"
-    if echo "$body" | grep -q "\"version\":\"$VERSION\""; then
+    if [ "$VERSION" = "stable" ]; then
+      echo "[deploy] OK — stable channel; health reports the concrete release above"
+    elif echo "$body" | grep -q "\"version\":\"$VERSION\""; then
       echo "[deploy] OK — running $VERSION"
     else
       echo "[deploy] note: health version differs from $VERSION (images built before 0.21.1 report the API contract version instead)."
