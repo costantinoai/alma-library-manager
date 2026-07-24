@@ -72,6 +72,8 @@ interface GraphControlsProps {
   onLayoutCoauthWeightChange?: (value: number) => void
   layoutBibWeight?: number
   onLayoutBibWeightChange?: (value: number) => void
+  layoutCociteWeight?: number
+  onLayoutCociteWeightChange?: (value: number) => void
   physics?: GraphPhysicsConfig
   onPhysicsChange?: (patch: Partial<GraphPhysicsConfig>) => void
   onResetPhysics?: () => void
@@ -190,6 +192,8 @@ export function GraphControls({
   onLayoutCoauthWeightChange,
   layoutBibWeight = 0,
   onLayoutBibWeightChange,
+  layoutCociteWeight = 0,
+  onLayoutCociteWeightChange,
   physics,
   onPhysicsChange,
   onResetPhysics,
@@ -363,61 +367,100 @@ export function GraphControls({
             </div>
           )}
 
-          {/* PROTOTYPE (task 19): fused multi-view layout. Library scope only
-              (dense O(N²)) — both the paper map AND the author network. */}
-          {!includeCorpus && onLayoutSemanticWeightChange && onLayoutCoauthWeightChange && onLayoutBibWeightChange && (
-            <div className="mt-3 rounded-sm border border-dashed border-edge-2 bg-surface-2 p-3">
-              <div className="mb-1 flex items-center gap-2">
-                <span className="text-xs font-semibold text-alma-800">Layout basis</span>
-                <Badge variant="outline" className="text-[10px]">beta</Badge>
-              </div>
-              <p className="mb-2 text-[11px] text-slate-500">
-                Blend what drives the <em>positions</em>. Each weight is independent (they
-                don&apos;t need to add up) — all three are used together. The default
-                (semantic 1, others 0) is the trustworthy similarity map; raise a weight to
-                also pull co-authoring or reference-sharing nodes together. Clusters stay
-                semantic.
-              </p>
-              <div className="flex flex-wrap items-center gap-4">
-                {(
-                  [
-                    ['Semantic', layoutSemanticWeight, onLayoutSemanticWeightChange] as const,
-                    ['Co-authorship', layoutCoauthWeight, onLayoutCoauthWeightChange] as const,
-                    ['Bib. coupling', layoutBibWeight, onLayoutBibWeightChange] as const,
-                  ]
-                ).map(([label, value, onChange]) => (
-                  <label key={label} className="flex items-center gap-2 text-xs text-slate-600">
-                    <span className="font-medium whitespace-nowrap">{label}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.25}
-                      value={value}
-                      onChange={(e) => onChange(Number(e.target.value))}
-                      className="w-24 accent-alma-600"
-                    />
-                    <span className="font-mono text-[10px] tabular-nums text-slate-500">
-                      {value.toFixed(2)}
-                    </span>
-                  </label>
-                ))}
-                {(layoutCoauthWeight > 0 || layoutBibWeight > 0 || layoutSemanticWeight !== 1) && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      onLayoutSemanticWeightChange(1)
-                      onLayoutCoauthWeightChange(0)
-                      onLayoutBibWeightChange(0)
+          {/* PROTOTYPE (task 19 + 47 §7): fused multi-view layout. Library scope
+              only (dense O(N²)) — both the paper map AND the author network. The
+              primary control is ONE "Citation influence" slider that scales both
+              structural citation weights (bibliographic coupling + co-citation)
+              together; the raw per-source weights live under Advanced. */}
+          {!includeCorpus &&
+            onLayoutSemanticWeightChange &&
+            onLayoutCoauthWeightChange &&
+            onLayoutBibWeightChange &&
+            onLayoutCociteWeightChange && (
+              <div className="mt-3 rounded-sm border border-dashed border-edge-2 bg-surface-2 p-3">
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="text-xs font-semibold text-alma-800">Layout basis</span>
+                  <Badge variant="outline" className="text-[10px]">beta</Badge>
+                </div>
+                <p className="mb-2 text-[11px] text-slate-500">
+                  Blend what drives the <em>positions</em>. Pure semantic is the
+                  trustworthy similarity map; raise <em>Citation influence</em> to also
+                  pull papers that share references or citers closer together. Clusters
+                  stay semantic.
+                </p>
+                {/* One control: scales bibliographic coupling + co-citation together. */}
+                <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <span className="font-medium whitespace-nowrap">Citation influence</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.25}
+                    value={Math.max(layoutBibWeight, layoutCociteWeight)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value)
+                      onLayoutBibWeightChange(v)
+                      onLayoutCociteWeightChange(v)
                     }}
-                  >
-                    Reset to semantic
-                  </Button>
-                )}
+                    className="w-32 accent-alma-600"
+                  />
+                  <span className="font-mono text-[10px] tabular-nums text-slate-500">
+                    {Math.max(layoutBibWeight, layoutCociteWeight).toFixed(2)}
+                  </span>
+                </label>
+
+                {/* Advanced: raw per-source weights, independent (0..1 each). */}
+                <details className="group mt-2">
+                  <summary className="flex cursor-pointer list-none items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-alma-700">
+                    <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+                    Advanced — per-source weights
+                  </summary>
+                  <div className="mt-2 flex flex-wrap items-center gap-4">
+                    {(
+                      [
+                        ['Semantic', layoutSemanticWeight, onLayoutSemanticWeightChange] as const,
+                        ['Co-authorship', layoutCoauthWeight, onLayoutCoauthWeightChange] as const,
+                        ['Bib. coupling', layoutBibWeight, onLayoutBibWeightChange] as const,
+                        ['Co-citation', layoutCociteWeight, onLayoutCociteWeightChange] as const,
+                      ]
+                    ).map(([label, value, onChange]) => (
+                      <label key={label} className="flex items-center gap-2 text-xs text-slate-600">
+                        <span className="font-medium whitespace-nowrap">{label}</span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.25}
+                          value={value}
+                          onChange={(e) => onChange(Number(e.target.value))}
+                          className="w-24 accent-alma-600"
+                        />
+                        <span className="font-mono text-[10px] tabular-nums text-slate-500">
+                          {value.toFixed(2)}
+                        </span>
+                      </label>
+                    ))}
+                    {(layoutCoauthWeight > 0 ||
+                      layoutBibWeight !== 0.5 ||
+                      layoutCociteWeight !== 0.5 ||
+                      layoutSemanticWeight !== 1) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          onLayoutSemanticWeightChange(1)
+                          onLayoutCoauthWeightChange(0)
+                          onLayoutBibWeightChange(0.5)
+                          onLayoutCociteWeightChange(0.5)
+                        }}
+                      >
+                        Reset
+                      </Button>
+                    )}
+                  </div>
+                </details>
               </div>
-            </div>
-          )}
+            )}
 
           {!isPaperMap && (
             <div className="mt-3 flex flex-wrap items-center gap-3">

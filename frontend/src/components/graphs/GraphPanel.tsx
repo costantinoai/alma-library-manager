@@ -140,6 +140,7 @@ export function GraphPanel() {
   const [layoutSemanticWeight, setLayoutSemanticWeight] = useState(1)
   const [layoutCoauthWeight, setLayoutCoauthWeight] = useState(0)
   const [layoutBibWeight, setLayoutBibWeight] = useState(0.5)
+  const [layoutCociteWeight, setLayoutCociteWeight] = useState(0.5)
   const [includeCorpus, setIncludeCorpus] = useState(false)
   // Typed edge layers toggled OFF (Phase 3 / I-11). Empty ⇒ all layers shown.
   const [hiddenLayers, setHiddenLayers] = useState<Set<string>>(new Set())
@@ -176,20 +177,21 @@ export function GraphPanel() {
   const wSem = fusedActive ? layoutSemanticWeight : 1
   const wCo = fusedActive ? layoutCoauthWeight : 0
   const wBib = fusedActive ? layoutBibWeight : 0
+  const wCite = fusedActive ? layoutCociteWeight : 0
   // show_edges is hardcoded true so the edges are always in the (cached) payload
   // — the Edges toggle is a client-side RENDER flag, so flipping it never
   // refetches. cluster_resolution is the only fetch-affecting graph option here.
   const queryParams = activeView === 'paper-map'
-    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
-    : `?scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}`
+    ? `?label_mode=${labelMode}&color_by=${colorBy}&size_by=${sizeBy}&show_edges=true&scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}&w_cocitation=${wCite}`
+    : `?scope=${scope}&cluster_resolution=${clusterResolution}&w_semantic=${wSem}&w_coauthorship=${wCo}&w_bibliographic=${wBib}&w_cocitation=${wCite}`
 
   // Only the params that actually change the FETCH belong in the key. The author
   // view's color/size/edges encodings are applied client-side, so they must NOT
   // be in its key (else toggling them would refetch + flash a spinner).
   const queryKey =
     activeView === 'paper-map'
-      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, scope, clusterResolution, wSem, wCo, wBib]
-      : ['graph', 'author-network', scope, clusterResolution, wSem, wCo, wBib]
+      ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, scope, clusterResolution, wSem, wCo, wBib, wCite]
+      : ['graph', 'author-network', scope, clusterResolution, wSem, wCo, wBib, wCite]
   const { data, isLoading, error } = useQuery<GraphData>({
     queryKey,
     queryFn: () => api.get<GraphData>(`/graphs/${activeView}${queryParams}`),
@@ -500,6 +502,8 @@ export function GraphPanel() {
             onLayoutCoauthWeightChange={setLayoutCoauthWeight}
             layoutBibWeight={layoutBibWeight}
             onLayoutBibWeightChange={setLayoutBibWeight}
+            layoutCociteWeight={layoutCociteWeight}
+            onLayoutCociteWeightChange={setLayoutCociteWeight}
             physics={physics}
             onPhysicsChange={updatePhysics}
             onResetPhysics={() => setPhysics(DEFAULT_GRAPH_PHYSICS)}
