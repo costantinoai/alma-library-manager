@@ -762,6 +762,7 @@ def list_feed_items(
     limit: int = 50,
     offset: int = 0,
     since_days: int | None = None,
+    monitor_scope: str | None = None,
 ) -> tuple[list[dict], int]:
     """List feed inbox items with joined paper/author data.
 
@@ -770,6 +771,13 @@ def list_feed_items(
         since_days: If set, only include items whose effective publication or
             fetch timestamp is within the last ``since_days`` days. Keeps the
             chronological feed bounded and avoids scanning unbounded history.
+        monitor_scope: split the inbox by monitor type so noisy journal
+            (venue) monitors get their own surface. ``"inbox"`` excludes venue
+            items; ``"journals"`` returns ONLY venue items; ``None`` / ``"all"``
+            applies no filter. Filtering is row-level (before per-paper
+            aggregation), so a paper matched by BOTH an author AND a journal
+            still shows in the inbox via its author row and in Journals via its
+            venue row.
     """
     # NOTE: pure read. Writes previously done here (sync_author_monitors /
     # prune_feed_items_for_missing_monitors) were the source of SQLite lock
@@ -787,6 +795,14 @@ def list_feed_items(
     # alongside the `_insert_feed_item` gate: this also hides any historical
     # component row the backfill re-classified, with no feed_items deletion.
     where.append(standalone_paper_sql("p"))
+    # Journal (venue) monitors are high-volume; they live on a dedicated Feed
+    # surface so they never drown the author/topic/keyword inbox. Filter on the
+    # row's effective monitor type BEFORE aggregation.
+    scope = str(monitor_scope or "").strip().lower()
+    if scope == "journals":
+        where.append("COALESCE(fm.monitor_type, fi.monitor_type, '') = 'venue'")
+    elif scope == "inbox":
+        where.append("COALESCE(fm.monitor_type, fi.monitor_type, '') <> 'venue'")
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
     if requested_status and requested_status != "all":

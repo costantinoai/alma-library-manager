@@ -174,6 +174,10 @@ def list_feed_items(
         le=3650,
         description="Restrict to items published (or fetched) within the last N days. Defaults to 60.",
     ),
+    monitor_scope: str | None = Query(
+        default=None,
+        description="Split by monitor type: 'inbox' (exclude journals) | 'journals' (venue only) | omit for all",
+    ),
     db: sqlite3.Connection = Depends(get_db),
 ):
     """Return feed inbox items from feed_items table."""
@@ -185,6 +189,7 @@ def list_feed_items(
             limit=limit,
             offset=offset,
             since_days=since_days,
+            monitor_scope=monitor_scope,
         )
         return {"items": [FeedItemResponse(**item).model_dump() for item in items], "total": total}
     except ValueError as exc:

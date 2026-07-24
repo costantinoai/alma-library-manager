@@ -4016,6 +4016,8 @@ export function listFeedInbox(params?: {
   offset?: number
   /** Restrict to items within the last N days. Defaults to 60 server-side. */
   since_days?: number
+  /** Split by monitor type: 'inbox' hides journals, 'journals' shows only them. */
+  monitor_scope?: 'inbox' | 'journals' | 'all'
 }): Promise<{ items: FeedInboxItem[]; total: number }> {
   const qs = new URLSearchParams()
   if (params?.status) qs.set('status', params.status)
@@ -4023,6 +4025,9 @@ export function listFeedInbox(params?: {
   if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.offset != null) qs.set('offset', String(params.offset))
   if (params?.since_days != null) qs.set('since_days', String(params.since_days))
+  if (params?.monitor_scope && params.monitor_scope !== 'all') {
+    qs.set('monitor_scope', params.monitor_scope)
+  }
   const q = qs.toString()
   return api.get(`/feed${q ? `?${q}` : ''}`)
 }
@@ -4080,11 +4085,34 @@ export function listFeedMonitors(): Promise<FeedMonitor[]> {
   return api.get('/feed/monitors')
 }
 
+export interface VenueSearchResult {
+  source_id: string
+  display_name: string
+  works_count: number
+  issn_l?: string | null
+  type?: string | null
+  summary_stats?: {
+    '2yr_mean_citedness'?: number
+    h_index?: number
+    i10_index?: number
+  } | null
+}
+
+/** Autocomplete OpenAlex journals/venues by name (paid ?search class — call
+ * only from interactive follow UI, never a loop). */
+export function venueSearch(q: string): Promise<{ results: VenueSearchResult[] }> {
+  return api.get<{ results: VenueSearchResult[] }>(
+    `/feed/monitors/venue-search?q=${encodeURIComponent(q)}`,
+  )
+}
+
 export function createFeedMonitor(body: {
   monitor_type: 'query' | 'topic' | 'venue' | 'preprint' | 'branch'
   query: string
   label?: string
   config?: Record<string, unknown>
+  source_id?: string
+  filter_keywords?: string[]
 }): Promise<FeedMonitor> {
   return api.post('/feed/monitors', body)
 }

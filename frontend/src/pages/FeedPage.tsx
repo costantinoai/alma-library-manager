@@ -238,6 +238,9 @@ export function FeedPage() {
 
   // Default to the recency "New" view; "Show all" is opt-in.
   const [filter, setFilter] = useState<FeedFilter>('new')
+  // Journal (venue) monitors are noisy → their own surface. 'inbox' hides
+  // them from the author/topic/keyword feed; 'journals' shows only them.
+  const [feedScope, setFeedScope] = useState<'inbox' | 'journals'>('inbox')
   const [sort, setSort] = useState<FeedSort>('chronological')
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -247,7 +250,7 @@ export function FeedPage() {
   const [feedLimit, setFeedLimit] = useState(60)
 
   const feedQuery = useQuery({
-    queryKey: ['feed-inbox', filter, sort, feedLimit],
+    queryKey: ['feed-inbox', feedScope, filter, sort, feedLimit],
     queryFn: () =>
       listFeedInbox({
         status: filter === 'all' ? undefined : filter,
@@ -256,6 +259,7 @@ export function FeedPage() {
         limit: feedLimit,
         offset: 0,
         since_days: 60,
+        monitor_scope: feedScope,
       }),
     retry: 1,
     placeholderData: (previous) => previous,
@@ -459,6 +463,9 @@ export function FeedPage() {
   const total = authorFilter ? items.length : (feedQuery.data?.total ?? 0)
   const filteredAuthorLabel = items[0]?.author_name || authorFilter
   const monitors = monitorQueryState.data ?? []
+  const journalMonitorCount = monitors.filter(
+    (monitor) => monitor.monitor_type === 'venue' && monitor.enabled,
+  ).length
   const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
   const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
   const degradedMonitors = degradedMonitorList.length
@@ -650,6 +657,46 @@ export function FeedPage() {
       {/* U-1: visible while a feed refresh runs in the background. */}
       <RefreshRunningBanner domain="feed" label="Refreshing feed inbox…" />
 
+      {/* ── Scope tabs ─────────────────────────────────────────────────────
+          Journal (venue) monitors are high-volume and can be noisy, so they
+          get their own surface instead of drowning the author/topic/keyword
+          inbox. The active tab drives the `monitor_scope` query param.
+      ──────────────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 border-b border-[var(--color-border)]" role="tablist" aria-label="Feed scope">
+        {([
+          { scope: 'inbox' as const, label: 'Inbox', Icon: LayoutList },
+          { scope: 'journals' as const, label: 'Journals', Icon: BookOpen },
+        ]).map(({ scope, label, Icon }) => {
+          const active = feedScope === scope
+          return (
+            <button
+              key={scope}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => {
+                setFeedScope(scope)
+                setSelectedIds(new Set())
+              }}
+              className={cn(
+                'relative -mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                active
+                  ? 'border-[var(--color-accent)] text-alma-900'
+                  : 'border-transparent text-slate-500 hover:text-alma-800',
+              )}
+            >
+              <Icon className="h-4 w-4" aria-hidden />
+              {label}
+              {scope === 'journals' && journalMonitorCount > 0 && (
+                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-3 px-1 text-[10px] font-semibold tabular-nums text-slate-600">
+                  {journalMonitorCount}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
       {/* ── Control bar ────────────────────────────────────────────────────
           Single horizontal strip with three zones separated by dividers:
           [filter] · [sort]  …  [counter + select-all] · [view mode]
@@ -757,15 +804,35 @@ export function FeedPage() {
       ) : feedQuery.isError ? (
         <ErrorState message="Failed to load feed inbox." />
       ) : items.length === 0 ? (
-        <EmptyState
-          icon={Search}
-          title={filter === 'new' ? 'Nothing new from the latest fetch' : 'No papers published in the last 60 days'}
-          description={
-            filter === 'new'
-              ? "You're caught up on this refresh. Switch to Show all for your full 60-day inbox, or run Refresh Inbox to pull new papers."
-              : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
-          }
-        />
+        feedScope === 'journals' ? (
+          <EmptyState
+            icon={BookOpen}
+            title={
+              journalMonitorCount === 0
+                ? 'No journals followed yet'
+                : filter === 'new'
+                  ? 'Nothing new from your journals'
+                  : 'No journal papers in the last 60 days'
+            }
+            description={
+              journalMonitorCount === 0
+                ? 'Follow a journal from any paper’s venue, or add one under Settings → Feed Monitor Controls. New papers from that journal will collect here, out of your main inbox.'
+                : filter === 'new'
+                  ? "You're caught up on your journals for this refresh. Switch to Show all for the full 60-day window, or run Refresh Inbox."
+                  : 'No papers from your followed journals in the last 60 days. Add a keyword filter to a busy journal in Settings, or run Refresh Inbox.'
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={Search}
+            title={filter === 'new' ? 'Nothing new from the latest fetch' : 'No papers published in the last 60 days'}
+            description={
+              filter === 'new'
+                ? "You're caught up on this refresh. Switch to Show all for your full 60-day inbox, or run Refresh Inbox to pull new papers."
+                : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
+            }
+          />
+        )
       ) : viewMode === 'compact' ? (
         <FeedCompactTable
           items={items}
