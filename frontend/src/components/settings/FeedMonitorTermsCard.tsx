@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, RefreshCw, Save, Search, Tag, Trash2, UserRound } from 'lucide-react'
+import { BookOpen, Plus, RefreshCw, Save, Search, Tag, Trash2, UserRound, X } from 'lucide-react'
 
 import {
   createFeedMonitor,
@@ -9,7 +9,9 @@ import {
   refreshFeedMonitor,
   updateFeedMonitor,
   type FeedMonitor,
+  type VenueSearchResult,
 } from '@/api/client'
+import { VenueAutocomplete } from '@/components/shared/VenueAutocomplete'
 import { AsyncButton, SettingsCard, SettingsSection } from '@/components/settings/primitives'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -30,7 +32,7 @@ import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
 
-type FeedMonitorCreateType = 'query' | 'topic'
+type FeedMonitorCreateType = 'query' | 'topic' | 'venue'
 
 function monitorQuery(monitor: FeedMonitor): string {
   const raw = monitor.config?.query
@@ -47,6 +49,9 @@ function createMonitorPlaceholder(type: FeedMonitorCreateType): string {
 function createMonitorHelp(type: FeedMonitorCreateType): string {
   if (type === 'query') {
     return 'Keyword monitors use strict boolean logic over title and abstract only.'
+  }
+  if (type === 'venue') {
+    return 'Journal monitors match every new paper published in a journal (by exact OpenAlex source), optionally filtered by keywords. Papers land in Feed → Journals.'
   }
   return 'Topic monitors cast a broader retrieval net, then Feed applies stricter matching before insertion.'
 }
@@ -263,12 +268,194 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
   )
 }
 
+/** A followed-journal row: enable/pause, edit the keyword filter, refresh,
+ * unfollow. A legacy name-only venue (pre source-id) shows a re-link prompt. */
+function VenueMonitorRow({ monitor }: { monitor: FeedMonitor }) {
+  const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const config = (monitor.config ?? {}) as {
+    query?: string
+    source_id?: string
+    filter_keywords?: string[]
+    needs_resolution?: boolean
+  }
+  const needsResolution = Boolean(config.needs_resolution) || !config.source_id
+  const savedKeywords = (config.filter_keywords ?? []).join(', ')
+  const [enabled, setEnabled] = useState(Boolean(monitor.enabled))
+  const [keywords, setKeywords] = useState(savedKeywords)
+  const [relinkOpen, setRelinkOpen] = useState(false)
+
+  useEffect(() => {
+    setEnabled(Boolean(monitor.enabled))
+    setKeywords(((monitor.config as { filter_keywords?: string[] } | null)?.filter_keywords ?? []).join(', '))
+  }, [monitor.enabled, monitor.config])
+
+  const dirty = enabled !== Boolean(monitor.enabled) || keywords.trim() !== savedKeywords.trim()
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const body: { enabled?: boolean; config?: Record<string, unknown> } = {}
+      if (enabled !== Boolean(monitor.enabled)) body.enabled = enabled
+      if (keywords.trim() !== savedKeywords.trim()) {
+        body.config = { filter_keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean) }
+      }
+      return updateFeedMonitor(monitor.id, body)
+    },
+    onSuccess: async () => {
+      await invalidateQueries(queryClient, ['feed-monitors'], ['feed-inbox'])
+      toast({ title: 'Journal updated', description: 'The filter is applied on the next refresh.' })
+    },
+    onError: () => errorToast('Could not update journal'),
+  })
+
+  const relinkMutation = useMutation({
+    mutationFn: (venue: VenueSearchResult) =>
+      updateFeedMonitor(monitor.id, {
+        enabled: true,
+        config: { query: venue.display_name, source_id: venue.source_id },
+      }),
+    onSuccess: async () => {
+      setRelinkOpen(false)
+      await invalidateQueries(queryClient, ['feed-monitors'], ['feed-inbox'])
+      toast({ title: 'Journal re-linked', description: 'Matching resumes on the next refresh.' })
+    },
+    onError: () => errorToast('Could not re-link journal'),
+  })
+
+  const refreshMutation = useMutation({
+    mutationFn: () => refreshFeedMonitor(monitor.id),
+    onSuccess: async () => {
+      await invalidateQueries(queryClient, ['feed-monitors'], ['feed-inbox'], ['activity-operations'])
+      toast({ title: 'Journal refresh queued', description: 'Track it in Activity.' })
+    },
+    onError: () => errorToast('Could not refresh journal'),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteFeedMonitor(monitor.id),
+    onSuccess: async () => {
+      await invalidateQueries(queryClient, ['feed-monitors'], ['feed-inbox'])
+      toast({ title: 'Journal unfollowed', description: 'It no longer collects papers.' })
+    },
+    onError: () => errorToast('Could not unfollow journal'),
+  })
+
+  const busy =
+    saveMutation.isPending || refreshMutation.isPending || deleteMutation.isPending || relinkMutation.isPending
+
+  return (
+    <div className="rounded-sm border border-[var(--color-border)] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
+              <BookOpen className="mr-1 h-3 w-3" /> Journal
+            </Badge>
+            {needsResolution ? (
+              <StatusBadge tone="warning">needs re-linking</StatusBadge>
+            ) : (
+              <StatusBadge tone={monitorHealthTone(monitor.health)}>{monitor.health}</StatusBadge>
+            )}
+            {!needsResolution && (
+              <label className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-slate-700">
+                <Checkbox
+                  checked={enabled}
+                  disabled={busy}
+                  onCheckedChange={(checked) => setEnabled(checked === true)}
+                />
+                {enabled ? 'active' : 'paused'}
+              </label>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-alma-800">
+            <span className="truncate">{config.query || monitor.label}</span>
+            {config.source_id && (
+              <span className="text-xs font-normal tabular-nums text-slate-400">{config.source_id}</span>
+            )}
+          </div>
+          {needsResolution ? (
+            <div className="space-y-2">
+              <p className="text-xs text-warning-700">
+                This journal predates source-id matching. Re-link it to an OpenAlex source to re-enable
+                matching.
+              </p>
+              {relinkOpen ? (
+                <VenueAutocomplete
+                  onSelect={(venue) => relinkMutation.mutate(venue)}
+                  disabled={busy}
+                  placeholder={`Find “${config.query || monitor.label}”…`}
+                />
+              ) : (
+                <AsyncButton type="button" size="sm" variant="outline" onClick={() => setRelinkOpen(true)}>
+                  Re-link
+                </AsyncButton>
+              )}
+            </div>
+          ) : (
+            <Input
+              value={keywords}
+              onChange={(event) => setKeywords(event.target.value)}
+              placeholder="Keyword filter, comma-separated — empty follows the whole journal"
+              disabled={busy}
+              className="h-8 text-xs"
+            />
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {!needsResolution && (
+            <AsyncButton
+              type="button"
+              size="sm"
+              variant="outline"
+              icon={<RefreshCw className="h-3.5 w-3.5" />}
+              pending={refreshMutation.isPending}
+              disabled={busy && !refreshMutation.isPending}
+              onClick={() => refreshMutation.mutate()}
+            >
+              Refresh
+            </AsyncButton>
+          )}
+          {!needsResolution && (
+            <AsyncButton
+              type="button"
+              size="sm"
+              variant="outline"
+              icon={<Save className="h-3.5 w-3.5" />}
+              pending={saveMutation.isPending}
+              disabled={busy || !dirty}
+              onClick={() => saveMutation.mutate()}
+            >
+              Save
+            </AsyncButton>
+          )}
+          <AsyncButton
+            type="button"
+            size="sm"
+            variant="outline"
+            icon={<Trash2 className="h-3.5 w-3.5" />}
+            pending={deleteMutation.isPending}
+            disabled={busy && !deleteMutation.isPending}
+            onClick={() => deleteMutation.mutate()}
+          >
+            Unfollow
+          </AsyncButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function FeedMonitorTermsCard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [newType, setNewType] = useState<FeedMonitorCreateType>('query')
   const [newLabel, setNewLabel] = useState('')
   const [newQuery, setNewQuery] = useState('')
+  // Journal (venue) create: a resolved source is required, plus an optional
+  // comma-separated keyword filter.
+  const [selectedVenue, setSelectedVenue] = useState<VenueSearchResult | null>(null)
+  const [venueKeywords, setVenueKeywords] = useState('')
 
   const monitorsQuery = useQuery({
     queryKey: ['feed-monitors', 'settings'],
@@ -278,18 +465,38 @@ export function FeedMonitorTermsCard() {
   })
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      createFeedMonitor({
+    mutationFn: () => {
+      if (newType === 'venue') {
+        if (!selectedVenue) throw new Error('Pick a journal first')
+        return createFeedMonitor({
+          monitor_type: 'venue',
+          query: selectedVenue.display_name,
+          source_id: selectedVenue.source_id,
+          filter_keywords: venueKeywords
+            .split(',')
+            .map((k) => k.trim())
+            .filter(Boolean),
+        })
+      }
+      return createFeedMonitor({
         monitor_type: newType,
         label: newLabel.trim() || undefined,
         query: newQuery.trim(),
-      }),
+      })
+    },
     onSuccess: async () => {
       setNewLabel('')
       setNewQuery('')
+      setSelectedVenue(null)
+      setVenueKeywords('')
       await invalidateQueries(queryClient, ['feed-monitors'], ['feed-inbox'])
       toast({
-        title: newType === 'query' ? 'Keyword monitor added' : 'Topic monitor added',
+        title:
+          newType === 'query'
+            ? 'Keyword monitor added'
+            : newType === 'venue'
+              ? 'Journal followed'
+              : 'Topic monitor added',
         description: 'The new Feed rule is now active.',
       })
     },
@@ -309,8 +516,15 @@ export function FeedMonitorTermsCard() {
     () => monitors.filter((monitor) => monitor.monitor_type === 'topic'),
     [monitors],
   )
+  const venueMonitors = useMemo(
+    () =>
+      [...monitors.filter((monitor) => monitor.monitor_type === 'venue')].sort(
+        (a, b) => (a.position ?? 9999) - (b.position ?? 9999),
+      ),
+    [monitors],
+  )
   const otherMonitors = useMemo(
-    () => monitors.filter((monitor) => !['author', 'query', 'topic'].includes(monitor.monitor_type)),
+    () => monitors.filter((monitor) => !['author', 'query', 'topic', 'venue'].includes(monitor.monitor_type)),
     [monitors],
   )
   const disabledCount = monitors.filter((monitor) => !monitor.enabled).length
@@ -329,6 +543,9 @@ export function FeedMonitorTermsCard() {
       </StatusBadge>
       <StatusBadge tone="neutral" size="sm">
         {keywordMonitors.length} keywords
+      </StatusBadge>
+      <StatusBadge tone="neutral" size="sm">
+        {venueMonitors.length} journals
       </StatusBadge>
       {disabledCount > 0 && (
         <StatusBadge tone="neutral" size="sm">
@@ -352,7 +569,7 @@ export function FeedMonitorTermsCard() {
       roomy
     >
       <div className="rounded-sm border border-[var(--color-border)] bg-surface-2/70 p-4">
-        <div className="grid gap-3 lg:grid-cols-[170px_minmax(0,1fr)_minmax(0,0.9fr)_auto]">
+        <div className="grid items-start gap-3 lg:grid-cols-[170px_minmax(0,1fr)_auto]">
           <Select
             value={newType}
             onValueChange={(value) => setNewType(value as FeedMonitorCreateType)}
@@ -364,28 +581,63 @@ export function FeedMonitorTermsCard() {
             <SelectContent>
               <SelectItem value="query">Keyword Monitor</SelectItem>
               <SelectItem value="topic">Topic Monitor</SelectItem>
+              <SelectItem value="venue">Journal</SelectItem>
             </SelectContent>
           </Select>
-          <Input
-            value={newQuery}
-            onChange={(event) => setNewQuery(event.target.value)}
-            placeholder={createMonitorPlaceholder(newType)}
-            disabled={createMutation.isPending}
-          />
-          <Input
-            value={newLabel}
-            onChange={(event) => setNewLabel(event.target.value)}
-            placeholder="Display label"
-            disabled={createMutation.isPending}
-          />
+          {newType === 'venue' ? (
+            <div className="space-y-2">
+              {selectedVenue ? (
+                <div className="flex items-center gap-2 rounded-sm border border-accent-edge bg-accent-soft px-3 py-2 text-sm">
+                  <BookOpen className="h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
+                  <span className="min-w-0 flex-1 truncate font-medium text-alma-folio">
+                    {selectedVenue.display_name}
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                    {selectedVenue.works_count.toLocaleString()} works
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedVenue(null)}
+                    className="shrink-0 text-slate-400 hover:text-slate-600"
+                    aria-label="Clear selected journal"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <VenueAutocomplete onSelect={setSelectedVenue} disabled={createMutation.isPending} />
+              )}
+              <Input
+                value={venueKeywords}
+                onChange={(event) => setVenueKeywords(event.target.value)}
+                placeholder="Optional keywords, comma-separated — only papers matching these"
+                disabled={createMutation.isPending || !selectedVenue}
+              />
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)]">
+              <Input
+                value={newQuery}
+                onChange={(event) => setNewQuery(event.target.value)}
+                placeholder={createMonitorPlaceholder(newType)}
+                disabled={createMutation.isPending}
+              />
+              <Input
+                value={newLabel}
+                onChange={(event) => setNewLabel(event.target.value)}
+                placeholder="Display label"
+                disabled={createMutation.isPending}
+              />
+            </div>
+          )}
           <AsyncButton
             type="button"
-            icon={<Plus className="h-4 w-4" />}
+            icon={newType === 'venue' ? <BookOpen className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
             pending={createMutation.isPending}
-            disabled={!newQuery.trim()}
+            disabled={newType === 'venue' ? !selectedVenue : !newQuery.trim()}
             onClick={() => createMutation.mutate()}
           >
-            Add Monitor
+            {newType === 'venue' ? 'Follow journal' : 'Add Monitor'}
           </AsyncButton>
         </div>
         <p className="mt-3 text-xs text-slate-500">{createMonitorHelp(newType)}</p>
@@ -434,6 +686,13 @@ export function FeedMonitorTermsCard() {
             <MonitorSection icon={<Search className="h-4 w-4 text-slate-500" />} title="Keyword Monitors">
               {keywordMonitors.map((monitor) => (
                 <MonitorRow key={monitor.id} monitor={monitor} />
+              ))}
+            </MonitorSection>
+          )}
+          {venueMonitors.length > 0 && (
+            <MonitorSection icon={<BookOpen className="h-4 w-4 text-slate-500" />} title="Journals">
+              {venueMonitors.map((monitor) => (
+                <VenueMonitorRow key={monitor.id} monitor={monitor} />
               ))}
             </MonitorSection>
           )}

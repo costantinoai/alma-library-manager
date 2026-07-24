@@ -400,7 +400,22 @@ def update_feed_monitor(
     next_label = str(label if label is not None else row["label"] or "").strip()
     next_label = " ".join(next_label.split()) or next_query
     next_config["query"] = next_query
-    next_monitor_key = _canonical_monitor_key(monitor_type, next_query)
+    if monitor_type == "venue":
+        # A venue's key is its source id, never the display name. A re-link
+        # passes a new source_id in `config`; on a valid id we clear the
+        # needs_resolution flag so the row re-enables cleanly. Keyword edits
+        # flow through config too.
+        resolved_source_id = canonical_source_id(str(next_config.get("source_id") or ""))
+        if resolved_source_id:
+            next_config["source_id"] = resolved_source_id
+            next_config.pop("needs_resolution", None)
+            next_monitor_key = resolved_source_id.lower()
+        else:
+            next_monitor_key = str(row["monitor_key"] or "").strip()
+        if "filter_keywords" in next_config:
+            next_config["filter_keywords"] = _clean_filter_keywords(next_config.get("filter_keywords"))
+    else:
+        next_monitor_key = _canonical_monitor_key(monitor_type, next_query)
 
     duplicate = db.execute(
         """
