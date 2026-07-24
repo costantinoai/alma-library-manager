@@ -468,6 +468,27 @@ export function FeedPage() {
   const journalMonitorCount = monitors.filter(
     (monitor) => monitor.monitor_type === 'venue' && monitor.enabled,
   ).length
+
+  // In the Journals scope, papers are grouped under their journal so a noisy
+  // venue reads as one block. We flatten [header, item, item, header, …] so the
+  // existing single card map can render it with one extra branch.
+  const feedRenderList = useMemo<
+    Array<{ type: 'header'; journal: string; count: number } | { type: 'item'; item: FeedInboxItem }>
+  >(() => {
+    if (feedScope !== 'journals') return items.map((item) => ({ type: 'item' as const, item }))
+    const groups = new Map<string, FeedInboxItem[]>()
+    for (const item of items) {
+      const journal = (toPublication(item)?.journal || item.monitor_label || 'Unknown journal').trim()
+      if (!groups.has(journal)) groups.set(journal, [])
+      groups.get(journal)!.push(item)
+    }
+    const out: Array<{ type: 'header'; journal: string; count: number } | { type: 'item'; item: FeedInboxItem }> = []
+    for (const [journal, groupItems] of groups) {
+      out.push({ type: 'header', journal, count: groupItems.length })
+      for (const item of groupItems) out.push({ type: 'item', item })
+    }
+    return out
+  }, [feedScope, items])
   const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
   const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
   const degradedMonitors = degradedMonitorList.length
@@ -847,7 +868,21 @@ export function FeedPage() {
         />
       ) : (
         <RevealList className="space-y-3">
-          {items.map((item, i) => {
+          {feedRenderList.map((entry, i) => {
+            if (entry.type === 'header') {
+              return (
+                <RevealItem key={`journal-header-${entry.journal}`} index={i}>
+                  <div className="flex items-center gap-2 px-1 pb-1 pt-3 text-sm font-semibold text-alma-800 first:pt-1">
+                    <BookOpen className="h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
+                    <span className="truncate">{entry.journal}</span>
+                    <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-3 px-1 text-[10px] font-semibold tabular-nums text-slate-600">
+                      {entry.count}
+                    </span>
+                  </div>
+                </RevealItem>
+              )
+            }
+            const item = entry.item
             const paper = toPublication(item)
             const matchedAuthors = item.matched_authors ?? []
             const matchedMonitors = item.matched_monitors ?? []
