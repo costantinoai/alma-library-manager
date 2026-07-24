@@ -41,6 +41,7 @@ import {
 import { JargonHint, MetricTile } from '@/components/shared'
 import { DiscoverIcon } from '@/components/ui/brand-icons'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { ConceptCallout } from '@/components/ui/concept-callout'
 import {
   BranchExplorerPanel,
   LensManager,
@@ -59,7 +60,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
@@ -739,23 +740,28 @@ export function DiscoveryPage() {
         </div>
       </section>
 
-      {/* Find & add — compact at the top. Just a search input until
-          results land. The result section is rendered by
-          OnlineSearchTab itself (only appears when items > 0); we
-          deliberately don't carry a verbose description here — the
-          input placeholder + the prefix-hint inside the tab are
-          enough. */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Globe className="h-4 w-4 text-alma-folio" />
-            Find &amp; add
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
-        </CardContent>
-      </Card>
+      {/* Page vocabulary — lens → branches → signals, once at the top. */}
+      <ConceptCallout
+        eyebrow="How Discovery works"
+        summary="A lens sets what to recommend; branches are the sub-themes it pursues; signals show whether it's working."
+      >
+        <p className="mb-2">
+          A <span className="font-medium text-alma-900">lens</span> is a saved point of view —
+          "recommend from my whole library", or from a collection / topic / tag. It drives every
+          recommendation below.
+        </p>
+        <p className="mb-2">
+          Within a lens, Discovery clusters your taste into{' '}
+          <span className="font-medium text-alma-900">branches</span> — the distinct sub-themes it's
+          exploring. You steer them in <span className="font-medium">Tune this lens</span> (pin,
+          boost, mute) and see them coloured on the frontier <span className="font-medium">Map</span>.
+        </p>
+        <p>
+          <span className="font-medium text-alma-900">Signals</span> are the feedback loop: what you
+          save, like, and dismiss reshapes the next refresh. <span className="font-medium">Is it
+          working?</span> shows how your signals are landing.
+        </p>
+      </ConceptCallout>
 
       {/* Anchor card — only when ?seed=<paperId>. Shows immediately
           after the hero so the user knows what they're looking at
@@ -839,10 +845,10 @@ export function DiscoveryPage() {
         >
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
             <div className="flex flex-col gap-0.5">
-              <span className="font-brand text-sm font-semibold text-alma-800">Branch Studio</span>
+              <span className="font-brand text-sm font-semibold text-alma-800">Tune this lens</span>
               <span className="text-xs text-slate-500">
-                Tune which clusters this lens pursues — pin, boost, mute, and
-                review smart suggestions before the next refresh.
+                Branch Studio + weights — pin, boost, or mute the sub-themes this
+                lens pursues before the next refresh.
               </span>
             </div>
             <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
@@ -860,7 +866,7 @@ export function DiscoveryPage() {
         <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
             <div className="flex flex-col gap-0.5">
-              <span className="font-brand text-sm font-semibold text-alma-800">Lens diagnostics</span>
+              <span className="font-brand text-sm font-semibold text-alma-800">Is it working?</span>
               <span className="text-xs text-slate-500">
                 {selectedLensSummary ? (
                   <>
@@ -1245,6 +1251,27 @@ export function DiscoveryPage() {
         </div>
 
       </div>
+
+      {/* Find & add — a manual tool, demoted below the recommendations
+          (the page thesis is the lens's suggestions, not manual search).
+          Collapsed by default; auto-opens on a ?q= deep link. Revert-cheap. */}
+      <details
+        open={!!routeQuery}
+        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+      >
+        <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-alma-folio" />
+            <span className="font-brand text-sm font-semibold text-alma-800">Find &amp; add</span>
+            <span className="text-xs text-slate-500">search any source to add a paper by hand</span>
+          </div>
+          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
+          <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
+        </summary>
+        <div className="border-t border-[var(--color-border)] p-4">
+          <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
+        </div>
+      </details>
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
     </div>
