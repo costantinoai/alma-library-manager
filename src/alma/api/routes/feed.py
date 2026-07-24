@@ -17,6 +17,7 @@ from alma.api.models import (
     FeedMonitorCreateRequest,
     FeedMonitorResponse,
     FeedMonitorUpdateRequest,
+    ReorderRequest,
 )
 from alma.application import feed as feed_app
 from alma.application import feed_monitors as monitor_app
@@ -283,6 +284,23 @@ def create_feed_monitor(
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise_internal("Failed to create feed monitor", exc)
+
+
+@router.put(
+    "/monitors/order",
+    summary="Reorder feed monitors (drag-to-reorder)",
+)
+def reorder_feed_monitors(
+    payload: ReorderRequest,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Persist a new display order. Defined BEFORE /monitors/{id} so the literal
+    'order' path is not captured as a monitor id."""
+    try:
+        monitor_app.reorder_feed_monitors(db, payload.ordered_ids)
+        return {"success": True, "count": len(payload.ordered_ids)}
+    except Exception as exc:
+        raise_internal("Failed to reorder feed monitors", exc)
 
 
 @router.delete(

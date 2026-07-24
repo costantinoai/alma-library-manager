@@ -562,12 +562,30 @@ def list_lenses(
             GROUP BY r.lens_id
         ) r ON r.lens_id = l.id
         WHERE {" AND ".join(where)}
-        ORDER BY l.created_at DESC
+        ORDER BY l.position ASC, l.created_at DESC
         LIMIT ? OFFSET ?
         """,
         [*params, limit, offset],
     ).fetchall()
     return [_map_lens_row(r) for r in rows]
+
+
+def reorder_lenses(db: sqlite3.Connection, ordered_ids: list[str]) -> None:
+    """Persist a new lens display order (Discovery drag-reorder). Each id's
+    ``position`` becomes its index; ids not present are left untouched. One
+    gated write unit."""
+    clean = [str(lid).strip() for lid in (ordered_ids or []) if str(lid).strip()]
+    if not clean:
+        return
+
+    def _persist() -> None:
+        for index, lens_id in enumerate(clean):
+            db.execute(
+                "UPDATE discovery_lenses SET position = ? WHERE id = ?",
+                (index, lens_id),
+            )
+
+    run_write_unit(db, _persist, label="lens_reorder")
 
 
 def get_lens(db: sqlite3.Connection, lens_id: str) -> dict | None:
@@ -1202,6 +1220,7 @@ def _map_lens_row(row: sqlite3.Row) -> dict:
         "created_at": row["created_at"],
         "last_refreshed_at": row["last_refreshed_at"],
         "is_active": bool(row["is_active"]),
+        "position": int(row["position"] or 0),
         "signal_count": int(row["signal_count"] or 0),
         "recommendation_count": int(row["recommendation_count"] or 0),
         "last_suggestion_set_id": row["last_suggestion_set_id"],

@@ -128,6 +128,7 @@ def _serialize_monitor_row(row: sqlite3.Row) -> dict[str, Any]:
         "scholar_id": row["scholar_id"],
         "orcid": row["orcid"],
         "config": _json_loads(row["config_json"]),
+        "position": int(row["position"] or 0),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_checked_at": row["last_checked_at"],
@@ -474,6 +475,28 @@ def update_feed_monitor(
     updated = _fetch_monitor_row(db, monitor_id)
     assert updated is not None
     return _serialize_monitor_row(updated)
+
+
+def reorder_feed_monitors(db: sqlite3.Connection, ordered_ids: list[str]) -> None:
+    """Persist a new display order for monitors (used by journal drag-reorder).
+
+    ``ordered_ids`` is the ids in their new order; each row's ``position``
+    becomes its index. Ids not present are left untouched (the caller reorders
+    one group — e.g. venues — at a time). One gated write unit.
+    """
+    clean = [str(mid).strip() for mid in (ordered_ids or []) if str(mid).strip()]
+    if not clean:
+        return
+
+    def _persist() -> None:
+        now = datetime.utcnow().isoformat()
+        for index, monitor_id in enumerate(clean):
+            db.execute(
+                "UPDATE feed_monitors SET position = ?, updated_at = ? WHERE id = ?",
+                (index, now, monitor_id),
+            )
+
+    run_write_unit(db, _persist, label="feed_monitor_reorder")
 
 
 def delete_feed_monitor(db: sqlite3.Connection, monitor_id: str) -> bool:

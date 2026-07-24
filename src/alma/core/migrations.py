@@ -1002,6 +1002,24 @@ def _m_0029_venue_monitor_source_id(conn: sqlite3.Connection) -> None:
         )
 
 
+def _m_0030_reorder_position(conn: sqlite3.Connection) -> None:
+    """Persisted display order for feed monitors + discovery lenses (task 47).
+
+    Users can drag to reorder followed journals (Feed → Journals) and lenses
+    (Discovery). Both get an integer ``position``; existing rows are backfilled
+    from their current newest-first order so nothing visibly moves on upgrade.
+    """
+    for table in ("feed_monitors", "discovery_lenses"):
+        _add_columns(conn, table, {"position": "INTEGER NOT NULL DEFAULT 0"})
+        if not _table_exists(conn, table):
+            continue
+        rows = conn.execute(
+            f"SELECT id FROM {table} ORDER BY created_at DESC, id ASC"
+        ).fetchall()
+        for idx, row in enumerate(rows):
+            conn.execute(f"UPDATE {table} SET position = ? WHERE id = ?", (idx, row[0]))
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1032,6 +1050,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (27, "suggestion_not_duplicate", _m_0027_suggestion_not_duplicate),
     (28, "alerted_publications_channel", _m_0028_alerted_publications_channel),
     (29, "venue_monitor_source_id", _m_0029_venue_monitor_source_id),
+    (30, "reorder_position", _m_0030_reorder_position),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

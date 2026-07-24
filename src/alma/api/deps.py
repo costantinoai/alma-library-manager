@@ -614,7 +614,8 @@ def init_db_schema() -> None:
                     last_success_at TEXT,
                     last_status TEXT,
                     last_error TEXT,
-                    last_result_json TEXT
+                    last_result_json TEXT,
+                    position INTEGER NOT NULL DEFAULT 0
                 )"""
             )
             for idx_sql in [
@@ -638,7 +639,8 @@ def init_db_schema() -> None:
                     preference_profile TEXT,
                     created_at TEXT DEFAULT (datetime('now')),
                     last_refreshed_at TEXT,
-                    is_active INTEGER DEFAULT 1
+                    is_active INTEGER DEFAULT 1,
+                    position INTEGER NOT NULL DEFAULT 0
                 )"""
             )
             conn.execute(

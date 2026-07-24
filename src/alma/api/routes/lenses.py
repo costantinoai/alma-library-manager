@@ -16,6 +16,7 @@ from alma.api.models import (
     LensResponse,
     LensUpdate,
     RecommendationResponse,
+    ReorderRequest,
 )
 from alma.application import discovery as discovery_app
 from alma.core.operations import OperationOutcome, OperationRunner
@@ -82,6 +83,20 @@ def create_lens(
         raise
     except Exception as exc:
         raise_internal("Failed to create discovery lens", exc)
+
+
+@router.put("/order", summary="Reorder discovery lenses (drag-to-reorder)")
+def reorder_lenses(
+    body: ReorderRequest,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    """Persist a new lens display order. Defined BEFORE /{lens_id} so the
+    literal 'order' path is not captured as a lens id."""
+    try:
+        discovery_app.reorder_lenses(db, body.ordered_ids)
+        return {"success": True, "count": len(body.ordered_ids)}
+    except Exception as exc:
+        raise_internal("Failed to reorder discovery lenses", exc)
 
 
 @router.get("/{lens_id}", response_model=LensResponse, summary="Get discovery lens")

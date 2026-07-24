@@ -81,6 +81,7 @@ from .lens_crud import (
     list_lens_recommendations,
     list_lens_signals,
     list_lenses,
+    reorder_lenses,
     list_recommendations,
     mark_recommendation_action,
     read_settings,

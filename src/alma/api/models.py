@@ -391,6 +391,7 @@ class FeedMonitorResponse(BaseModel):
     scholar_id: str | None = None
     orcid: str | None = None
     config: dict | None = None
+    position: int = 0
     created_at: str | None = None
     updated_at: str | None = None
     last_checked_at: str | None = None
@@ -400,6 +401,12 @@ class FeedMonitorResponse(BaseModel):
     last_result: dict | None = None
     health: str = "ready"
     health_reason: str | None = None
+
+
+class ReorderRequest(BaseModel):
+    """Body for a drag-reorder: ids in their new display order."""
+
+    ordered_ids: list[str] = Field(..., description="Row ids in their new order; index becomes position")
 
 
 # ============================================================================
@@ -436,6 +443,7 @@ class LensResponse(BaseModel):
     created_at: str
     last_refreshed_at: str | None = None
     is_active: bool = True
+    position: int = 0
     signal_count: int = 0
     recommendation_count: int = 0
     last_suggestion_set_id: str | None = None

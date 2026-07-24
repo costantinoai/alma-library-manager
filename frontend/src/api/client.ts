@@ -1751,6 +1751,7 @@ export interface FeedMonitor {
   scholar_id?: string | null
   orcid?: string | null
   config?: Record<string, unknown> | null
+  position?: number
   created_at?: string | null
   updated_at?: string | null
   last_checked_at?: string | null
@@ -1844,6 +1845,7 @@ export interface Lens {
   created_at: string
   last_refreshed_at?: string | null
   is_active: boolean
+  position?: number
   signal_count: number
   recommendation_count: number
   last_suggestion_set_id?: string | null
@@ -3694,6 +3696,11 @@ export function deleteLens(lensId: string): Promise<{ success: boolean }> {
   return api.delete<{ success: boolean }>(`/lenses/${encodeURIComponent(lensId)}`)
 }
 
+/** Persist a new lens display order (drag-to-reorder). */
+export function reorderLenses(orderedIds: string[]): Promise<{ success: boolean; count: number }> {
+  return api.put('/lenses/order', { ordered_ids: orderedIds })
+}
+
 export function refreshLens(lensId: string, limit = 50): Promise<JobEnvelope> {
   return api.post<JobEnvelope>(
     `/lenses/${encodeURIComponent(lensId)}/refresh?limit=${encodeURIComponent(String(limit))}`,
@@ -4127,6 +4134,11 @@ export function updateFeedMonitor(
   },
 ): Promise<FeedMonitor> {
   return api.put(`/feed/monitors/${encodeURIComponent(monitorId)}`, body)
+}
+
+/** Persist a new feed-monitor display order (journal drag-to-reorder). */
+export function reorderFeedMonitors(orderedIds: string[]): Promise<{ success: boolean; count: number }> {
+  return api.put('/feed/monitors/order', { ordered_ids: orderedIds })
 }
 
 export function deleteFeedMonitor(monitorId: string): Promise<{ success: boolean; monitor_id: string }> {
