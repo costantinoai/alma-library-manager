@@ -582,6 +582,104 @@ def get_frontier(
     }
 
 
+class RegionDescribeRequest(BaseModel):
+    paper_ids: list[str]
+
+
+@router.post("/region/describe")
+def describe_region(
+    body: RegionDescribeRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Characterise an arbitrary set of papers by its dominant vocabulary — the
+    read behind selecting a region on the frontier map (task 47 §8, "Directions").
+
+    POST only because the body carries up to ~300 paper ids; it is a **pure read**
+    (verified by the GET-purity suite). Reuses the SAME c-TF-IDF labeler the
+    cluster labels use — no second TF-IDF. Returns the region's label, top terms,
+    three sample titles, honest membership counts (library / current suggestions /
+    seen), and a `sufficient` flag (false below 5 papers → the UI shows "too few
+    papers to characterize" and disables actions).
+    """
+    ids = list(dict.fromkeys(str(p).strip() for p in (body.paper_ids or []) if str(p).strip()))[:300]
+    sufficient = len(ids) >= 5
+    if not ids:
+        return {
+            "label": "",
+            "top_terms": [],
+            "sample": [],
+            "counts": {"library": 0, "recs": 0, "seen": 0},
+            "sufficient": False,
+        }
+
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"SELECT id, title, abstract, status FROM papers WHERE id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    texts: dict[str, str] = {}
+    titles: list[str] = []
+    lib_ids: set[str] = set()
+    for r in rows:
+        pid = str(r["id"])
+        title = str(r["title"] or "").strip()
+        abstract = str(r["abstract"] or "").strip()
+        texts[pid] = f"{title}. {abstract}".strip(". ").strip()
+        if title:
+            titles.append(title)
+        if str(r["status"] or "") == "library":
+            lib_ids.add(pid)
+    library = len(lib_ids)
+
+    # Membership counts mirror the frontier's mutually-exclusive layers:
+    # library first, then "suggestions here" (current recommendations that are
+    # NOT already in the library), then "seen" (everything else selected).
+    non_lib = [i for i in ids if i not in lib_ids]
+    recs = 0
+    if non_lib:
+        nl_placeholders = ",".join("?" for _ in non_lib)
+        recs = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(DISTINCT paper_id) FROM recommendations
+                WHERE paper_id IN ({nl_placeholders})
+                  AND COALESCE(user_action, '') NOT IN ('dismiss', 'dismissed', 'remove', 'removed')
+                """,
+                non_lib,
+            ).fetchone()[0]
+            or 0
+        )
+    seen = max(0, len(ids) - library - recs)
+
+    label = ""
+    top_terms: list[str] = []
+    if sufficient and texts:
+        try:
+            from alma.ai.clustering import (
+                Cluster,
+                label_clusters_tfidf,
+                score_cluster_terms,
+            )
+
+            cluster = Cluster(cluster_id=0, member_keys=list(texts.keys()), label="", centroid=None)
+            labels = label_clusters_tfidf([cluster], texts, top_n=4)
+            label = labels[0] if labels else ""
+            scored = score_cluster_terms(
+                {0: [t for t in texts.values() if t]}, top_k=10
+            )
+            top_terms = [term for term, _ in scored.get(0, [])][:8]
+        except Exception:
+            logger.debug("region describe labeling failed", exc_info=True)
+
+    return {
+        "label": label or "Selected region",
+        "top_terms": top_terms,
+        "sample": titles[:3],
+        "counts": {"library": library, "recs": recs, "seen": seen},
+        "sufficient": sufficient,
+    }
+
+
 @router.get("/author-network", response_model=GraphData)
 def get_author_network(
     scope: str = Query("library", description="library (default) or corpus"),

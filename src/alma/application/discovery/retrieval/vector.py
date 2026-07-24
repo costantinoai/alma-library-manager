@@ -21,6 +21,80 @@ except Exception:
     _NUMPY_AVAILABLE = False
 
 
+# Per-mode pull strength when blending an adopted direction into the seed
+# centroid. `pin` commits to the region harder than a `boost` nudge.
+_DIRECTION_BLEND_WEIGHT = {"pin": 0.5, "boost": 0.3}
+
+
+def _blend_custom_directions(
+    db: sqlite3.Connection,
+    lens: dict,
+    centroid: "np.ndarray",
+    active_model: str,
+    decode_vector,
+) -> "np.ndarray":
+    """Return the seed centroid pulled toward each adopted custom direction.
+
+    Recomputes every direction's centroid from its members' LIVE embeddings
+    (ids are stored, not vectors), adds it to the seed centroid weighted by the
+    direction's mode, and re-normalises. No directions / no embeddable members →
+    the centroid is returned unchanged.
+    """
+    try:
+        from alma.application.discovery.lens_crud import _resolve_lens_branch_controls
+
+        directions = _resolve_lens_branch_controls(lens).get("custom_directions") or []
+    except Exception:
+        directions = []
+    if not directions:
+        return centroid
+
+    combined = centroid.copy()
+    applied = 0
+    for direction in directions:
+        members = [
+            str(m).strip()
+            for m in (direction.get("member_paper_ids") or [])
+            if str(m or "").strip()
+        ]
+        if not members:
+            continue
+        mp = ",".join("?" for _ in members)
+        drows = db.execute(
+            f"""
+            SELECT pe.embedding
+            FROM publication_embeddings pe
+            JOIN papers p ON p.id = pe.paper_id
+            WHERE pe.model = ? AND pe.paper_id IN ({mp})
+              AND {standalone_paper_sql('p')}
+            """,
+            [active_model, *members],
+        ).fetchall()
+        dvecs: list[np.ndarray] = []
+        for r in drows:
+            try:
+                v = decode_vector(r["embedding"])
+                n = float(np.linalg.norm(v))
+                if n > 0.0:
+                    dvecs.append(v / n)
+            except Exception:
+                continue
+        if not dvecs:
+            continue
+        dcent = np.mean(np.vstack(dvecs), axis=0)
+        dn = float(np.linalg.norm(dcent))
+        if dn <= 0.0:
+            continue
+        weight = _DIRECTION_BLEND_WEIGHT.get(str(direction.get("mode") or "boost"), 0.3)
+        combined = combined + weight * (dcent / dn)
+        applied += 1
+
+    if not applied:
+        return centroid
+    cn = float(np.linalg.norm(combined))
+    return combined / cn if cn > 0.0 else centroid
+
+
 def _retrieve_vector_channel(
     db: sqlite3.Connection,
     lens: dict,
@@ -70,6 +144,13 @@ def _retrieve_vector_channel(
     if centroid_norm <= 0.0:
         return []
     centroid = centroid / centroid_norm
+
+    # Blend adopted custom directions (task 47 §8) into the seed centroid so a
+    # refresh DEEPENS retrieval toward a region the user adopted from the map.
+    # Members are stored (never raw vectors) so the direction centroid is
+    # recomputed from live embeddings every refresh and can't go stale. `pin`
+    # pulls harder than `boost`; the blended centroid is re-normalised.
+    centroid = _blend_custom_directions(db, lens, centroid, active_model, decode_vector)
 
     rows = db.execute(
         f"""

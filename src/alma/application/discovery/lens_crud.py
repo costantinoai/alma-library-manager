@@ -136,7 +136,15 @@ DEFAULT_BRANCH_CONTROLS: dict[str, Any] = {
     "pinned": [],
     "muted": [],
     "boosted": [],
+    # Adopted map regions (task 47 §8). Each: {id, label, terms,
+    # member_paper_ids, mode: 'boost'|'pin', created_at}. Member IDS are stored
+    # (never raw vectors) so the direction centroid is recomputed from live
+    # embeddings at every refresh and can't go stale.
+    "custom_directions": [],
 }
+
+# Valid adoption modes for a custom direction.
+_DIRECTION_MODES = ("boost", "pin")
 
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -1281,6 +1289,46 @@ def _normalize_branch_controls(raw: dict | None) -> dict[str, Any]:
         muted = set(out["muted"])
         out["pinned"] = [bid for bid in out["pinned"] if bid not in muted]
         out["boosted"] = [bid for bid in out["boosted"] if bid not in muted]
+
+    # Custom directions (task 47 §8): normalize each adopted region, dropping
+    # malformed / empty entries. `created_at` is preserved verbatim when present
+    # (never fabricated); ids dedupe so a re-adopt doesn't stack duplicates.
+    directions_raw = value.get("custom_directions")
+    directions: list[dict[str, Any]] = []
+    seen_dir_ids: set[str] = set()
+    if isinstance(directions_raw, list):
+        for entry in directions_raw:
+            if not isinstance(entry, dict):
+                continue
+            did = str(entry.get("id") or "").strip()
+            members = [
+                str(m).strip()
+                for m in (entry.get("member_paper_ids") or [])
+                if str(m or "").strip()
+            ]
+            if not did or did in seen_dir_ids or not members:
+                continue
+            seen_dir_ids.add(did)
+            terms = [
+                str(t).strip()
+                for t in (entry.get("terms") or [])
+                if str(t or "").strip()
+            ]
+            mode = str(entry.get("mode") or "boost").strip().lower()
+            if mode not in _DIRECTION_MODES:
+                mode = "boost"
+            direction = {
+                "id": did,
+                "label": str(entry.get("label") or "").strip() or "Direction",
+                "terms": terms,
+                "member_paper_ids": list(dict.fromkeys(members)),
+                "mode": mode,
+            }
+            created_at = entry.get("created_at")
+            if created_at:
+                direction["created_at"] = str(created_at)
+            directions.append(direction)
+    out["custom_directions"] = directions
 
     return out
 

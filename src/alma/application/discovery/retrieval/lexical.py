@@ -26,6 +26,19 @@ def _retrieve_lexical_channel(
         keyword = str(config.get("keyword") or config.get("query") or "").strip()
         explicit_topics = [keyword] if keyword else []
     topics = _extract_keywords(seeds, explicit=explicit_topics, max_keywords=10)
+    # Fold adopted custom-direction terms (task 47 §8) into the query expansion
+    # so the lexical search also pulls papers matching the direction vocabulary.
+    try:
+        from ..lens_crud import _resolve_lens_branch_controls
+
+        for direction in _resolve_lens_branch_controls(lens).get("custom_directions") or []:
+            for term in direction.get("terms") or []:
+                term = str(term).strip()
+                if term and term not in topics:
+                    topics.append(term)
+    except Exception:
+        pass
+    topics = topics[:16]
     if not topics:
         return []
     results = openalex_related.search_works_by_topics(
