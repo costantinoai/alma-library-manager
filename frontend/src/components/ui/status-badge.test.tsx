@@ -11,19 +11,34 @@ describe('StatusBadge', () => {
 
   it('applies the neutral tone classes by default', () => {
     render(<StatusBadge>Idle</StatusBadge>)
-    // Neutral = top-of-ladder white chip with an alma border (see status-badge.tsx).
-    expect(screen.getByText('Idle')).toHaveClass('bg-surface-4')
+    // Neutral is the QUIET chip — a surface step with a hairline, so metadata
+    // recedes under the coloured chips that carry real signal (2026-07-25
+    // colour contract in status-badge.tsx).
+    expect(screen.getByText('Idle')).toHaveClass('bg-surface-2')
   })
 
   it('switches visual treatment with the tone prop', () => {
     render(<StatusBadge tone="positive">Healthy</StatusBadge>)
     // Positive routes through the success semantic token.
-    expect(screen.getByText('Healthy')).toHaveClass('text-success-700')
+    expect(screen.getByText('Healthy')).toHaveClass('text-success-800')
   })
 
   it('merges a caller className', () => {
     render(<StatusBadge className="ml-2">X</StatusBadge>)
     expect(screen.getByText('X')).toHaveClass('ml-2')
+  })
+
+  it('renders the category glyph when an icon is supplied', () => {
+    // Colour carries valence, the icon carries category — both must survive.
+    const Dot = ({ className }: { className?: string }) => (
+      <svg data-testid="chip-glyph" className={className} />
+    )
+    render(
+      <StatusBadge tone="accent" icon={Dot}>
+        Cited together
+      </StatusBadge>,
+    )
+    expect(screen.getByTestId('chip-glyph')).toBeInTheDocument()
   })
 })
 

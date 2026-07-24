@@ -49,7 +49,6 @@ import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef } from '@tanstack/react-table'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -195,15 +194,20 @@ function MonitorBadge({
   const type = (monitorType || 'query').toLowerCase()
   const Icon = MONITOR_TYPE_ICON[type] ?? Search
   const chip = MONITOR_TYPE_CHIP[type] ?? MONITOR_TYPE_CHIP_FALLBACK
+  // Monitor chips are an IDENTITY chip, the documented exception to the
+  // valence colour contract (see SignalChip): the hue answers *which monitor
+  // matched*, not how good the match is. They still render through the shared
+  // StatusBadge shell so shape, metrics, and the icon slot stay identical to
+  // every other pill — only the palette differs, and it lives in one place
+  // (`MONITOR_TYPE_CHIP` in lib/palette.ts).
   return (
-    <Badge
-      variant="outline"
+    <StatusBadge
+      icon={Icon}
       title={formatMonitorTypeLabel(monitorType)}
-      className={cn('inline-flex items-center gap-1 border-transparent font-medium', chip)}
+      className={cn('border-transparent', chip)}
     >
-      <Icon className="h-3 w-3 shrink-0" aria-hidden />
       {label}
-    </Badge>
+    </StatusBadge>
   )
 }
 

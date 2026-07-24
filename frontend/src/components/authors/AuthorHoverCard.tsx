@@ -4,7 +4,8 @@ import { ExternalLink, Loader2, UserPlus, UserRoundCheck } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { SignalChip } from '@/components/shared/SignalChip'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { lookupAuthorByName, type Author } from '@/api/client'
 
 interface AuthorHoverCardProps {
@@ -64,10 +65,13 @@ export function AuthorHoverCard({
                 </p>
               )}
             </div>
+            {/* Following is an ACTIVE state you chose — it reads as positive,
+                not as grey chrome (the app-wide chip contract: colour = "is
+                this good news"). */}
             {isFollowed && (
-              <Badge variant="outline" size="sm" className="shrink-0">
-                <UserRoundCheck className="mr-1 h-3 w-3" /> Following
-              </Badge>
+              <StatusBadge tone="positive" size="sm" icon={UserRoundCheck} className="shrink-0">
+                Following
+              </StatusBadge>
             )}
           </div>
 
@@ -103,10 +107,16 @@ export function AuthorHoverCard({
 
               {topInterests.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {topInterests.map((topic) => (
-                    <Badge key={topic} variant="secondary" size="sm" className="font-normal">
+                  {topInterests.map((topic, i) => (
+                    <SignalChip
+                      key={topic}
+                      kind="topic"
+                      hideIcon={i > 0}
+                      title={`Research interest: ${topic}`}
+                      className="font-normal"
+                    >
                       {topic}
-                    </Badge>
+                    </SignalChip>
                   ))}
                 </div>
               )}

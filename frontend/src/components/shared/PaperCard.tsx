@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ExternalLink, HelpCircle, Loader2, Plus, Compass } from 'lucide-react'
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
+import { SignalChip } from '@/components/shared/SignalChip'
 
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -797,17 +798,21 @@ export function PaperCard({
               </div>
             )}
 
-            {/* Provenance chips — which external sources returned this paper. */}
+            {/* Provenance chips — which external sources returned this paper.
+                `source` kind: quiet plumbing, one Globe glyph leads the row and
+                the rest are bare so a 4-source row doesn't turn into a picket
+                fence of identical icons. */}
             {sources && sources.length > 0 && (
               <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                {sources.map((source) => (
-                  <span
+                {sources.map((source, i) => (
+                  <SignalChip
                     key={source}
-                    className="inline-flex items-center rounded-full border border-[var(--color-border)] bg-surface-1 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500"
-                    title={`Returned by ${source}`}
+                    kind="source"
+                    hideIcon={i > 0}
+                    title={`Returned by ${source.replace(/_/g, ' ')}`}
                   >
                     {source.replace(/_/g, ' ')}
-                  </span>
+                  </SignalChip>
                 ))}
               </div>
             )}

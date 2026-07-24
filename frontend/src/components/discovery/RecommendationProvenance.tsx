@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Sparkles } from 'lucide-react'
 
-import { StatusBadge, type StatusBadgeTone } from '@/components/ui/status-badge'
+import { SignalChip, type SignalKind } from '@/components/shared/SignalChip'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
@@ -55,7 +55,10 @@ export interface ProvenanceSignals {
 interface Chip {
   key: string
   label: string
-  tone: StatusBadgeTone
+  /** Semantic category from the shared registry — decides colour AND glyph.
+   *  Never hand-pick a tone here; the registry is the single owner of what a
+   *  chip's colour means across the whole app. */
+  kind: SignalKind
   /** Exact underlying figure, surfaced on hover so the humanized label stays
    *  inspectable/truthful (the full per-signal breakdown lives in the panel). */
   title?: string
@@ -81,7 +84,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'consensus',
       label: `Found by ${signals.consensusCount} sources`,
-      tone: 'accent',
+      kind: 'consensus',
     })
   }
 
@@ -92,7 +95,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'specter',
       label: `${similarityBand(signals.specterCosine)} topic`,
-      tone: 'neutral',
+      kind: 'topic',
       title: `SPECTER2 embedding cosine ${signals.specterCosine.toFixed(2)}`,
     })
   }
@@ -100,7 +103,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'lexical',
       label: `${similarityBand(signals.lexicalSimilarity)} wording`,
-      tone: 'neutral',
+      kind: 'wording',
       title: `lexical (keyword) similarity ${signals.lexicalSimilarity.toFixed(2)}`,
     })
   }
@@ -113,13 +116,13 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
       signals.sharedAuthorsCount === 1 && sample
         ? `co-author: ${sample}`
         : `${signals.sharedAuthorsCount} shared authors`
-    chips.push({ key: 'authors', label, tone: 'neutral' })
+    chips.push({ key: 'authors', label, kind: 'authors' })
   }
   if (typeof signals.negativeHit === 'number' && signals.negativeHit >= 0.35) {
     chips.push({
       key: 'neg-hit',
       label: 'Near a disliked paper',
-      tone: 'warning',
+      kind: 'taste-avoid',
       title: `negative-neighbour proximity ${signals.negativeHit.toFixed(2)}`,
     })
   }
@@ -136,7 +139,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'projected',
       label: positive ? 'Matches what you save' : 'Near things you pass on',
-      tone: positive ? 'positive' : 'warning',
+      kind: positive ? 'taste-match' : 'taste-avoid',
       title: `projected-feedback pull ${positive ? '+' : ''}${signals.projectedFeedbackRaw.toFixed(2)}`,
     })
   }
@@ -151,7 +154,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'coupling',
       label: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}`,
-      tone: 'neutral',
+      kind: 'coupling',
       title: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}${withTitle}`,
     })
   }
@@ -162,31 +165,35 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
     chips.push({
       key: 'cocitation',
       label: `Cited together ×${signals.cocitationCount}`,
-      tone: 'neutral',
+      kind: 'cocitation',
       title: `Cited together${withTitle} in ${signals.cocitationCount} paper${signals.cocitationCount === 1 ? '' : 's'}`,
     })
   }
 
-  // Existing categorical chips (branch / source / planner).
+  // Retrieval plumbing — WHICH branch pursued it, HOW it was fetched, and
+  // WHERE from. Quiet by design: these explain the machinery, not the merit,
+  // so they sit visually under the evidence chips above.
   if (signals.branchLabel) {
-    chips.push({ key: 'branch', label: signals.branchLabel, tone: 'info' })
+    chips.push({ key: 'branch', label: signals.branchLabel, kind: 'branch' })
   }
   if (signals.branchMode) {
     chips.push({
       key: 'mode',
       label: signals.branchMode.replace(/_/g, ' '),
-      tone: 'neutral',
+      kind: 'channel',
+      title: `Branch mode: ${signals.branchMode.replace(/_/g, ' ')}`,
     })
   }
   if (signals.sourceType) {
     chips.push({
       key: 'source',
       label: signals.sourceType.replace(/_/g, ' '),
-      tone: 'neutral',
+      kind: 'channel',
+      title: `Retrieval lane: ${signals.sourceType.replace(/_/g, ' ')}`,
     })
   }
   if (signals.sourceApi) {
-    chips.push({ key: 'api', label: signals.sourceApi, tone: 'neutral' })
+    chips.push({ key: 'api', label: signals.sourceApi, kind: 'source' })
   }
   return chips
 }
@@ -319,9 +326,9 @@ export function RecommendationProvenance({
         className={cn('mt-2 flex flex-wrap items-center gap-1.5', className)}
       >
         {chips.map((chip) => (
-          <StatusBadge key={chip.key} tone={chip.tone} size="sm" title={chip.title}>
+          <SignalChip key={chip.key} kind={chip.kind} size="sm" title={chip.title}>
             {chip.label}
-          </StatusBadge>
+          </SignalChip>
         ))}
       </div>
     )
@@ -345,9 +352,9 @@ export function RecommendationProvenance({
       {chips.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {chips.map((chip) => (
-            <StatusBadge key={chip.key} tone={chip.tone} size="sm" title={chip.title}>
+            <SignalChip key={chip.key} kind={chip.kind} size="sm" title={chip.title}>
               {chip.label}
-            </StatusBadge>
+            </SignalChip>
           ))}
         </div>
       )}

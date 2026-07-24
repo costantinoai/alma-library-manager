@@ -19,7 +19,8 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { PaperCard, type PaperCardPaper } from '@/components/shared'
+import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
+import { StatusBadge } from '@/components/ui/status-badge'
 import {
   Dialog,
   DialogContent,
@@ -273,22 +274,27 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-medium text-alma-800">{coll.name}</h3>
                         <Badge variant="secondary">{coll.item_count} papers</Badge>
+                        {/* Activity is a real valence scale — fresh is good,
+                            stale wants attention — so it rides the shared
+                            semantic tones instead of hand-mixed -100 fills.
+                            Dormant is quiet on purpose: it's a fact, not a
+                            fault. */}
                         {coll.activity_status === 'fresh' && (
-                          <Badge className="bg-success-100 text-success-700 hover:bg-success-100">Fresh</Badge>
+                          <StatusBadge tone="positive">Fresh</StatusBadge>
                         )}
                         {coll.activity_status === 'active' && (
-                          <Badge className="bg-info-100 text-info-700 hover:bg-info-100">Active</Badge>
+                          <StatusBadge tone="accent">Active</StatusBadge>
                         )}
                         {coll.activity_status === 'stale' && (
-                          <Badge className="bg-warning-100 text-warning-700 hover:bg-warning-100">Stale</Badge>
+                          <StatusBadge tone="warning">Stale</StatusBadge>
                         )}
                         {coll.activity_status === 'dormant' && (
-                          <Badge className="bg-surface-2 text-slate-600 hover:bg-surface-2">Dormant</Badge>
+                          <StatusBadge tone="neutral">Dormant</StatusBadge>
                         )}
                         {coll.avg_citations != null && coll.avg_citations > 10 && (
-                          <Badge variant="outline" className="text-slate-600">
+                          <SignalChip kind="trending" size="default">
                             ~{Math.round(coll.avg_citations)} cites avg
-                          </Badge>
+                          </SignalChip>
                         )}
                       </div>
                       {coll.description && (

@@ -1,8 +1,9 @@
-import { Check, Loader2, UserMinus, UserPlus } from 'lucide-react'
+import { Check, Loader2, TrendingDown, TrendingUp, UserMinus, UserPlus } from 'lucide-react'
 
 import type { AuthorSuggestion } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { truncate } from '@/lib/utils'
 
@@ -121,14 +122,15 @@ export function SuggestedAuthorCard({
                 progress bar score; this chip explains *why* the score
                 climbed when no single bucket would justify it. */}
             {suggestion.consensus_count && suggestion.consensus_count >= 2 ? (
-              <StatusBadge
-                tone="accent"
-                size="sm"
+              // Same registry kind as Discovery's "Found by N sources" chip, so
+              // multi-source agreement looks identical wherever it appears.
+              <SignalChip
+                kind="consensus"
                 className="uppercase tracking-wide"
                 title={(suggestion.consensus_buckets ?? []).join(' · ')}
               >
                 {suggestion.consensus_count} sources
-              </StatusBadge>
+              </SignalChip>
             ) : null}
             {/* Bucket calibration — only when the multiplier deviates
                 meaningfully from 1.0 (fresh DB returns 1.0 for every
@@ -141,27 +143,28 @@ export function SuggestedAuthorCard({
               <StatusBadge
                 tone={suggestion.bucket_calibration_multiplier > 1.0 ? 'positive' : 'warning'}
                 size="sm"
+                icon={suggestion.bucket_calibration_multiplier > 1.0 ? TrendingUp : TrendingDown}
                 className="uppercase tracking-wide"
                 title="Per-bucket outcome calibration: how often you've followed vs rejected this bucket's suggestions"
               >
-                {suggestion.bucket_calibration_multiplier > 1.0 ? '↑' : '↓'} bucket{' '}
-                {suggestion.bucket_calibration_multiplier.toFixed(2)}×
+                bucket {suggestion.bucket_calibration_multiplier.toFixed(2)}×
               </StatusBadge>
             ) : null}
             {/* Paper-feedback projection — surface only when the magnitude
                 cleared a small noise floor so neutral cards stay quiet. */}
             {typeof suggestion.paper_signal_adjustment === 'number' &&
             Math.abs(suggestion.paper_signal_adjustment) >= 1 ? (
-              <StatusBadge
-                tone={suggestion.paper_signal_adjustment > 0 ? 'positive' : 'warning'}
-                size="sm"
+              // Your own feedback loop speaking — same green/amber pairing and
+              // same registry kinds as Discovery's "Matches what you save".
+              <SignalChip
+                kind={suggestion.paper_signal_adjustment > 0 ? 'taste-match' : 'taste-avoid'}
                 className="uppercase tracking-wide"
                 title="Net pull from your saved + dismissed papers in this area"
               >
                 {suggestion.paper_signal_adjustment > 0
                   ? `+${suggestion.paper_signal_adjustment.toFixed(1)} from saves`
                   : `${suggestion.paper_signal_adjustment.toFixed(1)} from rejects`}
-              </StatusBadge>
+              </SignalChip>
             ) : null}
             {suggestion.local_paper_count ? (
               <span className="text-[11px] text-slate-500">
@@ -224,10 +227,12 @@ export function SuggestedAuthorCard({
           evidence (T7). */}
       {signals.length === 0 && suggestion.shared_topics.length > 0 ? (
         <div className="flex flex-wrap gap-1">
-          {suggestion.shared_topics.slice(0, 3).map((topic) => (
-            <StatusBadge key={topic} tone="accent" size="sm">
+          {suggestion.shared_topics.slice(0, 3).map((topic, i) => (
+            // One Target glyph leads the row; the rest are bare so three
+            // topics don't read as three separate signals.
+            <SignalChip key={topic} kind="topic" hideIcon={i > 0} title={`Shared topic: ${topic}`}>
               {truncate(topic, 24)}
-            </StatusBadge>
+            </SignalChip>
           ))}
         </div>
       ) : null}

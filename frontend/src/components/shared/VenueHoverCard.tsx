@@ -4,7 +4,7 @@ import { BookOpen, BookmarkCheck, Loader2 } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { Input } from '@/components/ui/input'
 import { venueSearch, type VenueSearchResult } from '@/api/client'
 
@@ -87,10 +87,11 @@ export function VenueHoverCard({
                 </p>
               )}
             </div>
+            {/* Same positive "you chose this" state as the author card. */}
             {isFollowed && (
-              <Badge variant="outline" size="sm" className="shrink-0">
-                <BookmarkCheck className="mr-1 h-3 w-3" /> Following
-              </Badge>
+              <StatusBadge tone="positive" size="sm" icon={BookmarkCheck} className="shrink-0">
+                Following
+              </StatusBadge>
             )}
           </div>
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   ChevronDown,
   Database,
   Edit3,
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   Star,
   Trash2,
+  Unlock,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -59,7 +61,7 @@ import {
 } from '@/api/client'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { PaperCard, type PaperCardPaper } from '@/components/shared'
+import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
 import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
@@ -396,40 +398,47 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
               </div>
             )}
 
-            {/* Venue + publishing facets */}
+            {/* Venue + publishing facets.
+                These are DESCRIPTION, not signal, so they ride the quiet
+                `neutral` family via the shared registry and let the coloured
+                chips elsewhere carry meaning. (They were all Folio-blue
+                `info` before, which made blue mean "any fact at all".) Two
+                stay coloured because they genuinely carry valence: `Open
+                access` is good news for the reader, and `Retracted` is a true
+                alarm that must never read as ordinary chrome. */}
             <div className="flex flex-wrap items-center gap-2">
-              {/* Metadata bubbles all ride the brand Folio-blue
-                  translucent (`tone="info"`) so the meta strip reads
-                  as one calm row of evidence. The only exception is
-                  `Retracted` — that's a true alarm, not metadata,
-                  and stays on the deep-rose `negative` tone so it
-                  can't be mistaken for ordinary chrome. */}
-              {p.journal && <StatusBadge tone="info">{p.journal}</StatusBadge>}
+              {p.journal && (
+                <SignalChip kind="venue" size="default">{p.journal}</SignalChip>
+              )}
               {publishedLabel && (
-                <StatusBadge tone="info">Published {publishedLabel}</StatusBadge>
+                <SignalChip kind="year" size="default">Published {publishedLabel}</SignalChip>
               )}
               {p.cited_by_count != null && p.cited_by_count > 0 && (
-                <StatusBadge tone="info">
+                <SignalChip kind="trending" size="default" title="Times cited (OpenAlex)">
                   {p.cited_by_count.toLocaleString()} citations
-                </StatusBadge>
+                </SignalChip>
               )}
               {p.fwci != null && (
-                <StatusBadge tone="info" title="Field-Weighted Citation Impact">
+                <SignalChip kind="trending" size="default" title="Field-Weighted Citation Impact">
                   FWCI {p.fwci.toFixed(2)}
-                </StatusBadge>
+                </SignalChip>
               )}
-              {p.work_type && <StatusBadge tone="info">{p.work_type}</StatusBadge>}
-              {p.language && <StatusBadge tone="info">{p.language.toUpperCase()}</StatusBadge>}
+              {p.work_type && (
+                <SignalChip kind="work-type" size="default">{p.work_type}</SignalChip>
+              )}
+              {p.language && (
+                <SignalChip kind="language" size="default">{p.language.toUpperCase()}</SignalChip>
+              )}
               {p.is_oa && (
-                <StatusBadge tone="info">
+                <StatusBadge tone="positive" icon={Unlock} title="Freely readable">
                   Open access{p.oa_status ? ` · ${p.oa_status}` : ''}
                 </StatusBadge>
               )}
               {p.is_retracted && (
-                <StatusBadge tone="negative">Retracted</StatusBadge>
+                <StatusBadge tone="negative" icon={AlertTriangle}>Retracted</StatusBadge>
               )}
               {p.status && (
-                <StatusBadge tone="info" className="capitalize">{p.status}</StatusBadge>
+                <SignalChip kind="meta" size="default" className="capitalize">{p.status}</SignalChip>
               )}
             </div>
 
@@ -590,7 +599,7 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
                         <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-500">
                           <Icon className="h-3.5 w-3.5" />
                           {group.label}
-                          <StatusBadge tone="info" size="sm">{items.length}</StatusBadge>
+                          <StatusBadge tone="neutral" size="sm">{items.length}</StatusBadge>
                         </div>
                         <ul className="space-y-1 text-xs">
                           {items.map((c) => {
@@ -942,7 +951,7 @@ function RelatedWorksSection({
               {heading}
             </span>
             {(isLoading || count > 0 || localCount > 0) && (
-              <StatusBadge tone="info">
+              <StatusBadge tone="neutral">
                 {isLoading
                   ? 'loading…'
                   : count > 0
