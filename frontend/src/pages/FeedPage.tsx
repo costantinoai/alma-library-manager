@@ -508,6 +508,14 @@ export function FeedPage() {
       return items.map((item) => ({ type: 'item' as const, item }))
     }
     const groups = new Map<string, FeedInboxItem[]>()
+    // Seed a group for EVERY followed journal so the tab groups match the
+    // "journals followed" badge and a just-followed journal appears at once
+    // (empty until its first Refresh Inbox brings papers).
+    for (const monitor of monitors) {
+      if (monitor.monitor_type !== 'venue' || !monitor.enabled) continue
+      const name = String((monitor.config?.query as string | undefined) ?? monitor.label ?? '').trim()
+      if (name && !groups.has(name)) groups.set(name, [])
+    }
     for (const item of items) {
       const journal = (toPublication(item)?.journal || item.monitor_label || 'Unknown journal').trim()
       if (!groups.has(journal)) groups.set(journal, [])
@@ -530,7 +538,7 @@ export function FeedPage() {
       for (const item of groupItems) out.push({ type: 'item', item, journal })
     }
     return out
-  }, [feedScope, mergeJournals, items, journalOrderIndex])
+  }, [feedScope, mergeJournals, items, monitors, journalOrderIndex])
   const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
   const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
   const degradedMonitors = degradedMonitorList.length
@@ -946,6 +954,19 @@ export function FeedPage() {
         <RevealList className="space-y-3">
           {feedRenderList.map((entry, i) => {
             if (entry.type === 'header') {
+              // A followed journal with no papers yet: a quiet, non-collapsible
+              // row so the tab groups still match the "journals followed" badge.
+              if (entry.count === 0) {
+                return (
+                  <RevealItem key={`journal-header-${entry.journal}`} index={i}>
+                    <div className="flex w-full items-center gap-2 rounded-sm border border-dashed border-[var(--color-border)] bg-surface-1 px-3 py-2 text-slate-400">
+                      <BookOpen className="ml-6 h-4 w-4 shrink-0" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.journal}</span>
+                      <span className="text-xs">no papers yet · Refresh to fetch</span>
+                    </div>
+                  </RevealItem>
+                )
+              }
               const open = openJournals.has(entry.journal)
               return (
                 <RevealItem key={`journal-header-${entry.journal}`} index={i}>
