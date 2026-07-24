@@ -295,6 +295,22 @@ def get_paper_map(
             result = _build_embedding_paper_map(
                 c, embeddings, ai_state=ai_state, graph_options=graph_options, persist=False
             )
+            # F3 (truthful UI, doc 49): the embedding map is built ONLY from
+            # vectored papers, so under partial coverage it silently omits the
+            # vector-less remainder. Annotate shown/total so the frontend can say
+            # "showing X of Y papers (vectored)" instead of looking complete.
+            try:
+                total = int(
+                    c.execute(
+                        f"SELECT COUNT(*) FROM papers p WHERE {scope.paper_filter('p', leading_and=False)}"
+                    ).fetchone()[0]
+                    or 0
+                )
+                meta = dict(result.metadata or {})
+                meta["vector_coverage"] = {"shown": len(embeddings), "total": total}
+                result.metadata = meta
+            except Exception:
+                logger.debug("paper-map vector-coverage annotation skipped", exc_info=True)
         else:
             result = _build_text_paper_map(c, scope=scope, ai_state=ai_state)
         return result.model_dump()

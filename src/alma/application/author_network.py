@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -260,10 +261,26 @@ def _select_seed_authors(db: sqlite3.Connection, limit: int = _MAX_SEED_AUTHORS)
             pool.append(oid)
 
     if state.has_author_centroids():
-        pool.sort(
-            key=lambda oid: state.author_centroid_sim.get(oid, 0.0),
-            reverse=True,
-        )
+        # Fairness (doc 49 F1): under PARTIAL centroid coverage, an author with
+        # no cached centroid must not collapse to 0.0 — that sinks them below
+        # every author with any positive similarity and truncates them out of
+        # the seed pool entirely (a silent exclusion, not a soft penalty). Give
+        # centroid-less authors a NEUTRAL rank = the median of the present
+        # similarities, so they interleave in the middle (keeping their
+        # Library-count order among themselves) instead of the bottom. Membership
+        # (`is not None`) distinguishes "no centroid" from a genuine low 0.0 sim.
+        present = [
+            sim
+            for oid in pool
+            if (sim := state.author_centroid_sim.get(oid)) is not None
+        ]
+        neutral = statistics.median(present) if present else 0.0
+
+        def _centroid_rank(oid: str) -> float:
+            sim = state.author_centroid_sim.get(oid)
+            return sim if sim is not None else neutral
+
+        pool.sort(key=_centroid_rank, reverse=True)
     return pool[:limit]
 
 

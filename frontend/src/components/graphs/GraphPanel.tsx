@@ -312,6 +312,15 @@ export function GraphPanel() {
   const graphErrorMessage = error instanceof Error ? error.message : 'Could not load graph data.'
   const method = String(data?.metadata?.method || '')
   const note = String(data?.metadata?.note || '')
+  // F3 (truthful UI): the corpus embedding map is built only from vectored
+  // papers; annotate how many of the scope's papers are actually placed so the
+  // ~45% vector-less remainder isn't silently omitted.
+  const vectorCoverage = (data?.metadata?.vector_coverage ?? null) as
+    | { shown?: number; total?: number }
+    | null
+  const coverageShown = vectorCoverage?.shown ?? 0
+  const coverageTotal = vectorCoverage?.total ?? 0
+  const coverageOmitted = scope === 'corpus' && coverageTotal > coverageShown
   // Typed edge layers (Phase 3 / I-11): per-layer counts from metadata drive
   // the filter chips; `visibleLayers` is the set NOT toggled off.
   const edgeLayers = useMemo(
@@ -429,6 +438,17 @@ export function GraphPanel() {
             {data && (
               <span className="text-xs text-slate-400">
                 {data.nodes.length} nodes · {data.edges.length} edges
+                {coverageOmitted && (
+                  <>
+                    {' · '}
+                    <span
+                      className="text-warning-700"
+                      title="The map places only papers that have a SPECTER2 vector; the rest can't be positioned. Raise embedding coverage in Settings → AI."
+                    >
+                      showing {coverageShown.toLocaleString()} of {coverageTotal.toLocaleString()} vectored
+                    </span>
+                  </>
+                )}
               </span>
             )}
           </div>
