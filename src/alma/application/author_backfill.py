@@ -718,6 +718,31 @@ def refresh_author_works_and_vectors(
         summary["vectors_missing"] = int(vector_summary.get("vectors_missing") or 0)
         summary["vector_fetch_errors"] = int(vector_summary.get("vector_fetch_errors") or 0)
 
+        # Phase 4.5: route newly-inserted works through the CENTRAL enrichment
+        # ledger so they get abstract recovery → S2 vectors → local fill like
+        # every other entry path. Previously author-backfill was the one cold
+        # entry path: works S2 had no vector for stayed `missing_vector` forever
+        # with no metadata recovery and no local fill (task 47 Phase 9). Batched:
+        # one gated ledger write + one coalesced sweep for the whole run. The
+        # sweep is idempotent (fixed key) and enqueue only writes pending rows
+        # for genuinely-missing fields, so fully-hydrated works cost nothing.
+        if new_paper_ids:
+            try:
+                from alma.services.corpus_rehydrate import (
+                    enqueue_pending_hydration,
+                    schedule_pending_hydration_sweep,
+                )
+
+                with write_section(conn, label="author_backfill enrich enqueue"):
+                    for pid in new_paper_ids:
+                        enqueue_pending_hydration(conn, pid, auto_schedule=False)
+                schedule_pending_hydration_sweep(
+                    reason="author_backfill",
+                    target_paper_ids=new_paper_ids,
+                )
+            except Exception as exc:
+                _log("enrich_enqueue_skipped", f"Author enrichment enqueue skipped: {exc}")
+
         # Phase 5: recompute centroid (gated local write — no raw commit racing
         # the writer gate under concurrent deep-refresh workers).
         _log("centroid", "Recomputing author centroid")
