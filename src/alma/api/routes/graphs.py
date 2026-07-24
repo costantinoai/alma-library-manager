@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from alma.ai.cooccurrence import cooccurrence_pairs
@@ -326,6 +327,206 @@ def get_paper_map(
         scope=scope,
         build_fn=_build_variant,
     )
+
+
+def _enqueue_corpus_layout_build() -> dict:
+    """Enqueue a background corpus-scope graph rebuild so the frontier map has
+    persisted 2-D coordinates. Deduped by operation key (won't double-schedule),
+    mirrors the rebuild-graphs enqueue. Returns the job envelope bits."""
+    from alma.api.scheduler import add_job_log, find_active_job, schedule_immediate, set_job_status
+
+    operation_key = f"graphs.rebuild_all:{Scope.corpus}"
+    existing = find_active_job(operation_key)
+    if existing:
+        return {"job_id": str(existing.get("job_id") or ""), "message": "Building the semantic layout…"}
+
+    job_id = f"frontier_layout_{uuid.uuid4().hex[:10]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="auto:frontier",
+        started_at=datetime.utcnow().isoformat(),
+        message="Building corpus semantic layout for the frontier map",
+    )
+    add_job_log(job_id, "Queued corpus layout build for the frontier map", step="queued")
+
+    def _runner() -> dict:
+        bg_conn = open_db_connection()
+        try:
+            return _rebuild_graphs_impl(bg_conn, scope=Scope.corpus, job_id=job_id)
+        finally:
+            bg_conn.close()
+
+    schedule_immediate(job_id, _runner)
+    return {"job_id": job_id, "message": "Building the semantic layout…"}
+
+
+def _score_seen_candidates(
+    conn: sqlite3.Connection,
+    centroid,
+    *,
+    exclude_ids: set[str],
+    coords: dict[str, tuple[float, float]],
+    limit: int,
+) -> tuple[list[tuple[float, str, object, object]], int]:
+    """Top-N embedded standalone papers by cosine to the library centroid,
+    restricted to papers that HAVE a corpus map coordinate and are not library/
+    removed/dismissed or in ``exclude_ids``. Reuses the discovery dense-fallback
+    candidate shape. Returns (taken[:limit], total_pool)."""
+    import numpy as np
+
+    from alma.core.vector_blob import decode_vector
+    from alma.discovery.similarity import get_active_embedding_model
+
+    model = get_active_embedding_model(conn)
+    if model is None or centroid is None:
+        return [], 0
+    centroid = np.asarray(centroid, dtype=float)
+    cnorm = float(np.linalg.norm(centroid))
+    if cnorm == 0:
+        return [], 0
+
+    rows = conn.execute(
+        f"""
+        SELECT p.id, p.title, p.year, pe.embedding
+        FROM publication_embeddings pe
+        JOIN papers p ON pe.paper_id = p.id
+        WHERE pe.model = ?
+          AND COALESCE(p.status, '') NOT IN ('library', 'removed', 'dismissed')
+          AND {standalone_paper_sql('p')}
+        """,
+        (model,),
+    ).fetchall()
+
+    scored: list[tuple[float, str, object, object]] = []
+    for r in rows:
+        pid = str(r["id"])
+        if pid in exclude_ids or pid not in coords:
+            continue
+        vec = decode_vector(r["embedding"])
+        if vec is None:
+            continue
+        vec = np.asarray(vec, dtype=float)
+        vnorm = float(np.linalg.norm(vec))
+        if vnorm == 0:
+            continue
+        sim = float(np.dot(centroid, vec) / (cnorm * vnorm))
+        scored.append((sim, pid, r["title"], r["year"]))
+
+    scored.sort(reverse=True, key=lambda t: t[0])
+    return scored[:limit], len(scored)
+
+
+@router.get("/frontier")
+def get_frontier(
+    lens_id: str = Query(..., description="Discovery lens whose CURRENT suggestions to plot"),
+    seen_limit: int = Query(
+        0, ge=0, le=1000,
+        description="Top-N seen-but-unacted papers by centroid similarity (0 = hide the seen layer)",
+    ),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """Layered semantic-map nodes for the Discovery frontier view (task 47 P3).
+
+    Three layers over the corpus-scope 2-D layout: (a) all library papers
+    (`layer=library`), (b) the lens's CURRENT suggestion set, branch-stamped
+    (`layer=rec`), (c) opt-in top-N seen papers by cosine to the library
+    centroid (`layer=seen`). `dismissed`/`removed` papers are never returned
+    (D6/D3). Pure read except the one-time corpus-layout build, which returns
+    202 `{status:'building'}` (the sanctioned cache-build path).
+    """
+    coord_count = int(
+        conn.execute("SELECT COUNT(*) FROM publication_clusters WHERE scope = 'corpus'").fetchone()[0]
+        or 0
+    )
+    if coord_count == 0:
+        return JSONResponse(status_code=202, content={"status": "building", **_enqueue_corpus_layout_build()})
+
+    coords: dict[str, tuple[float, float]] = {
+        str(r["paper_id"]): (float(r["x"]), float(r["y"]))
+        for r in conn.execute("SELECT paper_id, x, y FROM publication_clusters WHERE scope = 'corpus'")
+    }
+
+    nodes: list[dict] = []
+
+    # (a) Library layer.
+    lib_rows = conn.execute(
+        f"SELECT id, title, year FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql('p')}"
+    ).fetchall()
+    library_ids = [str(r["id"]) for r in lib_rows]
+    for r in lib_rows:
+        c = coords.get(str(r["id"]))
+        if c:
+            nodes.append({
+                "paper_id": str(r["id"]), "x": c[0], "y": c[1], "in_library": True,
+                "layer": "library", "title": r["title"], "year": r["year"],
+            })
+    library_shown = len(nodes)
+
+    # (b) Recommendation layer — the lens's CURRENT suggestion set.
+    rec_rows = conn.execute(
+        f"""
+        SELECT r.paper_id, r.branch_id, r.branch_label, r.score, p.title, p.year
+        FROM recommendations r
+        JOIN papers p ON p.id = r.paper_id
+        WHERE r.lens_id = ?
+          AND r.suggestion_set_id = (
+              SELECT id FROM suggestion_sets WHERE lens_id = ? ORDER BY created_at DESC LIMIT 1
+          )
+          AND COALESCE(r.user_action, '') NOT IN ('dismiss', 'dismissed', 'remove', 'removed')
+          AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed')
+          AND {standalone_paper_sql('p')}
+        """,
+        (lens_id, lens_id),
+    ).fetchall()
+    rec_ids: set[str] = set()
+    recs_unplaced = 0
+    recs_shown = 0
+    for r in rec_rows:
+        pid = str(r["paper_id"])
+        rec_ids.add(pid)
+        c = coords.get(pid)
+        if c:
+            nodes.append({
+                "paper_id": pid, "x": c[0], "y": c[1], "in_library": False, "layer": "rec",
+                "branch_id": r["branch_id"], "branch_label": r["branch_label"],
+                "score": r["score"], "title": r["title"], "year": r["year"],
+            })
+            recs_shown += 1
+        else:
+            recs_unplaced += 1
+
+    # (c) Seen layer — opt-in top-N by cosine to the library centroid.
+    seen_shown = 0
+    seen_total = 0
+    if seen_limit > 0 and library_ids:
+        from alma.discovery.scoring import compute_centroid_from_ids
+
+        centroid = compute_centroid_from_ids(conn, library_ids)
+        if centroid is not None:
+            taken, seen_total = _score_seen_candidates(
+                conn, centroid, exclude_ids=rec_ids | set(library_ids), coords=coords, limit=seen_limit
+            )
+            for _sim, pid, title, year in taken:
+                c = coords[pid]
+                nodes.append({
+                    "paper_id": pid, "x": c[0], "y": c[1], "in_library": False,
+                    "layer": "seen", "title": title, "year": year,
+                })
+                seen_shown += 1
+
+    return {
+        "status": "ready",
+        "nodes": nodes,
+        "counts": {
+            "library": library_shown,
+            "recs": recs_shown,
+            "recs_unplaced": recs_unplaced,
+            "seen_shown": seen_shown,
+            "seen_total": seen_total,
+        },
+    }
 
 
 @router.get("/author-network", response_model=GraphData)
