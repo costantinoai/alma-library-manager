@@ -17,6 +17,7 @@ import {
   createLens,
   discoverSimilar,
   deleteLens,
+  reorderLenses,
   dislikeRecommendation,
   dismissRecommendation,
   explainRecommendation,
@@ -218,6 +219,23 @@ export function DiscoveryPage() {
       toast({ title: 'Lens deleted', description: 'The lens was removed.' })
     },
     onError: () => errorToast('Delete failed', 'Could not delete lens.'),
+  })
+
+  const reorderLensesMutation = useMutation({
+    mutationFn: reorderLenses,
+    // Optimistic: reflect the new order immediately, persist in the background.
+    onMutate: (orderedIds: string[]) => {
+      queryClient.setQueryData<Lens[]>(['lenses'], (prev) => {
+        if (!prev) return prev
+        const byId = new Map(prev.map((lens) => [lens.id, lens]))
+        const reordered = orderedIds
+          .map((id) => byId.get(id))
+          .filter((lens): lens is Lens => Boolean(lens))
+        const rest = prev.filter((lens) => !orderedIds.includes(lens.id))
+        return [...reordered, ...rest]
+      })
+    },
+    onError: () => errorToast('Reorder failed', 'Could not save the lens order.'),
   })
 
   const updateLensMutation = useMutation({
@@ -802,6 +820,7 @@ export function DiscoveryPage() {
           onSelectLens={setSelectedLensId}
           onCreate={(payload) => createLensMutation.mutate(payload)}
           onDelete={(lensId) => deleteLensMutation.mutate(lensId)}
+          onReorder={(orderedIds) => reorderLensesMutation.mutate(orderedIds)}
         />
       </div>
 

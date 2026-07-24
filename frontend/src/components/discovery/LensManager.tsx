@@ -1,6 +1,23 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Plus, Trash2, X } from 'lucide-react'
+import { Check, GripVertical, Plus, Trash2, X } from 'lucide-react'
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 import type { Lens } from '@/api/client'
 import { listCollections } from '@/api/client'
@@ -31,6 +48,90 @@ interface LensManagerProps {
     context_config?: Record<string, unknown>
   }) => void
   onDelete: (lensId: string) => void
+  /** Persist a new lens order (drag-to-reorder). Omit to disable reordering. */
+  onReorder?: (orderedIds: string[]) => void
+}
+
+/** One lens chip: a grip handle (drag), the name (select), and delete. The
+ * grip is the ONLY drag surface so name/delete clicks are never hijacked. */
+function SortableLensChip({
+  lens,
+  isActive,
+  draggable,
+  onSelect,
+  onDelete,
+}: {
+  lens: Lens
+  isActive: boolean
+  draggable: boolean
+  onSelect: () => void
+  onDelete: () => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: lens.id,
+    disabled: !draggable,
+  })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+  }
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
+        isActive
+          ? 'border-alma-folio bg-alma-folio-soft'
+          : 'border-[var(--color-border)] bg-surface-2 hover:border-parchment-400',
+        isDragging && 'opacity-80 shadow-paper-md',
+      )}
+    >
+      {draggable && (
+        <button
+          type="button"
+          className="inline-flex cursor-grab items-center pl-1.5 text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+          aria-label={`Reorder ${lens.name}`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onSelect}
+        className={cn(
+          'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium',
+          isActive ? 'text-alma-folio' : 'text-alma-800',
+        )}
+        aria-pressed={isActive}
+        title={
+          isActive
+            ? `${lens.name} (active — refreshing this lens reloads recommendations)`
+            : `Switch to ${lens.name}`
+        }
+      >
+        {isActive && <Check className="h-3.5 w-3.5" aria-hidden />}
+        {lens.name}
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        className={cn(
+          'inline-flex items-center justify-center border-l px-2 transition-colors',
+          isActive
+            ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-50 hover:text-critical-700'
+            : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-50 hover:text-critical-700',
+        )}
+        aria-label={`Delete ${lens.name}`}
+        title={`Delete ${lens.name}`}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
 }
 
 const CONTEXT_OPTIONS: Array<{ label: string; value: Lens['context_type'] }> = [
@@ -60,7 +161,25 @@ export function LensManager({
   onSelectLens,
   onCreate,
   onDelete,
+  onReorder,
 }: LensManagerProps) {
+  // Pointer needs a small drag threshold so a plain click still selects/deletes;
+  // keyboard sensor makes reordering accessible.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const canReorder = !!onReorder && lenses.length > 1
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id || !onReorder) return
+    const ids = lenses.map((lens) => lens.id)
+    const oldIndex = ids.indexOf(String(active.id))
+    const newIndex = ids.indexOf(String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+    onReorder(arrayMove(ids, oldIndex, newIndex))
+  }
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [name, setName] = useState('')
   const [contextType, setContextType] = useState<Lens['context_type']>('library_global')
@@ -170,57 +289,22 @@ export function LensManager({
           description="Create one to start context-aware discovery."
         />
       ) : (
-        <div className="flex flex-wrap gap-2">
-          {lenses.map((lens) => {
-            const isActive = selectedLensId === lens.id
-            return (
-              <div
-                key={lens.id}
-                className={cn(
-                  // Two-button chip: select on the lens-name button,
-                  // delete on the trash button — never overload the
-                  // whole chip click area onto delete (the v2 trap).
-                  'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
-                  isActive
-                    ? 'border-alma-folio bg-alma-folio-soft'
-                    : 'border-[var(--color-border)] bg-surface-2 hover:border-parchment-400',
-                )}
-              >
-                <button
-                  type="button"
-                  onClick={() => onSelectLens(lens.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium',
-                    isActive ? 'text-alma-folio' : 'text-alma-800',
-                  )}
-                  aria-pressed={isActive}
-                  title={
-                    isActive
-                      ? `${lens.name} (active — refreshing this lens reloads recommendations)`
-                      : `Switch to ${lens.name}`
-                  }
-                >
-                  {isActive && <Check className="h-3.5 w-3.5" aria-hidden />}
-                  {lens.name}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteClick(lens)}
-                  className={cn(
-                    'inline-flex items-center justify-center border-l px-2 transition-colors',
-                    isActive
-                      ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-50 hover:text-critical-700'
-                      : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-50 hover:text-critical-700',
-                  )}
-                  aria-label={`Delete ${lens.name}`}
-                  title={`Delete ${lens.name}`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={lenses.map((lens) => lens.id)} strategy={rectSortingStrategy}>
+            <div className="flex flex-wrap gap-2">
+              {lenses.map((lens) => (
+                <SortableLensChip
+                  key={lens.id}
+                  lens={lens}
+                  isActive={selectedLensId === lens.id}
+                  draggable={canReorder}
+                  onSelect={() => onSelectLens(lens.id)}
+                  onDelete={() => handleDeleteClick(lens)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       )}
 
       {showCreateForm && (
