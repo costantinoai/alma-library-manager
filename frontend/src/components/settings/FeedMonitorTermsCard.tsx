@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Plus, RefreshCw, Save, Search, Tag, Trash2, UserRound, X } from 'lucide-react'
+import { BookOpen, GripVertical, Plus, RefreshCw, Save, Search, Tag, Trash2, UserRound, X } from 'lucide-react'
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 import {
   createFeedMonitor,
   deleteFeedMonitor,
   listFeedMonitors,
   refreshFeedMonitor,
+  reorderFeedMonitors,
   updateFeedMonitor,
   type FeedMonitor,
   type VenueSearchResult,
@@ -30,7 +48,7 @@ import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
+import { cn, formatMonitorTypeLabel, formatTimestamp } from '@/lib/utils'
 
 type FeedMonitorCreateType = 'query' | 'topic' | 'venue'
 
@@ -269,8 +287,18 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
 }
 
 /** A followed-journal row: enable/pause, edit the keyword filter, refresh,
- * unfollow. A legacy name-only venue (pre source-id) shows a re-link prompt. */
-function VenueMonitorRow({ monitor }: { monitor: FeedMonitor }) {
+ * unfollow. A legacy name-only venue (pre source-id) shows a re-link prompt.
+ * Draggable (grip handle) to reorder — the order drives the Feed → Journals tab. */
+function VenueMonitorRow({ monitor, draggable }: { monitor: FeedMonitor; draggable: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: monitor.id,
+    disabled: !draggable,
+  })
+  const sortableStyle = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 10 : undefined,
+  }
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const config = (monitor.config ?? {}) as {
@@ -344,9 +372,28 @@ function VenueMonitorRow({ monitor }: { monitor: FeedMonitor }) {
     saveMutation.isPending || refreshMutation.isPending || deleteMutation.isPending || relinkMutation.isPending
 
   return (
-    <div className="rounded-sm border border-[var(--color-border)] p-4">
+    <div
+      ref={setNodeRef}
+      style={sortableStyle}
+      className={cn(
+        'rounded-sm border border-[var(--color-border)] p-4',
+        isDragging && 'opacity-80 shadow-paper-md',
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          {draggable && (
+            <button
+              type="button"
+              className="mt-0.5 shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+              aria-label={`Reorder ${config.query || monitor.label}`}
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
+          )}
+          <div className="min-w-0 flex-1 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="border-accent-edge bg-accent-soft text-alma-folio">
               <BookOpen className="mr-1 h-3 w-3" /> Journal
@@ -400,6 +447,7 @@ function VenueMonitorRow({ monitor }: { monitor: FeedMonitor }) {
               className="h-8 text-xs"
             />
           )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -527,6 +575,32 @@ export function FeedMonitorTermsCard() {
     () => monitors.filter((monitor) => !['author', 'query', 'topic', 'venue'].includes(monitor.monitor_type)),
     [monitors],
   )
+
+  const venueSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const reorderVenuesMutation = useMutation({
+    mutationFn: reorderFeedMonitors,
+    // Optimistic: stamp the new positions so the sort reflects immediately.
+    onMutate: (orderedIds: string[]) => {
+      const posById = new Map(orderedIds.map((id, index) => [id, index]))
+      queryClient.setQueryData<FeedMonitor[]>(['feed-monitors', 'settings'], (prev) =>
+        prev?.map((m) => (posById.has(m.id) ? { ...m, position: posById.get(m.id)! } : m)),
+      )
+    },
+    onError: () => errorToast('Could not reorder journals'),
+  })
+  const handleVenueDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const ids = venueMonitors.map((m) => m.id)
+    const oldIndex = ids.indexOf(String(active.id))
+    const newIndex = ids.indexOf(String(over.id))
+    if (oldIndex < 0 || newIndex < 0) return
+    reorderVenuesMutation.mutate(arrayMove(ids, oldIndex, newIndex))
+  }
+
   const disabledCount = monitors.filter((monitor) => !monitor.enabled).length
   const degradedCount = monitors.filter((monitor) => monitor.health === 'degraded').length
 
@@ -691,9 +765,24 @@ export function FeedMonitorTermsCard() {
           )}
           {venueMonitors.length > 0 && (
             <MonitorSection icon={<BookOpen className="h-4 w-4 text-slate-500" />} title="Journals">
-              {venueMonitors.map((monitor) => (
-                <VenueMonitorRow key={monitor.id} monitor={monitor} />
-              ))}
+              <DndContext
+                sensors={venueSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleVenueDragEnd}
+              >
+                <SortableContext
+                  items={venueMonitors.map((m) => m.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {venueMonitors.map((monitor) => (
+                    <VenueMonitorRow
+                      key={monitor.id}
+                      monitor={monitor}
+                      draggable={venueMonitors.length > 1}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
             </MonitorSection>
           )}
           {otherMonitors.length > 0 && (
