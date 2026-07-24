@@ -765,7 +765,7 @@ export function FeedPage() {
               <Icon className="h-4 w-4" aria-hidden />
               {label}
               {scope === 'journals' && journalMonitorCount > 0 && (
-                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-3 px-1 text-[10px] font-semibold tabular-nums text-slate-600">
+                <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-alma-800/[0.08] px-1 text-[10px] font-semibold tabular-nums text-slate-700">
                   {journalMonitorCount}
                 </span>
               )}

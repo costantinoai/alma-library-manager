@@ -4,6 +4,7 @@ import { Eye, EyeOff, Loader2, Maximize2, Share2, LassoSelect, Sparkles, X } fro
 
 import { describeRegion, getFrontier, type FrontierNode, type RegionDescription } from '@/api/client'
 import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { FRONTIER_MAP, branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
 
@@ -459,12 +460,9 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
               {region.description.top_terms.length > 0 && (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {region.description.top_terms.slice(0, 6).map((t) => (
-                    <span
-                      key={t}
-                      className="rounded-full border border-edge-2 bg-surface-3 px-1.5 py-0.5 text-[10px] text-slate-600"
-                    >
+                    <StatusBadge key={t} tone="neutral" size="sm">
                       {t}
-                    </span>
+                    </StatusBadge>
                   ))}
                 </div>
               )}

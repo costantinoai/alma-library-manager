@@ -47,7 +47,7 @@ export function DiagnosticsSection({ dims, onOpenDim }: DiagnosticsSectionProps)
           {healthy.map((dim) => (
             <span
               key={dim.key}
-              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-surface-2 px-2.5 py-1 text-xs text-alma-700"
+              className="inline-flex items-center gap-1.5 rounded-full border border-alma-800/10 bg-alma-800/[0.06] px-2.5 py-1 text-xs text-alma-700"
             >
               <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
               {dim.label}

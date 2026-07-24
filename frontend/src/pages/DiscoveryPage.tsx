@@ -1015,13 +1015,10 @@ export function DiscoveryPage() {
                         ],
                       ] as const
                     ).map(([label, value]) => (
-                      <span
-                        key={label}
-                        className="inline-flex items-baseline gap-1 rounded-full border border-edge-2 bg-surface-2 px-2 py-0.5 text-[11px] text-slate-500"
-                      >
+                      <StatusBadge key={label} tone="neutral" className="items-baseline">
                         {label}
-                        <strong className="font-mono text-alma-800 tabular-nums">{value}</strong>
-                      </span>
+                        <strong className="font-mono tabular-nums text-alma-800">{value}</strong>
+                      </StatusBadge>
                     ))}
                   </div>
                 ) : (

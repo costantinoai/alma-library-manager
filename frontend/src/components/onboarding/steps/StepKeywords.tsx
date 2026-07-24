@@ -131,7 +131,7 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
                 key={ex}
                 type="button"
                 onClick={() => setValue(ex)}
-                className="rounded-full border border-[var(--color-border)] bg-surface-2 px-3 py-1 text-xs text-slate-600 transition-colors hover:border-alma-folio hover:text-alma-folio"
+                className="rounded-full border border-alma-800/10 bg-alma-800/[0.06] px-3 py-1 text-xs text-slate-700 transition-colors hover:border-alma-folio hover:text-alma-folio"
               >
                 {ex}
               </button>
