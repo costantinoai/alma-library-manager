@@ -56,15 +56,13 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: 'Analyze',
-    items: [
-      // Insights retired into Library › Analytics (task 47 Phase 4).
-      { id: 'health', label: 'Health', icon: HeartPulse },
-    ],
-  },
-  {
+    // Insights retired into Library › Analytics (task 47 Phase 4); Health moved
+    // here so operational/diagnostic surfaces sit together under Control.
     label: 'Control',
-    items: [{ id: 'settings', label: 'Settings', icon: Settings }],
+    items: [
+      { id: 'health', label: 'Health', icon: HeartPulse },
+      { id: 'settings', label: 'Settings', icon: Settings },
+    ],
   },
 ]
 
