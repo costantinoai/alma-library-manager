@@ -444,6 +444,10 @@ def get_frontier(
         0, ge=0, le=1000,
         description="Top-N seen-but-unacted papers by centroid similarity (0 = hide the seen layer)",
     ),
+    include_edges: bool = Query(
+        False,
+        description="Also return coupling + co-citation edges between the placed nodes (off by default)",
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Layered semantic-map nodes for the Discovery frontier view (task 47 P3).
@@ -535,15 +539,45 @@ def get_frontier(
                 })
                 seen_shown += 1
 
+    # (d) Optional citation-fabric edges — the coupling (shared references) +
+    # co-citation (shared citers) layers, so the frontier map can draw the
+    # citation structure that links its terrain to its recommendations. Off by
+    # default (extra work + visual density); computed on the SAME cooccurrence
+    # primitive as the paper map. Restricted to the library + rec nodes (the
+    # faint seen layer would otherwise dominate with seen↔seen noise) — the
+    # useful signal is how the suggestions connect to what you already have.
+    edges: list[dict] = []
+    if include_edges:
+        focus_ids = [n["paper_id"] for n in nodes if n["layer"] != "seen"]
+    if include_edges and len(focus_ids) >= 2:
+        for (a, b), c in _paper_bibliographic_coupling(
+            conn, focus_ids, min_shared_refs=3
+        ).items():
+            edges.append({
+                "source": a, "target": b,
+                "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
+                "edge_type": "bibliographic_coupling",
+            })
+        for (a, b), c in _paper_cocitation(
+            conn, focus_ids, min_shared_citers=2
+        ).items():
+            edges.append({
+                "source": a, "target": b,
+                "weight": round(min(1.0, 0.4 + 0.1 * c), 3),
+                "edge_type": "co_citation",
+            })
+
     return {
         "status": "ready",
         "nodes": nodes,
+        "edges": edges,
         "counts": {
             "library": library_shown,
             "recs": recs_shown,
             "recs_unplaced": recs_unplaced,
             "seen_shown": seen_shown,
             "seen_total": seen_total,
+            "edges": len(edges),
         },
     }
 

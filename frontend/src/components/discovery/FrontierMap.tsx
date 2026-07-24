@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Eye, EyeOff, Loader2, Maximize2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Maximize2, Share2 } from 'lucide-react'
 
 import { getFrontier, type FrontierNode } from '@/api/client'
+import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
 import { FRONTIER_MAP, branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
 
@@ -46,6 +47,7 @@ function useBranchColors(nodes: FrontierNode[]) {
 
 export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
+  const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
   const [hover, setHover] = useState<{ node: Placed; branchColor?: string } | null>(null)
   // Pan/zoom transform.
@@ -53,8 +55,8 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
   const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null)
 
   const query = useQuery({
-    queryKey: ['frontier', lensId, showSeen],
-    queryFn: () => getFrontier(lensId as string, showSeen ? 300 : 0),
+    queryKey: ['frontier', lensId, showSeen, showEdges],
+    queryFn: () => getFrontier(lensId as string, showSeen ? 300 : 0, showEdges),
     enabled: !!lensId,
     // Poll while the corpus layout is still building.
     refetchInterval: (q) => (q.state.data?.status === 'building' ? 2500 : false),
@@ -62,6 +64,7 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
   })
 
   const nodes = useMemo(() => query.data?.nodes ?? [], [query.data])
+  const edges = useMemo(() => query.data?.edges ?? [], [query.data])
   const counts = query.data?.counts
   const branchColors = useBranchColors(nodes)
 
@@ -87,6 +90,24 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
   const seenNodes = placed.filter((n) => n.layer === 'seen')
   const libraryNodes = placed.filter((n) => n.layer === 'library')
   const recNodes = placed.filter((n) => n.layer === 'rec')
+
+  // Citation edges between placed nodes (drawn under the dots when the overlay
+  // is on). Resolve endpoints to their pixel coords; drop any pointing at an
+  // unplaced node (e.g. a rec with no corpus coords).
+  const placedById = useMemo(() => {
+    const m = new Map<string, Placed>()
+    for (const n of placed) m.set(n.paper_id, n)
+    return m
+  }, [placed])
+  const drawnEdges = useMemo(
+    () =>
+      edges
+        .map((e) => ({ a: placedById.get(e.source), b: placedById.get(e.target), type: e.edge_type }))
+        .filter((e): e is { a: Placed; b: Placed; type: (typeof edges)[number]['edge_type'] } =>
+          !!e.a && !!e.b,
+        ),
+    [edges, placedById],
+  )
 
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault()
@@ -164,6 +185,20 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
         </button>
         <button
           type="button"
+          onClick={() => setShowEdges((s) => !s)}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+            showEdges
+              ? 'border-accent-edge bg-accent-soft text-alma-folio'
+              : 'border-[var(--color-border)] bg-surface-2 text-slate-600 hover:bg-surface-3',
+          )}
+          title="Draw citation links (shared references + cited-together) between the papers on the map"
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          Citation links{showEdges && counts?.edges ? ` · ${counts.edges}` : ''}
+        </button>
+        <button
+          type="button"
           onClick={resetView}
           className="inline-flex items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-2 px-2 py-1 text-xs text-slate-600 hover:bg-surface-3"
           title="Reset view"
@@ -185,6 +220,24 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
         aria-label="Semantic frontier map of your library, suggestions, and seen papers"
       >
         <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
+          {/* Citation edges — drawn first so they sit UNDER the nodes. Coupling
+              (shared references) + co-citation (cited together), colored by the
+              same layer palette as the Analytics graph. */}
+          {showEdges && (
+            <g className="frontier-layer-edges">
+              {drawnEdges.map((e, i) => (
+                <line
+                  key={i}
+                  x1={e.a.px}
+                  y1={e.a.py}
+                  x2={e.b.px}
+                  y2={e.b.py}
+                  stroke={LAYER_COLORS[e.type] ?? LAYER_FALLBACK_COLOR}
+                  strokeWidth={0.5}
+                />
+              ))}
+            </g>
+          )}
           {/* Seen — faint frontier (fades in last visually, drawn first) */}
           {showSeen && (
             <g className="frontier-layer-seen" style={{ opacity: 0.55 }}>

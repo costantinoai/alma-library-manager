@@ -3342,24 +3342,38 @@ export interface FrontierNode {
   title?: string | null
   year?: number | null
 }
+export interface FrontierEdge {
+  source: string
+  target: string
+  weight: number
+  edge_type: 'bibliographic_coupling' | 'co_citation'
+}
 export interface FrontierResponse {
   status: 'ready' | 'building'
   nodes?: FrontierNode[]
+  edges?: FrontierEdge[]
   counts?: {
     library: number
     recs: number
     recs_unplaced: number
     seen_shown: number
     seen_total: number
+    edges?: number
   }
   message?: string
   job_id?: string
 }
 /** Layered semantic-map nodes for the Discovery frontier view. `seenLimit=0`
- * hides the seen layer; a 202 body carries `status:'building'`. */
-export function getFrontier(lensId: string, seenLimit: number): Promise<FrontierResponse> {
+ * hides the seen layer; `includeEdges` also returns coupling + co-citation
+ * edges between placed nodes; a 202 body carries `status:'building'`. */
+export function getFrontier(
+  lensId: string,
+  seenLimit: number,
+  includeEdges = false,
+): Promise<FrontierResponse> {
   return api.get<FrontierResponse>(
-    `/graphs/frontier?lens_id=${encodeURIComponent(lensId)}&seen_limit=${seenLimit}`,
+    `/graphs/frontier?lens_id=${encodeURIComponent(lensId)}&seen_limit=${seenLimit}` +
+      `&include_edges=${includeEdges}`,
   )
 }
 
