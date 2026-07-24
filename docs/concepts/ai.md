@@ -48,6 +48,16 @@ Independently of that selection, ALMa also knows how to fetch
 **Semantic Scholar's pre-computed `specter_v2` vectors** in bulk. Those
 fetched vectors are still the cheapest way to seed a large library.
 
+**The default follows your environment.** `ai.provider` resolves to `local`
+when the SPECTER2 stack (torch / transformers / adapters / numpy) is importable
+in the backend interpreter, and `none` otherwise — so a torch-capable install
+computes the residual automatically and a lean install stays S2-only. Fetching
+S2 pre-computed vectors is always on regardless. Set `ALMA_DEFAULT_AI_PROVIDER`
+(`none` / `local` / `openai`) to pin the choice explicitly (e.g. force `none`
+on a torch box). S2 alone tops out around the mid-50%s on a broad tracked
+corpus; adding the local fill lifts it into the low-80%s within the same
+768-dim SPECTER2 space (measured 55% → 82% on a 4,174-paper corpus).
+
 ### 1. Semantic Scholar pre-computed vectors
 
 Semantic Scholar exposes pre-computed `specter_v2` vectors via
@@ -66,13 +76,26 @@ Papers S2 doesn't have can be embedded locally. ALMa loads the
 SPECTER2 model in-process (with the `adapters` library) and computes
 vectors on demand.
 
-This is the **fall-back path**. The **AI compute missing** action
+This fills the residual S2 can't. The **AI compute missing** action
 runs SPECTER2 locally over papers that have no S2 vector. Slower
 than the S2 fetch (seconds per paper instead of milliseconds), but
-it covers the long tail.
+it covers the long tail. When the local provider is active it also runs
+**automatically in the background** — see convergence below.
 
 Both paths write to the same column (`publication_embeddings.vector`)
 with `source ∈ {'s2', 'local'}` so the provenance is preserved.
+
+### Coverage converges on its own
+
+You don't have to click the backfill buttons to reach full coverage. Every
+paper-entry path (feed, discovery, import, library-save, author-works backfill)
+enqueues into a durable enrichment ledger, and a default-ON drain (every 15 min,
+only when the app is idle) walks any residual: metadata + **abstract recovery**
+first, then S2 vectors, then the local SPECTER2 fill. The drain is
+coverage-driven — it fills papers missing a vector even when their ledger row
+was already cleared (e.g. papers that predate enabling the local provider) — so
+coverage climbs to the S2+local ceiling and stays there. Papers with no
+abstract can't be embedded and are the honest, reported floor.
 
 ### 3. OpenAI embeddings
 
