@@ -265,7 +265,15 @@ def get_paper_map(
     if is_default_options:
         view_key = scope.view_key("paper_map")
         envelope = mv.get(conn, view_key)
-        return _graph_data_from_envelope(envelope)
+        graph = _graph_data_from_envelope(envelope)
+        # Citation-edge coverage is a cheap live stat, not cached data — compute
+        # it fresh on the read so it tracks reference backfills immediately
+        # (and so a pre-annotation cached payload still carries it). Pure read.
+        graph.metadata = {
+            **(graph.metadata or {}),
+            "citation_coverage": _citation_edge_coverage(conn, scope),
+        }
+        return graph
 
     # Custom-options path: build live, but cache durably + proportionally (task
     # #20) so a repeat request (the same slider position, a fused layout you already
@@ -318,7 +326,7 @@ def get_paper_map(
             result = _build_text_paper_map(c, scope=scope, ai_state=ai_state)
         return result.model_dump()
 
-    return _serve_graph_variant(
+    graph = _serve_graph_variant(
         conn,
         base_view_key=scope.view_key("paper_map"),
         options=(
@@ -330,6 +338,14 @@ def get_paper_map(
         scope=scope,
         build_fn=_build_variant,
     )
+    # Citation-edge coverage is a cheap live stat, computed on the read so it's
+    # correct even when the variant payload was cached before this annotation
+    # existed (and so it tracks reference backfills immediately). Pure read.
+    graph.metadata = {
+        **(graph.metadata or {}),
+        "citation_coverage": _citation_edge_coverage(conn, scope),
+    }
+    return graph
 
 
 def _enqueue_corpus_layout_build() -> dict:
@@ -3025,6 +3041,48 @@ def _paper_cocitation(
     return cooccurrence_pairs(
         cited_citers, min_shared=min_shared_citers, max_feature_df=max_citer_df
     )
+
+
+def _citation_edge_coverage(
+    conn: sqlite3.Connection, scope: Any
+) -> dict[str, Any] | None:
+    """How much of the scope has the reference rows that citation edges need.
+
+    ``covered`` = standalone papers in scope with ≥1 ``publication_references``
+    row; ``total`` = standalone papers in scope; ``pct`` in [0, 100]. This is the
+    honest denominator for "citation edges cover N% of corpus" — coupling and
+    co-citation can only connect papers whose references we actually hold.
+    Returns None on any measurement error (never blocks a graph build).
+    """
+    try:
+        sc = scope if isinstance(scope, Scope) else Scope.parse(scope or "library")
+        where = sc.paper_filter("p", leading_and=False)
+        total = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM papers p WHERE {where}"
+            ).fetchone()[0]
+            or 0
+        )
+        covered = int(
+            conn.execute(
+                f"""
+                SELECT COUNT(*) FROM papers p
+                WHERE {where}
+                  AND EXISTS (
+                    SELECT 1 FROM publication_references pr WHERE pr.paper_id = p.id
+                  )
+                """
+            ).fetchone()[0]
+            or 0
+        )
+        return {
+            "covered": covered,
+            "total": total,
+            "pct": round(100.0 * covered / total, 1) if total else None,
+        }
+    except Exception:
+        logger.debug("citation-edge coverage annotation skipped", exc_info=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

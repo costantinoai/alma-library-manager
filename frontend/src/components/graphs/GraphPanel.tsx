@@ -323,6 +323,12 @@ export function GraphPanel() {
   const coverageShown = vectorCoverage?.shown ?? 0
   const coverageTotal = vectorCoverage?.total ?? 0
   const coverageOmitted = scope === 'corpus' && coverageTotal > coverageShown
+  // Citation-edge coverage (task 47 §7): how much of the scope has the
+  // references the coupling / co-citation layers need — the honest denominator
+  // behind those edges.
+  const citationCoverage = (data?.metadata?.citation_coverage ?? null) as
+    | { covered?: number; total?: number; pct?: number | null }
+    | null
   // Typed edge layers (Phase 3 / I-11): per-layer counts from metadata drive
   // the filter chips; `visibleLayers` is the set NOT toggled off.
   const edgeLayers = useMemo(
@@ -570,6 +576,16 @@ export function GraphPanel() {
                     })}
                   </div>
                 )}
+                {showEdges &&
+                  citationCoverage &&
+                  typeof citationCoverage.pct === 'number' && (
+                    <p className="text-xs text-slate-400">
+                      Citation edges cover {citationCoverage.pct}% of{' '}
+                      {scope === 'corpus' ? 'the corpus' : 'the library'} —{' '}
+                      {citationCoverage.covered ?? 0} of {citationCoverage.total ?? 0}{' '}
+                      papers have their references.
+                    </p>
+                  )}
                 <ForceGraph
                   data={displayData ?? data}
                   height={Math.max(640, Math.round(window.innerHeight * 0.72))}
