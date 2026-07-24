@@ -1819,16 +1819,30 @@ def drain_pending_hydration_periodic() -> None:
 
         papers_pending = _pending("paper_enrichment_status")
         authors_pending = _pending("author_enrichment_status")
+        # Coverage-driven metadata orphans (task 47 P9): papers with a missing
+        # metadata/abstract gap that were never enqueued — e.g. legacy
+        # author-backfill rows predating the enqueue-on-insert. The metadata
+        # sweep is coverage-driven (selects FROM papers with a missing-field
+        # gap), so triggering it here recovers their abstracts and chains
+        # S2→local — "abstract recovery first". Reuse the runner's own candidate
+        # count (excludes the exhausted floor → reaches 0 when converged);
+        # short-circuit so the fuller scan only runs once the ledger is drained.
+        try:
+            from alma.services.corpus_rehydrate import count_corpus_metadata_candidates
+
+            metadata_work = bool(papers_pending) or count_corpus_metadata_candidates(conn) > 0
+        except Exception:
+            metadata_work = bool(papers_pending)
     finally:
         conn.close()
 
-    if papers_pending:
+    if metadata_work:
         try:
             from alma.services.corpus_rehydrate import schedule_pending_hydration_sweep
 
-            schedule_pending_hydration_sweep(reason="restart_drain")
+            schedule_pending_hydration_sweep(reason="coverage_drain")
         except Exception:
-            logger.exception("restart hydration drain (papers) failed to schedule")
+            logger.exception("coverage hydration drain (papers) failed to schedule")
     if authors_pending:
         try:
             from alma.services.author_hydrate import schedule_pending_author_hydration_sweep
@@ -1850,28 +1864,38 @@ def drain_pending_hydration_periodic() -> None:
             clear_post_hydration_chain_pending,
             is_post_hydration_chain_pending,
             schedule_post_hydration_chain,
+            schedule_post_s2_chain,
         )
 
         conn2 = open_db_connection()
         try:
-            if is_post_hydration_chain_pending(conn2):
-                ok, _reason = may_background_run(conn2)
-                if ok:
-                    chain = schedule_post_hydration_chain(
-                        conn2, trigger_reason="chain_rearm"
+            ok, _reason = may_background_run(conn2)
+            if ok and is_post_hydration_chain_pending(conn2):
+                chain = schedule_post_hydration_chain(
+                    conn2, trigger_reason="chain_rearm"
+                )
+                # Duty discharged when we armed the S2 fetch OR there is
+                # nothing left to chain — clear the marker either way.
+                if chain.get("scheduled_jobs") or chain.get("skipped") == "no_candidates":
+                    run_write_unit(
+                        conn2,
+                        lambda: clear_post_hydration_chain_pending(conn2),
+                        label="clear post-hydration chain pending",
                     )
-                    # Duty discharged when we armed the S2 fetch OR there is
-                    # nothing left to chain — clear the marker either way.
-                    if chain.get("scheduled_jobs") or chain.get("skipped") == "no_candidates":
-                        run_write_unit(
-                            conn2,
-                            lambda: clear_post_hydration_chain_pending(conn2),
-                            label="clear post-hydration chain pending",
-                        )
+            # Coverage-driven LOCAL convergence (task 47 P9): fill has-abstract
+            # papers still missing an active-model vector that the ledger-driven
+            # chain misses — papers whose S2 stage cleared the ledger BEFORE the
+            # local provider was enabled, or that slipped the chain.
+            # `schedule_post_s2_chain` is the canonical local-fill scheduler: it
+            # self-skips when the provider isn't local SPECTER2 or there are no
+            # candidates, and is idempotent by operation key — a cheap COUNT when
+            # converged, a bounded batched job only when there's real residual.
+            if ok:
+                schedule_post_s2_chain(conn2, trigger_reason="coverage_sweep")
         finally:
             conn2.close()
     except Exception:
-        logger.exception("post-hydration chain re-arm failed")
+        logger.exception("post-hydration chain re-arm / coverage sweep failed")
 
 
 # ===================================================================
