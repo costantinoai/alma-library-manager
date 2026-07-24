@@ -73,6 +73,23 @@ export const CATEGORY_ICON_COLORS: Record<string, string> = {
 export const CATEGORY_ICON_FALLBACK_COLOR = 'text-warning-600'
 
 /**
+ * Feed monitor TYPE → chip classes (background + text) for the "why this
+ * surfaced" pills on Feed cards. `venue` reuses the accent (folio) identity so
+ * the pill matches the venue chip on the paper card; `author` reuses the
+ * indigo it carries elsewhere; the rest are categorical hues with no token.
+ */
+export const MONITOR_TYPE_CHIP: Record<string, string> = {
+  author: 'bg-indigo-100 text-indigo-700',
+  topic: 'bg-success-100 text-success-700',
+  venue: 'bg-accent-soft text-alma-folio',
+  preprint: 'bg-orange-100 text-orange-700',
+  query: 'bg-cyan-100 text-cyan-700',
+  branch: 'bg-violet-100 text-violet-700',
+}
+/** Unknown monitor type → neutral surface chip. */
+export const MONITOR_TYPE_CHIP_FALLBACK = 'bg-surface-2 text-slate-600'
+
+/**
  * Triage "Queue" action identity — violet, deliberately distinct from amber
  * Save / emerald Like / rose Dismiss (which are semantic tokens). Queue is the
  * one triage tone whose color is a pure identity, not a state, so it lives here.

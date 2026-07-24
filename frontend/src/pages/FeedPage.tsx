@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  BookOpen,
   CalendarClock,
   ExternalLink,
+  FileText,
+  GitBranch,
   LayoutGrid,
   LayoutList,
   Loader2,
@@ -10,6 +13,7 @@ import {
   Rows3,
   Search,
   Settings2,
+  Tag,
   UserRound,
 } from 'lucide-react'
 
@@ -56,7 +60,8 @@ import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateAfterFeedRefresh, invalidateQueries } from '@/lib/queryHelpers'
-import { formatDate, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { cn, formatDate, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -162,6 +167,42 @@ function formatWhyMonitorLabel(monitor: { monitor_label?: string | null; monitor
   const label = monitor.monitor_label?.trim() || 'Unnamed monitor'
   const type = formatMonitorTypeLabel(monitor.monitor_type)
   return `${label} (${type})`
+}
+
+/** Icon per monitor type — the color lives in `MONITOR_TYPE_CHIP` (palette). */
+const MONITOR_TYPE_ICON: Record<string, typeof Search> = {
+  author: UserRound,
+  topic: Tag,
+  venue: BookOpen,
+  preprint: FileText,
+  query: Search,
+  branch: GitBranch,
+}
+
+/** The "why this surfaced" pill: a type-colored, type-iconed monitor chip.
+ * Icon + hue encode the monitor TYPE (so the redundant "(Type)" suffix is
+ * dropped); the label is the monitor's own name. Type is spelled out in the
+ * hover title for accessibility. */
+function MonitorBadge({
+  monitorType,
+  label,
+}: {
+  monitorType?: string | null
+  label: string
+}) {
+  const type = (monitorType || 'query').toLowerCase()
+  const Icon = MONITOR_TYPE_ICON[type] ?? Search
+  const chip = MONITOR_TYPE_CHIP[type] ?? MONITOR_TYPE_CHIP_FALLBACK
+  return (
+    <Badge
+      variant="outline"
+      title={formatMonitorTypeLabel(monitorType)}
+      className={cn('inline-flex items-center gap-1 border-transparent font-medium', chip)}
+    >
+      <Icon className="h-3 w-3 shrink-0" aria-hidden />
+      {label}
+    </Badge>
+  )
 }
 
 function joinWhyParts(parts: string[]): string {
@@ -863,25 +904,17 @@ export function FeedPage() {
                               <Search className="h-3.5 w-3.5" />
                               Monitors
                             </span>
-                            {matchedMonitors.map((monitor) => {
-                              const label = monitor.monitor_label?.trim() || formatMonitorTypeLabel(monitor.monitor_type)
-                              const suffix = monitor.monitor_type ? ` (${formatMonitorTypeLabel(monitor.monitor_type)})` : ''
-                              return (
-                                <Badge
-                                  key={`${item.id}-${monitor.monitor_id ?? label}-${monitor.monitor_type ?? 'monitor'}`}
-                                  variant="outline"
-                                  className="border-slate-200 bg-surface-2 text-slate-700"
-                                >
-                                  {label}{suffix}
-                                </Badge>
-                              )
-                            })}
+                            {matchedMonitors.map((monitor) => (
+                              <MonitorBadge
+                                key={`${item.id}-${monitor.monitor_id ?? monitor.monitor_label}-${monitor.monitor_type ?? 'monitor'}`}
+                                monitorType={monitor.monitor_type}
+                                label={monitor.monitor_label?.trim() || formatMonitorTypeLabel(monitor.monitor_type)}
+                              />
+                            ))}
                           </div>
                         )}
                         {matchedMonitors.length === 0 && item.monitor_type && item.monitor_type !== 'author' && item.monitor_label && (
-                          <Badge variant="outline" className="border-slate-200 bg-surface-2 text-slate-700">
-                            {item.monitor_label} ({formatMonitorTypeLabel(item.monitor_type)})
-                          </Badge>
+                          <MonitorBadge monitorType={item.monitor_type} label={item.monitor_label} />
                         )}
                       </div>
                     )}

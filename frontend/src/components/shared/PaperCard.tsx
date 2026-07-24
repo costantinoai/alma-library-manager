@@ -617,9 +617,9 @@ export function PaperCard({
                 inline keeps the "who, when" pair readable at a glance
                 and frees vertical space. Hidden when the paper has no
                 year at all (sparse-field policy). */}
-            {paper.authors && (
+            {(paper.authors || paper.journal || yearInline) && (
               <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm leading-snug text-slate-500">
-                {(authorNames.length > 0 ? authorNames : [truncate(paper.authors, 120)]).map((authorName, index, list) => {
+                {paper.authors && (authorNames.length > 0 ? authorNames : [truncate(paper.authors, 120)]).map((authorName, index, list) => {
                   const normalized = normalizeAuthorName(authorName)
                   const isFollowed = followedAuthorNames?.has(normalized) ?? false
                   const isPending = followAuthorPendingName === normalized
@@ -668,6 +668,19 @@ export function PaperCard({
                     · {yearInline}
                   </span>
                 )}
+                {/* Journal sits on the authors line, italicised (APA style),
+                    not down in the metadata strip. */}
+                {paper.journal && (
+                  <span
+                    className="inline-flex min-w-0 items-center gap-1.5 italic text-slate-500"
+                    title={paper.journal}
+                  >
+                    {(paper.authors || yearInline) && (
+                      <span className="not-italic text-slate-300">·</span>
+                    )}
+                    <span className="truncate">{truncate(paper.journal, 60)}</span>
+                  </span>
+                )}
               </div>
             )}
 
@@ -679,38 +692,26 @@ export function PaperCard({
                 optional (sparse-field policy); the row hides entirely
                 when nothing to show. Year is in the authors row
                 above. */}
-            {(paper.journal ||
-              citationsLabel ||
+            {(citationsLabel ||
               rankDisplay != null ||
               starDisplay ||
               score != null) && (
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                {paper.journal && (
-                  <span
-                    className="truncate font-medium text-slate-600"
-                    title={paper.journal}
-                  >
-                    {truncate(paper.journal, 50)}
-                  </span>
-                )}
                 {citationsLabel && (
-                  <>
-                    {paper.journal && <span className="text-slate-300">·</span>}
-                    <span
-                      className="tabular-nums"
-                      title={
-                        (paper.influential_citation_count ?? 0) > 0
-                          ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
-                          : `${paper.cited_by_count} citations`
-                      }
-                    >
-                      {citationsLabel}
-                    </span>
-                  </>
+                  <span
+                    className="tabular-nums"
+                    title={
+                      (paper.influential_citation_count ?? 0) > 0
+                        ? `${paper.cited_by_count} citations (${paper.influential_citation_count} flagged influential by S2)`
+                        : `${paper.cited_by_count} citations`
+                    }
+                  >
+                    {citationsLabel}
+                  </span>
                 )}
                 {rankDisplay != null && (
                   <>
-                    <span className="text-slate-300">·</span>
+                    {citationsLabel && <span className="text-slate-300">·</span>}
                     <span
                       className="tabular-nums text-slate-600"
                       title="paper_signal composite (0–100) — ALMa's taste-fit score. Distinct from your star rating."
@@ -721,7 +722,7 @@ export function PaperCard({
                 )}
                 {starDisplay && (
                   <>
-                    <span className="text-slate-300">·</span>
+                    {(citationsLabel || rankDisplay != null) && <span className="text-slate-300">·</span>}
                     <span
                       className="tabular-nums text-gold-500"
                       title={`Your rating: ${paper.rating}/5`}
@@ -732,7 +733,7 @@ export function PaperCard({
                 )}
                 {score != null && (
                   <>
-                    <span className="text-slate-300">·</span>
+                    {(citationsLabel || rankDisplay != null || starDisplay) && <span className="text-slate-300">·</span>}
                     <span className="inline-flex items-center gap-2">
                       <ScoreBar score={score} />
                       {(hasBreakdown || hasExplanation) && (
