@@ -15,13 +15,19 @@ the Feed is deterministic and orders strictly by time.
 ## What populates the Feed
 
 A `feed_items` row is created when one of your **monitors** finds a
-paper that's new to ALMa. Three monitor types exist:
+paper that's new to ALMa. The monitor types:
 
 | Monitor | Source |
 |---|---|
 | **Author monitor** | A followed author publishes a new work (OpenAlex). |
 | **Topic monitor** | OpenAlex returns a new work matching a topic / concept query. |
 | **Query monitor** | A free-text query against OpenAlex search returns a new work. |
+| **Journal monitor** | A new work is published in a followed journal — matched by exact OpenAlex **source id** (see below), not a name search. |
+
+Journal monitors are noisy by nature (a busy venue publishes constantly),
+so they live on their **own Feed surface** — the **Journals** tab — instead
+of mixing into the author/topic/keyword **Inbox**. See
+[Journal (venue) monitors](#journal-venue-monitors).
 
 Monitors run on a schedule (default: every few hours) via the
 APScheduler background loop. You can also trigger them manually from
@@ -70,6 +76,96 @@ user has already seen it. Older untriaged rows still appear in the
 Feed; they're just not badged. The sidebar bubble counts distinct
 papers (not rows) using the same per-paper rule, so it tracks the
 real "new this fetch" count.
+
+## Journal (venue) monitors
+
+Following a journal is a first-class monitor, but its matching and its
+surface differ from the others. This section is the contract.
+
+### What "follow a journal" does
+
+Following a journal (from a paper card's venue name, the Journals tab, or
+Settings) creates one enabled `feed_monitors` row with
+`monitor_type = 'venue'`. It is keyed by the journal's **OpenAlex source id**
+(`monitor_key` = the lowercased `S…` id — unique and rename-proof), and its
+`config_json` carries `{ "query": "<display name>", "source_id": "S…",
+"filter_keywords": [...] }`. Following does **not** fetch anything on its own —
+it only registers the source. Papers arrive on the **next Feed refresh**
+(manual **Refresh Inbox**, or the scheduled auto-refresh when enabled).
+
+Resolution to a source id is deliberate: the follow UI searches OpenAlex
+`/sources` and you pick the exact journal, so `"Cortex"` follows the journal
+*Cortex* — never every paper whose text mentions the word.
+
+### Where the items come from
+
+On refresh, a venue monitor bypasses the free-text cross-source fan-out and
+fetches directly from OpenAlex:
+
+```
+GET /works?filter=primary_location.source.id:{source_id}&sort=publication_date:desc
+```
+
+That is an **exact membership** query — every returned work was actually
+published in that source. Results are upserted into `papers` and each match
+gets a `feed_items` row with `monitor_type = 'venue'`. No other source
+(Crossref, S2, arXiv, bioRxiv) participates for a venue monitor.
+
+An optional **keyword filter** (`filter_keywords`) narrows a high-volume
+journal: a candidate is admitted only if **any** keyword matches its title or
+abstract (case-insensitive). An empty list admits the whole venue.
+
+### Timeframe — what gets downloaded vs. what you see
+
+Two different bounds apply, and they are not the same:
+
+* **Download bound.** Each refresh pulls up to the monitor's
+  `search_limit` (default **15**, per-monitor override allowed) most-recent
+  works published on or after `from_year`, where
+  `from_year = max(current_year − monitor_defaults.recency_years, global
+  fetch year)` and `recency_years` defaults to **2**. Because the sort is
+  `publication_date:desc`, successive refreshes keep pulling the newest works.
+* **Display bound.** The Feed view — Inbox *and* Journals — is bounded to the
+  **last 60 days** by publication date (falling back to `fetched_at` when the
+  date is unknown). The **New** view shows papers first surfaced by the latest
+  fetch.
+
+So a journal shows its **recent (≤60-day)** papers; the ~2-year download
+window only caps how far back the OpenAlex query reaches. Older fetched works
+remain in the corpus (Library / Discovery / Corpus Explorer) but age out of
+the Feed like everything else.
+
+### Independence — the Journals tab shares state with the rest of ALMa
+
+The Journals tab and the Inbox are **two filtered views of the same
+`feed_items` table** (`monitor_scope=journals` vs `inbox`), not separate
+inboxes. A paper is one canonical `papers` row, so its **rating, membership
+status, and reading status are shared everywhere** — the Feed, Library, and
+Discovery all read the same paper.
+
+Concretely:
+
+* A paper matched by **both** a followed author and a followed journal appears
+  in **both** the Inbox and the Journals tab (one `feed_items` row per
+  monitor). They *coexist* as views.
+* Any action settles **every** `feed_items` row for that paper together
+  (`apply_feed_action` writes `WHERE paper_id = ?`). **Save / Like / Love**
+  add the shared paper to Library; **Dismiss** hides the paper from **both**
+  surfaces at once; **Dislike** down-weights it but keeps it visible. There is
+  no per-surface rating or per-surface dismiss.
+
+In short: journal items are not an independent stream with their own state —
+they are a *lens* onto the same papers, sharing one rating/status per paper.
+
+### Managing followed journals
+
+Followed journals appear as collapsible groups on the **Journals** tab (each
+with a "N new" badge and total count), and a "Merge journals" toggle flattens
+them into one stream. A journal you just followed shows immediately as a quiet
+"no papers yet · Refresh to fetch" row until its first refresh brings papers.
+Order is user-controlled (drag-to-reorder, persisted per monitor). A legacy
+name-only venue row (pre-source-id) is disabled and marked
+`needs_resolution` until you re-link it to a source.
 
 ## Actions on a Feed item
 
