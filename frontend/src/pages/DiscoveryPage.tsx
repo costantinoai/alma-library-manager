@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ExternalLink,
+  Gauge,
   Globe,
   LayoutGrid,
   LayoutList,
@@ -758,10 +759,31 @@ export function DiscoveryPage() {
         </p>
         <p>
           <span className="font-medium text-alma-900">Signals</span> are the feedback loop: what you
-          save, like, and dismiss reshapes the next refresh. <span className="font-medium">Is it
-          working?</span> shows how your signals are landing.
+          save, like, and dismiss reshapes the next refresh. <span className="font-medium">Lens
+          performance</span> shows how your signals are landing.
         </p>
       </ConceptCallout>
+
+      {/* Find & add — the manual entry point, first among the tools: search
+          any source and add a paper by hand before (or instead of) drilling
+          into a lens. Collapsed by default; auto-opens on a ?query= deep link. */}
+      <details
+        open={!!routeQuery}
+        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
+      >
+        <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
+          <div className="flex items-center gap-2">
+            <Globe className="h-4 w-4 text-alma-folio" />
+            <span className="font-brand text-sm font-semibold text-alma-800">Find &amp; add a paper</span>
+            <span className="text-xs text-slate-500">search any source and add it by hand</span>
+          </div>
+          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
+          <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
+        </summary>
+        <div className="border-t border-[var(--color-border)] p-4">
+          <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
+        </div>
+      </details>
 
       {/* Anchor card — only when ?seed=<paperId>. Shows immediately
           after the hero so the user knows what they're looking at
@@ -864,27 +886,54 @@ export function DiscoveryPage() {
             the lens-context surfaces (Branch Studio + this) cluster
             together right after the lens picker. */}
         <details className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet">
-          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-brand text-sm font-semibold text-alma-800">Is it working?</span>
-              <span className="text-xs text-slate-500">
-                {selectedLensSummary ? (
-                  <>
-                    Mode <strong className="text-alma-800">{String(selectedLensSummary.recommendation_mode ?? '—')}</strong>
-                    {' · '}
-                    Seeds <strong className="text-alma-800">{Number(selectedLensSummary.seed_count ?? 0)}</strong>
-                    {' · '}
-                    Temp <strong className="text-alma-800">{Number(selectedLensSummary.temperature ?? 0).toFixed(2)}</strong>
-                    {' · '}
-                    External lanes <strong className="text-alma-800">{Object.keys((selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {}).length}</strong>
-                  </>
-                ) : (
-                  'Refresh the lens to capture taste-driven lane composition.'
-                )}
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-4 px-4 py-3 text-left">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-soft text-alma-folio">
+                <Gauge className="h-4 w-4" />
               </span>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-brand text-sm font-semibold text-alma-800">Lens performance</span>
+                  <span className="text-xs text-slate-500">
+                    What this lens learned from your signals, and how the last refresh
+                    composed its lanes.
+                  </span>
+                </div>
+                {selectedLensSummary ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(
+                      [
+                        ['Mode', String(selectedLensSummary.recommendation_mode ?? '—')],
+                        ['Seeds', String(Number(selectedLensSummary.seed_count ?? 0))],
+                        ['Temp', Number(selectedLensSummary.temperature ?? 0).toFixed(2)],
+                        [
+                          'Lanes',
+                          String(
+                            Object.keys(
+                              (selectedLensSummary.external_lanes as Record<string, unknown> | null) ?? {},
+                            ).length,
+                          ),
+                        ],
+                      ] as const
+                    ).map(([label, value]) => (
+                      <span
+                        key={label}
+                        className="inline-flex items-baseline gap-1 rounded-full border border-edge-2 bg-surface-2 px-2 py-0.5 text-[11px] text-slate-500"
+                      >
+                        {label}
+                        <strong className="font-mono text-alma-800 tabular-nums">{value}</strong>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-xs text-slate-500">
+                    Refresh the lens to capture taste-driven lane composition.
+                  </span>
+                )}
+              </div>
             </div>
-            <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-            <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
+            <span className="shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
+            <span className="hidden shrink-0 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
           </summary>
           <div className="space-y-4 border-t border-[var(--color-border)] p-4">
           <Card>
@@ -1251,27 +1300,6 @@ export function DiscoveryPage() {
         </div>
 
       </div>
-
-      {/* Find & add — a manual tool, demoted below the recommendations
-          (the page thesis is the lens's suggestions, not manual search).
-          Collapsed by default; auto-opens on a ?q= deep link. Revert-cheap. */}
-      <details
-        open={!!routeQuery}
-        className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
-      >
-        <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
-          <div className="flex items-center gap-2">
-            <Globe className="h-4 w-4 text-alma-folio" />
-            <span className="font-brand text-sm font-semibold text-alma-800">Find &amp; add</span>
-            <span className="text-xs text-slate-500">search any source to add a paper by hand</span>
-          </div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
-          <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
-        </summary>
-        <div className="border-t border-[var(--color-border)] p-4">
-          <OnlineSearchTab initialQuery={routeQuery} autoRun={!!routeQuery} resultPreviewLimit={5} />
-        </div>
-      </details>
 
       <PaperDetailPanel paper={selectedPaper} open={detailOpen} onOpenChange={setDetailOpen} />
     </div>
