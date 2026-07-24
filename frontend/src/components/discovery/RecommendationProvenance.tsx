@@ -41,6 +41,15 @@ export interface ProvenanceSignals {
    *  "near things you've dismissed". Rendered only when the
    *  magnitude clears a small noise floor. */
   projectedFeedbackRaw?: number | null
+  /** Citation fabric (task 47 §7). Number of references this candidate shares
+   *  with a saved/loved paper (bibliographic coupling) + that partner's title,
+   *  and the number of papers that cite it together with a saved/loved paper
+   *  (co-citation) + that partner's title. Each renders a chip only when the
+   *  count is ≥ 1, with the evidence string on hover. */
+  couplingCount?: number | null
+  couplingPartnerTitle?: string | null
+  cocitationCount?: number | null
+  cocitationPartnerTitle?: string | null
 }
 
 interface Chip {
@@ -129,6 +138,32 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
       label: positive ? 'Matches what you save' : 'Near things you pass on',
       tone: positive ? 'positive' : 'warning',
       title: `projected-feedback pull ${positive ? '+' : ''}${signals.projectedFeedbackRaw.toFixed(2)}`,
+    })
+  }
+
+  // Citation fabric: shared references (coupling) + cited-together (co-citation)
+  // with the user's saved/loved papers. Evidence string names the best-matching
+  // partner on hover; chip is silent when the candidate shares no citations.
+  if (typeof signals.couplingCount === 'number' && signals.couplingCount >= 1) {
+    const withTitle = signals.couplingPartnerTitle
+      ? ` with “${signals.couplingPartnerTitle}”`
+      : ' with your library'
+    chips.push({
+      key: 'coupling',
+      label: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}`,
+      tone: 'neutral',
+      title: `Shares ${signals.couplingCount} reference${signals.couplingCount === 1 ? '' : 's'}${withTitle}`,
+    })
+  }
+  if (typeof signals.cocitationCount === 'number' && signals.cocitationCount >= 1) {
+    const withTitle = signals.cocitationPartnerTitle
+      ? ` with “${signals.cocitationPartnerTitle}”`
+      : ' with a saved paper'
+    chips.push({
+      key: 'cocitation',
+      label: `Cited together ×${signals.cocitationCount}`,
+      tone: 'neutral',
+      title: `Cited together${withTitle} in ${signals.cocitationCount} paper${signals.cocitationCount === 1 ? '' : 's'}`,
     })
   }
 

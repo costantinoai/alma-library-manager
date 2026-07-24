@@ -99,17 +99,22 @@ def build_citation_fabric_maps(
     candidate_paper_ids: dict[str, str],
     positive_ids: list[str],
     *,
+    title_lookup: dict[str, str] | None = None,
     coupling_saturation: float = 3.0,
     cocitation_saturation: float = 2.0,
 ) -> dict[str, dict[str, Any]]:
     """Return ``{scoring_key: {coupling_strength, cocitation_strength,
     coupling_count, cocitation_count, coupling_partner_id,
-    cocitation_partner_id}}`` for every candidate that resolves to a local paper.
+    cocitation_partner_id, coupling_partner_title, cocitation_partner_title}}``
+    for every candidate that resolves to a local paper.
 
     ``candidate_paper_ids`` maps a scoring key → local paper id; ``positive_ids``
-    is the high-signal (loved / saved) paper-id set. Returns ``{}`` when either
-    side is empty or the references table is unavailable.
+    is the high-signal (loved / saved) paper-id set. ``title_lookup`` (paper id →
+    title) resolves the best-matching partner's title for the evidence string —
+    single-owner here, so the UI never has to look it up. Returns ``{}`` when
+    either side is empty or the references table is unavailable.
     """
+    titles = title_lookup or {}
     if not candidate_paper_ids or not positive_ids:
         return {}
 
@@ -192,6 +197,8 @@ def build_citation_fabric_maps(
             ),
             "coupling_partner_id": coupling_partner,
             "cocitation_partner_id": cocite_partner,
+            "coupling_partner_title": titles.get(coupling_partner) if coupling_partner else None,
+            "cocitation_partner_title": titles.get(cocite_partner) if cocite_partner else None,
         }
 
     # Fan out per-pid results to every scoring key that resolved to that pid.

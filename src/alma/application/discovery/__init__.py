@@ -776,8 +776,13 @@ def refresh_lens_recommendations(
         # (shared citers) against the loved/saved set. One precompute; no
         # per-candidate DB access in the scoring loop.
         if candidate_paper_ids and positive_ids:
+            pos_titles = {
+                str(p.get("id")): str(p.get("title") or "")
+                for p in positive_pubs
+                if p.get("id")
+            }
             citation_fabric_map = build_citation_fabric_maps(
-                db, candidate_paper_ids, positive_ids
+                db, candidate_paper_ids, positive_ids, title_lookup=pos_titles
             )
     timings_ms["candidate_embedding_batch"] = int(round((perf_counter() - phase_started) * 1000))
     _log(

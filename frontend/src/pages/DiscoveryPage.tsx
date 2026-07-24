@@ -605,6 +605,10 @@ export function DiscoveryPage() {
           scorePct: readNumber(provenance?.score_pct),
           consensusCount: readNumber(breakdown?.consensus_count),
           projectedFeedbackRaw: readNumber(breakdown?.projected_feedback_raw),
+          couplingCount: readNumber(breakdown?.coupling_count),
+          couplingPartnerTitle: readString(breakdown?.coupling_partner_title),
+          cocitationCount: readNumber(breakdown?.cocitation_count),
+          cocitationPartnerTitle: readString(breakdown?.cocitation_partner_title),
         }}
       />
     )

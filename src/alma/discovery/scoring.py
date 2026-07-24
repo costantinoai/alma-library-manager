@@ -1037,10 +1037,14 @@ def score_candidate(
         breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
         if cf.get("coupling_partner_id"):
             breakdown["coupling_partner_id"] = str(cf["coupling_partner_id"])
+        if cf.get("coupling_partner_title"):
+            breakdown["coupling_partner_title"] = str(cf["coupling_partner_title"])
     if cf.get("cocitation_count"):
         breakdown["cocitation_count"] = int(cf.get("cocitation_count") or 0)
         if cf.get("cocitation_partner_id"):
             breakdown["cocitation_partner_id"] = str(cf["cocitation_partner_id"])
+        if cf.get("cocitation_partner_title"):
+            breakdown["cocitation_partner_title"] = str(cf["cocitation_partner_title"])
 
     return final_score, breakdown
 
