@@ -36,9 +36,12 @@ const statusBadgeVariants = cva(
   {
     variants: {
       tone: {
-        // Quiet metadata + mechanism. One surface step up from the card it
-        // sits on, hairline edge — reads as a chip, not as a white sticker.
-        neutral: 'border border-edge-2 bg-surface-2 text-slate-600',
+        // Quiet metadata + mechanism. A COOL INK wash, never a step on the
+        // warm paper ladder: a chip that borrows the surface's own cream
+        // disappears into it, which is exactly how the old white/`surface-N`
+        // chips failed. Translucent ink reads as a distinct object at every
+        // elevation (card, panel, popover) without needing a per-surface fill.
+        neutral: 'border border-alma-800/10 bg-alma-800/[0.06] text-slate-700',
         // Semantic valence — a calm translucent wash of the matching token.
         // Signal, not alarm: these sit on off-white paper surfaces.
         positive: 'border border-transparent bg-success-700/10 text-success-800',
@@ -46,9 +49,10 @@ const statusBadgeVariants = cva(
         warning: 'border border-transparent bg-warning-700/12 text-warning-800',
         // Engine reasoning — brand accent, FILLED.
         accent: 'border border-transparent bg-alma-folio/10 text-alma-folio',
-        // Informational tag — same accent family, OUTLINED so it reads as a
-        // "label" rather than a "signal" without introducing another hue.
-        info: 'border border-accent-edge bg-transparent text-alma-folio',
+        // Informational tag — same accent family, lighter weight: a hairline
+        // plus the faintest folio wash. Never fully transparent, or the paper
+        // shows through and the chip reads as cream.
+        info: 'border border-accent-edge bg-alma-folio/[0.04] text-alma-folio',
       },
       size: {
         sm: 'px-2 py-px text-[0.65rem]',

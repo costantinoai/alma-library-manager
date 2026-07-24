@@ -27,13 +27,13 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        // Quiet metadata — matches StatusBadge `neutral`.
-        default: 'border border-edge-2 bg-surface-2 text-slate-600',
-        secondary: 'border border-edge-2 bg-surface-2 text-slate-600',
-        // Outlined label — matches StatusBadge `info` in weight (transparent
-        // fill + hairline) but stays neutral-hued, since most `outline`
-        // callers are descriptive counts and tags, not brand signal.
-        outline: 'border border-edge-3 bg-transparent text-slate-600',
+        // Quiet metadata — matches StatusBadge `neutral`: a cool ink wash, so
+        // the chip never dissolves into the warm paper it sits on.
+        default: 'border border-alma-800/10 bg-alma-800/[0.06] text-slate-700',
+        secondary: 'border border-alma-800/10 bg-alma-800/[0.06] text-slate-700',
+        // Outlined label — same family, lighter weight (stronger hairline,
+        // fainter fill). Still tinted: a fully transparent chip reads as cream.
+        outline: 'border border-alma-800/20 bg-alma-800/[0.03] text-slate-700',
         // Semantic valence — identical washes to StatusBadge.
         success: 'border border-transparent bg-success-700/10 text-success-800',
         destructive: 'border border-transparent bg-critical-700/10 text-critical-700',

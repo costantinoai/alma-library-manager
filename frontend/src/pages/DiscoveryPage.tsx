@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  ArrowDownRight,
+  ArrowUpRight,
   ExternalLink,
   Gauge,
   Globe,
@@ -40,9 +42,8 @@ import {
   type Publication,
   type SimilarityResultItem,
 } from '@/api/client'
-import { JargonHint, MetricTile } from '@/components/shared'
+import { JargonHint, MetricTile, SignalChip, type SignalKind } from '@/components/shared'
 import { DiscoverIcon } from '@/components/ui/brand-icons'
-import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import {
   BranchExplorerPanel,
@@ -56,6 +57,7 @@ import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { ListControlBar, PaperCard, RefreshRunningBanner, SkeletonList } from '@/components/shared'
+import { SubPanel } from '@/components/ui/sub-panel'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/button'
@@ -564,30 +566,85 @@ export function DiscoveryPage() {
     null
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
 
-  const renderProfileList = (
+  /** Pull `[{label, value}]` out of one taste/negative-profile bucket. */
+  const profileItems = (
+    profile: unknown,
+    bucket: string,
+    labelKey: 'term' | 'name' | 'query',
+    valueKey: 'weight' | 'strength' = 'weight',
+  ): Array<{ label: string; value?: number | null }> =>
+    (((profile as Record<string, unknown> | null)?.[bucket] as
+      | Array<Record<string, unknown>>
+      | undefined) ?? [])
+      .map((item) => ({
+        label: String(item[labelKey] ?? ''),
+        value: Number(item[valueKey] ?? 0),
+      }))
+      .filter((item) => item.label)
+
+  /**
+   * One labelled row inside the taste ledger: "Topics", "Authors", … followed
+   * by its chips. Strongest weight first, so the row reads as a ranking rather
+   * than an arbitrary bag, and the weight rides *inside* the chip in dimmed
+   * tabular figures instead of as loose text after it.
+   */
+  const renderTasteGroup = (
     title: string,
+    kind: SignalKind,
     items: Array<{ label: string; value?: number | null }>,
-    tone: 'positive' | 'negative' = 'positive',
   ) => {
     if (items.length === 0) return null
+    const sorted = [...items].sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
     return (
-      <div className="space-y-2">
-        <EyebrowLabel tone={tone === 'negative' ? 'muted' : 'accent'}>{title}</EyebrowLabel>
-        <div className="flex flex-wrap gap-1.5">
-          {items.map((item) => (
-            <StatusBadge
+      <div key={title} className="space-y-1">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400">
+          {title}
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {sorted.map((item, i) => (
+            <SignalChip
               key={`${title}-${item.label}`}
-              tone={tone === 'negative' ? 'negative' : 'neutral'}
-              size="sm"
+              kind={kind}
+              hideIcon={i > 0}
+              title={
+                item.value != null
+                  ? `${item.label} · learned weight ${Math.round(item.value * 100) / 100}`
+                  : item.label
+              }
             >
               {item.label}
-              {item.value != null ? ` · ${Math.round(item.value * 100) / 100}` : ''}
-            </StatusBadge>
+              {item.value != null && (
+                <span className="ml-0.5 tabular-nums opacity-60">
+                  {Math.round(item.value * 100) / 100}
+                </span>
+              )}
+            </SignalChip>
           ))}
         </div>
       </div>
     )
   }
+
+  // The taste ledger's two columns, built symmetrically so each side can
+  // report its own emptiness honestly ("nothing suppressed yet" is a real,
+  // meaningful state — not a reason to hide the column).
+  const tasteProfile = selectedLensSummary?.taste_profile
+  const negativeProfile = selectedLensSummary?.negative_profile
+  const pullGroups = [
+    renderTasteGroup('Topics', 'pref-topic', profileItems(tasteProfile, 'topics', 'term')),
+    renderTasteGroup('Authors', 'pref-author', profileItems(tasteProfile, 'authors', 'name')),
+    renderTasteGroup('Venues', 'pref-venue', profileItems(tasteProfile, 'venues', 'name')),
+    renderTasteGroup(
+      'Recent wins',
+      'pref-query',
+      profileItems(tasteProfile, 'recent_wins', 'query', 'strength'),
+    ),
+  ]
+  const pushGroups = [
+    renderTasteGroup('Topics', 'suppressed-topic', profileItems(negativeProfile, 'topics', 'term')),
+    renderTasteGroup('Authors', 'suppressed-author', profileItems(negativeProfile, 'authors', 'name')),
+    renderTasteGroup('Venues', 'suppressed-venue', profileItems(negativeProfile, 'venues', 'name')),
+  ]
 
   const renderProvenance = (
     rec: LensRecommendation,
@@ -1042,64 +1099,41 @@ export function DiscoveryPage() {
                     />
                   </div>
 
-                  {renderProfileList(
-                    'Favorite Topics',
-                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.topics as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.term ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                  )}
+                  {/* The taste ledger. This section answers one question —
+                      what has this lens learned to chase, and what to steer
+                      away from — so the two halves sit side by side and the
+                      answer is spatial before it is textual. It used to be
+                      seven identical flat chip rows, which buried the
+                      pull/push duality that IS the data's meaning. */}
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <SubPanel className="space-y-3 p-3">
+                      <div className="flex items-center gap-1.5">
+                        <ArrowUpRight className="h-3.5 w-3.5 text-success-700" />
+                        <span className="text-xs font-semibold text-alma-800">Pulling toward</span>
+                      </div>
+                      {pullGroups.some(Boolean) ? (
+                        pullGroups
+                      ) : (
+                        <p className="text-[11px] text-slate-500">
+                          Nothing learned yet — save or rate a few papers and refresh.
+                        </p>
+                      )}
+                    </SubPanel>
 
-                  {renderProfileList(
-                    'Favorite Authors',
-                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.authors as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.name ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                  )}
-
-                  {renderProfileList(
-                    'Favorite Venues',
-                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.venues as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.name ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                  )}
-
-                  {renderProfileList(
-                    'Recent Wins',
-                    (((selectedLensSummary.taste_profile as Record<string, unknown> | null)?.recent_wins as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.query ?? ''),
-                      value: Number(item.strength ?? 0),
-                    })).filter((item) => item.label),
-                  )}
-
-                  {renderProfileList(
-                    'Suppressed Topics',
-                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.topics as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.term ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                    'negative',
-                  )}
-
-                  {renderProfileList(
-                    'Suppressed Authors',
-                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.authors as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.name ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                    'negative',
-                  )}
-
-                  {renderProfileList(
-                    'Suppressed Venues',
-                    (((selectedLensSummary.negative_profile as Record<string, unknown> | null)?.venues as Array<Record<string, unknown>> | undefined) ?? []).map((item) => ({
-                      label: String(item.name ?? ''),
-                      value: Number(item.weight ?? 0),
-                    })).filter((item) => item.label),
-                    'negative',
-                  )}
+                    <SubPanel className="space-y-3 p-3">
+                      <div className="flex items-center gap-1.5">
+                        <ArrowDownRight className="h-3.5 w-3.5 text-warning-700" />
+                        <span className="text-xs font-semibold text-alma-800">Steering away</span>
+                      </div>
+                      {pushGroups.some(Boolean) ? (
+                        pushGroups
+                      ) : (
+                        <p className="text-[11px] text-slate-500">
+                          Nothing suppressed yet. Dismissing a paper teaches this side.
+                        </p>
+                      )}
+                    </SubPanel>
+                  </div>
                 </>
               )}
             </CardContent>

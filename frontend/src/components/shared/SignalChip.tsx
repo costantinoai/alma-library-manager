@@ -57,6 +57,14 @@ export type SignalKind =
   | 'cocitation' // cited together with a saved paper
   | 'branch' // the lens branch that pursued it
   | 'trending' // citation momentum
+  // ── Learned preference profile: what a lens chases vs steers away from ──
+  | 'pref-topic'
+  | 'pref-author'
+  | 'pref-venue'
+  | 'pref-query' // a query that recently produced saves
+  | 'suppressed-topic'
+  | 'suppressed-author'
+  | 'suppressed-venue'
   // ── Plumbing + description — quiet by design ──────────────────────────
   | 'channel' // retrieval lane: vector / lexical / graph / external
   | 'source' // which API returned it: openalex, semantic scholar, …
@@ -98,6 +106,18 @@ export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
   cocitation: { tone: 'accent', icon: GitMerge, hint: 'Cited alongside a paper you saved' },
   branch: { tone: 'accent', icon: GitBranch, hint: 'The lens branch that pursued this' },
   trending: { tone: 'accent', icon: TrendingUp, hint: 'Citation momentum' },
+
+  // A lens's learned preferences. Chased and suppressed are genuinely
+  // different signal kinds — not one kind with a colour override — so the
+  // registry owns both and the pair reads green-for / amber-away anywhere
+  // it's used.
+  'pref-topic': { tone: 'positive', icon: Target, hint: 'A topic this lens pulls toward' },
+  'pref-author': { tone: 'positive', icon: Users, hint: 'An author this lens pulls toward' },
+  'pref-venue': { tone: 'positive', icon: Quote, hint: 'A venue this lens pulls toward' },
+  'pref-query': { tone: 'positive', icon: Type, hint: 'A query that recently earned saves' },
+  'suppressed-topic': { tone: 'warning', icon: Target, hint: 'A topic this lens steers away from' },
+  'suppressed-author': { tone: 'warning', icon: Users, hint: 'An author this lens steers away from' },
+  'suppressed-venue': { tone: 'warning', icon: Quote, hint: 'A venue this lens steers away from' },
 
   // Plumbing + description.
   channel: { tone: 'neutral', icon: Route, hint: 'Which retrieval lane returned it' },

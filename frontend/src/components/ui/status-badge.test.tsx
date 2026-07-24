@@ -11,10 +11,11 @@ describe('StatusBadge', () => {
 
   it('applies the neutral tone classes by default', () => {
     render(<StatusBadge>Idle</StatusBadge>)
-    // Neutral is the QUIET chip — a surface step with a hairline, so metadata
-    // recedes under the coloured chips that carry real signal (2026-07-25
-    // colour contract in status-badge.tsx).
-    expect(screen.getByText('Idle')).toHaveClass('bg-surface-2')
+    // Neutral is the QUIET chip, but it must never borrow the warm paper
+    // ladder — a cream-on-cream chip disappears into its own card. It's a
+    // translucent COOL INK wash instead (2026-07-25 colour contract).
+    expect(screen.getByText('Idle')).toHaveClass('bg-alma-800/[0.06]')
+    expect(screen.getByText('Idle')).not.toHaveClass('bg-surface-2')
   })
 
   it('switches visual treatment with the tone prop', () => {
