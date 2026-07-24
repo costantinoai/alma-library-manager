@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
   CalendarClock,
+  ChevronRight,
   ExternalLink,
   FileText,
   GitBranch,
@@ -243,6 +244,17 @@ export function FeedPage() {
   // Journal (venue) monitors are noisy → their own surface. 'inbox' hides
   // them from the author/topic/keyword feed; 'journals' shows only them.
   const [feedScope, setFeedScope] = useState<'inbox' | 'journals'>('inbox')
+  // Journals surface: group by journal (collapsed by default) vs one merged
+  // flat stream; which groups are expanded.
+  const [mergeJournals, setMergeJournals] = useState(false)
+  const [openJournals, setOpenJournals] = useState<Set<string>>(new Set())
+  const toggleJournalOpen = (journal: string) =>
+    setOpenJournals((prev) => {
+      const next = new Set(prev)
+      if (next.has(journal)) next.delete(journal)
+      else next.add(journal)
+      return next
+    })
   const [sort, setSort] = useState<FeedSort>('chronological')
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -469,26 +481,56 @@ export function FeedPage() {
     (monitor) => monitor.monitor_type === 'venue' && monitor.enabled,
   ).length
 
-  // In the Journals scope, papers are grouped under their journal so a noisy
-  // venue reads as one block. We flatten [header, item, item, header, …] so the
-  // existing single card map can render it with one extra branch.
-  const feedRenderList = useMemo<
-    Array<{ type: 'header'; journal: string; count: number } | { type: 'item'; item: FeedInboxItem }>
-  >(() => {
-    if (feedScope !== 'journals') return items.map((item) => ({ type: 'item' as const, item }))
+  // Journal display order comes from the venue monitor's saved position
+  // (drag-to-reorder), keyed by the journal's display name.
+  const journalOrderIndex = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const monitor of monitors) {
+      if (monitor.monitor_type !== 'venue') continue
+      const name = String((monitor.config?.query as string | undefined) ?? monitor.label ?? '')
+        .trim()
+        .toLowerCase()
+      if (name) map.set(name, monitor.position ?? 9999)
+    }
+    return map
+  }, [monitors])
+
+  // In the Journals scope we group papers under their journal (each group
+  // collapsed by default) so a noisy venue reads as one block. "Merge journals"
+  // flattens back to a single stream. We emit [header, item, …] so the existing
+  // single card map renders it with one extra branch — item entries carry their
+  // journal so a collapsed group can hide them.
+  type FeedRenderEntry =
+    | { type: 'header'; journal: string; count: number; newCount: number }
+    | { type: 'item'; item: FeedInboxItem; journal?: string }
+  const feedRenderList = useMemo<FeedRenderEntry[]>(() => {
+    if (feedScope !== 'journals' || mergeJournals) {
+      return items.map((item) => ({ type: 'item' as const, item }))
+    }
     const groups = new Map<string, FeedInboxItem[]>()
     for (const item of items) {
       const journal = (toPublication(item)?.journal || item.monitor_label || 'Unknown journal').trim()
       if (!groups.has(journal)) groups.set(journal, [])
       groups.get(journal)!.push(item)
     }
-    const out: Array<{ type: 'header'; journal: string; count: number } | { type: 'item'; item: FeedInboxItem }> = []
-    for (const [journal, groupItems] of groups) {
-      out.push({ type: 'header', journal, count: groupItems.length })
-      for (const item of groupItems) out.push({ type: 'item', item })
+    const sortedJournals = Array.from(groups.keys()).sort((a, b) => {
+      const pa = journalOrderIndex.get(a.toLowerCase()) ?? 9999
+      const pb = journalOrderIndex.get(b.toLowerCase()) ?? 9999
+      return pa - pb || a.localeCompare(b)
+    })
+    const out: FeedRenderEntry[] = []
+    for (const journal of sortedJournals) {
+      const groupItems = groups.get(journal)!
+      out.push({
+        type: 'header',
+        journal,
+        count: groupItems.length,
+        newCount: groupItems.filter((it) => it.is_new).length,
+      })
+      for (const item of groupItems) out.push({ type: 'item', item, journal })
     }
     return out
-  }, [feedScope, items])
+  }, [feedScope, mergeJournals, items, journalOrderIndex])
   const readyMonitors = monitors.filter((monitor) => monitor.health === 'ready').length
   const degradedMonitorList = monitors.filter((monitor) => monitor.health === 'degraded')
   const degradedMonitors = degradedMonitorList.length
@@ -720,6 +762,40 @@ export function FeedPage() {
         })}
       </div>
 
+      {/* Journals sub-controls: expand/collapse the groups, or merge them into
+          one flat stream. Only shown on the Journals surface. */}
+      {feedScope === 'journals' && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          {!mergeJournals && (
+            <div className="flex items-center gap-2 text-slate-500">
+              <button
+                type="button"
+                onClick={() =>
+                  setOpenJournals(
+                    new Set(feedRenderList.flatMap((e) => (e.type === 'header' ? [e.journal] : []))),
+                  )
+                }
+                className="font-medium text-alma-700 hover:text-alma-900"
+              >
+                Expand all
+              </button>
+              <span className="text-slate-300" aria-hidden>·</span>
+              <button
+                type="button"
+                onClick={() => setOpenJournals(new Set())}
+                className="font-medium text-alma-700 hover:text-alma-900"
+              >
+                Collapse all
+              </button>
+            </div>
+          )}
+          <label className="ml-auto inline-flex cursor-pointer items-center gap-2 text-slate-600">
+            <Switch checked={mergeJournals} onCheckedChange={(v) => setMergeJournals(v === true)} />
+            Merge journals
+          </label>
+        </div>
+      )}
+
       {/* ── Control bar ────────────────────────────────────────────────────
           Single horizontal strip with three zones separated by dividers:
           [filter] · [sort]  …  [counter + select-all] · [view mode]
@@ -870,18 +946,39 @@ export function FeedPage() {
         <RevealList className="space-y-3">
           {feedRenderList.map((entry, i) => {
             if (entry.type === 'header') {
+              const open = openJournals.has(entry.journal)
               return (
                 <RevealItem key={`journal-header-${entry.journal}`} index={i}>
-                  <div className="flex items-center gap-2 px-1 pb-1 pt-3 text-sm font-semibold text-alma-800 first:pt-1">
+                  <button
+                    type="button"
+                    onClick={() => toggleJournalOpen(entry.journal)}
+                    aria-expanded={open}
+                    className="flex w-full items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition-colors hover:bg-surface-3"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        'h-4 w-4 shrink-0 text-slate-400 transition-transform',
+                        open && 'rotate-90',
+                      )}
+                      aria-hidden
+                    />
                     <BookOpen className="h-4 w-4 shrink-0 text-alma-folio" aria-hidden />
-                    <span className="truncate">{entry.journal}</span>
-                    <span className="ml-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-surface-3 px-1 text-[10px] font-semibold tabular-nums text-slate-600">
-                      {entry.count}
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold text-alma-800">
+                      {entry.journal}
                     </span>
-                  </div>
+                    {entry.newCount > 0 && (
+                      <span className="inline-flex items-center rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-alma-folio">
+                        {entry.newCount} new
+                      </span>
+                    )}
+                    <span className="text-xs tabular-nums text-slate-400">{entry.count}</span>
+                  </button>
                 </RevealItem>
               )
             }
+            // A collapsed group hides its papers (grouped mode only; inbox and
+            // merged entries carry no journal so they always render).
+            if (entry.journal && !openJournals.has(entry.journal)) return null
             const item = entry.item
             const paper = toPublication(item)
             const matchedAuthors = item.matched_authors ?? []
