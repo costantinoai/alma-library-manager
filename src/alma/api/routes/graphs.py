@@ -237,6 +237,7 @@ def get_paper_map(
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
+    w_cocitation: float = Query(0.0, ge=0.0, le=1.0, description="Citation influence: co-citation weight in the fused layout (shared citers)"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get paper map visualization data.
@@ -251,7 +252,7 @@ def get_paper_map(
     """
     scope = Scope.parse(scope)
     # A fused layout (any non-zero non-semantic weight) is a custom, uncached view.
-    fused_layout = w_coauthorship > 0 or w_bibliographic > 0
+    fused_layout = w_coauthorship > 0 or w_bibliographic > 0 or w_cocitation > 0
     is_default_options = (
         label_mode == "cluster"
         and color_by == "cluster"
@@ -285,6 +286,7 @@ def get_paper_map(
                 "semantic": w_semantic,
                 "coauthorship": w_coauthorship,
                 "bibliographic_coupling": w_bibliographic,
+                "co_citation": w_cocitation,
             },
         }
         embeddings = _load_embeddings(c, scope=scope)
@@ -323,6 +325,7 @@ def get_paper_map(
             label_mode, color_by, size_by,
             round(cluster_resolution, 3), round(w_semantic, 3),
             round(w_coauthorship, 3), round(w_bibliographic, 3),
+            round(w_cocitation, 3),
         ),
         scope=scope,
         build_fn=_build_variant,
@@ -2565,6 +2568,7 @@ def _build_embedding_paper_map(
         and (
             float(layout_weights.get("coauthorship", 0) or 0) > 0
             or float(layout_weights.get("bibliographic_coupling", 0) or 0) > 0
+            or float(layout_weights.get("co_citation", 0) or 0) > 0
         )
     ):
         try:
@@ -2575,6 +2579,7 @@ def _build_embedding_paper_map(
                 _paper_coauthorship(conn, paper_ids),
                 _paper_bibliographic_coupling(conn, paper_ids),
                 weights=layout_weights,
+                cocite_pairs=_paper_cocitation(conn, paper_ids),
                 # Anchor at the semantic layout we just computed so adjacent
                 # weight steps nudge the map instead of reshuffling it.
                 init_coords=coords,
@@ -2695,6 +2700,14 @@ def _build_embedding_paper_map(
                     edge_type="co_authorship",
                     pairs=_paper_coauthorship(conn, paper_ids, min_shared_authors=1),
                     weight_floor=0.4, weight_span=0.2, weight_mode="linear_capped",
+                ),
+                # Co-citation: papers cited together by ≥2 other papers (shared
+                # reception). The forward-looking twin of bibliographic coupling
+                # (shared references / shared past). Same cooccurrence primitive.
+                CouplingSpec(
+                    edge_type="co_citation",
+                    pairs=_paper_cocitation(conn, paper_ids, min_shared_citers=2),
+                    weight_floor=0.4, weight_span=0.5,
                 ),
             ],
             semantic_k=8,
@@ -2925,6 +2938,93 @@ def _paper_bibliographic_coupling(
         ref = r["referenced_work_id"] if isinstance(r, sqlite3.Row) else r[1]
         paper_refs[str(pid)].append(str(ref))
     return cooccurrence_pairs(paper_refs, min_shared=min_shared_refs, max_feature_df=max_ref_df)
+
+
+def _paper_cocitation(
+    conn: sqlite3.Connection,
+    paper_ids: list[str],
+    *,
+    min_shared_citers: int = 2,
+    max_citer_df: int = 50,
+) -> dict[tuple[str, str], int]:
+    """Return pairs of corpus papers that are *co-cited* — cited together by at
+    least ``min_shared_citers`` other papers.
+
+    Co-citation is the inverse of bibliographic coupling: coupling groups papers
+    that share the same REFERENCES (a shared past), co-citation groups papers
+    that share the same CITERS (a shared reception). Two papers B and C are
+    co-cited whenever some third paper A cites both — so the graph entity is the
+    cited *corpus* paper and the shared feature is the citing paper. Built on the
+    same ``cooccurrence_pairs`` primitive as coupling (one indexed scan +
+    inverted index, no self-join).
+
+    Only cited works that resolve to a corpus paper in ``paper_ids`` become
+    entities, so every emitted pair is an edge between two visible graph nodes.
+    The cited/local mapping is ``papers.openalex_id = 'W' || referenced_work_id``
+    (verified live 2026-07-25). ``max_citer_df`` is the IDF-analogue cap: a
+    review that cites hundreds of corpus papers co-cites every pair among them
+    (O(df²) explosion + non-discriminative noise), so citers held by more than
+    that many entities are dropped before pairing. Silently returns {} when
+    ``publication_references`` is missing.
+    """
+    if not paper_ids:
+        return {}
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='publication_references'"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    if not row:
+        return {}
+
+    placeholders = ",".join(["?"] * len(paper_ids))
+    # Map the visible corpus papers' OpenAlex ids → local paper id, keyed by the
+    # numeric work-id form stored in publication_references.referenced_work_id.
+    refwork_to_local: dict[str, str] = {}
+    id_rows = conn.execute(
+        f"""
+        SELECT id, openalex_id
+        FROM papers
+        WHERE id IN ({placeholders})
+          AND TRIM(COALESCE(openalex_id, '')) <> ''
+        """,
+        list(paper_ids),
+    ).fetchall()
+    for r in id_rows:
+        pid = r["id"] if isinstance(r, sqlite3.Row) else r[0]
+        oa = str(r["openalex_id"] if isinstance(r, sqlite3.Row) else r[1]).strip()
+        # 'W1002902372' → '1002902372'; skip anything not in that canonical shape.
+        if oa[:1] in ("W", "w") and oa[1:].isdigit():
+            refwork_to_local[oa[1:]] = str(pid)
+    if not refwork_to_local:
+        return {}
+
+    # Pull every reference row whose cited work is one of our visible papers.
+    ref_placeholders = ",".join(["?"] * len(refwork_to_local))
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT paper_id AS citing, referenced_work_id AS ref
+            FROM publication_references
+            WHERE CAST(referenced_work_id AS TEXT) IN ({ref_placeholders})
+            """,
+            list(refwork_to_local.keys()),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    # Entity = cited corpus paper; feature = the paper that cites it.
+    cited_citers: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        citing = r["citing"] if isinstance(r, sqlite3.Row) else r[0]
+        ref = str(r["ref"] if isinstance(r, sqlite3.Row) else r[1])
+        local = refwork_to_local.get(ref)
+        if local is not None:
+            cited_citers[local].append(str(citing))
+    return cooccurrence_pairs(
+        cited_citers, min_shared=min_shared_citers, max_feature_df=max_citer_df
+    )
 
 
 # ---------------------------------------------------------------------------

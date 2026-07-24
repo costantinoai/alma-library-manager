@@ -126,6 +126,7 @@ def fuse_layout(
     bib_pairs: dict[tuple[str, str], int],
     *,
     weights: dict[str, float],
+    cocite_pairs: dict[tuple[str, str], int] | None = None,
     init_coords: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, tuple[float, float]]:
     """PROTOTYPE multi-view layout (task 19) — fuse several relationship signals
@@ -133,7 +134,8 @@ def fuse_layout(
 
     Builds a per-signal pairwise DISTANCE matrix — semantic (cosine on the
     embeddings), co-authorship (shared authors), bibliographic coupling (shared
-    references) — blends them by ``weights`` and runs UMAP(metric="precomputed").
+    references) and co-citation (shared citers, the citation fabric's forward
+    view) — blends them by ``weights`` and runs UMAP(metric="precomputed").
 
     * **Weights are INDEPENDENT** (not renormalized): each is the raw 0..1
       contribution of that source, used together. semantic 1 / coauth 1 / bib 0
@@ -156,7 +158,8 @@ def fuse_layout(
     w_sem = max(0.0, float(weights.get("semantic", 1.0) or 0.0))
     w_co = max(0.0, float(weights.get("coauthorship", 0.0) or 0.0))
     w_bib = max(0.0, float(weights.get("bibliographic_coupling", 0.0) or 0.0))
-    if w_sem + w_co + w_bib <= 0:
+    w_cocite = max(0.0, float(weights.get("co_citation", 0.0) or 0.0))
+    if w_sem + w_co + w_bib + w_cocite <= 0:
         w_sem = 1.0  # all-zero is degenerate → pure semantic
 
     idx = {pid: i for i, pid in enumerate(ids)}
@@ -190,6 +193,8 @@ def fuse_layout(
         d = d + w_co * _pair_distance(coauth_pairs)
     if w_bib > 0:
         d = d + w_bib * _pair_distance(bib_pairs)
+    if w_cocite > 0 and cocite_pairs:
+        d = d + w_cocite * _pair_distance(cocite_pairs)
     np.fill_diagonal(d, 0.0)
     d = (d + d.T) / 2.0  # enforce exact symmetry for the precomputed metric
 

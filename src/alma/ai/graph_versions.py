@@ -64,7 +64,11 @@ from __future__ import annotations
 #            the cached graph payloads (paper map + author network, both scopes,
 #            default + variant caches — all keyed on this version) must rebuild to
 #            include it.
-PROJECTION_ALGO_VERSION = "2026.07-7"
+# 2026.07-8: paper map gains a `co_citation` edge layer (papers cited together by
+#            ≥2 other papers) alongside semantic / bibliographic_coupling /
+#            co_authorship — a new default edge topology, so the cached paper maps
+#            must rebuild to carry the new edges + edge_layers count (task 47 §7).
+PROJECTION_ALGO_VERSION = "2026.07-8"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.

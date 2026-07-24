@@ -17,6 +17,7 @@ export const LAYER_COLORS: Record<string, string> = {
   semantic: 'rgba(59,130,246,0.45)',
   bibliographic_coupling: 'rgba(139,92,246,0.38)',
   co_authorship: 'rgba(16,185,129,0.38)',
+  co_citation: 'rgba(236,72,153,0.38)',
   topic: 'rgba(245,158,11,0.35)',
 }
 
@@ -26,5 +27,6 @@ export const LAYER_LABELS: Record<string, string> = {
   semantic: 'Semantic (nearest work)',
   bibliographic_coupling: 'Shared references',
   co_authorship: 'Shared authors',
+  co_citation: 'Cited together',
   topic: 'Topic',
 }
