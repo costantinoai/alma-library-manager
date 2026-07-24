@@ -346,6 +346,34 @@ them (`PRIOR_STRENGTH = 6.0`, `HALF_LIFE_DAYS = 30`) live in
 They're tuned for "noticeable enough to act on, not so reactive
 that one bad day kills a branch."
 
+## Frontier map view
+
+Beyond the list / compact / extended layouts, the recommendation list has a
+fourth **Map** view — a 2-D projection of your SPECTER2 semantic space where
+proximity means similarity. It's the actionable version of the corpus graph:
+three layers make "where am I, where's the frontier, what next" spatially
+legible.
+
+- **Library** — solid neutral dots: the terrain, the shape of what you've saved.
+- **Suggestions** — the hero layer: the lens's current recommendations, coloured
+  by **branch** (the same branch identity as Branch Studio) and sized by score.
+  A suggestion near your library is a natural extension; one far out is a novel
+  direction. Suggestions with no abstract yet (no coordinate) are reported as
+  "N not placed".
+- **Seen** — faint frontier dots, opt-in ("Show everything I've seen"): the top
+  papers you've encountered but not acted on, nearest your library centroid,
+  with an honest cap ("showing X nearest of Y seen"). `dismissed`/`removed`
+  papers never appear.
+
+The map is fully connected to the rest of Discovery: a **branch legend** chips
+row highlights a branch and dims the others; clicking any node opens the same
+paper detail panel the list uses, so Save / Dismiss write the same real rows and
+the map refetches. Pan and zoom to explore; the coordinates come from the
+corpus-scope layout (built once and cached — a short "building the layout" state
+shows on first use).
+
+Endpoint: `GET /graphs/frontier?lens_id=&seen_limit=` (see the API reference).
+
 ## Actions on a Discovery card
 
 | Action | What it does |
