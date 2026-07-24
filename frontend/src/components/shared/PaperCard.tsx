@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ExternalLink, HelpCircle, Loader2, Plus, Compass } from 'lucide-react'
 
+import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
+
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
@@ -67,6 +69,9 @@ interface PaperCardProps {
   followedAuthorNames?: Set<string>
   followAuthorPendingName?: string | null
   onFollowAuthor?: (authorName: string, paperId: string) => void
+  followedVenueKeys?: Set<string>
+  venueFollowPending?: string | null
+  onFollowVenue?: (args: { sourceId: string; displayName: string; keywords?: string[] }) => void
   onDetails?: () => void
   onDismiss?: () => void
   onQueue?: () => void
@@ -337,6 +342,9 @@ export function PaperCard({
   followedAuthorNames,
   followAuthorPendingName,
   onFollowAuthor,
+  followedVenueKeys,
+  venueFollowPending,
+  onFollowVenue,
   onDetails,
   onDismiss,
   onQueue,
@@ -437,6 +445,7 @@ export function PaperCard({
   const hasExplanation = !!explanation?.trim()
   const authorNames = parseAuthorNames(paper.authors)
   const canFollowAuthors = !!(paper.id && onFollowAuthor)
+  const canFollowVenue = !!(paper.journal && onFollowVenue)
 
   // Track abstract engagement duration on collapse or unmount
   const flushAbstractEngagement = useCallback(() => {
@@ -678,7 +687,20 @@ export function PaperCard({
                     {(paper.authors || yearInline) && (
                       <span className="not-italic text-slate-300">·</span>
                     )}
-                    <span className="truncate">{truncate(paper.journal, 60)}</span>
+                    {canFollowVenue ? (
+                      <VenueHoverCard
+                        journal={paper.journal}
+                        isFollowed={followedVenueKeys?.has(paper.journal.toLowerCase()) ?? false}
+                        followPending={venueFollowPending === paper.journal.toLowerCase()}
+                        onFollow={onFollowVenue}
+                      >
+                        <span className="cursor-default truncate rounded px-0.5 transition-colors hover:bg-surface-2 hover:not-italic hover:text-slate-700">
+                          {truncate(paper.journal, 60)}
+                        </span>
+                      </VenueHoverCard>
+                    ) : (
+                      <span className="truncate">{truncate(paper.journal, 60)}</span>
+                    )}
                   </span>
                 )}
               </div>

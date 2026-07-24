@@ -52,6 +52,7 @@ import { StarRating } from '@/components/StarRating'
 import { DataTable } from '@/components/ui/data-table'
 import type { ColumnDef, SortingState } from '@tanstack/react-table'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
+import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
@@ -193,6 +194,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const { followedAuthorNames, pendingAuthorName, followAuthor } = usePaperAuthorFollow()
+  const { followedVenueKeys, pendingVenueName, followVenue } = usePaperVenueFollow()
   const queryOrder = useMemo(() => {
     if (viewMode === 'cards') return sort
     switch (compactSortKey) {
@@ -536,6 +538,9 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                 followedAuthorNames={followedAuthorNames}
                 followAuthorPendingName={pendingAuthorName}
                 onFollowAuthor={followAuthor}
+                followedVenueKeys={followedVenueKeys}
+                venueFollowPending={pendingVenueName}
+                onFollowVenue={followVenue}
                 onRate={(rating) => updateLikeMutation.mutate({ pubKey: like.id, rating })}
                 onDismiss={() => setDeleteKey(like.id)}
                 onLike={() => updateLikeMutation.mutate({ pubKey: like.id, rating: 4 })}

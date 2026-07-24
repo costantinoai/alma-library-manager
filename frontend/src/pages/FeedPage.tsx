@@ -57,6 +57,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
+import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateAfterFeedRefresh, invalidateQueries } from '@/lib/queryHelpers'
@@ -233,6 +234,7 @@ export function FeedPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const { followedAuthorNames, pendingAuthorName, followAuthor } = usePaperAuthorFollow()
+  const { followedVenueKeys, pendingVenueName, followVenue } = usePaperVenueFollow()
   const route = useHashRoute()
   const authorFilter = route.params.get('author')?.trim() ?? ''
 
@@ -895,6 +897,9 @@ export function FeedPage() {
                   followedAuthorNames={followedAuthorNames}
                   followAuthorPendingName={pendingAuthorName}
                   onFollowAuthor={followAuthor}
+                  followedVenueKeys={followedVenueKeys}
+                  venueFollowPending={pendingVenueName}
+                  onFollowVenue={followVenue}
                   onDetails={() => {
                     setSelectedPaper(paper)
                     setDetailOpen(true)
