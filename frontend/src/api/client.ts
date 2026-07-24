@@ -3329,6 +3329,40 @@ export interface GraphData {
   metadata: Record<string, unknown>
 }
 
+// ── Frontier map (Discovery) ──
+export interface FrontierNode {
+  paper_id: string
+  x: number
+  y: number
+  in_library: boolean
+  layer: 'library' | 'rec' | 'seen'
+  branch_id?: string | null
+  branch_label?: string | null
+  score?: number | null
+  title?: string | null
+  year?: number | null
+}
+export interface FrontierResponse {
+  status: 'ready' | 'building'
+  nodes?: FrontierNode[]
+  counts?: {
+    library: number
+    recs: number
+    recs_unplaced: number
+    seen_shown: number
+    seen_total: number
+  }
+  message?: string
+  job_id?: string
+}
+/** Layered semantic-map nodes for the Discovery frontier view. `seenLimit=0`
+ * hides the seen layer; a 202 body carries `status:'building'`. */
+export function getFrontier(lensId: string, seenLimit: number): Promise<FrontierResponse> {
+  return api.get<FrontierResponse>(
+    `/graphs/frontier?lens_id=${encodeURIComponent(lensId)}&seen_limit=${seenLimit}`,
+  )
+}
+
 // ── Import types ──
 
 export interface ImportResult {

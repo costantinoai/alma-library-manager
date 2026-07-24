@@ -90,6 +90,37 @@ export const MONITOR_TYPE_CHIP: Record<string, string> = {
 export const MONITOR_TYPE_CHIP_FALLBACK = 'bg-surface-2 text-slate-600'
 
 /**
+ * Discovery frontier map — the three layers + the branch hue ramp. This is the
+ * ONE place SVG node fills are spelled. Neutrals use design tokens (var()); the
+ * branch ramp is vivid categorical hues (the recs are the map's hero layer),
+ * cycled by branch index. Raw hues live here only (surface-guard).
+ */
+export const FRONTIER_MAP = {
+  /** Library = the terrain: solid neutral, grounded, not attention-grabbing. */
+  library: 'var(--color-slate-500)',
+  libraryEdge: 'var(--color-slate-600)',
+  /** Seen = the faint frontier: ambient, receding. */
+  seen: 'var(--color-slate-300)',
+}
+/** Branch → node color for the recommendation (hero) layer. */
+export const BRANCH_MAP_COLORS: string[] = [
+  '#2F80C4', // folio blue
+  '#14B8A6', // teal
+  '#8B5CF6', // violet
+  '#F97316', // orange
+  '#10B981', // emerald
+  '#E11D6B', // rose
+  '#06B6D4', // cyan
+  '#F59E0B', // amber
+  '#6366F1', // indigo
+  '#D946A6', // fuchsia
+]
+export function branchMapColor(index: number): string {
+  const n = BRANCH_MAP_COLORS.length
+  return BRANCH_MAP_COLORS[((index % n) + n) % n]
+}
+
+/**
  * Triage "Queue" action identity — violet, deliberately distinct from amber
  * Save / emerald Like / rose Dismiss (which are semantic tokens). Queue is the
  * one triage tone whose color is a pure identity, not a state, so it lives here.

@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   LayoutList,
   Loader2,
+  Map as MapIcon,
   RefreshCw,
   Rows3,
 } from 'lucide-react'
@@ -25,6 +26,7 @@ import {
   getDiscoverySettings,
   updateDiscoverySettings,
   likeRecommendation,
+  getPaperById,
   listLensRecommendations,
   listLenses,
   readRecommendation,
@@ -45,6 +47,7 @@ import {
   LensWeightsPanel,
   PaperDetailPanel,
 } from '@/components/discovery'
+import { FrontierMap } from '@/components/discovery/FrontierMap'
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
@@ -72,7 +75,7 @@ import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/l
 // `recent` re-sorts by publication date desc so the user can scan
 // what's new in the lens without losing the underlying scoring.
 type DiscoverySort = 'relevance' | 'recent'
-type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
+type DiscoveryViewMode = 'compact' | 'normal' | 'extended' | 'map'
 // Per-refresh target — number of recommendations actually staged on
 // the Discovery page after dedup, diversity, lifecycle filters, and
 // truncation. The backend oversamples internally so the post-filter
@@ -1065,6 +1068,7 @@ export function DiscoveryPage() {
               { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
               { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
               { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
+              { value: 'map', label: 'Map', icon: MapIcon, title: 'Frontier map — your library, suggestions, and the frontier in semantic space' },
             ],
           }}
         />
@@ -1093,6 +1097,19 @@ export function DiscoveryPage() {
                   Refresh lens
                 </Button>
               ) : undefined}
+            />
+          ) : viewMode === 'map' ? (
+            <FrontierMap
+              lensId={selectedLensId}
+              onSelectPaper={async (paperId) => {
+                try {
+                  const paper = await getPaperById(paperId)
+                  setSelectedPaper(paper)
+                  setDetailOpen(true)
+                } catch {
+                  /* deep-link 404s are handled elsewhere; ignore here */
+                }
+              }}
             />
           ) : viewMode === 'compact' ? (
             <DiscoveryCompactTable
