@@ -402,6 +402,33 @@ Analytics graph.
 Endpoint: `GET /graphs/frontier?lens_id=&seen_limit=&include_edges=` (see the
 API reference).
 
+### Directions — naming a region and exploring it
+
+The frontier map isn't just a picture; you can **adopt a region of it as a
+direction** to deepen retrieval there. Turn on **Select a direction** and drag a
+box around a cluster of papers. Before any action, a popover shows the region's
+*meaning*: a c-TF-IDF **label** and top terms (the same labeler the corpus
+clusters use), honest membership counts ("12 in library · 3 suggestions · 41
+seen here"), and three sample titles. Selections under five papers are too small
+to characterize and the action is disabled.
+
+**Explore this direction** adopts it onto the lens: the region is stored on
+`branch_controls.custom_directions` as `{label, terms, member_paper_ids, mode}`
+and a refresh is kicked off. Crucially, the *member ids* are stored — never raw
+vectors — so the direction's centroid is recomputed from live embeddings at
+every refresh and can never go stale. At refresh time each lane consumes it: the
+**vector lane** blends the direction's centroid into the seed centroid (a `pin`
+pulls harder than a `boost`) so retrieval leans toward the region, and the
+**lexical lane** folds the direction's terms into its query expansion.
+
+Adopted directions appear in **Branch Studio** as branch-like rows (label, mode,
+member/term summary) with a **Remove** control. This adoption is the *only*
+crossing between the map's clusters and the lens's branches — it's always
+explicit and user-driven, never automatic.
+
+Endpoint: `POST /graphs/region/describe` (a pure read — the POST body just
+carries the selected paper ids).
+
 ### Citation fabric on the corpus graph
 
 The same coupling and co-citation layers ship on the Analytics paper map
