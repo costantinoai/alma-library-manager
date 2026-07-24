@@ -103,18 +103,47 @@ def _detect_default_python_env() -> tuple[str, str]:
 
 _default_env_type, _default_env_path = _detect_default_python_env()
 
+
+def _default_ai_provider() -> str:
+    """Environment-aware default for ``ai.provider``.
+
+    Returns ``"local"`` when the local SPECTER2 stack (torch / transformers /
+    adapters / numpy) is importable in this interpreter, else ``"none"``. Uses
+    ``find_spec`` only — no heavy import. This makes local vector compute follow
+    the environment so corpus coverage converges to the local ceiling on a
+    torch-capable box, while torch-less deployments stay S2-only. See
+    tasks/PRODUCT_DECISIONS.md D19 (task 47 Phase 9).
+
+    ``ALMA_DEFAULT_AI_PROVIDER`` (``none``/``local``/``openai``) forces the
+    default regardless of the environment — an ops escape hatch (e.g. pin
+    ``none`` on a torch-capable host) and what the test suite sets for
+    deterministic, host-independent runs.
+    """
+    override = os.environ.get("ALMA_DEFAULT_AI_PROVIDER", "").strip().lower()
+    if override in ("none", "local", "openai"):
+        return override
+    from alma.ai.import_state import module_available
+
+    if all(module_available(m) for m in ("adapters", "transformers", "torch", "numpy")):
+        return "local"
+    return "none"
+
+
 _DEFAULT_DISCOVERY_SETTINGS = dict(DISCOVERY_SETTINGS_DEFAULTS)
 _DEFAULT_DISCOVERY_SETTINGS.update(
     {
-        # ai.provider gates LOCAL embedding computation. "none" means
-        # "don't compute locally" — Semantic Scholar's pre-computed
-        # SPECTER2 vectors still get fetched for any paper with a DOI
-        # via the separate fetch_source layer, which is the zero-config
-        # default. Users who want local encoding for missing papers
-        # flip this to "local" in Settings → AI & embeddings (requires
-        # the normal Docker variant or a local install with the AI
-        # extras).
-        "ai.provider": "none",
+        # ai.provider gates LOCAL embedding computation. Semantic Scholar's
+        # pre-computed SPECTER2 vectors always get fetched for any paper with a
+        # DOI/s2_id via the separate fetch_source layer (~55% corpus ceiling);
+        # "local" additionally computes the residual locally within the same
+        # SPECTER2 space (→ ~82%+). The default now FOLLOWS THE ENVIRONMENT:
+        # "local" when the AI extras (torch/transformers/adapters) are
+        # importable, else "none" (see _default_ai_provider). This overrides the
+        # historical opt-in "none" so corpus vector coverage converges without a
+        # manual click on a torch-capable box — task 47 Phase 9,
+        # tasks/PRODUCT_DECISIONS.md D19. Users can still set "none" in
+        # Settings → AI & embeddings (a one-time migration won't re-flip it).
+        "ai.provider": _default_ai_provider(),
         "ai.python_env_type": _default_env_type,
         "ai.python_env_path": _default_env_path,
     }

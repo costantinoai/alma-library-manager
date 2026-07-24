@@ -1020,6 +1020,39 @@ def _m_0030_reorder_position(conn: sqlite3.Connection) -> None:
             conn.execute(f"UPDATE {table} SET position = ? WHERE id = ?", (idx, row[0]))
 
 
+def _m_0031_ai_provider_local_when_available(conn: sqlite3.Connection) -> None:
+    """Auto-enable local SPECTER2 when the environment supports it (task 47 P9).
+
+    The historical default was ``ai.provider='none'`` (S2 pre-computed vectors
+    only, ~55% corpus ceiling). On a torch-capable box the free local residual
+    fill lifts coverage to ~82%+ within the same SPECTER2 space, so the default
+    now follows the environment. This one-time migration flips EXISTING DBs from
+    the old ``none`` default to ``local`` when the AI extras are importable;
+    fresh DBs already get the environment-aware default. Runs once (versioned),
+    so a later explicit ``none`` chosen by the user sticks. See
+    PRODUCT_DECISIONS.md D19.
+    """
+    import os
+
+    from alma.ai.import_state import module_available
+
+    if not _table_exists(conn, "discovery_settings"):
+        return
+    # Respect the explicit ops/test override (matches deps._default_ai_provider).
+    override = os.environ.get("ALMA_DEFAULT_AI_PROVIDER", "").strip().lower()
+    if override in ("none", "local", "openai"):
+        if override == "local":
+            conn.execute(
+                "UPDATE discovery_settings SET value = 'local' WHERE key = 'ai.provider' AND value = 'none'"
+            )
+        return
+    if not all(module_available(m) for m in ("adapters", "transformers", "torch", "numpy")):
+        return
+    conn.execute(
+        "UPDATE discovery_settings SET value = 'local' WHERE key = 'ai.provider' AND value = 'none'"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1051,6 +1084,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (28, "alerted_publications_channel", _m_0028_alerted_publications_channel),
     (29, "venue_monitor_source_id", _m_0029_venue_monitor_source_id),
     (30, "reorder_position", _m_0030_reorder_position),
+    (31, "ai_provider_local_when_available", _m_0031_ai_provider_local_when_available),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
