@@ -358,6 +358,14 @@ class FeedMonitorCreateRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Search string or boolean keyword expression used by the monitor")
     label: str | None = Field(default=None, description="Optional display label")
     config: dict | None = None
+    source_id: str | None = Field(
+        default=None,
+        description="Resolved OpenAlex source id (S...) — REQUIRED for monitor_type='venue' (resolve via /feed/monitors/venue-search)",
+    )
+    filter_keywords: list[str] = Field(
+        default_factory=list,
+        description="Optional keyword filter for venue monitors: admit a paper only if any keyword matches its title or abstract",
+    )
 
 
 class FeedMonitorUpdateRequest(BaseModel):

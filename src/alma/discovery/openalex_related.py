@@ -564,6 +564,137 @@ def fetch_recent_works_for_author(
     return results
 
 
+def fetch_recent_works_for_source(
+    source_id: str,
+    from_year: int | None = None,
+    limit: int = 25,
+) -> list[dict]:
+    """Fetch recent works published in a specific OpenAlex source (journal/venue).
+
+    Backs journal (venue) feed monitors: instead of a fragile free-text search
+    on the journal NAME (which matched any paper mentioning "Cortex" / "Brain"),
+    venue monitors fetch works whose ``primary_location.source.id`` equals the
+    resolved OpenAlex source id — an exact, rename-proof membership match.
+
+    Uses the full ``_WORKS_SELECT_FIELDS`` projection (not the lean author
+    projection) because downstream the keyword filter matches on title OR
+    abstract, so ``abstract_inverted_index`` must be present in the response.
+
+    Args:
+        source_id: OpenAlex source id (bare ``S...`` or URL form).
+        from_year: Only include works published from this year onwards.
+        limit: Maximum number of works to return (newest first).
+
+    Returns:
+        List of normalized candidate dicts (same shape as
+        :func:`fetch_recent_works_for_author`). Empty list on failure.
+    """
+    sid = (source_id or "").strip()
+    if not sid:
+        return []
+    if "openalex.org/" in sid:
+        sid = sid.rstrip("/").split("/")[-1]
+
+    client = get_client()
+
+    filter_parts = [f"primary_location.source.id:{sid}"]
+    if from_year:
+        filter_parts.append(f"from_publication_date:{from_year}-01-01")
+    filter_str = ",".join(filter_parts)
+
+    try:
+        resp = client.get(
+            "/works",
+            params={
+                "filter": filter_str,
+                # Newest-first: a journal monitor is a recency feed, not a
+                # top-cited digest (unlike the author-works fetch).
+                "sort": "publication_date:desc",
+                "per-page": min(limit, 100),
+                "select": _WORKS_SELECT_FIELDS,
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.debug(
+                "OpenAlex source works fetch returned HTTP %d for '%s'",
+                resp.status_code,
+                sid,
+            )
+            return []
+
+        works = (resp.json() or {}).get("results") or []
+        results: list[dict] = []
+        for i, w in enumerate(works):
+            mapped = _work_to_result(w, rank_score(i, len(works)))
+            if mapped:
+                results.append(mapped)
+    except Exception as exc:
+        logger.warning("OpenAlex source works fetch failed for '%s': %s", sid, exc)
+        return []
+
+    return results
+
+
+def search_sources(query: str, limit: int = 10) -> list[dict]:
+    """Autocomplete OpenAlex sources (journals/venues) by name.
+
+    Backs the journal-follow autocomplete (``GET /feed/monitors/venue-search``).
+    ``?search=`` is the paid OpenAlex cost class, so this is a user-interactive
+    call only — never invoked by a background job.
+
+    Args:
+        query: Partial journal name to search for.
+        limit: Maximum number of sources to return.
+
+    Returns:
+        List of ``{source_id, display_name, works_count, issn_l, type,
+        summary_stats}`` dicts, best matches first. Empty list on failure.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+
+    client = get_client()
+    try:
+        resp = client.get(
+            "/sources",
+            params={
+                "search": query,
+                "per-page": min(max(1, limit), 25),
+                # Every field the follow UI reads must be projected (rule §4.5):
+                # display + works_count/summary_stats drive the big-venue nudge.
+                "select": "id,display_name,works_count,issn_l,type,summary_stats",
+            },
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            logger.debug("OpenAlex sources search returned HTTP %d", resp.status_code)
+            return []
+        rows = (resp.json() or {}).get("results") or []
+    except Exception as exc:
+        logger.warning("OpenAlex sources search failed for '%s': %s", query, exc)
+        return []
+
+    out: list[dict] = []
+    for row in rows[:limit]:
+        raw_id = str((row or {}).get("id") or "").strip()
+        source_id = raw_id.rstrip("/").split("/")[-1] if raw_id else ""
+        if not source_id:
+            continue
+        out.append(
+            {
+                "source_id": source_id,
+                "display_name": str((row or {}).get("display_name") or "").strip(),
+                "works_count": int((row or {}).get("works_count") or 0),
+                "issn_l": (row or {}).get("issn_l") or None,
+                "type": str((row or {}).get("type") or "").strip() or None,
+                "summary_stats": (row or {}).get("summary_stats") or {},
+            }
+        )
+    return out
+
+
 def batch_fetch_recent_works_for_authors(
     author_ids: list[str],
     from_year: int | None = None,

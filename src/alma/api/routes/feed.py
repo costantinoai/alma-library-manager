@@ -230,6 +230,29 @@ def list_feed_monitors(
         raise_internal("Failed to list feed monitors", exc)
 
 
+@router.get(
+    "/monitors/venue-search",
+    summary="Autocomplete OpenAlex journals/venues for a journal monitor",
+)
+def venue_search(q: str):
+    """Search OpenAlex sources (journals) by name for the journal-follow UI.
+
+    Pure read — no DB access. Defined BEFORE the dynamic ``/monitors/{id}``
+    routes so the literal path is not captured as a monitor id. ``?search=``
+    is the paid OpenAlex cost class, so this is only ever called interactively
+    from the follow UI, never by a background job.
+    """
+    query = (q or "").strip()
+    if not query:
+        return {"results": []}
+    try:
+        from alma.discovery import openalex_related
+
+        return {"results": openalex_related.search_sources(query, limit=10)}
+    except Exception as exc:
+        raise_internal("Failed to search journals", exc)
+
+
 @router.post(
     "/monitors",
     summary="Create a non-author feed monitor",
@@ -245,6 +268,8 @@ def create_feed_monitor(
             query=payload.query,
             label=payload.label,
             config=payload.config,
+            source_id=payload.source_id,
+            filter_keywords=payload.filter_keywords,
         )
         return FeedMonitorResponse(**created).model_dump()
     except sqlite3.IntegrityError as exc:

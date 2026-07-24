@@ -54,6 +54,49 @@ def _canonical_monitor_key(monitor_type: str, query: str) -> str:
     return raw
 
 
+def canonical_source_id(source_id: str) -> str:
+    """Normalize an OpenAlex source id to bare ``S<digits>`` form.
+
+    Accepts a bare id or a URL (``https://openalex.org/S12345``); returns the
+    upper-cased bare id. A venue monitor's key derives from this (unique per
+    source, rename-proof), so it must be canonical.
+    """
+    sid = (source_id or "").strip()
+    if not sid:
+        return ""
+    if "openalex.org/" in sid:
+        sid = sid.rstrip("/").split("/")[-1]
+    return sid.upper()
+
+
+def _clean_filter_keywords(raw: Any) -> list[str]:
+    """Normalize a venue monitor's optional keyword filter to a clean list.
+
+    Accepts a list or a comma-separated string; trims, drops blanks, and
+    de-duplicates case-insensitively while preserving first-seen order.
+    """
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        parts = raw.split(",")
+    elif isinstance(raw, (list, tuple)):
+        parts = [str(p) for p in raw]
+    else:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        token = " ".join(str(part or "").strip().split())
+        if not token:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(token)
+    return out
+
+
 def _fetch_monitor_row(db: sqlite3.Connection, monitor_id: str) -> sqlite3.Row | None:
     return db.execute(
         """
@@ -213,6 +256,8 @@ def create_feed_monitor(
     query: str,
     label: str | None = None,
     config: dict[str, Any] | None = None,
+    source_id: str | None = None,
+    filter_keywords: list[str] | None = None,
 ) -> dict[str, Any]:
     monitor_type = str(monitor_type or "").strip().lower()
     if monitor_type not in NON_AUTHOR_MONITOR_TYPES:
@@ -223,7 +268,31 @@ def create_feed_monitor(
         normalized_query = normalize_keyword_expression(normalized_query)
     if not normalized_query:
         raise ValueError("Monitor query cannot be empty")
-    monitor_key = _canonical_monitor_key(monitor_type, normalized_query)
+
+    extra_config = dict(config or {})
+    if monitor_type == "venue":
+        # Venue monitors match by OpenAlex source id, never by name-phrase
+        # search — so a resolved source id is mandatory. `normalized_query`
+        # carries the human-readable journal name for display only.
+        resolved_source_id = canonical_source_id(
+            source_id or extra_config.get("source_id") or ""
+        )
+        if not resolved_source_id:
+            raise ValueError(
+                "A journal monitor needs a resolved OpenAlex source id — "
+                "pick a journal via /feed/monitors/venue-search first"
+            )
+        keywords = _clean_filter_keywords(
+            filter_keywords if filter_keywords is not None
+            else extra_config.get("filter_keywords")
+        )
+        extra_config["source_id"] = resolved_source_id
+        extra_config["filter_keywords"] = keywords
+        # Key on the source id (unique, rename-proof) — not the display name.
+        monitor_key = resolved_source_id.lower()
+    else:
+        monitor_key = _canonical_monitor_key(monitor_type, normalized_query)
+
     monitor_label = " ".join((label or normalized_query).strip().split()) or normalized_query
 
     existing = db.execute(
@@ -235,7 +304,7 @@ def create_feed_monitor(
 
     now = datetime.utcnow().isoformat()
     monitor_id = uuid.uuid4().hex
-    payload = {"query": normalized_query, **(config or {})}
+    payload = {"query": normalized_query, **extra_config}
     # Single gated INSERT. The duplicate guard above raised IntegrityError
     # before opening the unit, so the route's 409 mapping still fires.
     run_write_unit(
@@ -466,7 +535,10 @@ def get_monitor_query(monitor: dict[str, Any]) -> str:
     if not raw_query:
         return ""
     if monitor_type == "venue":
-        return f"\"{raw_query}\""
+        # Venue matching is by OpenAlex source id (see feed._run_monitor_source_search),
+        # not a name-phrase search — so return the display name unquoted. It is
+        # used for logging / the diagnostic `monitor_query` only.
+        return raw_query
     if monitor_type == "preprint":
         return raw_query
     if monitor_type == "branch":

@@ -438,6 +438,25 @@ def _filter_monitor_candidates(
             if match_score < 0.45 or not has_explicit_support:
                 rejected_match += 1
                 continue
+        elif monitor_type == "venue":
+            # Membership is already guaranteed by the source-id fetch. The
+            # optional keyword filter narrows a high-volume journal: admit a
+            # paper iff ANY keyword matches (case-insensitive) in title OR
+            # abstract. Empty list => whole venue admitted.
+            config = monitor.get("config") if isinstance(monitor.get("config"), dict) else {}
+            keywords = [str(k).strip().lower() for k in ((config or {}).get("filter_keywords") or []) if str(k).strip()]
+            next_candidate["monitor_match_score"] = 1.0
+            next_candidate["monitor_match_coverage"] = 1.0
+            next_candidate["monitor_title_matches"] = 0
+            next_candidate["monitor_journal_matches"] = 0
+            if keywords:
+                haystack = (
+                    f"{next_candidate.get('title') or ''} "
+                    f"{next_candidate.get('abstract') or ''}"
+                ).lower()
+                if not any(kw in haystack for kw in keywords):
+                    rejected_match += 1
+                    continue
 
         filtered.append(next_candidate)
 
@@ -1319,8 +1338,10 @@ def _monitor_search_plan(
     temperature = search_temperature
 
     if monitor_type == "venue":
-        settings["sources.arxiv.enabled"] = "false"
-        settings["sources.biorxiv.enabled"] = "false"
+        # Venue monitors do NOT fan out across free-text sources; they fetch by
+        # OpenAlex source id in `_run_monitor_source_search`. `search_query` is
+        # the display name — kept non-empty only so the missing_query guard
+        # passes; the source-id fetch ignores it.
         search_query = str((config or {}).get("query") or monitor.get("label") or monitor_query).strip()
     elif monitor_type == "query":
         search_query = keyword_retrieval_query(monitor_query)
@@ -1339,6 +1360,53 @@ def _monitor_search_plan(
         temperature = max(search_temperature, float((config or {}).get("temperature") or 0.34))
 
     return monitor_query, search_query, settings, temperature
+
+
+def _run_monitor_source_search(
+    monitor: dict,
+    search_query: str,
+    *,
+    from_year: int | None,
+    settings: dict[str, str],
+    temperature: float,
+    search_limit: int,
+    semantic_scholar_bulk: bool,
+) -> list[dict]:
+    """Fetch raw candidates for one monitor.
+
+    Venue (journal) monitors resolve by OpenAlex source id — an exact,
+    rename-proof membership match — instead of the free-text cross-source
+    fan-out every other monitor type uses. This is the single seam both feed
+    refresh call sites (full-inbox worker + single-monitor refresh) share, so
+    the venue special-case can never drift between them.
+    """
+    from alma.discovery import openalex_related, source_search
+
+    monitor_type = str(monitor.get("monitor_type") or "").strip().lower()
+    if monitor_type == "venue":
+        config = monitor.get("config") if isinstance(monitor.get("config"), dict) else {}
+        source_id = str((config or {}).get("source_id") or "").strip()
+        if not source_id:
+            # Legacy name-only venue row awaiting re-linking (Phase 1.5 migrator
+            # disables these); fetch nothing rather than fall back to a phrase
+            # search that surfaces noise.
+            return []
+        candidates = openalex_related.fetch_recent_works_for_source(
+            source_id, from_year=from_year, limit=search_limit
+        )
+        for candidate in candidates:
+            candidate.setdefault("source_api", "openalex")
+        return candidates
+
+    return source_search.search_across_sources(
+        search_query,
+        limit=search_limit,
+        from_year=from_year,
+        settings=settings,
+        mode="core",
+        temperature=temperature,
+        semantic_scholar_mode="bulk" if semantic_scholar_bulk else "interactive",
+    )
 
 
 def _read_monitor_refresh_settings(discovery_settings: dict):
@@ -1409,7 +1477,6 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
     Authors reads don't queue behind an implicit transaction.
     """
     from alma.application.discovery import read_settings as read_discovery_settings
-    from alma.discovery import source_search
     from alma.openalex.client import _normalize_work, batch_fetch_recent_works_for_authors
     from alma.openalex.http import get_client as get_openalex_client
 
@@ -1666,14 +1733,14 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
                 return {"error_reason": "missing_query"}
             try:
                 search_limit_for_monitor = _monitor_search_limit(monitor, search_limit)
-                candidates = source_search.search_across_sources(
+                candidates = _run_monitor_source_search(
+                    monitor,
                     search_query,
-                    limit=search_limit_for_monitor,
                     from_year=from_year,
                     settings=search_settings,
-                    mode="core",
                     temperature=monitor_temperature,
-                    semantic_scholar_mode="bulk" if semantic_scholar_bulk else "interactive",
+                    search_limit=search_limit_for_monitor,
+                    semantic_scholar_bulk=semantic_scholar_bulk,
                 )
             except Exception as exc:
                 logger.debug("Non-author monitor refresh failed for %s: %s", monitor["label"], exc)
@@ -1886,7 +1953,6 @@ def refresh_feed_monitor(
 ) -> dict | None:
     """Refresh one feed monitor and return a monitor-scoped summary."""
     from alma.application.discovery import read_settings as read_discovery_settings
-    from alma.discovery import source_search
     from alma.openalex.client import _normalize_work, batch_fetch_recent_works_for_authors
 
     def _log(step: str, message: str, **kwargs) -> None:
@@ -2062,14 +2128,14 @@ def refresh_feed_monitor(
                 data={"monitor_id": monitor["id"], "query": monitor_query, "search_query": search_query},
             )
             search_limit_for_monitor = _monitor_search_limit(monitor, search_limit)
-            candidates = source_search.search_across_sources(
+            candidates = _run_monitor_source_search(
+                monitor,
                 search_query,
-                limit=search_limit_for_monitor,
                 from_year=from_year,
                 settings=search_settings,
-                mode="core",
                 temperature=monitor_temperature,
-                semantic_scholar_mode="bulk" if semantic_scholar_bulk else "interactive",
+                search_limit=search_limit_for_monitor,
+                semantic_scholar_bulk=semantic_scholar_bulk,
             )
             candidates, filter_stats = _filter_monitor_candidates(
                 monitor=monitor,

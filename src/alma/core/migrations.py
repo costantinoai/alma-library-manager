@@ -965,6 +965,43 @@ def _m_0028_alerted_publications_channel(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0029_venue_monitor_source_id(conn: sqlite3.Connection) -> None:
+    """Venue monitors match by OpenAlex source id (2026-07-24, task 47 Phase 1).
+
+    Journal (venue) monitors historically matched by a quoted phrase search on
+    the journal NAME — noisy for short names ("Cortex", "Brain"). They now
+    require a resolved OpenAlex ``source_id`` in ``config_json``. A legacy
+    name-only venue row cannot match under the new path, so mark it
+    ``needs_resolution`` and disable it: Settings surfaces it with a "Re-link"
+    action (Phase 2) instead of silently returning nothing.
+
+    The venue-follow feature was API-only before this change, so real DBs carry
+    zero venue rows — this migrator is written for correctness (dev/test DBs may
+    differ) and is a no-op on production data.
+    """
+    import json as _json
+
+    if not _table_exists(conn, "feed_monitors"):
+        return
+    rows = conn.execute(
+        "SELECT id, config_json FROM feed_monitors WHERE monitor_type = 'venue'"
+    ).fetchall()
+    for row in rows:
+        try:
+            config = _json.loads(row[1]) if row[1] else {}
+            if not isinstance(config, dict):
+                config = {}
+        except Exception:
+            config = {}
+        if str(config.get("source_id") or "").strip():
+            continue  # already resolved — forward-only shape, leave it be
+        config["needs_resolution"] = True
+        conn.execute(
+            "UPDATE feed_monitors SET config_json = ?, enabled = 0 WHERE id = ?",
+            (_json.dumps(config, ensure_ascii=False), row[0]),
+        )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -994,6 +1031,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (26, "merge_candidate_source_and_rejections", _m_0026_merge_candidate_source_and_rejections),
     (27, "suggestion_not_duplicate", _m_0027_suggestion_not_duplicate),
     (28, "alerted_publications_channel", _m_0028_alerted_publications_channel),
+    (29, "venue_monitor_source_id", _m_0029_venue_monitor_source_id),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
