@@ -1,0 +1,143 @@
+import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+
+import { InsightsActivity } from '@/components/insights/InsightsActivity'
+import { InsightsGraphTab } from '@/components/insights/InsightsGraphTab'
+import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
+import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { LoadingState } from '@/components/ui/LoadingState'
+import { ErrorState } from '@/components/ui/ErrorState'
+import {
+  api,
+  type InsightsData,
+  type AIStatus,
+  getWeeklyBrief,
+  getCollectionIntelligence,
+  getTopicDrift,
+  getSignalImpact,
+} from '@/api/client'
+import { COLORS, TOOLTIP_STYLE } from '@/components/insights/chartTheme'
+import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
+
+// Library › Analytics — the "understand your data" surface, absorbed from the
+// retired Insights page (task 47 Phase 4, decision 47-C). Sections: Overview
+// (corpus stats), Map (paper map, scope toggle inside GraphPanel), Activity
+// (subsystem trends — re-homes to Health in Phase 5), Reports. Driven by the
+// `?section=` param so `#/insights?tab=…` redirects land on the right section.
+const SECTIONS = ['overview', 'map', 'activity', 'reports'] as const
+
+export function AnalyticsTab() {
+  const route = useHashRoute()
+  const routeSection = route.params.get('section')?.trim() ?? 'overview'
+  const [section, setSection] = useState<string>(
+    (SECTIONS as readonly string[]).includes(routeSection) ? routeSection : 'overview',
+  )
+  const [activeReport, setActiveReport] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSection((SECTIONS as readonly string[]).includes(routeSection) ? routeSection : 'overview')
+  }, [routeSection])
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['insights'],
+    queryFn: () => api.get<InsightsData>('/insights'),
+    staleTime: 60_000,
+    retry: 1,
+  })
+  const { data: aiStatus } = useQuery({
+    queryKey: ['ai-status'],
+    queryFn: () => api.get<AIStatus>('/ai/status'),
+    staleTime: 30_000,
+  })
+
+  const { data: weeklyBrief, isLoading: weeklyLoading } = useQuery({
+    queryKey: ['report-weekly'],
+    queryFn: getWeeklyBrief,
+    staleTime: 120_000,
+    enabled: activeReport === 'weekly',
+  })
+  const { data: collectionIntel, isLoading: collectionLoading } = useQuery({
+    queryKey: ['report-collections'],
+    queryFn: getCollectionIntelligence,
+    staleTime: 120_000,
+    enabled: activeReport === 'collections',
+  })
+  const { data: topicDriftData, isLoading: driftLoading } = useQuery({
+    queryKey: ['report-drift'],
+    queryFn: getTopicDrift,
+    staleTime: 120_000,
+    enabled: activeReport === 'drift',
+  })
+  const { data: signalImpactData, isLoading: impactLoading } = useQuery({
+    queryKey: ['report-impact'],
+    queryFn: getSignalImpact,
+    staleTime: 120_000,
+    enabled: activeReport === 'impact',
+  })
+
+  const showStatsSkeleton = isLoading && !data
+  const showStatsError = isError && !data
+  const isRefreshing = Boolean(data?.stale || data?.rebuilding)
+
+  return (
+    <div className="space-y-6">
+      <Tabs
+        value={section}
+        onValueChange={(value) => {
+          setSection(value)
+          window.location.hash = buildHashRoute('library', { tab: 'analytics', section: value })
+        }}
+        className="w-full"
+      >
+        <div className="flex items-center justify-between gap-4">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="map">Map</TabsTrigger>
+            <TabsTrigger value="activity">Activity</TabsTrigger>
+            <TabsTrigger value="reports">Reports</TabsTrigger>
+          </TabsList>
+          {isRefreshing ? (
+            <span
+              className="inline-flex items-center gap-1.5 rounded-full border border-alma-200 bg-alma-50 px-2.5 py-1 text-xs text-alma-700"
+              title="Analytics are being recomputed in the background. This view is from the previous snapshot."
+            >
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-alma-folio" aria-hidden />
+              Refreshing…
+            </span>
+          ) : null}
+        </div>
+        <TabsContent value="overview" className="mt-4 space-y-6">
+          {showStatsSkeleton ? (
+            <LoadingState message="Loading analytics..." />
+          ) : showStatsError ? (
+            <ErrorState message="Failed to load analytics data." />
+          ) : data ? (
+            <InsightsOverviewTab data={data} aiStatus={aiStatus} colors={COLORS} tooltipStyle={TOOLTIP_STYLE} />
+          ) : null}
+        </TabsContent>
+        <TabsContent value="map" className="mt-4">
+          <InsightsGraphTab embeddingsReady={!!aiStatus?.capability_tiers?.tier1_embeddings?.ready} />
+        </TabsContent>
+        <TabsContent value="activity" className="mt-4">
+          <InsightsActivity />
+        </TabsContent>
+        <TabsContent value="reports" className="mt-4">
+          <InsightsReportsTab
+            weeklyBrief={weeklyBrief}
+            weeklyLoading={weeklyLoading}
+            collectionIntel={collectionIntel}
+            collectionLoading={collectionLoading}
+            topicDriftData={topicDriftData}
+            driftLoading={driftLoading}
+            signalImpactData={signalImpactData}
+            impactLoading={impactLoading}
+            onGenerate={(report) => setActiveReport(report)}
+            colors={COLORS}
+            tooltipStyle={TOOLTIP_STYLE}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}

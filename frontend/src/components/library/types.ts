@@ -1,6 +1,6 @@
 import { type LucideIcon } from 'lucide-react'
 
-export type TabId = 'saved' | 'reading' | 'collections' | 'tags' | 'topics' | 'imports'
+export type TabId = 'saved' | 'reading' | 'collections' | 'tags' | 'topics' | 'imports' | 'analytics'
 
 /**
  * Sort options for the Saved Library list.

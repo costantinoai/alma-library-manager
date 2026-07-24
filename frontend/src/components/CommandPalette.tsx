@@ -56,7 +56,7 @@ const PAGES: CommandAction[] = [
   { id: 'nav-corpus', name: 'Corpus explorer', icon: FileText, url: '#/settings?anchor=corpus-explorer', keywords: ['database', 'all papers', 'tracked', 'diagnostic', 'settings'] },
   { id: 'nav-authors', name: 'Authors', icon: UserCircle2, url: '#/authors', keywords: ['followed', 'people'] },
   { id: 'nav-alerts', name: 'Alerts', icon: Bell, url: '#/alerts', keywords: ['digests', 'rules'] },
-  { id: 'nav-insights', name: 'Insights', icon: BarChart3, url: '#/insights', keywords: ['stats', 'metrics', 'charts'] },
+  { id: 'nav-analytics', name: 'Analytics', icon: BarChart3, url: '#/library?tab=analytics', keywords: ['insights', 'stats', 'metrics', 'charts', 'map'] },
   { id: 'nav-settings', name: 'Settings', icon: SettingsIcon, url: '#/settings', keywords: ['preferences', 'config'] },
 ]
 

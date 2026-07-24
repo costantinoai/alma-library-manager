@@ -7,7 +7,6 @@ import {
   Library,
   X,
   Sparkles,
-  BarChart3,
   HeartPulse,
   PanelLeftClose,
   PanelLeftOpen,
@@ -59,7 +58,7 @@ const navGroups: NavGroup[] = [
   {
     label: 'Analyze',
     items: [
-      { id: 'insights', label: 'Insights', icon: BarChart3 },
+      // Insights retired into Library › Analytics (task 47 Phase 4).
       { id: 'health', label: 'Health', icon: HeartPulse },
     ],
   },

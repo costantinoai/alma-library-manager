@@ -11,7 +11,9 @@ const FeedPage = lazy(() => import('@/pages/FeedPage').then((m) => ({ default: m
 const DiscoveryPage = lazy(() => import('@/pages/DiscoveryPage').then((m) => ({ default: m.DiscoveryPage })))
 const AuthorsPage = lazy(() => import('@/pages/AuthorsPage').then((m) => ({ default: m.AuthorsPage })))
 const LibraryPage = lazy(() => import('@/pages/LibraryPage').then((m) => ({ default: m.LibraryPage })))
-const InsightsPage = lazy(() => import('@/pages/InsightsPage').then((m) => ({ default: m.InsightsPage })))
+// Insights retired into Library › Analytics (task 47 Phase 4); the page is now
+// a redirect shim so old #/insights?tab=… deep links still land correctly.
+const InsightsRedirect = lazy(() => import('@/pages/InsightsRedirect').then((m) => ({ default: m.InsightsRedirect })))
 const HealthPage = lazy(() => import('@/pages/HealthPage').then((m) => ({ default: m.HealthPage })))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage').then((m) => ({ default: m.AlertsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
@@ -76,7 +78,7 @@ function AppContent() {
       case 'library':
         return <LibraryPage />
       case 'insights':
-        return <InsightsPage />
+        return <InsightsRedirect />
       case 'health':
         return <HealthPage />
       case 'alerts':

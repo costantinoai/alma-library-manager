@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Heart,
@@ -7,6 +7,7 @@ import {
   Tags,
   Layers,
   UploadCloud,
+  BarChart3,
 } from 'lucide-react'
 
 import { getApiErrorMessage, getLibraryWorkflowSummary, getPaperById, type Publication, updateReadingStatus } from '@/api/client'
@@ -28,6 +29,12 @@ import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
 
+// Analytics is lazy — Library pays nothing for the charts/graph stack until
+// the tab is opened (task 47 Phase 4; absorbs the retired Insights page).
+const AnalyticsTab = lazy(() =>
+  import('@/components/library/AnalyticsTab').then((m) => ({ default: m.AnalyticsTab })),
+)
+
 const TABS: TabDefinition[] = [
   { id: 'saved', label: 'Saved', icon: Heart },
   { id: 'reading', label: 'Reading List', icon: BookOpen },
@@ -35,10 +42,11 @@ const TABS: TabDefinition[] = [
   { id: 'tags', label: 'Tags', icon: Tags },
   { id: 'topics', label: 'Topics', icon: Layers },
   { id: 'imports', label: 'Imports', icon: UploadCloud },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
 ]
 
 const DEFAULT_TAB: TabId = 'saved'
-const VALID_TABS = new Set<TabId>(['saved', 'reading', 'collections', 'tags', 'topics', 'imports'])
+const VALID_TABS = new Set<TabId>(['saved', 'reading', 'collections', 'tags', 'topics', 'imports', 'analytics'])
 const READING_ACTIONS: Array<{ value: 'reading' | 'done'; label: string }> = [
   { value: 'reading', label: 'Reading' },
   { value: 'done', label: 'Done' },
@@ -352,6 +360,11 @@ export function LibraryPage() {
       {activeTab === 'tags' && <TagsTab />}
       {activeTab === 'topics' && <TopicsTab initialTopic={deepLinkTopic} />}
       {activeTab === 'imports' && <ImportsTab />}
+      {activeTab === 'analytics' && (
+        <Suspense fallback={<div className="py-12 text-center text-sm text-slate-500">Loading analytics…</div>}>
+          <AnalyticsTab />
+        </Suspense>
+      )}
 
       <PaperDetailPanel
         paper={selectedPaper}
