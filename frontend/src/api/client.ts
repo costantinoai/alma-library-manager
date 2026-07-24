@@ -2708,6 +2708,10 @@ export type DiagnosticsAuthorsSection = DiagnosticsSectionMeta & {
   suggestions: InsightsDiagnostics['authors']['suggestions']
   corpus_health?: InsightsDiagnostics['authors']['corpus_health']
   author_follow_trend: NonNullable<InsightsDiagnostics['trends']['author_follows_daily']>
+  // Identity-resolution attention rows (consumed by Health System-status
+  // popups, cast to IdentityRow at the call site). Optional: absent on older
+  // section payloads.
+  identity_attention?: unknown[]
 }
 
 export type DiagnosticsAlertsSection = DiagnosticsSectionMeta & {

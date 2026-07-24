@@ -518,10 +518,7 @@ export function InsightsOverviewTab({
                   {(recommendations.by_lens ?? []).length > 0 && (
                     <div className="space-y-1 border-t border-[var(--color-border)] pt-2">
                       {(recommendations.by_lens ?? []).map(
-                        (
-                          s: { lens_id: string; count: number; avg_score?: number },
-                          i: number,
-                        ) => (
+                        (s: { lens_id: string; count: number; avg_score?: number }) => (
                           <div key={s.lens_id} className="flex min-w-0 items-center gap-2 text-xs">
                             <span className="min-w-0 flex-1 truncate text-slate-500">
                               {s.lens_id === 'unknown' ? 'Global' : s.lens_id}

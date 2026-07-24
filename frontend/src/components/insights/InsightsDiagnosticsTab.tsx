@@ -193,7 +193,6 @@ function FailedOperationsCard({
 }) {
   const focusFailed = parseHashRoute().params.get('focus') === 'failed'
   const ref = useRef<HTMLDivElement | null>(null)
-  const failed = operational.data?.failed_operations ?? []
   const count = operational.data?.summary?.recent_failed_operations_24h ?? 0
 
   // Deep-link focus: scroll the card into view once its data is present.
