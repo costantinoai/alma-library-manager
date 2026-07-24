@@ -60,6 +60,7 @@ class ScoringContext:
     negative_example_embeddings: Any
     candidate_text_map: dict
     candidate_embedding_map: dict
+    citation_fabric_map: dict
     lexical_profile: Any
     precomputed_lexical_map: dict
     user_topic_embeddings: Any
@@ -110,6 +111,7 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
     negative_example_embeddings = ctx.negative_example_embeddings
     candidate_text_map = ctx.candidate_text_map
     candidate_embedding_map = ctx.candidate_embedding_map
+    citation_fabric_map = ctx.citation_fabric_map
     lexical_profile = ctx.lexical_profile
     precomputed_lexical_map = ctx.precomputed_lexical_map
     user_topic_embeddings = ctx.user_topic_embeddings
@@ -183,6 +185,7 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             user_topic_embeddings=user_topic_embeddings,
             preloaded_preference_profile=preloaded_preference_profile,
             topic_provider=_topic_provider,
+            citation_fabric=citation_fabric_map.get(key),
         )
         candidate["score"] = final_score
         # Fold retrieval provenance ("why this paper surfaced") into the

@@ -110,6 +110,7 @@ from .retrieval import (
     _select_diverse_recommendation_candidates,
 )
 from .scoring_loop import SIGNAL_NAMES, ScoringContext, score_candidates
+from .citation_fabric import build_citation_fabric_maps
 
 # --- D-9: re-exported from .seed_profile (moved out of this god-module) ---
 from .seed_profile import (
@@ -668,6 +669,9 @@ def refresh_lens_recommendations(
     phase_started = perf_counter()
     candidate_embedding_map: dict[str, Any] = {}
     reused_embedding_count = 0
+    # Citation-fabric scoring features (task 47 §7): candidate→paper coupling +
+    # co-citation strengths vs the high-signal set, precomputed once (see below).
+    citation_fabric_map: dict[str, Any] = {}
     if cached_embeddings_available and candidate_text_map:
         # Map each candidate key to a real DB paper_id for the
         # embedding lookup. External / graph lane candidates carry a
@@ -766,6 +770,15 @@ def refresh_lens_recommendations(
                     for matched_key in pid_to_keys.get(str(row["paper_id"]), []):
                         candidate_embedding_map[matched_key] = decoded
                         reused_embedding_count += 1
+
+        # Batched, local-only citation-fabric strengths for every candidate that
+        # resolved to a local paper — coupling (shared references) + co-citation
+        # (shared citers) against the loved/saved set. One precompute; no
+        # per-candidate DB access in the scoring loop.
+        if candidate_paper_ids and positive_ids:
+            citation_fabric_map = build_citation_fabric_maps(
+                db, candidate_paper_ids, positive_ids
+            )
     timings_ms["candidate_embedding_batch"] = int(round((perf_counter() - phase_started) * 1000))
     _log(
         "scoring_inputs",
@@ -957,6 +970,7 @@ def refresh_lens_recommendations(
             negative_example_embeddings=negative_example_embeddings,
             candidate_text_map=candidate_text_map,
             candidate_embedding_map=candidate_embedding_map,
+            citation_fabric_map=citation_fabric_map,
             lexical_profile=lexical_profile,
             precomputed_lexical_map=precomputed_lexical_map,
             user_topic_embeddings=user_topic_embeddings,

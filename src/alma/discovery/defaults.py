@@ -17,6 +17,13 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.feedback_adj": "0.10",
     "weights.preference_affinity": "0.10",
     "weights.usefulness_boost": "0.06",
+    # Citation-fabric bonuses (task 47 §7): bounded ADDITIVE nudges (not weights)
+    # for candidates that share citation structure with the loved/saved set —
+    # coupling (shared references) + co-citation (shared citers). Each scales its
+    # ceiling by the precomputed [0,1] strength, so citation-less candidates are
+    # unaffected and proven signals are never diluted.
+    "citation_fabric.coupling_bonus_max": "2.5",
+    "citation_fabric.cocitation_bonus_max": "2.5",
     "strategies.related_works": "true",
     "strategies.topic_search": "true",
     "strategies.followed_authors": "true",

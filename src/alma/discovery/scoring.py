@@ -522,8 +522,9 @@ def score_candidate(
     user_topic_embeddings: dict[str, Any] | None = None,
     preloaded_preference_profile: dict[str, Any] | None = None,
     topic_provider: Any = _PROVIDER_UNSET,
+    citation_fabric: dict[str, Any] | None = None,
 ) -> tuple[float, dict[str, Any]]:
-    """Score a candidate paper using 10 weighted signals.
+    """Score a candidate paper using 10 weighted signals (+ bounded bonuses).
 
     ``topic_provider`` lets a hot-loop caller (the lens-refresh scoring
     loop) pass the embedding provider it already resolved once, so we
@@ -874,6 +875,13 @@ def score_candidate(
         1.0,
     )
 
+    # -- Citation-fabric channels (task 47 §7): local-only coupling + co-citation
+    # strength vs the loved/saved set, precomputed in the orchestrator. Missing
+    # (cold start / no local paper) → 0, so the channel simply doesn't fire. --
+    cf = citation_fabric or {}
+    coupling_strength = max(0.0, min(1.0, float(cf.get("coupling_strength") or 0.0)))
+    cocitation_strength = max(0.0, min(1.0, float(cf.get("cocitation_strength") or 0.0)))
+
     # -- Weighted combination --
     weights = {
         "source_relevance": float(settings.get("weights.source_relevance", "0.15")),
@@ -940,7 +948,22 @@ def score_candidate(
         else int(candidate.get("consensus_count") or 0)
     )
     consensus_bonus = _consensus_bonus(consensus_count)
-    score_pre_dismissal = min(_MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus)
+
+    # Citation-fabric bonus (task 47 §7): a bounded ADDITIVE nudge, not a
+    # reweighting — so it never dilutes the 10 core signals for the many
+    # candidates that share no citation structure (their bonus is 0 and their
+    # score is unchanged). Coupling (shared references with the loved/saved set)
+    # and co-citation (cited together with a loved/saved paper) each contribute
+    # up to their configured ceiling, scaled by the precomputed [0,1] strength.
+    coupling_bonus_max = float(settings.get("citation_fabric.coupling_bonus_max", "2.5"))
+    cocitation_bonus_max = float(settings.get("citation_fabric.cocitation_bonus_max", "2.5"))
+    citation_bonus = (
+        coupling_strength * coupling_bonus_max
+        + cocitation_strength * cocitation_bonus_max
+    )
+    score_pre_dismissal = min(
+        _MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus + citation_bonus
+    )
 
     # Dismissal cluster penalty — mirrors the author rail. Applied
     # AFTER consensus so multi-source agreement can't entirely rescue
@@ -1002,6 +1025,22 @@ def score_candidate(
     breakdown["candidate_embedding_ready"] = bool(semantic_details.get("candidate_embedding_ready"))
     breakdown["topic_match_mode"] = topic_match_mode
     breakdown["projected_feedback_raw"] = round(float(projected_adj or 0.0), 4)
+    # Citation-fabric provenance (task 47 §7): the two [0,1] strengths, the bonus
+    # they earned, and — when a channel fired — the raw count + the single
+    # best-matching high-signal paper id, so the UI can render an evidence string
+    # ("shares N references with <title>", "cited together with <title> in N
+    # papers"). Strengths are always emitted; counts/partners only when non-zero.
+    breakdown["coupling_strength"] = round(coupling_strength, 4)
+    breakdown["cocitation_strength"] = round(cocitation_strength, 4)
+    breakdown["citation_bonus"] = round(float(citation_bonus), 4)
+    if cf.get("coupling_count"):
+        breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
+        if cf.get("coupling_partner_id"):
+            breakdown["coupling_partner_id"] = str(cf["coupling_partner_id"])
+    if cf.get("cocitation_count"):
+        breakdown["cocitation_count"] = int(cf.get("cocitation_count") or 0)
+        if cf.get("cocitation_partner_id"):
+            breakdown["cocitation_partner_id"] = str(cf["cocitation_partner_id"])
 
     return final_score, breakdown
 
