@@ -34,6 +34,7 @@ import {
   saveRecommendation,
   refreshLens,
   updateLens,
+  type CustomDirection,
   type Lens,
   type LensRecommendation,
   type Publication,
@@ -277,6 +278,39 @@ export function DiscoveryPage() {
       }
     },
     onError: () => errorToast('Refresh failed', 'Could not queue lens refresh.'),
+  })
+
+  // Adopt a selected map region as a custom direction on the current lens
+  // (task 47 §8): merge it into branch_controls.custom_directions and refresh so
+  // retrieval deepens toward it. Member IDS are stored (the backend recomputes
+  // the centroid live), so the direction never goes stale.
+  const adoptDirectionMutation = useMutation({
+    mutationFn: async (dir: { label: string; terms: string[]; member_paper_ids: string[] }) => {
+      if (!selectedLensId || !selectedLens) throw new Error('No lens selected')
+      const controls = (selectedLens.branch_controls ?? {}) as NonNullable<Lens['branch_controls']>
+      const existing = controls.custom_directions ?? []
+      const direction: CustomDirection = {
+        id: crypto.randomUUID?.() ?? `dir-${Date.now()}`,
+        label: dir.label,
+        terms: dir.terms,
+        member_paper_ids: dir.member_paper_ids,
+        mode: 'boost',
+        created_at: new Date().toISOString(),
+      }
+      await updateLens(selectedLensId, {
+        branch_controls: { ...controls, custom_directions: [...existing, direction] },
+      })
+      return refreshLens(selectedLensId, 50)
+    },
+    onSuccess: async () => {
+      setDismissedIds(new Set())
+      await invalidateQueries(queryClient, ['lenses'], ['lens-branches', selectedLensId])
+      toast({
+        title: 'Exploring direction',
+        description: 'Refreshing suggestions toward the area you selected…',
+      })
+    },
+    onError: () => errorToast('Could not adopt direction', 'Please try again.'),
   })
 
   const discoveryStatusQuery = useQuery({
@@ -1173,6 +1207,7 @@ export function DiscoveryPage() {
                   /* deep-link 404s are handled elsewhere; ignore here */
                 }
               }}
+              onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
             />
           ) : viewMode === 'compact' ? (
             <DiscoveryCompactTable

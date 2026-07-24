@@ -122,6 +122,10 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
           pinned,
           muted,
           boosted,
+          // Preserve adopted directions — this mutation only edits the branch
+          // knobs, so it must carry the directions through untouched (else
+          // saving temperature would silently wipe them).
+          custom_directions: lens?.branch_controls?.custom_directions ?? [],
         },
       }),
     onSuccess: (updatedLens) => {
@@ -138,6 +142,30 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
     onError: () => {
       errorToast('Branch controls failed', 'Could not save branch controls.')
     },
+  })
+
+  // Adopted map regions (task 47 §8). Removing one deletes the entry, preserving
+  // every other branch control.
+  const customDirections = lens?.branch_controls?.custom_directions ?? []
+  const removeDirectionMutation = useMutation({
+    mutationFn: (directionId: string) =>
+      updateLens(lens?.id as string, {
+        branch_controls: {
+          temperature,
+          resolution,
+          pinned,
+          muted,
+          boosted,
+          custom_directions: customDirections.filter((d) => d.id !== directionId),
+        },
+      }),
+    onSuccess: (updatedLens) => {
+      queryClient.setQueryData<Lens[]>(['lenses'], (prev) =>
+        (prev ?? []).map((item) => (item.id === updatedLens.id ? updatedLens : item)),
+      )
+      void invalidateQueries(queryClient, ['lenses'], ['lens-branches', updatedLens.id])
+    },
+    onError: () => errorToast('Could not remove direction', 'Please try again.'),
   })
 
   const branches = useMemo(() => branchQuery.data?.branches ?? [], [branchQuery.data?.branches])
@@ -493,6 +521,50 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
             </div>
           </div>
         ) : null}
+
+        {/* Adopted directions (task 47 §8): map regions the user explored,
+            shown as branch-like rows. Adoption is the only branches↔clusters
+            crossing (47-H) — explicit and user-driven; removing deletes it. */}
+        {customDirections.length > 0 && (
+          <div className="space-y-2">
+            <EyebrowLabel tone="muted" className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-alma-folio" />
+              Adopted directions
+            </EyebrowLabel>
+            <div className="grid gap-2 xl:grid-cols-2">
+              {customDirections.map((direction) => (
+                <div
+                  key={direction.id}
+                  className="flex items-center justify-between gap-2 rounded-sm border border-[var(--color-border-cool)] bg-surface-2 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium capitalize text-alma-800">
+                        {direction.label}
+                      </span>
+                      <StatusBadge tone={direction.mode === 'pin' ? 'accent' : 'neutral'}>
+                        {direction.mode}
+                      </StatusBadge>
+                    </div>
+                    <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                      {direction.member_paper_ids.length} papers
+                      {direction.terms.length > 0 ? ` · ${direction.terms.slice(0, 4).join(', ')}` : ''}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 text-slate-500"
+                    onClick={() => removeDirectionMutation.mutate(direction.id)}
+                    disabled={removeDirectionMutation.isPending}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {branchQuery.isLoading ? (
           <div className="flex items-center justify-center rounded-sm border border-[var(--color-border)] bg-surface-1 py-16 text-sm text-slate-500">

@@ -1841,6 +1841,7 @@ export interface Lens {
     pinned?: string[]
     muted?: string[]
     boosted?: string[]
+    custom_directions?: CustomDirection[]
   } | null
   created_at: string
   last_refreshed_at?: string | null
@@ -3377,6 +3378,30 @@ export function getFrontier(
   )
 }
 
+/** An adopted map region on a lens (task 47 §8). Member IDS are stored, not
+ * vectors, so the centroid is recomputed live at every refresh. */
+export interface CustomDirection {
+  id: string
+  label: string
+  terms: string[]
+  member_paper_ids: string[]
+  mode: 'boost' | 'pin'
+  created_at?: string
+}
+export interface RegionDescription {
+  label: string
+  top_terms: string[]
+  sample: string[]
+  counts: { library: number; recs: number; seen: number }
+  sufficient: boolean
+}
+/** Characterise an arbitrary set of papers (a selected map region) by its
+ * dominant vocabulary — label, top terms, sample titles, membership counts.
+ * POST because the body carries up to ~300 ids; it is a pure read. */
+export function describeRegion(paperIds: string[]): Promise<RegionDescription> {
+  return api.post<RegionDescription>('/graphs/region/describe', { paper_ids: paperIds })
+}
+
 // ── Import types ──
 
 export interface ImportResult {
@@ -3733,6 +3758,7 @@ export function updateLens(
       pinned?: string[]
       muted?: string[]
       boosted?: string[]
+      custom_directions?: CustomDirection[]
     }
     is_active?: boolean
   },

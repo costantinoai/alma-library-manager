@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Eye, EyeOff, Loader2, Maximize2, Share2 } from 'lucide-react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Eye, EyeOff, Loader2, Maximize2, Share2, LassoSelect, Sparkles, X } from 'lucide-react'
 
-import { getFrontier, type FrontierNode } from '@/api/client'
+import { describeRegion, getFrontier, type FrontierNode, type RegionDescription } from '@/api/client'
 import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
 import { FRONTIER_MAP, branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -15,6 +15,20 @@ interface FrontierMapProps {
   lensId: string | null
   /** Open the shared PaperDetailPanel for a paper (same as the list views). */
   onSelectPaper: (paperId: string) => void
+  /** Adopt a selected region as a custom direction on the current lens
+   *  (writes branch_controls.custom_directions + refreshes). */
+  onAdoptDirection?: (direction: {
+    label: string
+    terms: string[]
+    member_paper_ids: string[]
+  }) => void
+}
+
+/** A pending region selection: the ids under the lasso + its describe payload. */
+interface RegionSelection {
+  ids: string[]
+  anchor: { x: number; y: number }
+  description?: RegionDescription
 }
 
 interface Placed extends FrontierNode {
@@ -45,7 +59,7 @@ function useBranchColors(nodes: FrontierNode[]) {
   }, [nodes])
 }
 
-export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
+export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
@@ -53,6 +67,13 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
   // Pan/zoom transform.
   const [view, setView] = useState({ tx: 0, ty: 0, scale: 1 })
   const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  // Region selection: in select mode a drag draws a rectangle (viewBox coords)
+  // instead of panning; on release the papers inside become a candidate
+  // Direction. `region` holds the pending selection + its describe payload.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const selRef = useRef<{ x1: number; y1: number } | null>(null)
+  const [region, setRegion] = useState<RegionSelection | null>(null)
 
   const query = useQuery({
     queryKey: ['frontier', lensId, showSeen, showEdges],
@@ -121,11 +142,37 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
       return { scale: next, tx: mx - k * (mx - v.tx), ty: my - k * (my - v.ty) }
     })
   }
+  const describeMutation = useMutation({
+    mutationFn: (ids: string[]) => describeRegion(ids),
+    onSuccess: (desc) => setRegion((r) => (r ? { ...r, description: desc } : r)),
+  })
+
+  // Pointer → viewBox coordinates (matches the wheel-zoom math).
+  const toViewBox = (e: React.PointerEvent) => {
+    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * VB_W,
+      y: ((e.clientY - rect.top) / rect.height) * VB_H,
+    }
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
-    dragRef.current = { x: e.clientX, y: e.clientY, moved: false }
     ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
+    if (selectMode) {
+      const p = toViewBox(e)
+      selRef.current = { x1: p.x, y1: p.y }
+      setSelRect({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
+      setRegion(null)
+      return
+    }
+    dragRef.current = { x: e.clientX, y: e.clientY, moved: false }
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    if (selectMode && selRef.current) {
+      const p = toViewBox(e)
+      setSelRect({ x1: selRef.current.x1, y1: selRef.current.y1, x2: p.x, y2: p.y })
+      return
+    }
     if (!dragRef.current) return
     const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
     const dx = ((e.clientX - dragRef.current.x) / rect.width) * VB_W
@@ -138,9 +185,47 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
     setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
   }
   const onPointerUp = () => {
+    if (selectMode && selRef.current && selRect) {
+      const x1 = Math.min(selRect.x1, selRect.x2)
+      const x2 = Math.max(selRect.x1, selRect.x2)
+      const y1 = Math.min(selRect.y1, selRect.y2)
+      const y2 = Math.max(selRect.y1, selRect.y2)
+      selRef.current = null
+      setSelRect(null)
+      // Hit-test placed nodes against the rect in screen (post-transform) coords.
+      if (x2 - x1 > 4 && y2 - y1 > 4) {
+        const ids: string[] = []
+        for (const n of placed) {
+          const sx = view.tx + view.scale * n.px
+          const sy = view.ty + view.scale * n.py
+          if (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2) ids.push(n.paper_id)
+        }
+        if (ids.length) {
+          setRegion({ ids, anchor: { x: x2, y: y2 } })
+          describeMutation.mutate(ids.slice(0, 300))
+        }
+      }
+      return
+    }
     dragRef.current = null
   }
   const resetView = () => setView({ tx: 0, ty: 0, scale: 1 })
+
+  const cancelRegion = () => {
+    setRegion(null)
+    setSelRect(null)
+    selRef.current = null
+  }
+  const adoptRegion = () => {
+    if (!region?.description || !region.description.sufficient) return
+    onAdoptDirection?.({
+      label: region.description.label,
+      terms: region.description.top_terms,
+      member_paper_ids: region.ids,
+    })
+    setRegion(null)
+    setSelectMode(false)
+  }
 
   const nodeClick = (n: Placed) => {
     if (dragRef.current?.moved) return
@@ -197,6 +282,25 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
           <Share2 className="h-3.5 w-3.5" />
           Citation links{showEdges && counts?.edges ? ` · ${counts.edges}` : ''}
         </button>
+        {onAdoptDirection && (
+          <button
+            type="button"
+            onClick={() => {
+              setSelectMode((s) => !s)
+              cancelRegion()
+            }}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+              selectMode
+                ? 'border-accent-edge bg-accent-soft text-alma-folio'
+                : 'border-[var(--color-border)] bg-surface-2 text-slate-600 hover:bg-surface-3',
+            )}
+            title="Drag a box around a cluster of papers to name it and explore that direction"
+          >
+            <LassoSelect className="h-3.5 w-3.5" />
+            Select a direction
+          </button>
+        )}
         <button
           type="button"
           onClick={resetView}
@@ -210,7 +314,10 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
       <svg
         viewBox={`0 0 ${VB_W} ${VB_H}`}
         preserveAspectRatio="xMidYMid meet"
-        className="h-[520px] w-full cursor-grab touch-none select-none active:cursor-grabbing"
+        className={cn(
+          'h-[520px] w-full touch-none select-none',
+          selectMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing',
+        )}
         onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -299,7 +406,103 @@ export function FrontierMap({ lensId, onSelectPaper }: FrontierMapProps) {
             })}
           </g>
         </g>
+        {/* Selection rectangle — drawn in raw viewBox coords (outside the
+            pan/zoom group) since selRect is captured in screen viewBox space. */}
+        {selRect && (
+          <rect
+            x={Math.min(selRect.x1, selRect.x2)}
+            y={Math.min(selRect.y1, selRect.y2)}
+            width={Math.abs(selRect.x2 - selRect.x1)}
+            height={Math.abs(selRect.y2 - selRect.y1)}
+            fill="var(--color-accent-soft)"
+            fillOpacity={0.25}
+            stroke="var(--color-alma-folio)"
+            strokeWidth={1}
+            strokeDasharray="4 3"
+          />
+        )}
       </svg>
+
+      {/* Region popover — the describe payload + adopt action. Appears when a
+          selection has been made; meaning (label + terms + counts) is shown
+          before the action, per 47 §8. */}
+      {region && (
+        <div className="absolute right-3 top-14 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
+          <div className="mb-2 flex items-start justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+              <Sparkles className="h-3.5 w-3.5 text-alma-folio" />
+              Direction
+            </div>
+            <button
+              type="button"
+              onClick={cancelRegion}
+              className="rounded-sm p-0.5 text-slate-400 hover:bg-surface-3 hover:text-slate-600"
+              aria-label="Cancel selection"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          {describeMutation.isPending || !region.description ? (
+            <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin text-alma-folio" />
+              Characterizing {region.ids.length} papers…
+            </div>
+          ) : !region.description.sufficient ? (
+            <p className="py-2 text-xs text-slate-500">
+              Too few papers to characterize — select a larger cluster (5+).
+            </p>
+          ) : (
+            <>
+              <p className="text-sm font-semibold capitalize text-alma-800">
+                {region.description.label}
+              </p>
+              {region.description.top_terms.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {region.description.top_terms.slice(0, 6).map((t) => (
+                    <span
+                      key={t}
+                      className="rounded-full border border-edge-2 bg-surface-3 px-1.5 py-0.5 text-[10px] text-slate-600"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-[11px] text-slate-500">
+                {region.description.counts.library} in library ·{' '}
+                {region.description.counts.recs} suggestions ·{' '}
+                {region.description.counts.seen} seen here
+              </p>
+              {region.description.sample.length > 0 && (
+                <ul className="mt-1.5 space-y-0.5">
+                  {region.description.sample.map((s, i) => (
+                    <li key={i} className="line-clamp-1 text-[11px] text-slate-400">
+                      · {s}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={adoptRegion}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm bg-alma-800 px-2.5 py-1.5 text-xs font-medium text-alma-cream hover:bg-alma-900"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Explore this direction
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelRegion}
+                  className="rounded-sm border border-[var(--color-border)] bg-surface-3 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-surface-2"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Hover tooltip */}
       {hover && (
