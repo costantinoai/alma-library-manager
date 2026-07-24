@@ -117,6 +117,9 @@ export function DiscoveryPage() {
   const routeLensId = route.params.get('lens')?.trim() ?? ''
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
+  // Find & add is the manual entry point at the top of the page — open by
+  // default (but collapsible; state keeps re-renders from fighting the user).
+  const [findAddOpen, setFindAddOpen] = useState(true)
   const [detailOpen, setDetailOpen] = useState(false)
   // Track dismissed rec IDs locally for instant removal. Dismiss is the ONLY
   // action that removes a card from Discovery; save / read / like / love / add-
@@ -766,9 +769,10 @@ export function DiscoveryPage() {
 
       {/* Find & add — the manual entry point, first among the tools: search
           any source and add a paper by hand before (or instead of) drilling
-          into a lens. Collapsed by default; auto-opens on a ?query= deep link. */}
+          into a lens. Open by default; collapsible (state-controlled). */}
       <details
-        open={!!routeQuery}
+        open={findAddOpen}
+        onToggle={(e) => setFindAddOpen((e.currentTarget as HTMLDetailsElement).open)}
         className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
       >
         <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-left">
