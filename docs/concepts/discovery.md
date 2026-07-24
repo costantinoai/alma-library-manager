@@ -149,9 +149,29 @@ The hybrid scorer combines (default weights configurable):
   centroid.
 * **Usefulness boost** — explicit per-source bonus.
 
-After the 10 weighted signals are summed, a **multi-source consensus
-bonus** rewards candidates that were independently surfaced by more
-than one retrieval source. Each non-external channel (`lexical`,
+After the 10 weighted signals are summed, two families of **bounded
+bonuses** are added on top (never reweighting the ten, so a candidate
+that lacks them is unaffected):
+
+The **citation-fabric bonuses** reward candidates that share citation
+structure with the papers you've saved or loved:
+
+* **Coupling** — the candidate and a saved/loved paper cite the *same
+  works* (a shared past / bibliographic coupling).
+* **Co-citation** — some other paper cites the candidate *together
+  with* a saved/loved paper (a shared reception).
+
+Both are computed once per refresh as batched set intersections over
+the local `publication_references` table (no network, no per-candidate
+query), squashed to `[0, 1]` by a saturating `n / (n + k)` curve, and
+each adds up to a 2.5-point ceiling scaled by that strength. The
+recommendation card shows the evidence as chips — "Shares N references
+with *<paper>*", "Cited together ×N with *<paper>*" — with the
+best-matching saved paper named on hover. Tunable via
+`citation_fabric.coupling_bonus_max` / `.cocitation_bonus_max`.
+
+The **multi-source consensus bonus** rewards candidates that were
+independently surfaced by more than one retrieval source. Each non-external channel (`lexical`,
 `vector`, `graph`) counts as one source; the `external` channel
 counts each distinct source API (`openalex`, `semantic_scholar`, …)
 separately. With $N$ confirming sources, the bonus is
@@ -372,7 +392,25 @@ the map refetches. Pan and zoom to explore; the coordinates come from the
 corpus-scope layout (built once and cached — a short "building the layout" state
 shows on first use).
 
-Endpoint: `GET /graphs/frontier?lens_id=&seen_limit=` (see the API reference).
+An opt-in **Citation links** toggle overlays the citation fabric — coupling
+(shared references) and co-citation (cited-together) edges — between the library
+and suggestion nodes, so you can see how a suggestion connects to what you
+already have. Edges are drawn over the library + rec nodes only (the faint seen
+layer would otherwise swamp the view), colored by the same layer palette as the
+Analytics graph.
+
+Endpoint: `GET /graphs/frontier?lens_id=&seen_limit=&include_edges=` (see the
+API reference).
+
+### Citation fabric on the corpus graph
+
+The same coupling and co-citation layers ship on the Analytics paper map
+(**Library › Analytics › Map**) as filterable edge layers alongside the semantic
+and co-authorship layers. A **Citation influence** slider (Layout basis) blends
+those structural signals into the node *positions* at library scale; the panel
+also reports honest citation-edge coverage — "citation edges cover N% of the
+corpus" — since coupling and co-citation can only connect papers whose references
+ALMa actually holds.
 
 ## Actions on a Discovery card
 
