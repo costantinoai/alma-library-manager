@@ -98,10 +98,14 @@ const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
   dismissed: 'Dismissed',
 }
 
-const FEED_FILTERS: readonly FeedFilter[] = ['all', 'new'] as const
+// "New" is the default triage surface — papers first surfaced by the latest
+// fetch (recency, not action-status, so acting on a card keeps it in view). "Show
+// all" is the opt-in full chronological inbox (60-day window). Order matters:
+// the default lens is listed first in the segmented toggle.
+const FEED_FILTERS: readonly FeedFilter[] = ['new', 'all'] as const
 const FEED_FILTER_LABELS: Record<FeedFilter, string> = {
-  all: 'All',
   new: FEED_STATUS_LABELS.new,
+  all: 'Show all',
 }
 
 function toPublication(item: FeedInboxItem): Publication | null {
@@ -191,7 +195,8 @@ export function FeedPage() {
   const route = useHashRoute()
   const authorFilter = route.params.get('author')?.trim() ?? ''
 
-  const [filter, setFilter] = useState<FeedFilter>('all')
+  // Default to the recency "New" view; "Show all" is opt-in.
+  const [filter, setFilter] = useState<FeedFilter>('new')
   const [sort, setSort] = useState<FeedSort>('chronological')
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -713,11 +718,11 @@ export function FeedPage() {
       ) : items.length === 0 ? (
         <EmptyState
           icon={Search}
-          title="No papers published in the last 60 days"
+          title={filter === 'new' ? 'Nothing new from the latest fetch' : 'No papers published in the last 60 days'}
           description={
-            filter === 'all'
-              ? 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
-              : `No ${FEED_FILTER_LABELS[filter].toLowerCase()} papers in the last 60 days. Clear the filter or refresh.`
+            filter === 'new'
+              ? "You're caught up on this refresh. Switch to Show all for your full 60-day inbox, or run Refresh Inbox to pull new papers."
+              : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
           }
         />
       ) : viewMode === 'compact' ? (

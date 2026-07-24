@@ -1050,12 +1050,24 @@ def list_lens_recommendations(
 ) -> list[dict]:
     """List recommendations for one lens, enriched with paper metadata.
 
-    A collection-typed lens is *tied* to its collection: it hides only papers
-    already in that collection (and dismissed/removed), and still surfaces
-    Library papers that live in OTHER collections so they can be pulled in. Every
-    other lens keeps the plain "hide anything already in the Library" rule. The
-    two read-time filters here must match the staging filter in
-    ``refresh_lens_recommendations`` or a staged rec would be re-hidden on read.
+    The visible deck is: (a) the current un-actioned recommendations, PLUS (b)
+    recommendations the user just Saved/Read **from this lens's latest suggestion
+    set**, kept in place so a card never vanishes the instant it's acted on. Only
+    ``dismiss`` (and a soft-removed paper) is hidden. Saved/read rows from OLDER
+    sets are scoped out here (fresh deck on the next Refresh Lens) but their
+    ``recommendations`` rows are preserved for the outcome/signal loop — the
+    refresh swap only deletes un-actioned rows.
+
+    A collection-typed lens is *tied* to its collection: on the un-actioned arm it
+    hides only papers already in that collection (and dismissed/removed) and still
+    surfaces Library papers that live in OTHER collections so they can be pulled
+    in. Every other lens keeps the plain "hide anything already in the Library"
+    rule on its un-actioned arm.
+
+    The un-actioned arm here must match the staging filter in
+    ``refresh_lens_recommendations`` or a staged rec would be re-hidden on read;
+    the save/read arm is deliberately more permissive than staging (a persisted
+    card is a superset), which is safe.
     """
     lens = get_lens(db, lens_id)
     lens_collection_id = None
@@ -1074,6 +1086,7 @@ def list_lens_recommendations(
                p.publication_date AS paper_publication_date,
                p.cited_by_count AS paper_cited_by_count,
                p.status AS paper_status,
+               p.reading_status AS paper_reading_status,
                p.rating AS paper_rating,
                p.openalex_id AS paper_openalex_id,
                p.tldr AS paper_tldr,
@@ -1088,11 +1101,18 @@ def list_lens_recommendations(
             LEFT JOIN collection_items ci
               ON ci.paper_id = p.id AND ci.collection_id = ?
             WHERE r.lens_id = ?
-              AND r.user_action IS NULL
+              AND COALESCE(r.user_action, '') NOT IN ('dismiss', 'dismissed', 'remove', 'removed')
               AND p.status NOT IN ('dismissed', 'removed')
               AND {standalone_paper_sql('p')}
-              AND ci.paper_id IS NULL
-              AND (p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = '')
+              AND (
+                    (r.user_action IS NULL
+                       AND ci.paper_id IS NULL
+                       AND (p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = ''))
+                 OR (r.user_action IN ('save', 'read')
+                       AND r.suggestion_set_id = (
+                           SELECT id FROM suggestion_sets
+                           WHERE lens_id = r.lens_id ORDER BY created_at DESC LIMIT 1))
+                  )
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
             """,
@@ -1105,10 +1125,18 @@ def list_lens_recommendations(
             FROM recommendations r
             LEFT JOIN papers p ON p.id = r.paper_id
             WHERE r.lens_id = ?
-              AND r.user_action IS NULL
-              AND p.status NOT IN ('library', 'dismissed', 'removed')
+              AND COALESCE(r.user_action, '') NOT IN ('dismiss', 'dismissed', 'remove', 'removed')
+              AND p.status NOT IN ('dismissed', 'removed')
               AND {standalone_paper_sql('p')}
-              AND COALESCE(TRIM(p.reading_status), '') = ''
+              AND (
+                    (r.user_action IS NULL
+                       AND p.status NOT IN ('library', 'dismissed', 'removed')
+                       AND COALESCE(TRIM(p.reading_status), '') = '')
+                 OR (r.user_action IN ('save', 'read')
+                       AND r.suggestion_set_id = (
+                           SELECT id FROM suggestion_sets
+                           WHERE lens_id = r.lens_id ORDER BY created_at DESC LIMIT 1))
+                  )
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
             """,
@@ -1618,6 +1646,7 @@ def _normalize_recommendation(
             "publication_date": row.get("paper_publication_date") or None,
             "cited_by_count": row.get("paper_cited_by_count") or 0,
             "status": row.get("paper_status") or "tracked",
+            "reading_status": row.get("paper_reading_status") or None,
             "rating": row.get("paper_rating") or 0,
             "openalex_id": row.get("paper_openalex_id") or "",
             # T5: surface S2 TLDR + influential citation count on the

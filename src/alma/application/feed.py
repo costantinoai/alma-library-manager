@@ -770,25 +770,26 @@ def list_feed_items(
     where.append(standalone_paper_sql("p"))
     requested_status = str(status or "").strip().lower()
     latest_fetch_window = latest_feed_fetch_window(db)
-    filter_to_new_papers = False
     if requested_status and requested_status != "all":
         if requested_status not in VALID_FEED_STATUSES:
             raise ValueError(f"Invalid feed status: {requested_status}")
         if requested_status == "new":
-            # "new" is a paper-level concept (earliest row in the latest fetch
-            # window AND at least one row still untriaged). We must NOT filter
-            # rows by `fi.fetched_at IN window` here — that would hide the
-            # pre-window rows the aggregator needs to detect papers the user
-            # has already seen. Restrict to in-window paper_ids and let the
-            # aggregator make the per-paper decision; then drop is_new=False
-            # papers post-aggregation.
+            # "New" = every paper first surfaced by the LATEST fetch (recency),
+            # regardless of whether the user has since acted on it. Acting
+            # (save / like / queue) must NOT drop a card from the New view — it is
+            # a stable triage surface, and only Dismiss hides (handled by the
+            # global ``<> 'dismissed'`` filter above). We bound on the paper's
+            # EARLIEST fetched_at so a paper from a prior fetch that a new monitor
+            # re-surfaces doesn't re-light as "new". On the next refresh the
+            # window advances: older papers age out of New but remain under
+            # "Show all" — the Feed's full chronological truth never hides them.
             if latest_fetch_window[0] and latest_fetch_window[1]:
                 where.append(
                     "fi.paper_id IN (SELECT paper_id FROM feed_items "
-                    "WHERE status = 'new' AND fetched_at >= ? AND fetched_at <= ?)"
+                    "GROUP BY paper_id "
+                    "HAVING MIN(fetched_at) >= ? AND MIN(fetched_at) <= ?)"
                 )
                 params.extend([latest_fetch_window[0], latest_fetch_window[1]])
-                filter_to_new_papers = True
             else:
                 where.append("1=0")
         else:
@@ -858,8 +859,6 @@ def list_feed_items(
     """
     rows = db.execute(query, params).fetchall()
     aggregated = _aggregate_feed_rows(rows, latest_fetch_window=latest_fetch_window)
-    if filter_to_new_papers:
-        aggregated = [item for item in aggregated if item.get("is_new")]
     total = len(aggregated)
     return aggregated[offset:offset + limit], total
 

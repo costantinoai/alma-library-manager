@@ -1061,7 +1061,12 @@ def save_recommendation(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Save a recommendation to Library and remove it from Discovery."""
+    """Save a recommendation to Library.
+
+    The card STAYS in Discovery (it flips to a checked "Saved" state) so the user
+    can keep acting on it — only Dismiss removes a card. The saved rec is scoped
+    to the current suggestion set, so the next Refresh Lens yields a fresh deck.
+    """
     runner = OperationRunner(db)
 
     def _handler(_ctx):

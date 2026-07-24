@@ -112,8 +112,10 @@ export function DiscoveryPage() {
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-  // Track actioned rec IDs locally for instant removal
-  const [actionedIds, setActionedIds] = useState<Set<string>>(new Set())
+  // Track dismissed rec IDs locally for instant removal. Dismiss is the ONLY
+  // action that removes a card from Discovery; save / read / like / love / add-
+  // to-collection all keep the card visible (they just flip its button state).
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   // Lazily fetched explanations keyed by rec ID
   const [explanations, setExplanations] = useState<Record<string, string | null>>({})
   // List view state — mirrors Feed: sort (relevance vs publication date),
@@ -146,11 +148,11 @@ export function DiscoveryPage() {
     }
   }, [lensesQuery.data, selectedLensId, routeLensId])
 
-  // Reset actioned IDs and the show-all toggle when the lens changes —
+  // Reset dismissed IDs and the show-all toggle when the lens changes —
   // a fresh lens always opens to the curated first DEFAULT_VISIBLE_RECS
   // so users land on a focused page, not a 50-card scroll.
   useEffect(() => {
-    setActionedIds(new Set())
+    setDismissedIds(new Set())
     setShowAllRecs(false)
   }, [selectedLensId])
 
@@ -240,7 +242,7 @@ export function DiscoveryPage() {
       // completion — so we deliberately don't toast a redundant "queued" here.
       // Clear the actioned-id overlay now so the incoming rec set isn't masked
       // by stale state.
-      setActionedIds(new Set())
+      setDismissedIds(new Set())
       if (envelope.status === 'already_running') {
         toast({
           title: 'Refresh already running',
@@ -297,8 +299,9 @@ export function DiscoveryPage() {
     onError: () => errorToast('Could not update auto-refresh'),
   })
 
-  const markActioned = (recId: string) => {
-    setActionedIds((prev) => new Set([...prev, recId]))
+  // Optimistic removal for the ONE action that hides a card: Dismiss.
+  const markDismissed = (recId: string) => {
+    setDismissedIds((prev) => new Set([...prev, recId]))
   }
 
   const undoMutation = usePaperUndo(selectedLensId)
@@ -306,7 +309,7 @@ export function DiscoveryPage() {
   const dismissMutation = useMutation({
     mutationFn: dismissRecommendation,
     onSuccess: async (_data, recId) => {
-      markActioned(recId)
+      markDismissed(recId)
       toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
       await invalidateQueries(queryClient,
         ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId],
@@ -331,8 +334,10 @@ export function DiscoveryPage() {
         undefined,
         selectedLensCollectionId ? [selectedLensCollectionId] : undefined,
       ),
-    onSuccess: async (_data, recId) => {
-      markActioned(recId)
+    onSuccess: async (_data, _recId) => {
+      // Card stays visible (it flips to a checked "Saved" state); only Dismiss
+      // removes a card from Discovery. The refetch below re-reads the rec with
+      // its now-'library' paper status so the button reflects the save.
       toast({
         title: 'Added',
         description: selectedLensCollectionId
@@ -349,8 +354,8 @@ export function DiscoveryPage() {
   const addToCollectionsMutation = useMutation({
     mutationFn: ({ recId, collectionIds }: { recId: string; collectionIds: string[] }) =>
       saveRecommendation(recId, undefined, collectionIds),
-    onSuccess: async (_data, { recId }) => {
-      markActioned(recId)
+    onSuccess: async (_data, _vars) => {
+      // Card stays visible (flips to a checked "Saved" state); only Dismiss removes.
       toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
       await invalidateAfterPaperMutation(queryClient, selectedLensId)
       await invalidateQueries(
@@ -385,13 +390,12 @@ export function DiscoveryPage() {
 
   // Add to Reading List (papers.reading_status = 'reading'). D2 v3:
   // reading-list membership IS the reading state — there's no separate
-  // queued step. Orthogonal to Library membership. Card disappears
-  // from the active Discovery list after adding so the user sees the
-  // progress.
+  // queued step. Orthogonal to Library membership. The card STAYS visible
+  // and flips to a checked "Queued" state; only Dismiss removes a card
+  // from Discovery. The refetch re-reads the rec's reading_status.
   const queueMutation = useMutation({
     mutationFn: (recId: string) => readRecommendation(recId),
-    onSuccess: async (_data, args) => {
-      markActioned(args)
+    onSuccess: async (_data, _args) => {
       toast({ title: 'Added to reading list', description: 'Marked as Reading.' })
       await invalidateQueries(queryClient,
         ['lens-recommendations', selectedLensId], ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
@@ -404,14 +408,17 @@ export function DiscoveryPage() {
     () => lensRecommendationsQuery.data ?? [],
     [lensRecommendationsQuery.data],
   )
-  // Filter out actioned papers instantly + apply the user's sort
-  // choice. `relevance` sorts by raw score DESC so visible ordering
-  // tracks the score bars on each card; the diversity-aware `rank`
-  // value stays as a tie-breaker. `recent` re-sorts by publication
-  // date DESC, falling back to `year` when no full date is set.
+  // Filter out ONLY dismissed papers (instantly via `dismissedIds`, and via the
+  // persisted `user_action==='dismiss'` on refetch) + apply the user's sort
+  // choice. Saved / read / liked cards stay in the deck showing their new state;
+  // the backend scopes persisted saves/reads to the current suggestion set, so a
+  // Refresh Lens still yields a clean deck. `relevance` sorts by raw score DESC
+  // so visible ordering tracks the score bars on each card; the diversity-aware
+  // `rank` value stays as a tie-breaker. `recent` re-sorts by publication date
+  // DESC, falling back to `year` when no full date is set.
   const recommendations = useMemo(() => {
     const visible = allRecommendations.filter(
-      (rec) => !actionedIds.has(rec.id) && !rec.user_action,
+      (rec) => !dismissedIds.has(rec.id) && rec.user_action !== 'dismiss',
     )
     if (sort === 'relevance') {
       return [...visible].sort((a, b) => {
@@ -440,7 +447,7 @@ export function DiscoveryPage() {
       if (!dateB) return -1
       return dateB.localeCompare(dateA)
     })
-  }, [allRecommendations, actionedIds, sort])
+  }, [allRecommendations, dismissedIds, sort])
 
   // Bulk-selection helpers — mirror the Feed page so the affordance
   // feels identical between the two surfaces.
@@ -1093,6 +1100,7 @@ export function DiscoveryPage() {
                 cited_by_count: paper?.cited_by_count,
                 rating: paper?.rating,
                 status: paper?.status,
+                reading_status: paper?.reading_status ?? null,
                 abstract: paper?.abstract,
                 // T5 — pass S2 tldr + influential count through to the
                 // card so the TLDR line shows and the eventual
@@ -1157,10 +1165,13 @@ export function DiscoveryPage() {
                   // collections (rec.in_library) — surfaced so they can be pulled
                   // in; the saved state is passive (savedReadOnly) since removing
                   // from the Library belongs in the Library, not the feed.
-                  isSaved={
-                    (selectedLensCollectionId ? !!rec.in_library : paper?.status === 'library') ||
-                    rec.user_action === 'save'
-                  }
+                  // Membership is read from the live `paper.status` join (the
+                  // source of truth) — NOT `rec.user_action`, which stays stamped
+                  // 'save' even after an undo and would falsely read "Saved".
+                  isSaved={selectedLensCollectionId ? !!rec.in_library : paper?.status === 'library'}
+                  // Reading-list membership. Reflects the "Queued" state on a card
+                  // that stays visible after Add to reading list.
+                  isQueued={paper?.reading_status === 'reading' || rec.user_action === 'read'}
                   savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
                   savedLabel={selectedLensCollectionId && rec.in_library ? 'In library' : undefined}
                   trailingHeader={rec.is_new ? <StatusBadge tone="positive" size="sm">New</StatusBadge> : undefined}
