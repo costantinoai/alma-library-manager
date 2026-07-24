@@ -33,7 +33,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Search, SearchX, SlidersHorizontal, Users } from 'lucide-react'
+import { BookOpen, Search, SearchX, SlidersHorizontal, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,6 +58,7 @@ import { PaperCard, type PaperCardPaper, SkeletonPaperCard } from '@/components/
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import {
   fetchAuthorTopCitedWorks,
@@ -66,11 +67,13 @@ import {
   onlineImportSave,
   onlineImportSearchStream,
   rejectAuthorSuggestion,
+  venueSearch,
   type Author,
   type AuthorSuggestion,
   type OnlineAuthorSearchResult,
   type OnlineSearchItem,
   type ScoreBreakdown,
+  type VenueSearchResult,
 } from '@/api/client'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { SuggestedAuthorCard } from '@/components/authors/SuggestedAuthorCard'
@@ -225,6 +228,7 @@ export function OnlineSearchTab({
   // result list shows actionable author cards (Follow) instead of paper
   // cards. Mutually exclusive with `items` for a given query.
   const [authorResults, setAuthorResults] = useState<OnlineAuthorSearchResult[] | null>(null)
+  const [venueResults, setVenueResults] = useState<VenueSearchResult[] | null>(null)
   const [authorPending, setAuthorPending] = useState<Record<string, boolean>>({})
   const [authorRejectPending, setAuthorRejectPending] = useState<Record<string, boolean>>({})
   // The two most-cited papers per author load in a SECOND (non-blocking)
@@ -241,6 +245,7 @@ export function OnlineSearchTab({
   const [authorDetailOpen, setAuthorDetailOpen] = useState(false)
   const queryClient = useQueryClient()
   const abortRef = useRef<AbortController | null>(null)
+  const { followedVenueKeys, pendingVenueName, followVenue } = usePaperVenueFollow()
 
   const canSearch = query.trim().length > 0 && !loading
   const lastAutoRef = useRef<string>('')
@@ -257,6 +262,7 @@ export function OnlineSearchTab({
     setError(null)
     setItems(null)
     setAuthorResults(null)
+    setVenueResults(null)
     setAuthorPending({})
     setAuthorRejectPending({})
     setAuthorTitlesLoading(false)
@@ -303,6 +309,26 @@ export function OnlineSearchTab({
         if ((err as { name?: string })?.name !== 'AbortError') {
           setError(err instanceof Error ? err.message : 'Author search failed')
           setAuthorResults([])
+        }
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    // Journal scope — `journal:foo` / `venue:foo` → propose journals to follow,
+    // reusing the same OpenAlex source search as the follow affordances.
+    const journalMatch = q.match(/^(?:journal|venue):\s*(.*)$/i)
+    if (journalMatch) {
+      try {
+        const term = journalMatch[1].trim()
+        const res = term ? await venueSearch(term) : { results: [] }
+        if (controller.signal.aborted) return
+        setVenueResults(res.results)
+      } catch (err) {
+        if ((err as { name?: string })?.name !== 'AbortError') {
+          setError(err instanceof Error ? err.message : 'Journal search failed')
+          setVenueResults([])
         }
       } finally {
         setLoading(false)
@@ -662,7 +688,7 @@ export function OnlineSearchTab({
                 void handleSearch()
               }
             }}
-            placeholder="Title, DOI, author:name, or OpenAlex URL"
+            placeholder="Title, DOI, author:name, journal:name, or OpenAlex URL"
             aria-label="Search online sources"
             autoFocus
             disabled={loading}
@@ -678,9 +704,13 @@ export function OnlineSearchTab({
             <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
               author:
             </code>{' '}
-            or{' '}
+            ,{' '}
             <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
               title:
+            </code>
+            , or{' '}
+            <code className="rounded bg-surface-2 px-1 py-0.5 text-[11px] text-slate-600">
+              journal:
             </code>{' '}
             to scope the search. DOIs and OpenAlex URLs are detected automatically.
           </p>
@@ -804,7 +834,7 @@ export function OnlineSearchTab({
         />
       )}
 
-      {!error && loading && items === null && authorResults === null && (
+      {!error && loading && items === null && authorResults === null && venueResults === null && (
         <div className="space-y-3" data-testid="online-search-loading">
           <SkeletonPaperCard compact />
           <SkeletonPaperCard compact />
@@ -852,11 +882,76 @@ export function OnlineSearchTab({
         </div>
       )}
 
-      {!error && authorResults === null && !loading && items && items.length === 0 && (
+      {/* Journal scope results — rendered when query starts with `journal:` */}
+      {!error && venueResults !== null && (
+        <div className="space-y-3" data-testid="online-search-venue-results">
+          {resolvedQuery && (
+            <p className="text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">{venueResults.length}</span>{' '}
+              {venueResults.length === 1 ? 'journal' : 'journals'} for{' '}
+              <span className="font-medium text-slate-700">“{resolvedQuery}”</span>
+            </p>
+          )}
+          {venueResults.length === 0 ? (
+            <EmptyState
+              icon={BookOpen}
+              title="No journal matches"
+              description="Try a different name, or drop the journal: prefix to search papers."
+            />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {venueResults.map((venue) => {
+                const followed =
+                  followedVenueKeys.has(venue.display_name.toLowerCase()) ||
+                  followedVenueKeys.has(venue.source_id.toLowerCase())
+                const pending = pendingVenueName === venue.display_name.toLowerCase()
+                return (
+                  <div
+                    key={venue.source_id}
+                    className="flex items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 p-3"
+                  >
+                    <BookOpen className="h-5 w-5 shrink-0 text-alma-folio" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-alma-800">{venue.display_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {venue.works_count.toLocaleString()} works
+                        {venue.type ? ` · ${venue.type}` : ''}
+                      </p>
+                    </div>
+                    {followed ? (
+                      <StatusBadge tone="positive" size="sm">
+                        Following
+                      </StatusBadge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pending}
+                        onClick={() =>
+                          followVenue({ sourceId: venue.source_id, displayName: venue.display_name })
+                        }
+                      >
+                        {pending ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <BookOpen className="mr-1 h-3 w-3" />
+                        )}
+                        Follow
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!error && authorResults === null && venueResults === null && !loading && items && items.length === 0 && (
         <EmptyState
           icon={SearchX}
           title="No matches"
-          description="Try a DOI, an OpenAlex URL, or prefix your query with author:<name>."
+          description="Try a DOI, an OpenAlex URL, or prefix your query with author:<name> or journal:<name>."
         />
       )}
 
