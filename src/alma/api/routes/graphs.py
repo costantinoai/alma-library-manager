@@ -34,7 +34,7 @@ from alma.application.graph_substrate import (
     OUTLIER_LABEL,
     SUBSTRATE_CLUSTER_RESOLUTION,
     SUBSTRATE_SCOPE,
-    SubstrateUnavailable,
+    SubstrateUnavailableError,
     assign_to_centroids,
     cluster_jitter,
 )
@@ -49,6 +49,11 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
     responses={401: {"description": "Unauthorized"}},
 )
+
+# Author-only layout contract. Bump when placement semantics change so existing
+# materialized/variant payloads cannot keep serving obsolete geometry. The
+# 2026-07-26 bump retires the radius-0.48 fallback for authors with no vectors.
+_AUTHOR_NETWORK_LAYOUT_VERSION = "author-layout-no-radial-fallback-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +264,16 @@ def _serve_graph_variant(
     )
     if payload is None:
         return None
-    return GraphData(**payload)
+    graph = GraphData(**payload)
+    graph.metadata = {
+        **(graph.metadata or {}),
+        "delivery": {
+            "source": "variant_cache",
+            "stale": False,
+            "rebuilding": False,
+        },
+    }
+    return graph
 
 
 def _enqueue_graph_view_build(view_key: str) -> dict:
@@ -831,7 +845,14 @@ def get_author_network(
         # never the GET's (see get_paper_map).
         view_key = scope.view_key("author_network")
         envelope = mv.get_stored(conn, view_key)
-        if envelope is None:
+        stored_layout_version = (
+            ((envelope or {}).get("payload") or {}).get("metadata") or {}
+        ).get("layout_version")
+        if envelope is None or stored_layout_version != _AUTHOR_NETWORK_LAYOUT_VERSION:
+            # One-time compatibility gate, not a freshness calculation: a
+            # pre-fix payload contains fabricated radial coordinates and is not
+            # valid data under the current semantic-placement contract. Treat
+            # it like a missing view and enqueue the normal background build.
             return JSONResponse(
                 status_code=202,
                 content={"status": "building", **_enqueue_graph_view_build(view_key)},
@@ -855,8 +876,13 @@ def get_author_network(
     graph = _serve_graph_variant(
         conn,
         base_view_key=scope.view_key("author_network"),
-        options=(round(cluster_resolution, 3), round(w_semantic, 3),
-                 round(w_coauthorship, 3), round(w_bibliographic, 3)),
+        options=(
+            _AUTHOR_NETWORK_LAYOUT_VERSION,
+            round(cluster_resolution, 3),
+            round(w_semantic, 3),
+            round(w_coauthorship, 3),
+            round(w_bibliographic, 3),
+        ),
         scope=scope,
         build_fn=_build_variant,
         job_label=f"author network variant ({scope.label()})",
@@ -963,6 +989,130 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
     return {"status": "ready", "points": points, "stats": stats}
 
 
+@router.get("/author-field")
+def get_author_field(
+    scope: str = Query("library", description="library | corpus"),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """The LIVE preference + score field for the author map.
+
+    The author analogue of `/graphs/signal-field`, and deliberately built from
+    the SAME contract: an author's valence is the mean `paper_valence` over the
+    in-scope papers of theirs you have an opinion about. So "how do I feel about
+    this author" is derived from "how do I feel about their papers" — one owner
+    of the weights (`alma.core.signal_valence`), no second scale to keep in sync.
+
+    Two reasons this is an endpoint rather than a field baked into the network
+    payload (user catch 2026-07-26 — "terrain is all yellow and no scores"):
+
+    * **Live.** The author network is a materialized view; the score baked into
+      it goes stale the moment Discovery re-scores, which greyed the dots and
+      flattened the terrain exactly like the paper map's baked score did.
+    * **Coverage.** The old terrain used the mean recommendation score alone and
+      substituted 0 for every author without one — in corpus scope that is ~90%
+      of them, and a flood of hard zeros diluted the splat's local mean to
+      nothing: uniform yellow. Valence covers every author carrying ANY signal
+      (saved / rated / dismissed / scored), and authors with NO signal are
+      returned with `v: null` so the host can omit them from the splat instead
+      of drowning it. Pale paper where you have no opinion is the honest render.
+
+    Keyed by author id (the OpenAlex id, as the network's nodes are) rather than
+    by coordinates: unlike the paper substrate there is no off-view author to
+    account for — the author map always draws every author in scope — so an
+    id-keyed field is view-independent for exactly the same reason.
+
+    Pure read.
+    """
+    from alma.core.signal_valence import NEGATIVE_REC_ACTIONS, paper_valence
+
+    scope_filter = Scope.parse(scope).paper_filter("p")
+    neg_actions_sql = ",".join(f"'{a}'" for a in NEGATIVE_REC_ACTIONS)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT pa.openalex_id AS aid, p.status AS status,
+                   COALESCE(p.rating, 0) AS rating,
+                   latest.score AS rec_score,
+                   COALESCE(neg.n_neg, 0) AS n_neg
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            LEFT JOIN (
+                SELECT paper_id, score, MAX(created_at)
+                FROM recommendations GROUP BY paper_id
+            ) latest ON latest.paper_id = pa.paper_id
+            LEFT JOIN (
+                SELECT paper_id, COUNT(*) AS n_neg
+                FROM recommendations
+                WHERE COALESCE(user_action, '') IN ({neg_actions_sql})
+                GROUP BY paper_id
+            ) neg ON neg.paper_id = pa.paper_id
+            WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''{scope_filter}
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+
+    # Two independent means per author: valence over SIGNALLED papers only, and
+    # the internal score over SCORED papers only. Averaging each over the papers
+    # that actually carry it keeps a prolific author from being diluted toward
+    # neutral by their unread back catalogue.
+    agg: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"v_sum": 0.0, "v_n": 0.0, "s_sum": 0.0, "s_n": 0.0, "papers": 0.0}
+    )
+    for row in rows:
+        entry = agg[str(row["aid"])]
+        entry["papers"] += 1
+        rec_score = row["rec_score"]
+        if rec_score is not None:
+            entry["s_sum"] += float(rec_score)
+            entry["s_n"] += 1
+        v = paper_valence(
+            status=str(row["status"] or ""),
+            rating=int(row["rating"] or 0),
+            n_negative_actions=int(row["n_neg"] or 0),
+            rec_score=rec_score,
+        )
+        if v is not None:
+            entry["v_sum"] += v
+            entry["v_n"] += 1
+
+    authors: list[dict] = []
+    vmin = float("inf")
+    vmax = float("-inf")
+    vsum = 0.0
+    n_valenced = 0
+    for aid, entry in agg.items():
+        v = round(entry["v_sum"] / entry["v_n"], 3) if entry["v_n"] else None
+        authors.append(
+            {
+                "id": aid,
+                "v": v,
+                "score": round(entry["s_sum"] / entry["s_n"], 1) if entry["s_n"] else None,
+                # How much evidence the valence rests on — the hover card says so
+                # rather than presenting a 1-paper opinion as an author verdict.
+                "signal_papers": int(entry["v_n"]),
+                "papers": int(entry["papers"]),
+            }
+        )
+        if v is not None:
+            vmin = min(vmin, v)
+            vmax = max(vmax, v)
+            vsum += v
+            n_valenced += 1
+
+    stats = (
+        {
+            "min": round(vmin, 3),
+            "max": round(vmax, 3),
+            "mean": round(vsum / n_valenced, 3),
+            "count": n_valenced,
+        }
+        if n_valenced
+        else None
+    )
+    return {"status": "ready", "authors": authors, "stats": stats}
+
+
 def _build_author_network_payload(
     conn: sqlite3.Connection,
     *,
@@ -1060,15 +1210,15 @@ def _build_author_network_payload(
         for n in raw["nodes"]
     ]
 
-    edges = [
-        GraphEdge(
-            source=e["source"],
-            target=e["target"],
-            weight=e["weight"],
-            edge_type=e.get("edge_type", "semantic"),
-        )
-        for e in raw["edges"]
-    ]
+    # The author map has NO link layer (user call 2026-07-26). Co-authorship and
+    # bibliographic coupling still SHAPE the layout — they are fusion inputs to
+    # `build_embedding_graph`, so co-authors already sit together — but drawing
+    # them again as lines re-states position as topology and buries the dots. The
+    # paper map's link layers answer "why are these two adjacent"; on an author
+    # map adjacency IS collaboration, so the lines add nothing and cost a very
+    # large payload. `edge_layers` stays in metadata: it describes the coupling
+    # that built the layout, which is true whether or not anything is drawn.
+    edges: list[GraphEdge] = []
 
     enriched_clusters: list[dict[str, object]] = []
     for cluster in raw.get("clusters", []):
@@ -1092,11 +1242,16 @@ def _build_author_network_payload(
         metadata={
             "type": "author_network",
             "method": raw.get("method", "author_embedding_mean"),
+            "layout_version": _AUTHOR_NETWORK_LAYOUT_VERSION,
             "clusters": enriched_clusters,
-            # Typed edge-layer counts + clustering diagnostics, same shape as the
-            # paper map so the UI's filter chips + method panel work here too.
+            # Typed coupling counts (build diagnostics — the layers that shaped
+            # the layout; the author map draws no links) + clustering panel.
             "edge_layers": raw.get("edge_layers", {}),
             "clustering": raw.get("clustering", {}),
+            # In-scope authors with no embedded paper, therefore no semantic
+            # position, therefore not on the map. Reported so the legend can own
+            # the omission out loud rather than inventing a ring for them.
+            "omitted_unplaced": int(raw.get("omitted_unplaced", 0)),
         },
     )
     return result.model_dump()
@@ -2871,7 +3026,7 @@ def _build_embedding_paper_map(
         # means the corpus substrate is missing/empty. The caller must build
         # the substrate first and retry — loud, never a silent library-only fit
         # persisted as the substrate (50-G).
-        raise SubstrateUnavailable(
+        raise SubstrateUnavailableError(
             "corpus substrate missing; build the corpus layout before assembling a library view"
         )
     if layout_mode == "embeddings_full":
@@ -3567,6 +3722,13 @@ def _graph_data_from_envelope(envelope: dict) -> GraphData:
     metadata["rebuilding"] = bool(envelope.get("rebuilding", False))
     if envelope.get("computed_at"):
         metadata["computed_at"] = envelope["computed_at"]
+    metadata["delivery"] = {
+        "source": "materialized_view",
+        "computed_at": str(envelope.get("computed_at") or ""),
+        "compute_ms": int(envelope.get("compute_ms") or 0),
+        "stale": bool(envelope.get("stale", False)),
+        "rebuilding": bool(envelope.get("rebuilding", False)),
+    }
     return GraphData(
         nodes=payload.get("nodes") or [],
         edges=payload.get("edges") or [],
@@ -3604,7 +3766,7 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
             result = _build_embedding_paper_map(
                 conn, embeddings, ai_state=ai_state, graph_options=graph_options
             )
-        except SubstrateUnavailable:
+        except SubstrateUnavailableError:
             # Library assembly found no substrate (fresh DB / post-migration).
             # Build the corpus substrate once — the ONE full fit — then retry
             # the assembly, which now reads it.
@@ -3714,13 +3876,21 @@ mv.register(mv.View(
 ))
 mv.register(mv.View(
     key="graph:author_network:library",
-    fingerprint_sql=with_version(_AUTHOR_NETWORK_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
+    fingerprint_sql=with_version(
+        _AUTHOR_NETWORK_LIBRARY_FP_SQL,
+        *_GRAPH_ML_VERSIONS,
+        _AUTHOR_NETWORK_LAYOUT_VERSION,
+    ),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
     operation_key="materialize.graph.author_network.library",
 ))
 mv.register(mv.View(
     key="graph:author_network:corpus",
-    fingerprint_sql=with_version(_AUTHOR_NETWORK_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
+    fingerprint_sql=with_version(
+        _AUTHOR_NETWORK_CORPUS_FP_SQL,
+        *_GRAPH_ML_VERSIONS,
+        _AUTHOR_NETWORK_LAYOUT_VERSION,
+    ),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
     operation_key="materialize.graph.author_network.corpus",
 ))
