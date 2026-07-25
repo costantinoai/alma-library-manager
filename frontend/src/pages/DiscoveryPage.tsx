@@ -52,6 +52,7 @@ import {
   PaperDetailPanel,
 } from '@/components/discovery'
 import { FrontierMap } from '@/components/discovery/FrontierMap'
+import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
 import { RecommendationProvenance } from '@/components/discovery/RecommendationProvenance'
@@ -628,6 +629,12 @@ export function DiscoveryPage() {
   // The taste ledger's two columns, built symmetrically so each side can
   // report its own emptiness honestly ("nothing suppressed yet" is a real,
   // meaningful state — not a reason to hide the column).
+  // Lens id → display name, so engagement rows read as lenses not UUIDs.
+  const lensNameById = useMemo(
+    () => new Map((lensesQuery.data ?? []).map((l) => [l.id, l.name])),
+    [lensesQuery.data],
+  )
+
   const tasteProfile = selectedLensSummary?.taste_profile
   const negativeProfile = selectedLensSummary?.negative_profile
   const pullGroups = [
@@ -1135,6 +1142,12 @@ export function DiscoveryPage() {
               )}
             </CardContent>
           </Card>
+          {/* How Discovery is performing overall — moved here from the
+              Analytics Overview, which described the LIBRARY. "Are these
+              suggestions any good?" is a Discovery question, so it lives on
+              the surface that answers it. */}
+          <RecommendationEngagement lensNames={lensNameById} />
+
           {/* Lens scoring weights — power-user control. Hidden behind
               a disclosure so the everyday Discovery view stays quiet;
               expand only when you need to tune how signals combine. */}

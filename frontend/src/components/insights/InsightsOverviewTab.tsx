@@ -47,6 +47,7 @@ import {
   useSeriesVisibility,
 } from '@/components/insights/chartSeries'
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
+import { Meter } from '@/components/ui/meter'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { cn, formatNumber, truncate } from '@/lib/utils'
 
@@ -108,7 +109,6 @@ export function InsightsOverviewTab({
     top_institutions,
     cluster_topics,
     top_journals,
-    recommendations,
     embeddings,
     library,
   } = data
@@ -495,12 +495,13 @@ export function InsightsOverviewTab({
                               </span>
                             </span>
                           </span>
-                          <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-surface-2">
-                            <span
-                              className="block h-1 rounded-full bg-alma-500"
-                              style={{ width: `${Math.max(2, share * 100)}%` }}
-                            />
-                          </span>
+                          <Meter
+                            value={Math.max(2, share * 100)}
+                            tone="neutral"
+                            size="xs"
+                            className="mt-1"
+                            decorative
+                          />
                         </span>
                         {followed ? (
                           <StatusBadge tone="positive" size="sm" className="shrink-0">
@@ -532,113 +533,6 @@ export function InsightsOverviewTab({
 
       {/* ── Recommendations + Library ── */}
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <SectionHeader icon={Sparkles} accent="text-gold-500" title="Recommendation Insights" />
-          <CardContent>
-            {recommendations.total === 0 ? (
-              <EmptyChart message="No recommendations yet" />
-            ) : (
-              // Two-column grid (CSS grid with min-w-0 on both columns)
-              // replaces the v2 `flex items-start gap-6` +
-              // `ResponsiveContainer width="50%"` recipe — the v2 version
-              // forced the pie into a fixed half-width and squeezed the
-              // stat list to nothing on narrow viewports. CSS grid does
-              // the right thing automatically.
-              <div className="grid gap-6 sm:grid-cols-2">
-                {(recommendations.by_lens ?? []).length > 0 && (
-                  <div className="min-w-0">
-                    {/* Sorted horizontal bars, not a pie: lens shares are a
-                        ranking, and bars make magnitudes comparable at a
-                        glance (same recipe as Top Topics). */}
-                    <ResponsiveContainer
-                      width="100%"
-                      height={Math.max(160, (recommendations.by_lens ?? []).length * 34)}
-                    >
-                      <BarChart
-                        data={[...(recommendations.by_lens ?? [])]
-                          .sort(
-                            (a: { count: number }, b: { count: number }) => b.count - a.count,
-                          )
-                          .map((s: { lens_id: string; count: number }) => ({
-                            name: s.lens_id === 'unknown' ? 'Global' : s.lens_id,
-                            count: s.count,
-                          }))}
-                        layout="vertical"
-                        margin={{ left: 10 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                        <XAxis
-                          type="number"
-                          tick={{ fontSize: 12, fill: '#152642' }}
-                          stroke="#D9CBAF"
-                          allowDecimals={false}
-                        />
-                        <YAxis
-                          dataKey="name"
-                          type="category"
-                          width={110}
-                          tick={{ fontSize: 11, fill: '#152642' }}
-                          stroke="#D9CBAF"
-                        />
-                        <Tooltip
-                          {...tooltipStyle}
-                          formatter={(value: number) => [value, 'Recommendations']}
-                        />
-                        <Bar dataKey="count" name="Recommendations" fill={colors.purple} radius={[0, 2, 2, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-                <div className="min-w-0 space-y-2 pt-4">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Total</span>
-                    <span className="font-medium tabular-nums text-alma-800">{recommendations.total}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Seen</span>
-                    <span className="font-medium tabular-nums text-alma-800">{recommendations.seen}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Liked</span>
-                    <span className="font-medium tabular-nums text-success-700">{recommendations.liked}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-slate-500">Dismissed</span>
-                    <span className="font-medium tabular-nums text-critical-700">{recommendations.dismissed}</span>
-                  </div>
-                  <div className="border-t border-[var(--color-border)] pt-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-slate-500">Engagement</span>
-                      <span className="font-brand font-semibold tabular-nums text-alma-800">
-                        {(recommendations.engagement_rate * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                  </div>
-                  {(recommendations.by_lens ?? []).length > 0 && (
-                    <div className="space-y-1 border-t border-[var(--color-border)] pt-2">
-                      {(recommendations.by_lens ?? []).map(
-                        (s: { lens_id: string; count: number; avg_score?: number }) => (
-                          <div key={s.lens_id} className="flex min-w-0 items-center gap-2 text-xs">
-                            <span className="min-w-0 flex-1 truncate text-slate-500">
-                              {s.lens_id === 'unknown' ? 'Global' : s.lens_id}
-                            </span>
-                            <span className="shrink-0 font-medium tabular-nums text-alma-800">{s.count}</span>
-                            {s.avg_score != null && (
-                              <span className="shrink-0 text-slate-400 tabular-nums">
-                                avg {(s.avg_score * 100).toFixed(0)}%
-                              </span>
-                            )}
-                          </div>
-                        ),
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
         <Card>
           <SectionHeader icon={Library} accent="text-alma-800" title="Library & Vectors" />
           <CardContent className="space-y-5">
