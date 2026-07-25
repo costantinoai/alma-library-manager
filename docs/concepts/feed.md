@@ -60,15 +60,29 @@ dates.
 
 ## New markers
 
-The **New** marker is tied to the latest completed Feed refresh, not
-to whether this browser session has rendered a row. The check is
-**per-paper**, not per-row — a paper credited to multiple followed
-authors has multiple `feed_items` rows, each with its own
-`fetched_at`. A paper is marked new only when:
+**New means "arrived since you last opened the Feed"** — not "since the last
+fetch". Papers reach the Feed from two directions: you press Refresh, and the
+scheduler fetches while ALMa is closed. Both accumulate. If a manual refresh
+brings 10 papers and an overnight run brings 20 more, the badge reads **30**
+until you actually look; opening the Feed clears it.
 
-* at least one of its rows still has `status = 'new'`, AND
-* the **earliest** `fetched_at` across all of its rows falls inside
-  the latest completed refresh window.
+The check is **per-paper**, not per-row — a paper credited to multiple followed
+authors has multiple `feed_items` rows, each with its own `fetched_at`. A paper
+counts as new only when:
+
+* at least one of its rows still has `status = 'new'` (you haven't triaged it), AND
+* the **earliest** `fetched_at` across all of its rows is later than your last
+  visit — so a paper a second monitor re-surfaces doesn't re-light.
+
+The visit is stamped by `POST /feed/seen`, which the page fires *after* it
+renders: the batch you are looking at is the batch that gets cleared, and
+reading the Feed never mutates what "new" means mid-request.
+
+!!! note "Why the badge and the New list can differ by a card or two"
+    The badge counts what still needs **triage**, so acting on a paper removes
+    it. The **New list** keeps acted-on cards visible until the next visit —
+    saving or liking a paper must not make it vanish out from under you
+    mid-triage. Only Dismiss hides a card.
 
 So a paper that was first surfaced in a previous fetch under author
 A and re-surfaced this fetch under author B is **not** new — the
@@ -127,8 +141,8 @@ Two different bounds apply, and they are not the same:
   `publication_date:desc`, successive refreshes keep pulling the newest works.
 * **Display bound.** The Feed view — Inbox *and* Journals — is bounded to the
   **last 60 days** by publication date (falling back to `fetched_at` when the
-  date is unknown). The **New** view shows papers first surfaced by the latest
-  fetch.
+  date is unknown). The **New** view shows papers that arrived since your last
+  visit.
 
 So a journal shows its **recent (≤60-day)** papers; the ~2-year download
 window only caps how far back the OpenAlex query reaches. Older fetched works
