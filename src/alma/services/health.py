@@ -34,6 +34,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
+from alma.ai.graph_versions import with_version
 from alma.application import materialized_views as mv
 from alma.core.paper_groups import PAPER_GROUP_DEFECT_KEYS
 from alma.core.sql_helpers import standalone_paper_sql
@@ -407,6 +408,14 @@ _REPAIR_ACTIONS: dict[str, list[dict[str, str]]] = {
             "kind": "run_now",
             "operation_key": "paper_group_reconcile",
             "target": "/api/v1/health/operations/paper_group_reconcile/run",
+        }
+    ],
+    "author_seed_thin": [
+        {
+            "label": "Seed their papers",
+            "kind": "run_now",
+            "operation_key": "author_seed_thin",
+            "target": "/api/v1/health/operations/author_seed_thin/run",
         }
     ],
 }
@@ -1278,7 +1287,19 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         # silently clipped the count (and attention_total) at the cap.
         return len(list_affiliation_conflicts(conn, limit=None) or [])
 
+    def _count_thin_suggested() -> tuple[int, int]:
+        # Same counter the `author_seed_thin` repair walks, so the Health number
+        # and the repair's population are the same set by construction — a run
+        # visibly drives this row down instead of appearing to do nothing.
+        # Returns (fixable, exhausted): the exhausted half is reported separately
+        # so the row can reach a quiet, converged state.
+        from alma.services.maintenance import count_thin_suggested_authors
+
+        return count_thin_suggested_authors(conn)
+
     merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
+    thin_counts, thin_ok = _safe_assess("author_thin_suggested", _count_thin_suggested)
+    thin_suggested, thin_exhausted = thin_counts if thin_ok else (None, None)
     affiliation_conflicts, affil_ok = _safe_assess(
         "author_affiliation_conflicts", _count_affiliation_conflicts
     )
@@ -1298,6 +1319,14 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
     follow_sev, _, follow_reason = _count_severity(
         n_followed_unresolved, warn_at=1, crit_at=None, noun="followed-but-unresolved authors"
     )
+    # Informational, never escalating: a thin suggestion is a missing-evidence
+    # gap the repair closes on its own schedule, not a broken identity.
+    if thin_ok:
+        thin_sev, _, thin_reason = _count_severity(
+            thin_suggested, warn_at=None, crit_at=None, noun="unplaceable suggested authors"
+        )
+    else:
+        thin_sev, thin_reason = "warning", "Couldn't measure suggested-author coverage — see logs."
     dims: list[dict[str, Any]] = [
         _dimension(
             key="authors.resolution_error",
@@ -1349,6 +1378,38 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             ),
             impact="A followed author with no identity bridge produces no new matches.",
             extra_actions=_AUTHOR_REVIEW_ACTION,
+        ),
+        _dimension(
+            key="authors.unplaceable",
+            entity="author",
+            label="Suggested but unplaceable",
+            count=thin_suggested if thin_ok else None,
+            total=total,
+            state=DIM_MEASURED if thin_ok else DIM_ERROR,
+            severity=thin_sev,
+            severity_reason=thin_reason,
+            # Tried-and-terminal subset: OpenAlex holds fewer than two works for
+            # them, so no repair can place them. Split out (never counted as
+            # outstanding) so this row converges to 0 instead of nagging.
+            exhausted=thin_exhausted if thin_ok else None,
+            explanation=(
+                f"{thin_suggested} currently-suggested authors have fewer than "
+                "two papers in the corpus."
+                + (
+                    f" A further {thin_exhausted} can never reach two — OpenAlex "
+                    "holds only one work for them."
+                    if thin_exhausted
+                    else ""
+                )
+                if thin_ok
+                else "Couldn't measure suggested-author coverage — see logs."
+            ),
+            impact=(
+                "Below two papers an author has no position on the author map, no "
+                "sample titles on their suggestion card, and no score — the engine "
+                "recommends them while showing you nothing to judge them on."
+            ),
+            repair_task="author_seed_thin",
         ),
         _dimension(
             key="authors.merge_conflicts",
@@ -1466,10 +1527,20 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 """
 
 
+# Assessor LOGIC version. The fingerprint above hashes input DATA only, so a
+# code change — a new dimension, a corrected threshold — leaves it identical and
+# the stale payload keeps serving: the fix ships and the Health page never shows
+# it. Bump whenever `assess_authors` changes shape or meaning.
+# 2026-07-26: added the `authors.unplaceable` dimension (suggested authors the
+#             corpus holds <2 papers for) + its `author_seed_thin` repair.
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.07-2"
+
 mv.register(
     mv.View(
         key=HEALTH_AUTHORS_VIEW_KEY,
-        fingerprint_sql=_HEALTH_AUTHORS_FINGERPRINT_SQL,
+        fingerprint_sql=with_version(
+            _HEALTH_AUTHORS_FINGERPRINT_SQL, _AUTHOR_HEALTH_LOGIC_VERSION
+        ),
         build_fn=assess_authors,
         operation_key="materialize.health.authors",
     )

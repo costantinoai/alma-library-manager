@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import materialized_views as mv
+from alma.core.time import utcnow
 from alma.services import health as health_service
 from alma.services.maintenance_contracts import (
     BatchSpec,
@@ -319,6 +320,78 @@ def _run_author_works(job_id: str, cap: int, target_paper_ids=None, params=None)
     )
 
 
+def _run_author_seed_thin(job_id: str, cap: int, target_paper_ids=None, params=None):
+    """Seed the few most-cited own papers for authors the corpus barely holds.
+
+    The repair for `authors.unplaceable`. Cheap and bounded (a page of works per
+    author), unlike `author_works`, which paginates an author's whole output —
+    this only needs enough papers to clear `_MIN_AUTHOR_PUBS` so the author gains
+    a map position, sample titles, and a score.
+    """
+    from alma.api.deps import _db_path
+    from alma.api.scheduler import add_job_log, set_job_status
+    from alma.application.authors import seed_thin_suggestion_authors
+
+    ctx = _ProgressCtx(job_id, set_job_status, add_job_log)
+    return seed_thin_suggestion_authors(_db_path(), limit=max(1, cap), ctx=ctx)
+
+
+def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Under-covered suggested authors, split ``(fixable, exhausted)``.
+
+    Counted over the SUGGESTION set rather than all authors on purpose: the
+    corpus is full of one-paper co-authors who are nobody's problem. An author
+    the engine is actively offering you, with no dot and no evidence, is.
+
+    The split is what lets the gap CONVERGE. An author OpenAlex holds fewer than
+    `SEED_TARGET_PAPERS` works for can never be placed, so counting them as
+    outstanding work means the Health row nags forever and every repair run
+    reports "Seeded 0 of N". `author_seed_status` records that verdict once
+    (terminal), exactly as `publication_embedding_fetch_status` does for papers
+    Semantic Scholar has no vector for.
+    """
+    from alma.application.author_backfill import (
+        SEED_STATUS_EXHAUSTED,
+        SEED_TARGET_PAPERS,
+        count_local_papers_for_author,
+    )
+    from alma.application.authors import list_author_suggestions
+
+    try:
+        suggestions = list_author_suggestions(conn, limit=30)
+    except Exception:  # noqa: BLE001 — a health count must never raise
+        return 0, 0
+    try:
+        exhausted_ids = {
+            str(r[0]).lower()
+            for r in conn.execute(
+                "SELECT author_openalex_id FROM author_seed_status WHERE status = ?",
+                (SEED_STATUS_EXHAUSTED,),
+            )
+        }
+    except sqlite3.OperationalError:
+        exhausted_ids = set()
+
+    fixable = exhausted = 0
+    for suggestion in suggestions:
+        openalex_id = str(suggestion.get("openalex_id") or "").strip()
+        if not openalex_id:
+            continue
+        if count_local_papers_for_author(conn, openalex_id) >= SEED_TARGET_PAPERS:
+            continue
+        if openalex_id.lower() in exhausted_ids:
+            exhausted += 1
+        else:
+            fixable += 1
+    return fixable, exhausted
+
+
+def _count_thin_suggested_authors(conn: sqlite3.Connection, params=None) -> int:
+    """The task's candidate pool — FIXABLE only, so a run never claims work it
+    structurally cannot do."""
+    return count_thin_suggested_authors(conn)[0]
+
+
 def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, params=None):
     """Bulk historical-corpus backfill for followed authors whose corpus needs
     maintenance (stale-first, then failed / unverified / thin) — the canonical
@@ -342,12 +415,12 @@ def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, par
     )
     from alma.services import author_attention
 
-    _STATE_PRIORITY = {"stale": 0, "failed": 1, "unverified": 2, "thin": 3}
+    state_priority = {"stale": 0, "failed": 1, "unverified": 2, "thin": 3}
     with _maintenance_conn() as conn:
         _counts, rows = author_attention.corpus_backfill_rows(conn)
     candidates = sorted(
         (r for r in rows if str(r.get("state") or "") in author_attention.CORPUS_ACTIONABLE_STATES),
-        key=lambda r: _STATE_PRIORITY.get(str(r.get("state") or ""), 9),
+        key=lambda r: state_priority.get(str(r.get("state") or ""), 9),
     )[: max(0, int(cap or 0))]
 
     total = len(candidates)
@@ -366,7 +439,7 @@ def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, par
             set_job_status(job_id, processed=idx + 1)
             continue
         child_id = f"author_deep_refresh_{_uuid.uuid4().hex[:10]}"
-        started = datetime.utcnow().isoformat()
+        started = utcnow().isoformat()
         set_job_status(
             child_id,
             status="running",
@@ -384,11 +457,11 @@ def _run_corpus_backfill_stale(job_id: str, cap: int, target_paper_ids=None, par
 
             _refresh_author_cache_impl(conn2, author_id, mode="deep", job_id=child_id)
             commit_with_retry(conn2, label="corpus_backfill_stale_author")
-            set_job_status(child_id, status="completed", finished_at=datetime.utcnow().isoformat())
+            set_job_status(child_id, status="completed", finished_at=utcnow().isoformat())
             done += 1
             add_job_log(job_id, f"{name}: backfill completed", step="author_done")
         except Exception as exc:  # keep going — one flaky author must not sink the batch
-            set_job_status(child_id, status="failed", error=str(exc), finished_at=datetime.utcnow().isoformat())
+            set_job_status(child_id, status="failed", error=str(exc), finished_at=utcnow().isoformat())
             failed += 1
             add_job_log(job_id, f"{name}: backfill failed — {exc}", step="author_failed")
         finally:
@@ -642,7 +715,7 @@ def _count_housekeeping(conn: sqlite3.Connection, params=None) -> int:
     from datetime import timedelta
 
     try:
-        cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        cutoff = (utcnow() - timedelta(days=30)).isoformat()
         return int(
             (conn.execute(
                 "SELECT COUNT(*) AS n FROM operation_logs WHERE timestamp < ?", (cutoff,)
@@ -935,6 +1008,43 @@ REGISTRY: dict[str, MaintenanceTask] = {
             sources=(SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR),
             local_compute=True,
             # Reuse the per-author multi-source rate profile for a truthful ETA.
+            eta_key="refresh_authors",
+        ),
+        MaintenanceTask(
+            key="author_seed_thin",
+            label="Seed under-covered suggested authors",
+            description=(
+                "Repair: land the 2 most-cited own papers (first-author preferred, "
+                "topped up by citations) for authors the engine is suggesting but "
+                "the corpus holds fewer than two papers for. Below two papers an "
+                "author has no position on the author map, no sample titles on "
+                "their card, and no score — one bounded fetch per author fixes all "
+                "three. Cheap: a single works page per author, not the full "
+                "pagination `author_works` does."
+            ),
+            # This one DOES claim its dimension: the population it walks is
+            # exactly the population `authors.unplaceable` counts, so a run
+            # visibly drives the Health number down (unlike `author_works`,
+            # whose disjoint population made repair counts look stuck).
+            health_dimensions=("authors.unplaceable",),
+            candidate_path="",
+            operation_key="authors.seed_thin_suggestions",
+            job_id_prefix="maint_author_seed",
+            cost=COST_NETWORK,
+            runner=_run_author_seed_thin,
+            stage=MaintenanceStage.AUTHOR_WORKS,
+            order=29,
+            unit=MaintenanceUnit.AUTHOR,
+            target_kind=TargetKind.AUTHOR,
+            supports_targets=False,
+            optional=True,
+            count_fn=_count_thin_suggested_authors,
+            default_manual_limit=30,
+            max_manual_limit=30,
+            default_auto_daily_cap=30,
+            auto_chunk_size=10,
+            sources=(SOURCE_OPENALEX, SOURCE_SEMANTIC_SCHOLAR),
+            local_compute=True,
             eta_key="refresh_authors",
         ),
         MaintenanceTask(
@@ -1368,7 +1478,7 @@ def get_task_user_pause(conn: sqlite3.Connection, task: MaintenanceTask) -> date
     except ValueError:
         logger.warning("maintenance: unparseable user pause for %s: %r", task.key, raw)
         return None
-    return until if until > datetime.utcnow() else None
+    return until if until > utcnow() else None
 
 
 def set_task_user_pause(
@@ -1378,7 +1488,7 @@ def set_task_user_pause(
     from alma.application.discovery import upsert_setting
     from alma.core.db_write import run_write_unit
 
-    until = datetime.utcnow() + timedelta(hours=max(1, int(hours)))
+    until = utcnow() + timedelta(hours=max(1, int(hours)))
     run_write_unit(
         conn,
         lambda: upsert_setting(
@@ -2401,7 +2511,7 @@ _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2, "ok": 3}
 
 def _utc_midnight_iso() -> str:
     """Today's UTC midnight as a naive ISO string (matches stored timestamps)."""
-    return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 def _healer_used_today(conn: sqlite3.Connection, operation_key: str) -> int:
@@ -2747,7 +2857,7 @@ def run_onboarding_convergence(
             set_job_status(
                 job_id, status="cancelled", processed=len(steps), total=len(steps),
                 message=f"Onboarding convergence stopped after {len(steps)} step(s)",
-                finished_at=datetime.utcnow().isoformat(), result=result,
+                finished_at=utcnow().isoformat(), result=result,
             )
             return
         message = (
@@ -2757,14 +2867,14 @@ def run_onboarding_convergence(
         )
         set_job_status(
             job_id, status="completed", processed=len(steps), total=len(steps),
-            message=message, finished_at=datetime.utcnow().isoformat(), result=result,
+            message=message, finished_at=utcnow().isoformat(), result=result,
         )
         add_job_log(job_id, message, step="converge_done", data=result)
     except Exception as exc:
         logger.exception("onboarding convergence failed")
         set_job_status(
             job_id, status="failed", message=f"Onboarding convergence failed: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         try:
