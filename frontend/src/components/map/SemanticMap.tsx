@@ -40,8 +40,8 @@ import {
   MAP_INK,
   MAP_NODE_STYLES,
   SELECTION_RING,
-  TERRAIN_RAMP,
   radiusFor,
+  terrainColor,
   type MapNodeKind,
 } from './mapNodeStyle'
 import { fitViewport, useMapViewport, worldToScreen } from './useMapViewport'
@@ -394,36 +394,28 @@ export function SemanticMap({
         const img = hctx.createImageData(gw, gh)
         let maxW = 0
         for (let i = 0; i < dsum.length; i++) if (dsum[i] > maxW) maxW = dsum[i]
-        // TWO-SLOPE normalisation (matplotlib TwoSlopeNorm): zero is ALWAYS
-        // the neutral centre stop, each side anchored on the REAL extremes
-        // of the SOURCE values — the exact numbers the colourbar labels —
-        // so the ramp ends mean the field's true min / max (user call
-        // 2026-07-25). Anchoring on source values (not smoothed cell
-        // means) keeps the scale stable across zoom levels and identical
-        // to the legend.
-        let srcMin = 0
-        let srcMax = 0
+        // SYMMETRIC normalisation about zero at the field's real max
+        // |value| (user contract 2026-07-25): the same ±absMax the
+        // colourbar labels, dynamically from the SOURCE values — legend
+        // and plate share one scale, stable across zoom. Contrast comes
+        // from the RAMP (narrow yellow band, terrainColor), never from
+        // bending the scale.
+        let absMax = 0
         for (const [, , v] of heatPoints) {
-          if (v < srcMin) srcMin = v
-          if (v > srcMax) srcMax = v
+          const a = Math.abs(v)
+          if (a > absMax) absMax = a
         }
-        const negMax = Math.max(1e-6, -srcMin)
-        const posMax = Math.max(1e-6, srcMax)
-        // TERRAIN_RAMP (mapNodeStyle owns the stops): deep red → pale
-        // parchment → deep green. Alpha scales with |deviation| so a
-        // neutral cell fades into the paper instead of blanketing the
-        // plate in mid-ramp wash — only real diffs take colour.
-        const { neg: RN, mid: RM, pos: RP } = TERRAIN_RAMP
+        if (absMax <= 0) absMax = 1
+        // terrainColor (mapNodeStyle owns the ramp): narrow yellow band
+        // around 0, strong red/green quickly off neutral. Alpha still
+        // scales with |deviation| so genuinely neutral cells recede.
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
           const mean = vsum[i] / wsum[i]
-          const t = Math.max(-1, Math.min(1, mean < 0 ? mean / negMax : mean / posMax))
-          const [r, g, b] =
-            t < 0
-              ? [RN[0] + (RM[0] - RN[0]) * (1 + t), RN[1] + (RM[1] - RN[1]) * (1 + t), RN[2] + (RM[2] - RN[2]) * (1 + t)]
-              : [RM[0] + (RP[0] - RM[0]) * t, RM[1] + (RP[1] - RM[1]) * t, RM[2] + (RP[2] - RM[2]) * t]
-          const densityAlpha = Math.min(0.5, 0.12 + 0.55 * (dsum[i] / maxW))
-          const alpha = densityAlpha * (0.35 + 0.65 * Math.abs(t)) * 255
+          const t = Math.max(-1, Math.min(1, mean / absMax))
+          const [r, g, b] = terrainColor(t)
+          const densityAlpha = Math.min(0.75, 0.25 + 0.7 * (dsum[i] / maxW))
+          const alpha = densityAlpha * (0.45 + 0.55 * Math.abs(t)) * 255
           const o = i * 4
           img.data[o] = r
           img.data[o + 1] = g

@@ -213,21 +213,44 @@ export function summarizeValues(values: number[]): { min: number; max: number; m
   return { min, max, mean: sum / vs.length }
 }
 
-/** Terrain ramp — the ONE owner of the preference-field colours (splat +
- *  legend read THESE stops). Deep ends, near-parchment centre: a neutral
- *  cell blends into the paper instead of blanketing the plate in yellow;
- *  only real deviations take colour (user call 2026-07-25). The splat
- *  additionally scales alpha by |deviation|, so neutral fades out. */
-export const TERRAIN_RAMP = {
-  neg: [165, 0, 38] as const, // deep red — strongest against
-  mid: [252, 245, 224] as const, // pale parchment — neutral, near-invisible
-  pos: [0, 104, 55] as const, // deep green — strongest for
+/** Terrain ramp — the ONE owner of the preference-field colours (splat and
+ *  legend both read THIS). Contract (user, 2026-07-25): the scale is
+ *  SYMMETRIC about zero at the field's real max |value| (dynamic, shown on
+ *  the bar), the centre is yellow, and the yellow band is NARROW
+ *  (±TERRAIN_YELLOW_BAND of the scale) — colour ramps to strong red/green
+ *  quickly off zero so differences from neutral read clearly. */
+export const TERRAIN_YELLOW_BAND = 0.12
+
+const TERRAIN_STOPS = {
+  deepNeg: [165, 0, 38] as const, // -1 — strongest against
+  neg: [220, 68, 61] as const, // edge of the yellow band, negative side
+  mid: [233, 196, 76] as const, // 0 — neutral yellow
+  pos: [64, 160, 92] as const, // edge of the yellow band, positive side
+  deepPos: [0, 104, 55] as const, // +1 — strongest for
 }
 
+/** Terrain colour for a NORMALISED t in [-1, +1] (t = mean / absMax). */
+export function terrainColor(t: number): [number, number, number] {
+  const x = Math.max(-1, Math.min(1, t))
+  const mix = (a: readonly number[], b: readonly number[], k: number): [number, number, number] => [
+    Math.round(a[0] + (b[0] - a[0]) * k),
+    Math.round(a[1] + (b[1] - a[1]) * k),
+    Math.round(a[2] + (b[2] - a[2]) * k),
+  ]
+  const band = TERRAIN_YELLOW_BAND
+  if (x < -band) return mix(TERRAIN_STOPS.deepNeg, TERRAIN_STOPS.neg, (x + 1) / (1 - band))
+  if (x < 0) return mix(TERRAIN_STOPS.neg, TERRAIN_STOPS.mid, (x + band) / band)
+  if (x < band) return mix(TERRAIN_STOPS.mid, TERRAIN_STOPS.pos, x / band)
+  return mix(TERRAIN_STOPS.pos, TERRAIN_STOPS.deepPos, (x - band) / (1 - band))
+}
+
+const terrainStopPct = (t: number) => `${Math.round(((t + 1) / 2) * 100)}%`
+
 /** CSS gradients matching the canvas ramps exactly — the legend bar must be
- *  the same ramp the dots use. */
+ *  the same ramp the dots use. The terrain gradient pins the yellow band to
+ *  the same narrow ±TERRAIN_YELLOW_BAND the canvas uses. */
 export const RAMP_GRADIENTS = {
   divergent: 'linear-gradient(to right, rgb(220,68,61), rgb(233,196,76), rgb(64,160,92))',
-  terrain: `linear-gradient(to right, rgb(${TERRAIN_RAMP.neg.join(',')}), rgb(${TERRAIN_RAMP.mid.join(',')}), rgb(${TERRAIN_RAMP.pos.join(',')}))`,
+  terrain: `linear-gradient(to right, rgb(${TERRAIN_STOPS.deepNeg.join(',')}) 0%, rgb(${TERRAIN_STOPS.neg.join(',')}) ${terrainStopPct(-TERRAIN_YELLOW_BAND)}, rgb(${TERRAIN_STOPS.mid.join(',')}) 50%, rgb(${TERRAIN_STOPS.pos.join(',')}) ${terrainStopPct(TERRAIN_YELLOW_BAND)}, rgb(${TERRAIN_STOPS.deepPos.join(',')}) 100%)`,
   year: 'linear-gradient(to right, #440154, #3B528B, #21918C, #5EC962, #FDE725)',
 } as const

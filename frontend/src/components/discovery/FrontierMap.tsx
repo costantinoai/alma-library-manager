@@ -575,13 +575,13 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               />
             )}
             {showTerrain && terrainStats && (
-              // Two-slope terrain ramp (pale centre): labels are the true
-              // asymmetric min / 0 / max — the ramp's exact anchors.
+              // Symmetric ±max|value| (dynamic, the splat's exact scale);
+              // narrow yellow band = neutral.
               <ColourBarLegend
                 gradient={RAMP_GRADIENTS.terrain}
-                min={terrainStats.min.toFixed(2)}
+                min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
                 mid="0"
-                max={terrainStats.max.toFixed(2)}
+                max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
                 mean={terrainStats.mean.toFixed(2)}
               />
             )}

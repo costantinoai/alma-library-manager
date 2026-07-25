@@ -400,15 +400,15 @@ export function GraphMapView({
             />
           )}
           {showTerrain && terrainStats && (
-            // Two-slope scale on the TERRAIN ramp (pale centre = neutral
-            // fades into the paper): labels are the field's TRUE asymmetric
-            // min / 0 / max — exactly the ramp's anchors, never a fixed ±1
-            // (user call 2026-07-25). Space-owned, stable across layers.
+            // SYMMETRIC about zero at the field's REAL max |value| —
+            // dynamic, the exact scale the splat uses (user contract
+            // 2026-07-25). Narrow yellow band = neutral; strong red/green
+            // right off zero.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.terrain}
-              min={terrainStats.min.toFixed(2)}
+              min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
               mid="0"
-              max={terrainStats.max.toFixed(2)}
+              max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
               mean={terrainStats.mean.toFixed(2)}
             />
           )}
