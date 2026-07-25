@@ -95,11 +95,12 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   // (the recs are its hero layer); corpus clusters are the alternative lens on
   // the same points. Never both — two colourings on one scatter is a lie about
   // which structure you're looking at.
-  const [groupBy, setGroupBy] = useState<'branches' | 'clusters'>('branches')
+  const [groupBy, setGroupBy] = useState<'branches' | 'clusters' | 'year' | 'heat'>('branches')
   // Legend chips as toggles: a dimmed cluster recedes (never disappears —
   // the territory stays honest), so you can mute the mega-cluster and read
   // the rest. Reset on grouping switch.
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
+  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [region, setRegion] = useState<RegionSelection | null>(null)
 
@@ -152,6 +153,33 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     prevRecIds.current = current
   }, [nodes, query.data?.status])
 
+  const yearRange = useMemo(() => {
+    let lo = Infinity
+    let hi = -Infinity
+    for (const n of nodes) {
+      if (typeof n.year === 'number' && n.year > 1800) {
+        lo = Math.min(lo, n.year)
+        hi = Math.max(hi, n.year)
+      }
+    }
+    return lo <= hi ? { lo, hi } : null
+  }, [nodes])
+
+  // Heat valence (50-J): what carries signal HERE — a strong suggestion and
+  // your library are positive mass, weak suggestions negative, seen papers
+  // neutral. View-only wash under the dots; never a discovery input.
+  const heatValues = useMemo(() => {
+    if (groupBy !== 'heat') return undefined
+    const m = new Map<string, number>()
+    for (const n of nodes) {
+      if (n.layer === 'rec')
+        m.set(n.paper_id, Math.max(-1, Math.min(1, ((n.score ?? 50) - 50) / 50)))
+      else if (n.layer === 'library') m.set(n.paper_id, 0.35)
+      else m.set(n.paper_id, 0)
+    }
+    return m
+  }, [groupBy, nodes])
+
   // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
   const mapNodes = useMemo<SemanticMapNode[]>(() => {
     return nodes.map((n): SemanticMapNode => {
@@ -161,7 +189,15 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
       if (groupBy === 'clusters') {
         color =
           typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id)?.color : undefined
-      } else if (n.layer === 'rec') {
+      } else if (groupBy === 'year') {
+        if (yearRange && typeof n.year === 'number' && n.year > 1800) {
+          const t = (n.year - yearRange.lo) / Math.max(1, yearRange.hi - yearRange.lo)
+          const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
+          color = `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
+        } else {
+          color = MAP_INK.ambientSoft
+        }
+      } else if (groupBy === 'branches' && n.layer === 'rec') {
         color = n.branch_id ? branchColors.get(n.branch_id)?.color : branchMapColor(0)
       }
       return {
@@ -185,16 +221,18 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         halo: newRecIds.has(n.paper_id),
       }
     })
-  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters])
+  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters, yearRange])
 
   const mapEdges = useMemo(
     () =>
-      edges.map((e) => ({
+      edges
+        .filter((e) => !hiddenEdgeTypes.has(e.edge_type))
+        .map((e) => ({
         source: e.source,
         target: e.target,
         color: EDGE_LAYER_COLORS[e.edge_type] ?? EDGE_LAYER_FALLBACK_COLOR,
       })),
-    [edges],
+    [edges, hiddenEdgeTypes],
   )
 
   const describeMutation = useMutation({
@@ -282,7 +320,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
         {clusterColors.size > 0 && (
           <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
-            {(['branches', 'clusters'] as const).map((mode) => (
+            {(['branches', 'clusters', 'year', 'heat'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -300,10 +338,14 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 title={
                   mode === 'branches'
                     ? 'Colour suggestions by the lens branch that found them'
-                    : 'Colour every paper by its corpus cluster'
+                    : mode === 'clusters'
+                      ? 'Colour every paper by its corpus cluster'
+                      : mode === 'year'
+                        ? 'Recency ramp — older fades, newer leads'
+                        : 'Local signal wash — green where your saves and strong suggestions sit, red where weak ones do (view only)'
                 }
               >
-                {mode === 'branches' ? 'Branches' : 'Clusters'}
+                {mode === 'branches' ? 'Branches' : mode === 'clusters' ? 'Clusters' : mode === 'year' ? 'Year' : 'Heat'}
               </button>
             ))}
           </div>
@@ -334,6 +376,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         edges={mapEdges}
         showEdges={showEdges}
         showToponyms={showNames && groupBy === 'clusters'}
+        heatValues={heatValues}
         height={520}
         lassoMode={selectMode}
         onLasso={(ids, anchor) => {
@@ -490,6 +533,51 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               </span>
             )}
           </div>
+          {showSeen && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Seen = surfaced in an EARLIER refresh and never acted on (not saved, not dismissed).
+              They are not in the current deck — each new refresh builds a fresh one — but they are
+              your unworked frontier: lasso a patch of them to explore it as a Direction.
+            </p>
+          )}
+          {showEdges && edges.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+              {Object.entries(
+                edges.reduce<Record<string, number>>((acc, e) => {
+                  acc[e.edge_type] = (acc[e.edge_type] ?? 0) + 1
+                  return acc
+                }, {}),
+              ).map(([type, count]) => {
+                const off = hiddenEdgeTypes.has(type)
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-pressed={!off}
+                    onClick={() =>
+                      setHiddenEdgeTypes((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(type)) next.delete(type)
+                        else next.add(type)
+                        return next
+                      })
+                    }
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600 transition-opacity hover:bg-control-quiet-hover',
+                      off && 'opacity-40 line-through',
+                    )}
+                    title={off ? `Show ${type} links` : `Hide ${type} links`}
+                  >
+                    <span
+                      className="inline-block h-1.5 w-3 rounded-full"
+                      style={{ background: EDGE_LAYER_COLORS[type] ?? EDGE_LAYER_FALLBACK_COLOR }}
+                    />
+                    {type === 'bibliographic_coupling' ? 'Shared references' : type === 'co_citation' ? 'Cited together' : type} · {count}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           {/* Branch chips — highlight on click, and (when the lens is available)
               steer the branch inline. Boost/mute here write the SAME
               branch_controls Branch Studio writes, through the shared hook: one
