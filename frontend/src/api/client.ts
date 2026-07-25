@@ -4779,6 +4779,14 @@ export interface HomeBrief {
     monitors_need_attention: number
   }
 }
+/** Stamp that the user has now LOOKED at the Feed, so the New count measures
+ * from here. Fired after the inbox renders — the GET stays pure, and papers
+ * from every fetch since the last visit (manual or scheduled) accumulate until
+ * this call clears them. */
+export function markFeedSeen(): Promise<{ last_seen_at: string }> {
+  return api.post<{ last_seen_at: string }>('/feed/seen', {})
+}
+
 export function getHomeBrief(): Promise<HomeBrief> {
   return api.get<HomeBrief>('/home/brief')
 }

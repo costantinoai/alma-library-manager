@@ -21,6 +21,27 @@ except Exception:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 
+def connect_scholar_db(path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
+    """Open a scholar.db connection FROM A PATH, with the app's row contract.
+
+    The one factory for code that receives a database *path* instead of a live
+    connection (CLI entry points, the OpenAlex ingest writers, the legacy
+    fetcher). It exists because every shared paper/author helper reads columns
+    by NAME — ``row["doi"]``, ``row["name"]`` — which raises
+    ``TypeError: tuple indices must be integers or slices, not str`` against the
+    default tuple row factory. That is exactly how the periodic author refresh
+    died. ``sqlite3.Row`` also still supports positional access, so
+    ``name, oa = row`` keeps working.
+
+    Request-path code keeps using ``alma.api.deps.open_db_connection`` (same row
+    contract plus the WAL/pragma assertions for the app's own DB file).
+    """
+    conn = sqlite3.connect(path, timeout=timeout)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=30000")
+    return conn
+
+
 def migrate_legacy_files(root: str = "./src") -> None:
     """Migrate legacy JSON caches and authors list to SQLite if present.
 
@@ -196,7 +217,7 @@ def confirm_temp_cache(
 def _init_authors_db(authors_path: str) -> sqlite3.Connection:
     """Ensure the authors database exists and return a connection."""
 
-    conn = sqlite3.connect(authors_path)
+    conn = connect_scholar_db(authors_path)
     # On the app DB the full-shape `authors` table already exists
     # (init_db_schema); this minimal CREATE only fires for a standalone
     # CLI-created file and is a no-op everywhere else.

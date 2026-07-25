@@ -705,29 +705,67 @@ def _is_new_since_latest_fetch(
     *,
     status: object,
     fetched_at: object,
-    latest_fetch_window: tuple[str | None, str | None],
+    unseen_since: str,
 ) -> bool:
+    """New = untriaged AND fetched after the user last opened the Feed."""
     if str(status or "new").strip().lower() != "new":
         return False
-    start, finish = latest_fetch_window
-    if not start or not finish:
-        return False
     fetched = str(fetched_at or "").strip()
-    return bool(fetched and start <= fetched <= finish)
+    if not fetched:
+        return False
+    # Never looked (empty stamp) → everything untriaged is still unseen.
+    return fetched > unseen_since
+
+
+#: KV key holding the ISO timestamp of the last time the user actually LOOKED
+#: at the Feed. Lives in the same `discovery_settings` store as every other
+#: durable app setting.
+FEED_LAST_SEEN_KEY = "feed.last_seen_at"
+
+
+def get_feed_last_seen(db: sqlite3.Connection) -> str | None:
+    """When the user last opened the Feed, or None if they never have."""
+    try:
+        row = db.execute(
+            "SELECT value FROM discovery_settings WHERE key = ?", (FEED_LAST_SEEN_KEY,)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    value = str((row["value"] if row else "") or "").strip()
+    return value or None
+
+
+def unseen_feed_window(db: sqlite3.Connection, *, since_days: int = 60) -> tuple[str, str]:
+    """The window that defines "new": everything fetched since you last LOOKED.
+
+    This is deliberately *not* "the latest fetch". Papers arrive from two
+    directions — you press Refresh, and the scheduler fetches while ALMa is
+    closed — and a latest-fetch window silently discards the earlier batch: a
+    manual refresh bringing 10 papers followed by an overnight run bringing 20
+    used to read "20 new", quietly burying the first 10. Unseen-since-last-visit
+    is what the user actually means by new, and it only clears when they open
+    the Feed (`mark_feed_seen`).
+
+    Returns ``(start, cutoff)``: `start` bounds the fetch time, `cutoff` is the
+    publication-recency floor the inbox is bounded to anyway.
+    """
+    cutoff = (datetime.utcnow() - timedelta(days=int(since_days))).isoformat()
+    # Never looked → everything still inside the inbox window is unseen.
+    return (get_feed_last_seen(db) or "", cutoff)
 
 
 def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_days: int = 60) -> int:
-    """Count distinct untriaged feed papers first surfaced by the latest fetch.
+    """Count distinct untriaged feed papers you haven't seen yet.
 
     A paper credited to multiple authors has multiple ``feed_items`` rows; the
-    badge counts the *paper* not the row, and only when the paper's earliest
-    surfacing falls inside the latest fetch window. Otherwise a paper from a
-    prior fetch re-lights every time a different author monitor surfaces it.
+    badge counts the *paper*, not the row, keyed on its EARLIEST surfacing so a
+    paper a second monitor re-surfaces doesn't re-light. Papers you've already
+    acted on (status no longer 'new') never count.
+
+    (Name kept for its callers; the definition is now unseen-since-last-visit —
+    see `unseen_feed_window`.)
     """
-    start, finish = latest_feed_fetch_window(db)
-    if not start or not finish:
-        return 0
-    cutoff = (datetime.utcnow() - timedelta(days=int(since_days))).isoformat()
+    start, cutoff = unseen_feed_window(db, since_days=since_days)
     try:
         row = db.execute(
             """
@@ -742,16 +780,29 @@ def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_day
             FROM per_paper pp
             LEFT JOIN papers p ON p.id = pp.paper_id
             WHERE pp.has_new = 1
-              AND pp.earliest >= ?
-              AND pp.earliest <= ?
+              AND pp.earliest > ?
               AND COALESCE(NULLIF(p.publication_date, ''), pp.earliest) >= ?
               AND """ + standalone_paper_sql("p") + """
             """,
-            (start, finish, cutoff),
+            (start, cutoff),
         ).fetchone()
     except sqlite3.OperationalError:
         return 0
     return int((row["c"] if row else 0) or 0)
+
+
+def mark_feed_seen(db: sqlite3.Connection, *, when: str | None = None) -> str:
+    """Stamp "the user has now looked at the Feed". Caller owns the write unit."""
+    stamp = when or datetime.utcnow().isoformat()
+    db.execute(
+        """
+        INSERT INTO discovery_settings (key, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (FEED_LAST_SEEN_KEY, stamp),
+    )
+    return stamp
 
 
 def list_feed_items(
@@ -804,29 +855,30 @@ def list_feed_items(
     elif scope == "inbox":
         where.append("COALESCE(fm.monitor_type, fi.monitor_type, '') <> 'venue'")
     requested_status = str(status or "").strip().lower()
-    latest_fetch_window = latest_feed_fetch_window(db)
     if requested_status and requested_status != "all":
         if requested_status not in VALID_FEED_STATUSES:
             raise ValueError(f"Invalid feed status: {requested_status}")
         if requested_status == "new":
-            # "New" = every paper first surfaced by the LATEST fetch (recency),
-            # regardless of whether the user has since acted on it. Acting
-            # (save / like / queue) must NOT drop a card from the New view — it is
-            # a stable triage surface, and only Dismiss hides (handled by the
-            # global ``<> 'dismissed'`` filter above). We bound on the paper's
-            # EARLIEST fetched_at so a paper from a prior fetch that a new monitor
-            # re-surfaces doesn't re-light as "new". On the next refresh the
-            # window advances: older papers age out of New but remain under
-            # "Show all" — the Feed's full chronological truth never hides them.
-            if latest_fetch_window[0] and latest_fetch_window[1]:
-                where.append(
-                    "fi.paper_id IN (SELECT paper_id FROM feed_items "
-                    "GROUP BY paper_id "
-                    "HAVING MIN(fetched_at) >= ? AND MIN(fetched_at) <= ?)"
-                )
-                params.extend([latest_fetch_window[0], latest_fetch_window[1]])
-            else:
-                where.append("1=0")
+            # "New" = every paper that arrived since you last LOOKED at the Feed
+            # — whether you fetched it yourself or the scheduler did while ALMa
+            # was closed. Both sources accumulate, which a latest-fetch window
+            # could not express (it discarded the earlier batch). The SAME
+            # `unseen_feed_window` drives the nav badge, so the count and the
+            # list can never disagree.
+            #
+            # Acting on a card (save / like / queue) must NOT drop it from this
+            # view — it's a stable triage surface, and only Dismiss hides
+            # (handled by the global ``<> 'dismissed'`` filter above). We bound
+            # on the paper's EARLIEST fetched_at so a paper a second monitor
+            # re-surfaces doesn't re-light as new. Opening the Feed advances the
+            # stamp: these papers age out of New but remain under "Show all".
+            unseen_start, _unseen_cutoff = unseen_feed_window(db)
+            where.append(
+                "fi.paper_id IN (SELECT paper_id FROM feed_items "
+                "GROUP BY paper_id "
+                "HAVING MIN(fetched_at) > ?)"
+            )
+            params.append(unseen_start)
         else:
             where.append("fi.status = ?")
             params.append(requested_status)
@@ -893,7 +945,8 @@ def list_feed_items(
         ORDER BY {order}
     """
     rows = db.execute(query, params).fetchall()
-    aggregated = _aggregate_feed_rows(rows, latest_fetch_window=latest_fetch_window)
+    unseen_since, _ = unseen_feed_window(db)
+    aggregated = _aggregate_feed_rows(rows, unseen_since=unseen_since)
     total = len(aggregated)
     return aggregated[offset:offset + limit], total
 
@@ -951,8 +1004,8 @@ def list_feed_items_for_ids(db: sqlite3.Connection, feed_item_ids: list[str]) ->
         """,
         feed_item_ids,
     ).fetchall()
-    latest_fetch_window = latest_feed_fetch_window(db)
-    mapped = [_map_feed_row(r, latest_fetch_window=latest_fetch_window) for r in rows]
+    unseen_since, _ = unseen_feed_window(db)
+    mapped = [_map_feed_row(r, unseen_since=unseen_since) for r in rows]
     return mapped, len(mapped)
 
 
@@ -2234,7 +2287,7 @@ def refresh_feed_monitor(
 def _map_feed_row(
     row: sqlite3.Row,
     *,
-    latest_fetch_window: tuple[str | None, str | None],
+    unseen_since: str,
 ) -> dict:
     monitor_type = str(row["monitor_type"] or "").strip().lower() or None
     author_id = str(row["author_id"] or "").strip()
@@ -2272,7 +2325,7 @@ def _map_feed_row(
         "is_new": _is_new_since_latest_fetch(
             status=row["status"],
             fetched_at=row["fetched_at"],
-            latest_fetch_window=latest_fetch_window,
+            unseen_since=unseen_since,
         ),
         "score_breakdown": _parse_json_dict(row["score_breakdown"]),
         "paper": {
@@ -2308,14 +2361,13 @@ def _map_feed_row(
 def _aggregate_feed_rows(
     rows: list[sqlite3.Row],
     *,
-    latest_fetch_window: tuple[str | None, str | None],
+    unseen_since: str,
 ) -> list[dict]:
     """Collapse duplicate papers into one inbox card while preserving author provenance.
 
     `is_new` is recomputed against the paper's earliest `fetched_at` across all
     rows, not the most recent — otherwise a paper credited to multiple authors
-    re-lights as new every time a different author monitor surfaces it in the
-    latest fetch window.
+    re-lights as new every time a different author monitor surfaces it.
     """
     aggregated: dict[str, dict] = {}
     ordered_ids: list[str] = []
@@ -2323,7 +2375,7 @@ def _aggregate_feed_rows(
     has_new_status: dict[str, bool] = {}
 
     for row in rows:
-        mapped = _map_feed_row(row, latest_fetch_window=latest_fetch_window)
+        mapped = _map_feed_row(row, unseen_since=unseen_since)
         group_key = str(mapped.get("paper_id") or mapped.get("id") or "").strip()
         if not group_key:
             continue
@@ -2341,14 +2393,11 @@ def _aggregate_feed_rows(
 
         _absorb_feed_card(existing, mapped)
 
-    start, finish = latest_fetch_window
     for group_key, item in aggregated.items():
         earliest = earliest_fetched.get(group_key, "")
         item["is_new"] = bool(
-            start
-            and finish
-            and earliest
-            and start <= earliest <= finish
+            earliest
+            and earliest > unseen_since
             and has_new_status.get(group_key, False)
         )
 

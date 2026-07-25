@@ -1390,13 +1390,21 @@ def refresh_authors_periodic() -> None:
             except Exception as score_exc:
                 logger.debug("Feed scoring after refresh failed: %s", score_exc)
 
+            # A sweep that skipped authors still finished, but Activity must say
+            # so — do_refresh_cache_all keeps going past a per-author failure and
+            # reports the count (the stack traces are in the log).
+            failed = int(result.get("failed") or 0)
             set_job_status(
                 job_id,
                 status="completed",
                 trigger_source="scheduler",
                 operation_key=operation_key,
                 finished_at=datetime.utcnow().isoformat(),
-                message="Periodic author refresh complete",
+                message=(
+                    f"Periodic author refresh complete — {failed} author(s) failed, see log"
+                    if failed
+                    else "Periodic author refresh complete"
+                ),
                 result=result,
             )
         finally:

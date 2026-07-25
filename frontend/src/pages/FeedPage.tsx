@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   BookOpen,
@@ -32,6 +32,7 @@ import {
   updateFeedSettings,
   listFeedMonitors,
   listFeedInbox,
+  markFeedSeen,
   refreshFeedInbox,
   removeFromLibrary,
   updateReadingStatus,
@@ -286,6 +287,27 @@ export function FeedPage() {
     // window refocus while keeping it fresh enough.
     staleTime: 30_000,
   })
+
+  // Mark the Feed seen ONCE per visit, after the inbox has rendered. Until
+  // this fires, every paper fetched since the last visit — by you or by the
+  // scheduler while ALMa was closed — keeps counting as New, which is what
+  // "new" actually means to a reader. The ref guards React 18's double-invoke
+  // and stops a background refetch from re-stamping.
+  const feedSeenStamped = useRef(false)
+  const markSeenMutation = useMutation({
+    mutationFn: markFeedSeen,
+    onSuccess: () => {
+      // Refresh the nav badge; the rendered cards keep their New marks so the
+      // batch you're looking at doesn't change under you.
+      void invalidateQueries(queryClient, ['bootstrap'], ['feed-status'])
+    },
+  })
+  useEffect(() => {
+    if (feedSeenStamped.current || !feedQuery.data) return
+    feedSeenStamped.current = true
+    markSeenMutation.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedQuery.data])
 
   const monitorQueryState = useQuery({
     queryKey: ['feed-monitors'],

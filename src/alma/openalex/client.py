@@ -1048,14 +1048,25 @@ def upsert_papers(works: Iterable[dict], db_path: Path = Path("./data/scholar.db
     Returns:
         Number of papers successfully upserted.
     """
-    with sqlite3.connect(db_path) as conn:
-        _ensure_schema(conn)
-        count = 0
-        for w in works:
-            if _upsert_single_paper(conn, w):
-                count += 1
-        conn.commit()
+    from alma.core.database import connect_scholar_db
+
+    # `_upsert_single_paper` and the group primitives it calls read columns by
+    # NAME, so this connection MUST carry the Row factory — a bare
+    # `sqlite3.connect` here is what killed the periodic author refresh.
+    conn = connect_scholar_db(str(db_path))
+    try:
+        with conn:  # transaction scope: rolls back if a write raises
+            _ensure_schema(conn)
+            count = 0
+            for w in works:
+                if _upsert_single_paper(conn, w):
+                    count += 1
+            conn.commit()
         return count
+    finally:
+        # The caller hands us a path, so we own the connection's lifetime — the
+        # periodic refresh calls this once per author and used to leak each one.
+        conn.close()
 
 
 def _get_author_details(

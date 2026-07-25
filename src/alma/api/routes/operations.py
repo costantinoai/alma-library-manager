@@ -64,6 +64,7 @@ def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = No
     total_refreshed = 0
     from_year = get_fetch_year()
     processed = 0
+    failures: list[dict[str, str]] = []
     for row in authors:
         if job_id and is_cancellation_requested(job_id):
             set_job_status(
@@ -94,13 +95,22 @@ def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = No
 
         author_id = row["id"]
         author_name = row["name"]
-        pubs = fetch_publications_by_id(
-            author_id,
-            output_folder=_data_dir(),
-            args=SimpleNamespace(update_cache=True, test_fetching=False),
-            from_year=from_year,
-        )
-        total_refreshed += len(pubs or [])
+        # One author must not take the whole sweep down. This runs unattended
+        # (authors.refresh_periodic at 01:00), where a single bad row used to
+        # abort every remaining author with one fatal error. Failures are LOUD
+        # (stack trace in the log) and counted into the result, so Activity
+        # shows "refreshed N, failed M" instead of a silent partial success.
+        try:
+            pubs = fetch_publications_by_id(
+                author_id,
+                output_folder=_data_dir(),
+                args=SimpleNamespace(update_cache=True, test_fetching=False),
+                from_year=from_year,
+            )
+            total_refreshed += len(pubs or [])
+        except Exception:
+            logger.exception("Cache refresh failed for author %s (%s)", author_name, author_id)
+            failures.append({"author_id": author_id, "author_name": author_name})
         processed += 1
         if job_id:
             try:
@@ -108,8 +118,22 @@ def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = No
             except Exception:
                 pass
 
-    logger.info("Refreshed cache for %d author(s), %d pubs total", len(authors), total_refreshed)
-    return {"success": True, "authors": len(authors), "refreshed": total_refreshed}
+    logger.info(
+        "Refreshed cache for %d author(s), %d pubs total, %d failed",
+        len(authors),
+        total_refreshed,
+        len(failures),
+    )
+    result = {
+        # Truthful status: a sweep that skipped authors is NOT a clean success.
+        "success": not failures,
+        "authors": len(authors),
+        "refreshed": total_refreshed,
+    }
+    if failures:
+        result["failed"] = len(failures)
+        result["failed_authors"] = [f["author_name"] for f in failures[:20]]
+    return result
 
 
 def do_fetch_and_send_all_progress(job_id: str | None = None) -> dict:
