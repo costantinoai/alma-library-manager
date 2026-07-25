@@ -156,6 +156,9 @@ export function DiscoveryPage() {
     () => localStorage.getItem('alma.discovery.mapOpen') !== 'false',
   )
   const [mapFilterIds, setMapFilterIds] = useState<Set<string> | null>(null)
+  // Clicking a suggestion dot on the map jumps to its row: selected + a
+  // transient accent pulse (same idiom as the Health→Authors drilldown ring).
+  const [pulsePaperId, setPulsePaperId] = useState<string | null>(null)
   const [selectedRecIds, setSelectedRecIds] = useState<Set<string>>(new Set())
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
@@ -1269,6 +1272,24 @@ export function DiscoveryPage() {
                 }}
                 onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
                 onFilterList={(ids) => setMapFilterIds(new Set(ids))}
+                onSelectRec={(paperId) => {
+                  // Make sure the row can be on screen: unhide the long tail
+                  // and drop a region filter that would exclude it.
+                  setShowAllRecs(true)
+                  setMapFilterIds((f) => (f && !f.has(paperId) ? null : f))
+                  const rec = recommendations.find((r) => r.paper_id === paperId)
+                  if (rec) {
+                    setSelectedRecIds((prev) => new Set(prev).add(rec.id))
+                  }
+                  setPulsePaperId(paperId)
+                  window.setTimeout(() => setPulsePaperId(null), 2200)
+                  // Scroll after the list re-renders with the row present.
+                  window.setTimeout(() => {
+                    document
+                      .getElementById(`rec-card-${paperId}`)
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }, 80)
+                }}
               />
             )}
           </section>
@@ -1392,8 +1413,18 @@ export function DiscoveryPage() {
               }
 
               return (
-                <PaperCard
+                <div
                   key={rec.id}
+                  id={`rec-card-${rec.paper_id}`}
+                  className={cn(
+                    'rounded-lg transition-shadow',
+                    // Transient landing ring for a map→list jump. Accent =
+                    // selected, as everywhere.
+                    pulsePaperId === rec.paper_id &&
+                      'ring-2 ring-alma-folio ring-offset-2 ring-offset-surface-0',
+                  )}
+                >
+                <PaperCard
                   // The `compact` viewMode is handled in the earlier
                   // branch above (line 959); by the time we reach here
                   // viewMode is narrowed to `'normal' | 'extended'`, so
@@ -1462,6 +1493,7 @@ export function DiscoveryPage() {
                     variant: viewMode === 'normal' ? 'inline' : 'panel',
                   })}
                 </PaperCard>
+                </div>
               )
             })
           )}

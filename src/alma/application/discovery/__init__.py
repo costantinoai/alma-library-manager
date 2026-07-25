@@ -1377,6 +1377,20 @@ def refresh_lens_recommendations(
         )
     timings_ms["recommendation_insert"] = int(round((perf_counter() - phase_started) * 1000))
 
+    # 50-L NOTE (audited 2026-07-25): candidates already arrive enriched via
+    # the ONE canonical route — the staging loop above persists EVERYTHING the
+    # retrieval APIs returned (upsert_paper: abstract/tldr/ids, nothing
+    # discarded; upsert_specter2_embedding: source vectors), upsert_paper
+    # writes the durable enrichment ledger rows (auto_schedule_hydration=False
+    # defers scheduling), and ONE bounded target-scoped
+    # schedule_pending_hydration_sweep fires after the loop (S-4/S-9). The
+    # ledger self-filters (enriched/terminal sources with the same lookup +
+    # fields key are never re-fetched), the chain orders metadata → abstract
+    # recovery → S2 vectors → local fill, and the M1 placement hooks put each
+    # paper on the map as its vector lands. Do NOT add a second enqueue/sweep
+    # here — a rec-subset sweep gets a different target-scoped operation key
+    # and double-schedules the same work.
+
     timings_ms["total"] = int(round((perf_counter() - overall_start) * 1000))
     retrieval_summary["timings_ms"] = dict(timings_ms)
 

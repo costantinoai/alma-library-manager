@@ -48,6 +48,10 @@ interface FrontierMapProps {
   }) => void
   /** 50-B map→list sync: filter the rec list below to a lassoed region. */
   onFilterList?: (paperIds: string[]) => void
+  /** Clicking a SUGGESTION dot jumps to its row in the list below (select +
+   *  transient pulse) instead of opening the popup — the map navigates the
+   *  deck. Library/seen dots (no list row) still open the paper panel. */
+  onSelectRec?: (paperId: string) => void
 }
 
 /** A pending region selection: the ids under the lasso + its describe payload. */
@@ -80,7 +84,7 @@ function useBranchColors(nodes: FrontierNode[]) {
   }, [nodes])
 }
 
-export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onFilterList }: FrontierMapProps) {
+export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onFilterList, onSelectRec }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
@@ -324,7 +328,11 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           setRegion({ ids, anchor })
           describeMutation.mutate(ids.slice(0, 300))
         }}
-        onClickNode={(id) => onSelectPaper(id)}
+        onClickNode={(id) => {
+          const n = nodesById.get(id)
+          if (n?.layer === 'rec' && onSelectRec) onSelectRec(id)
+          else onSelectPaper(id)
+        }}
         onHover={(id) => setHoverId(id)}
         className="rounded-none border-0"
       >
