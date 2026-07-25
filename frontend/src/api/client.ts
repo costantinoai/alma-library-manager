@@ -3797,6 +3797,13 @@ export function listLenses(): Promise<Lens[]> {
   return api.get<Lens[]>('/lenses')
 }
 
+export function markLensSeen(lensId: string): Promise<{ lens_id: string; last_seen_at: string }> {
+  return api.post<{ lens_id: string; last_seen_at: string }>(
+    `/lenses/${encodeURIComponent(lensId)}/seen`,
+    {},
+  )
+}
+
 export function createLens(body: {
   name: string
   context_type: Lens['context_type']
@@ -4774,72 +4781,86 @@ export function createAuthor(body: {
 }
 
 // ── Home ──
-/** The landing brief: what arrived since the last visit, what's waiting, and
- * one suggestion worth a look. One request powers the whole page. */
-export interface HomeBrief {
-  since: string
-  first_visit: boolean
-  last_seen_at: string | null
-  insight: {
-    /** Recommendation id — what `dismissRecommendation` acts on. */
-    id: string
-    paper_id: string
-    title: string
-    authors?: string | null
-    year?: number | null
-    journal?: string | null
-    url?: string | null
-    doi?: string | null
-    score?: number | null
-    score_breakdown?: unknown
-    lens_id?: string | null
-    lens_name?: string | null
-  } | null
-  /** The newest untriaged arrivals themselves — a title says what happened,
-   *  where a count only says that something did. */
-  recent_arrivals: Array<{
-    paper_id: string
-    title: string
-    authors?: string | null
-    year?: number | null
-    journal?: string | null
-    url?: string | null
-    doi?: string | null
-  }>
-  /** What you already committed to reading. */
-  reading_now: Array<{
-    paper_id: string
-    title: string
-    authors?: string | null
-    year?: number | null
-    journal?: string | null
-    url?: string | null
-    doi?: string | null
-  }>
-  arrived: {
-    feed_items: number
-    alerts_fired: number
-    recommendations: number
-  }
-  waiting: {
-    reading: number
-    imports_pending: number
-    monitors_need_attention: number
-  }
-}
-/** Stamp that the user has now LOOKED at the Feed, so the New count measures
- * from here. Fired after the inbox renders — the GET stays pure, and papers
- * from every fetch since the last visit (manual or scheduled) accumulate until
- * this call clears them. */
-export function markFeedSeen(): Promise<{ last_seen_at: string }> {
-  return api.post<{ last_seen_at: string }>('/feed/seen', {})
+export interface HomePaper {
+  id: string
+  title: string
+  authors?: string | null
+  year?: number | null
+  journal?: string | null
+  abstract?: string | null
+  tldr?: string | null
+  url?: string | null
+  doi?: string | null
+  status?: string | null
 }
 
-export function getHomeBrief(): Promise<HomeBrief> {
-  return api.get<HomeBrief>('/home/brief')
+export interface HomeHighlight {
+  kind: 'feed_paper' | 'discovery_paper' | 'source_update'
+  period: 'today' | 'last_7_days'
+  paper: HomePaper
+  reason: {
+    kind: string
+    label: string
+  }
+  monitor_id?: string | null
+  monitor_type?: string | null
+  lens_id?: string | null
+  lens_name?: string | null
+  recommendation_id?: string | null
+  score?: number | null
+  source?: {
+    id: string
+    type: 'author' | 'venue' | string
+    label: string
+    author_id?: string | null
+    paper_count: number
+  } | null
 }
-/** Stamp this visit so the NEXT brief measures from now. Fired after render —
- * the GET stays pure, so a refresh never eats the window it just reported. */
-export function markHomeSeen(): Promise<{ last_seen_at: string }> {
-  return api.post<{ last_seen_at: string }>('/home/seen', {})
+
+/** The read-only daily research desk. One request powers the whole page. */
+export interface HomeBrief {
+  generated_at: string
+  day_start: string
+  timezone: string
+  user_name: string | null
+  activity: {
+    feed: {
+      today: number
+      carryover: number
+      by_monitor_type: {
+        authors: number
+        journals: number
+        other: number
+      }
+    }
+    discovery: {
+      today: number
+      carryover: number
+      lenses_today: number
+    }
+    alerts: {
+      today: number
+    }
+  }
+  highlights: HomeHighlight[]
+  reading: {
+    total: number
+    items: HomePaper[]
+  }
+  attention: {
+    imports_pending: number
+    monitors_need_resolution: number
+    author_decisions: number
+    critical_health: number
+  }
+}
+
+export function getHomeBrief(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'): Promise<HomeBrief> {
+  return api.get<HomeBrief>(`/home/brief?timezone=${encodeURIComponent(timezone)}`)
+}
+
+/** Stamp Feed owner review state for Home carryover after the inbox renders.
+ * Feed's own New markers remain the union of latest refresh and last 24h. */
+export function markFeedSeen(): Promise<{ last_seen_at: string }> {
+  return api.post<{ last_seen_at: string }>('/feed/seen', {})
 }

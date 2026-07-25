@@ -19,7 +19,7 @@ import math
 import sqlite3
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import library as library_app
@@ -44,6 +44,8 @@ def _safe_div(numerator: float, denominator: float) -> float:
 
 VALID_CONTEXT_TYPES = {"library_global", "collection", "topic_keyword", "tag"}
 
+DISCOVERY_LENS_SEEN_PREFIX = "discovery.lens_seen."
+
 
 DEFAULT_CHANNEL_WEIGHTS: dict[str, dict[str, float]] = {
     "library_global": {"lexical": 0.30, "vector": 0.35, "graph": 0.20, "external": 0.15},
@@ -59,7 +61,7 @@ def latest_discovery_refresh_window(
     """Return window for latest successful Discovery refresh."""
     try:
         row = db.execute(
-            f"""
+            """
             SELECT started_at, finished_at
             FROM operation_status
             WHERE status IN ('completed', 'noop')
@@ -105,6 +107,150 @@ def count_new_discovery_recommendations(db: sqlite3.Connection) -> int:
     except sqlite3.OperationalError:
         return 0
     return int((row["c"] if row else 0) or 0)
+
+
+def get_lens_last_seen(db: sqlite3.Connection, lens_id: str) -> str | None:
+    """When the user last rendered this lens's recommendation deck."""
+    row = db.execute(
+        "SELECT value FROM discovery_settings WHERE key = ?",
+        (f"{DISCOVERY_LENS_SEEN_PREFIX}{lens_id}",),
+    ).fetchone()
+    value = str((row["value"] if row else "") or "").strip()
+    return value or None
+
+
+def mark_lens_seen(
+    db: sqlite3.Connection,
+    lens_id: str,
+    *,
+    when: str | None = None,
+) -> str:
+    """Stamp one rendered lens. Caller owns the gated write unit."""
+    stamp = when or datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    upsert_setting(db, f"{DISCOVERY_LENS_SEEN_PREFIX}{lens_id}", stamp)
+    return stamp
+
+
+def home_discovery_snapshot(
+    db: sqlite3.Connection,
+    *,
+    day_start: str,
+    recent_start: str,
+    candidate_limit: int = 20,
+) -> dict:
+    """Return Home's compact Discovery projection without marking a lens seen.
+
+    Daily activity counts every distinct standalone paper generated today and
+    therefore stays stable after review. Carryover is limited to the latest
+    suggestion set of each active lens and compares each lens against its own
+    owner-page review stamp.
+    """
+    stats = db.execute(
+        f"""
+        WITH latest_sets AS (
+            SELECT lens_id, id, created_at
+            FROM (
+                SELECT
+                    ss.lens_id,
+                    ss.id,
+                    ss.created_at,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY ss.lens_id
+                        ORDER BY ss.created_at DESC, ss.id DESC
+                    ) AS rn
+                FROM suggestion_sets ss
+                JOIN discovery_lenses l ON l.id = ss.lens_id
+                WHERE l.is_active = 1
+            )
+            WHERE rn = 1
+        ),
+        today_activity AS (
+            SELECT
+                COUNT(DISTINCT r.paper_id) AS papers,
+                COUNT(DISTINCT r.lens_id) AS lenses
+            FROM recommendations r
+            JOIN discovery_lenses l ON l.id = r.lens_id AND l.is_active = 1
+            JOIN papers p ON p.id = r.paper_id
+            WHERE r.created_at >= ?
+              AND {standalone_paper_sql('p')}
+        ),
+        carryover AS (
+            SELECT COUNT(DISTINCT r.paper_id) AS papers
+            FROM latest_sets ls
+            JOIN recommendations r ON r.suggestion_set_id = ls.id
+            JOIN papers p ON p.id = r.paper_id
+            LEFT JOIN discovery_settings ds
+              ON ds.key = ? || ls.lens_id
+            WHERE r.created_at > MAX(COALESCE(ds.value, ''), ?)
+              AND r.created_at < ?
+              AND r.user_action IS NULL
+              AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
+        )
+        SELECT
+            COALESCE(today_activity.papers, 0) AS today,
+            COALESCE(today_activity.lenses, 0) AS lenses_today,
+            COALESCE(carryover.papers, 0) AS carryover
+        FROM today_activity, carryover
+        """,
+        (
+            day_start,
+            DISCOVERY_LENS_SEEN_PREFIX,
+            recent_start,
+            day_start,
+        ),
+    ).fetchone()
+
+    candidates = [
+        dict(row)
+        for row in db.execute(
+            f"""
+            WITH latest_sets AS (
+                SELECT lens_id, id
+                FROM (
+                    SELECT
+                        ss.lens_id,
+                        ss.id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ss.lens_id
+                            ORDER BY ss.created_at DESC, ss.id DESC
+                        ) AS rn
+                    FROM suggestion_sets ss
+                    JOIN discovery_lenses l ON l.id = ss.lens_id
+                    WHERE l.is_active = 1
+                )
+                WHERE rn = 1
+            )
+            SELECT
+                r.id AS recommendation_id,
+                r.lens_id,
+                l.name AS lens_name,
+                r.score,
+                r.rank,
+                r.created_at,
+                p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
+                p.url, p.doi, p.status
+            FROM latest_sets ls
+            JOIN recommendations r ON r.suggestion_set_id = ls.id
+            JOIN discovery_lenses l ON l.id = r.lens_id
+            JOIN papers p ON p.id = r.paper_id
+            WHERE r.created_at >= ?
+              AND r.user_action IS NULL
+              AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed', 'library')
+              AND {standalone_paper_sql('p')}
+            ORDER BY r.score DESC, r.rank ASC, r.created_at DESC, r.id
+            LIMIT ?
+            """,
+            (recent_start, max(1, min(int(candidate_limit), 100))),
+        ).fetchall()
+    ]
+
+    return {
+        "today": int((stats["today"] if stats else 0) or 0),
+        "lenses_today": int((stats["lenses_today"] if stats else 0) or 0),
+        "carryover": int((stats["carryover"] if stats else 0) or 0),
+        "candidates": candidates,
+    }
 
 
 VALID_RECOMMENDATION_ACTIONS = {"save", "read", "like", "love", "dismiss", "dislike", "seen"}

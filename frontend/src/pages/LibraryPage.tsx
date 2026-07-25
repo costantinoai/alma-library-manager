@@ -117,6 +117,7 @@ export function LibraryPage() {
   const route = useHashRoute()
   const queryClient = useQueryClient()
   const routeTab = route.params.get('tab')?.trim() as TabId | undefined
+  const routeAction = route.params.get('action')?.trim() ?? ''
 
   // Deep links from the global command-palette search land here as
   // `#/library?paper=<id>` / `?collection=<id>` / `?topic=<term>` (see
@@ -139,6 +140,17 @@ export function LibraryPage() {
     const nextTab = VALID_TABS.has(effectiveTab ?? DEFAULT_TAB) ? (effectiveTab ?? DEFAULT_TAB) : DEFAULT_TAB
     setActiveTab(nextTab)
   }, [effectiveTab])
+
+  useEffect(() => {
+    if (routeAction !== 'import' || activeTab !== 'imports') return
+    const nextParams = new URLSearchParams(route.params)
+    nextParams.delete('action')
+    window.history.replaceState(
+      null,
+      '',
+      buildHashRoute('library', Object.fromEntries(nextParams)),
+    )
+  }, [activeTab, route.params, routeAction])
 
   // Open the deep-linked paper in the shared detail panel once it hydrates.
   // The ref guards against reopening after close; a NEW id re-triggers (and the
@@ -359,7 +371,7 @@ export function LibraryPage() {
       {activeTab === 'collections' && <CollectionsTab initialCollectionId={deepLinkCollectionId} />}
       {activeTab === 'tags' && <TagsTab />}
       {activeTab === 'topics' && <TopicsTab initialTopic={deepLinkTopic} />}
-      {activeTab === 'imports' && <ImportsTab />}
+      {activeTab === 'imports' && <ImportsTab openImportOnMount={routeAction === 'import'} />}
       {activeTab === 'analytics' && (
         <Suspense fallback={<div className="py-12 text-center text-sm text-slate-500">Loading analytics…</div>}>
           <AnalyticsTab />

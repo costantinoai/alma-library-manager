@@ -604,11 +604,14 @@ export function AlertRulesSection({ onGoToDigests }: AlertRulesSectionProps) {
     },
   })
 
-  const rules = rulesQuery.data ?? []
-  const lenses = lensesQuery.data ?? []
-  const monitors = monitorsQuery.data ?? []
-  const collections = collectionsQuery.data ?? []
-  const authors = authorsQuery.data ?? []
+  const rules = useMemo(() => rulesQuery.data ?? [], [rulesQuery.data])
+  const lenses = useMemo(() => lensesQuery.data ?? [], [lensesQuery.data])
+  const monitors = useMemo(() => monitorsQuery.data ?? [], [monitorsQuery.data])
+  const collections = useMemo(
+    () => collectionsQuery.data ?? [],
+    [collectionsQuery.data],
+  )
+  const authors = useMemo(() => authorsQuery.data ?? [], [authorsQuery.data])
   const branches = diagnosticsQuery.data?.discovery.branch_quality ?? []
 
   const orphanIds = useMemo(

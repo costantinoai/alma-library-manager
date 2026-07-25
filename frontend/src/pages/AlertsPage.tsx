@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTemplatesSection } from '@/components/alerts/AlertTemplatesSection'
 import { AlertRulesSection } from '@/components/alerts/AlertRulesSection'
 import { AlertsDeliverySection } from '@/components/alerts/AlertsDeliverySection'
 import { AlertHistorySection } from '@/components/alerts/AlertHistorySection'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useHashRoute } from '@/lib/hashRoute'
 
 type SectionId = 'rules' | 'alerts' | 'history'
 
@@ -15,10 +16,19 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 ]
 
 export function AlertsPage() {
-  const [activeSection, setActiveSection] = useState<SectionId>('rules')
+  const route = useHashRoute()
+  const routeTab = route.params.get('tab') as SectionId | null
+  const initialTab = SECTIONS.some((section) => section.id === routeTab) ? routeTab as SectionId : 'rules'
+  const [activeSection, setActiveSection] = useState<SectionId>(initialTab)
   // Digest whose history the user asked to see (via a digest card's outcome
   // chip). Passed down so the History tab opens pre-filtered.
   const [historyAlertId, setHistoryAlertId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (routeTab && SECTIONS.some((section) => section.id === routeTab)) {
+      setActiveSection(routeTab)
+    }
+  }, [routeTab])
 
   return (
     <div className="space-y-6">

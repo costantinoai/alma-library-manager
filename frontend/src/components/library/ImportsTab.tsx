@@ -53,10 +53,10 @@ function resolveStatusBadgeProps(
 import { useToast, errorToast } from '@/hooks/useToast'
 import { invalidateQueries } from '@/lib/queryHelpers'
 
-export function ImportsTab() {
+export function ImportsTab({ openImportOnMount = false }: { openImportOnMount?: boolean }) {
   const queryClient = useQueryClient()
   const { toast } = useToast()
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(openImportOnMount)
 
   const unresolvedQuery = useQuery({
     queryKey: ['library-import-unresolved'],

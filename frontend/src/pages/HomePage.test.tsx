@@ -1,40 +1,43 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { HomePage } from './HomePage'
 import type { HomeBrief } from '@/api/client'
 
 const getHomeBrief = vi.fn()
-const markHomeSeen = vi.fn().mockResolvedValue({ last_seen_at: '2026-07-25T00:00:00Z' })
 
 vi.mock('@/api/client', () => ({
   getHomeBrief: (...args: unknown[]) => getHomeBrief(...args),
-  markHomeSeen: (...args: unknown[]) => markHomeSeen(...args),
-  addToLibrary: vi.fn(),
-  dismissRecommendation: vi.fn(),
 }))
 
-vi.mock('@/hooks/useToast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
-  errorToast: vi.fn(),
-}))
-
-/** A healthy, quiet system: nothing arrived, nothing needs you, no suggestion. */
 const QUIET: HomeBrief = {
-  since: new Date(Date.now() - 3 * 3600_000).toISOString(),
-  first_visit: false,
-  last_seen_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
-  insight: null,
-  recent_arrivals: [],
-  reading_now: [],
-  arrived: { feed_items: 0, alerts_fired: 0, recommendations: 0 },
-  waiting: { reading: 0, imports_pending: 0, monitors_need_attention: 0 },
+  generated_at: new Date().toISOString(),
+  day_start: new Date().toISOString(),
+  timezone: 'Europe/Brussels',
+  user_name: null,
+  activity: {
+    feed: {
+      today: 0,
+      carryover: 0,
+      by_monitor_type: { authors: 0, journals: 0, other: 0 },
+    },
+    discovery: { today: 0, carryover: 0, lenses_today: 0 },
+    alerts: { today: 0 },
+  },
+  highlights: [],
+  reading: { total: 0, items: [] },
+  attention: {
+    imports_pending: 0,
+    monitors_need_resolution: 0,
+    author_decisions: 0,
+    critical_health: 0,
+  },
 }
 
 function renderHome() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: { queries: { retry: false } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -46,77 +49,110 @@ function renderHome() {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    markHomeSeen.mockResolvedValue({ last_seen_at: '2026-07-25T00:00:00Z' })
+    window.location.hash = ''
   })
 
-  it('renders the brief and stamps the visit after it lands', async () => {
+  it('renders a personal daily activity summary without a review mutation', async () => {
     getHomeBrief.mockResolvedValue({
       ...QUIET,
-      arrived: { feed_items: 12, alerts_fired: 2, recommendations: 7 },
-      waiting: { reading: 3, imports_pending: 0, monitors_need_attention: 0 },
+      user_name: 'Andrea Costantino',
+      activity: {
+        feed: {
+          today: 12,
+          carryover: 4,
+          by_monitor_type: { authors: 7, journals: 3, other: 2 },
+        },
+        discovery: { today: 6, carryover: 2, lenses_today: 2 },
+        alerts: { today: 1 },
+      },
     })
     renderHome()
 
-    expect(await screen.findByText('Since you were last here')).toBeInTheDocument()
+    expect(await screen.findByText(/Andrea/)).toBeInTheDocument()
     expect(screen.getByText('12')).toBeInTheDocument()
-    expect(screen.getByText('7')).toBeInTheDocument()
-    // The GET is pure; the visit is stamped separately, after render.
-    await waitFor(() => expect(markHomeSeen).toHaveBeenCalledTimes(1))
+    expect(screen.getByText('6')).toBeInTheDocument()
+    expect(screen.getByText('1')).toBeInTheDocument()
+    expect(screen.getByText(/4 in Feed/)).toBeInTheDocument()
+    expect(screen.getByText(/2 in Discovery/)).toBeInTheDocument()
+    expect(getHomeBrief).toHaveBeenCalledTimes(1)
   })
 
-  it('says "here is where things stand" on a first visit', async () => {
-    getHomeBrief.mockResolvedValue({ ...QUIET, first_visit: true, last_seen_at: null })
-    renderHome()
-    expect(await screen.findByText("Here's where things stand.")).toBeInTheDocument()
-    expect(screen.getByText(/first visit/i)).toBeInTheDocument()
-  })
-
-  it('keeps zero counts in the row so it never reflows', async () => {
-    getHomeBrief.mockResolvedValue(QUIET)
-    renderHome()
-    await screen.findByText('Since you were last here')
-    // All four figures are present even at zero — the row is stable and honest.
-    expect(screen.getAllByText('0')).toHaveLength(4)
-  })
-
-  it('renders NOTHING for attention when the system is quiet', async () => {
-    getHomeBrief.mockResolvedValue(QUIET)
-    renderHome()
-    await screen.findByText('Since you were last here')
-    // No "all good" card — a healthy system is silent.
-    expect(screen.queryByText('Needs you')).not.toBeInTheDocument()
-  })
-
-  it('surfaces staged imports and stopped monitors as actions', async () => {
+  it('renders source-balanced highlights with reasons, excerpts, and owner links', async () => {
     getHomeBrief.mockResolvedValue({
       ...QUIET,
-      waiting: { reading: 0, imports_pending: 2, monitors_need_attention: 1 },
-    })
-    renderHome()
-    expect(await screen.findByText('Needs you')).toBeInTheDocument()
-    expect(screen.getByText(/2 imported papers are waiting/i)).toBeInTheDocument()
-    expect(screen.getByText(/1 monitor stopped/i)).toBeInTheDocument()
-  })
-
-  it('omits the insight module when there is no suggestion', async () => {
-    getHomeBrief.mockResolvedValue(QUIET)
-    renderHome()
-    await screen.findByText('Since you were last here')
-    expect(screen.queryByText('One to look at')).not.toBeInTheDocument()
-  })
-
-  it('shows arrivals and the reading list when they have content', async () => {
-    getHomeBrief.mockResolvedValue({
-      ...QUIET,
-      recent_arrivals: [
-        { paper_id: 'p1', title: 'A newly arrived paper', authors: 'Ada L.', year: 2026 },
+      highlights: [
+        {
+          kind: 'feed_paper',
+          period: 'today',
+          paper: {
+            id: 'feed-1',
+            title: 'A monitored result',
+            authors: 'Ada Lovelace',
+            tldr: 'A compact explanation of the monitored result.',
+          },
+          reason: { kind: 'author', label: 'From followed author Ada Lovelace' },
+          monitor_id: 'm1',
+          monitor_type: 'author',
+        },
+        {
+          kind: 'discovery_paper',
+          period: 'last_7_days',
+          paper: {
+            id: 'disc-1',
+            title: 'A discovery result',
+            authors: 'Alan Turing',
+            abstract: 'An abstract explaining why this result may matter.',
+          },
+          reason: { kind: 'lens', label: 'Top match from Methods' },
+          lens_id: 'lens-1',
+        },
       ],
-      reading_now: [{ paper_id: 'p2', title: 'Something I started', authors: 'Alan T.', year: 2025 }],
     })
     renderHome()
-    expect(await screen.findByText('Newest in your Feed')).toBeInTheDocument()
-    expect(screen.getByText('A newly arrived paper')).toBeInTheDocument()
-    expect(screen.getByText('Still reading')).toBeInTheDocument()
-    expect(screen.getByText('Something I started')).toBeInTheDocument()
+
+    const feedLink = await screen.findByRole('link', { name: /A monitored result/ })
+    const discoveryLink = screen.getByRole('link', { name: /A discovery result/ })
+    expect(feedLink).toHaveAttribute('href', '#/feed?scope=inbox&monitor=m1&paper=feed-1')
+    expect(discoveryLink).toHaveAttribute('href', '#/discovery?lens=lens-1&paper=disc-1')
+    expect(screen.getByText('From followed author Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText('A compact explanation of the monitored result.')).toBeInTheDocument()
+    expect(screen.getByText('Last 7 days')).toBeInTheDocument()
+  })
+
+  it('shows reading continuity and only nonzero attention rows', async () => {
+    getHomeBrief.mockResolvedValue({
+      ...QUIET,
+      reading: {
+        total: 1,
+        items: [{ id: 'p1', title: 'Continue this paper', authors: 'Grace Hopper' }],
+      },
+      attention: {
+        imports_pending: 2,
+        monitors_need_resolution: 0,
+        author_decisions: 1,
+        critical_health: 0,
+      },
+    })
+    renderHome()
+
+    expect(await screen.findByText('Continue reading')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Continue this paper/ })).toHaveAttribute(
+      'href',
+      '#/library?tab=reading&paper=p1',
+    )
+    expect(screen.getByText(/2 imported papers need review/)).toBeInTheDocument()
+    expect(screen.getByText(/1 author identity needs review/)).toBeInTheDocument()
+    expect(screen.queryByText(/monitor needs relinking/)).not.toBeInTheDocument()
+  })
+
+  it('keeps a truthful quiet state and provides navigation-only workflow shortcuts', async () => {
+    getHomeBrief.mockResolvedValue(QUIET)
+    renderHome()
+    expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
+    expect(screen.getByText(/No noteworthy research arrived/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Find papers/ }))
+    expect(window.location.hash).toBe('#/discovery?action=find')
   })
 })

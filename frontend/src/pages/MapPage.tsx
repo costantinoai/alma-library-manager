@@ -20,7 +20,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Map as MapIcon, Settings2, X } from 'lucide-react'
+import { BookOpen, Map as MapIcon, X } from 'lucide-react'
 
 import {
   api,
@@ -32,13 +32,16 @@ import {
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
 import { GraphMapView } from '@/components/map/GraphMapView'
-import { MapModeSwitch } from '@/components/map/MapChrome'
+import {
+  MapDisplayTuningRows,
+  MapModeSwitch,
+  MapTuningPopover,
+  SliderRow,
+} from '@/components/map/MapChrome'
 import { EDGE_LAYER_LABELS } from '@/components/map/mapNodeStyle'
 import { MetricTile } from '@/components/shared/MetricTile'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Slider } from '@/components/ui/slider'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast } from '@/hooks/useToast'
@@ -52,42 +55,6 @@ interface ClusterMeta {
   year_range?: { min?: number; max?: number }
   top_topics?: string[]
   sample_papers?: Array<{ title: string; year?: number; cited_by_count?: number }>
-}
-
-function SliderRow({
-  label,
-  value,
-  min,
-  max,
-  step,
-  format,
-  onCommit,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  step: number
-  format: (v: number) => string
-  onCommit: (v: number) => void
-}) {
-  const [local, setLocal] = useState(value)
-  return (
-    <div>
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-slate-600">{label}</span>
-        <span className="tabular-nums text-slate-400">{format(local)}</span>
-      </div>
-      <Slider
-        value={[local]}
-        min={min}
-        max={max}
-        step={step}
-        onValueChange={([v]) => setLocal(v)}
-        onValueCommit={([v]) => onCommit(v)}
-      />
-    </div>
-  )
 }
 
 export function MapPage() {
@@ -132,9 +99,19 @@ export function MapPage() {
     return p
   }, [scope, resolution, blend])
 
-  const meta = (payload?.metadata ?? {}) as Record<string, unknown>
-  const clustering = (meta.clustering ?? {}) as Record<string, unknown>
-  const clusters = (meta.clusters ?? []) as ClusterMeta[]
+  const clustering = useMemo(
+    () =>
+      ((((payload?.metadata ?? {}) as Record<string, unknown>).clustering ?? {}) as Record<
+        string,
+        unknown
+      >),
+    [payload],
+  )
+  const clusters = useMemo(
+    () =>
+      ((((payload?.metadata ?? {}) as Record<string, unknown>).clusters ?? []) as ClusterMeta[]),
+    [payload],
+  )
   const selectedCluster = useMemo(
     () =>
       selected && typeof selected.cluster_id === 'number'
@@ -230,54 +207,24 @@ export function MapPage() {
                   { value: 'library', label: 'Library', title: 'Only papers you saved' },
                 ]}
               />
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-                    title="Fine tuning — cluster detail, dot size, layout blend, rebuilds"
-                  >
-                    <Settings2 className="h-3.5 w-3.5" />
-                    Advanced
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-72 space-y-4 text-xs">
-                  <SliderRow
-                    label="Cluster detail"
-                    value={resolution}
-                    min={0.5}
-                    max={3}
-                    step={0.1}
-                    format={(v) => `${v.toFixed(1)}×`}
-                    onCommit={(v) => setResolution(Number(v.toFixed(1)))}
-                  />
-                  <SliderRow
-                    label="Dot size"
-                    value={sizeScale}
-                    min={0.6}
-                    max={2}
-                    step={0.1}
-                    format={(v) => `${v.toFixed(1)}×`}
-                    onCommit={setSizeScale}
-                  />
-                  <SliderRow
-                    label="Word size"
-                    value={wordScale}
-                    min={0.6}
-                    max={2}
-                    step={0.1}
-                    format={(v) => `${v.toFixed(1)}×`}
-                    onCommit={setWordScale}
-                  />
-                  <SliderRow
-                    label="Words per cluster"
-                    value={wordCount}
-                    min={1}
-                    max={3}
-                    step={1}
-                    format={(v) => String(v)}
-                    onCommit={setWordCount}
-                  />
+              <MapTuningPopover title="Fine tuning — cluster detail, dot size, words, layout blend, rebuilds">
+                <SliderRow
+                  label="Cluster detail"
+                  value={resolution}
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  format={(v) => `${v.toFixed(1)}×`}
+                  onCommit={(v) => setResolution(Number(v.toFixed(1)))}
+                />
+                <MapDisplayTuningRows
+                  sizeScale={sizeScale}
+                  onSizeScale={setSizeScale}
+                  wordScale={wordScale}
+                  onWordScale={setWordScale}
+                  wordCount={wordCount}
+                  onWordCount={setWordCount}
+                />
                   {scope === 'library' ? (
                     <div className="space-y-3 border-t border-[var(--color-border)] pt-3">
                       <p className="font-medium text-alma-800">
@@ -304,8 +251,7 @@ export function MapPage() {
                       Refresh cluster labels
                     </Button>
                   </div>
-                </PopoverContent>
-              </Popover>
+              </MapTuningPopover>
             </>
           }
         />

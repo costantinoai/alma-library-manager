@@ -28,6 +28,7 @@ from alma.discovery.semantic_scholar import upsert_specter2_embedding
 
 from .. import library as library_app
 from ..feed import _commit_if_pending
+from .citation_fabric import build_citation_fabric_maps
 
 # --- D-9: re-exported from .lens_crud (moved out of this god-module) ---
 from .lens_crud import (
@@ -76,17 +77,20 @@ from .lens_crud import (
     default_channel_weights,
     delete_lens,
     get_lens,
+    get_lens_last_seen,
     get_recommendation,
+    home_discovery_snapshot,
     latest_discovery_refresh_window,
     list_lens_recommendations,
     list_lens_signals,
     list_lenses,
-    reorder_lenses,
     list_recommendations,
+    mark_lens_seen,
     mark_recommendation_action,
     read_settings,
     recommendation_stats,
     record_lens_signal,
+    reorder_lenses,
     reset_settings_to_defaults,
     update_lens,
     upsert_setting,
@@ -110,7 +114,6 @@ from .retrieval import (
     _select_diverse_recommendation_candidates,
 )
 from .scoring_loop import SIGNAL_NAMES, ScoringContext, score_candidates
-from .citation_fabric import build_citation_fabric_maps
 
 # --- D-9: re-exported from .seed_profile (moved out of this god-module) ---
 from .seed_profile import (

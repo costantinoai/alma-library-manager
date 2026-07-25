@@ -19,6 +19,7 @@ from alma.api.models import (
     ReorderRequest,
 )
 from alma.application import discovery as discovery_app
+from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,32 @@ def get_lens(
         raise
     except Exception as exc:
         raise_internal("Failed to load discovery lens", exc)
+
+
+@router.post(
+    "/{lens_id}/seen",
+    summary="Mark one Discovery lens as reviewed",
+    description=(
+        "Stamps the lens only after its recommendation deck renders. Home reads "
+        "this owner state but never changes it."
+    ),
+)
+def mark_lens_seen(
+    lens_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    if discovery_app.get_lens(db, lens_id) is None:
+        raise HTTPException(status_code=404, detail="Lens not found")
+    try:
+        stamp = run_write_unit(
+            db,
+            lambda: discovery_app.mark_lens_seen(db, lens_id),
+            label="discovery_lens_seen",
+        )
+    except Exception as exc:
+        raise_internal("Failed to mark Discovery lens as reviewed", exc)
+    return {"lens_id": lens_id, "last_seen_at": stamp}
 
 
 @router.put("/{lens_id}", response_model=LensResponse, summary="Update discovery lens")

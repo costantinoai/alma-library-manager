@@ -69,38 +69,32 @@ only what still needs a decision. The choice persists.
 Reading-list papers count as dealt-with — you've committed to them, so they
 aren't awaiting a decision either.
 
-## New markers
+## Landing view and New markers
 
-**New means "arrived since you last opened the Feed"** — not "since the last
-fetch". Papers reach the Feed from two directions: you press Refresh, and the
-scheduler fetches while ALMa is closed. Both accumulate. If a manual refresh
-brings 10 papers and an overnight run brings 20 more, the badge reads **30**
-until you actually look; opening the Feed clears it.
+Feed opens on **Show all**: the complete chronological 60-day record is the
+default, while **New** is an optional time/fetch lens.
 
-The check is **per-paper**, not per-row — a paper credited to multiple followed
-authors has multiple `feed_items` rows, each with its own `fetched_at`. A paper
-counts as new only when:
+A paper is **New** when any monitor fetched it:
 
-* at least one of its rows still has `status = 'new'` (you haven't triaged it), AND
-* the **earliest** `fetched_at` across all of its rows is later than your last
-  visit — so a paper a second monitor re-surfaces doesn't re-light.
+* during the **latest completed Feed refresh**, or
+* during the rolling **last 24 hours**.
 
-The visit is stamped by `POST /feed/seen`, which the page fires *after* it
-renders: the batch you are looking at is the batch that gets cleared, and
-reading the Feed never mutates what "new" means mid-request.
+These windows are a union. The latest refresh remains represented even when it
+is more than 24 hours old, while papers from other manual or scheduled runs in
+the last day are included too.
 
-!!! note "Why the badge and the New list can differ by a card or two"
-    The badge counts what still needs **triage**, so acting on a paper removes
-    it. The **New list** keeps acted-on cards visible until the next visit —
-    saving or liking a paper must not make it vanish out from under you
-    mid-triage. Only Dismiss hides a card.
+The check is **per-paper**, not per-row. A paper credited to multiple monitors
+may have several `feed_items` rows; if any row matches either window, its single
+Feed card is New. Save, Like, Love, Dislike, or adding the paper to the reading
+list does not change this factual recency marker. Only **Dismiss** hides it.
 
-So a paper that was first surfaced in a previous fetch under author
-A and re-surfaced this fetch under author B is **not** new — the
-user has already seen it. Older untriaged rows still appear in the
-Feed; they're just not badged. The sidebar bubble counts distinct
-papers (not rows) using the same per-paper rule, so it tracks the
-real "new this fetch" count.
+The New filter, card and journal-group pills, status endpoint, and sidebar badge
+all use that same predicate, so their paper counts cannot drift. Opening Feed
+does not clear New; papers age out naturally when they are no longer in the
+latest refresh and exceed 24 hours.
+
+`POST /feed/seen` remains an owner-review stamp for Home's older carryover
+summary. It does not control Feed's New markers.
 
 ## Journal (venue) monitors
 
@@ -152,8 +146,8 @@ Two different bounds apply, and they are not the same:
   `publication_date:desc`, successive refreshes keep pulling the newest works.
 * **Display bound.** The Feed view — Inbox *and* Journals — is bounded to the
   **last 60 days** by publication date (falling back to `fetched_at` when the
-  date is unknown). The **New** view shows papers that arrived since your last
-  visit.
+  date is unknown). The **New** view applies the latest-refresh-or-24-hours
+  union within that display window.
 
 So a journal shows its **recent (≤60-day)** papers; the ~2-year download
 window only caps how far back the OpenAlex query reaches. Older fetched works

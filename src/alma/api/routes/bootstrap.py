@@ -66,12 +66,11 @@ def get_bootstrap(
     except Exception:
         pass
 
-    # Feed badge count — only papers created by the latest completed fetch.
-    # "New" is not "untriaged forever"; older untriaged papers remain visible
-    # in Feed but stop lighting up the nav after a newer fetch.
+    # Feed badge count — papers fetched in the latest completed refresh OR the
+    # rolling last 24 hours. The Feed list and card pills share this predicate.
     feed_unread = 0
     try:
-        feed_unread = feed_app.count_new_feed_items_since_latest_fetch(db)
+        feed_unread = feed_app.count_new_feed_items(db)
     except Exception:
         pass
 

@@ -31,6 +31,7 @@ import {
   feedLove,
   getFeedStatus,
   getFeedSettings,
+  getPaperById,
   updateFeedSettings,
   listFeedMonitors,
   listFeedInbox,
@@ -107,11 +108,10 @@ const FEED_STATUS_LABELS: Record<FeedItemStatus, string> = {
   dismissed: 'Dismissed',
 }
 
-// "New" is the default triage surface — papers first surfaced by the latest
-// fetch (recency, not action-status, so acting on a card keeps it in view). "Show
-// all" is the opt-in full chronological inbox (60-day window). Order matters:
-// the default lens is listed first in the segmented toggle.
-const FEED_FILTERS: readonly FeedFilter[] = ['new', 'all'] as const
+// Show the full chronological record by default. "New" is a time/fetch lens:
+// papers fetched in the latest refresh OR the rolling last 24 hours. Action
+// state does not remove that marker; only Dismiss hides a paper.
+const FEED_FILTERS: readonly FeedFilter[] = ['all', 'new'] as const
 const FEED_FILTER_LABELS: Record<FeedFilter, string> = {
   new: FEED_STATUS_LABELS.new,
   all: 'Show all',
@@ -245,12 +245,17 @@ export function FeedPage() {
   const { followedVenueKeys, pendingVenueName, followVenue } = usePaperVenueFollow()
   const route = useHashRoute()
   const authorFilter = route.params.get('author')?.trim() ?? ''
+  const monitorFilter = route.params.get('monitor')?.trim() ?? ''
+  const routePaperId = route.params.get('paper')?.trim() ?? ''
+  const routeScope = route.params.get('scope')?.trim()
 
-  // Default to the recency "New" view; "Show all" is opt-in.
-  const [filter, setFilter] = useState<FeedFilter>('new')
+  // The full 60-day chronological Feed is the landing view.
+  const [filter, setFilter] = useState<FeedFilter>('all')
   // Journal (venue) monitors are noisy → their own surface. 'inbox' hides
   // them from the author/topic/keyword feed; 'journals' shows only them.
-  const [feedScope, setFeedScope] = useState<'inbox' | 'journals'>('inbox')
+  const [feedScope, setFeedScope] = useState<'inbox' | 'journals'>(
+    routeScope === 'journals' ? 'journals' : 'inbox',
+  )
   // Journals surface: group by journal (collapsed by default) vs one merged
   // flat stream; which groups are expanded.
   const [mergeJournals, setMergeJournals] = useState(false)
@@ -278,6 +283,37 @@ export function FeedPage() {
     window.localStorage.setItem('alma.feed.hideLibrary', hideLibrary ? '1' : '0')
   }, [hideLibrary])
 
+  useEffect(() => {
+    if (routeScope === 'journals' || routeScope === 'inbox') {
+      setFeedScope(routeScope)
+    }
+  }, [routeScope])
+
+  const deepLinkPaperQuery = useQuery({
+    queryKey: ['feed-deeplink-paper', routePaperId],
+    queryFn: () => getPaperById(routePaperId),
+    enabled: Boolean(routePaperId),
+    staleTime: 30_000,
+    retry: 1,
+  })
+  const handledPaperParam = useRef<string | null>(null)
+  useEffect(() => {
+    if (!routePaperId) {
+      handledPaperParam.current = null
+      return
+    }
+    if (handledPaperParam.current === routePaperId) return
+    if (deepLinkPaperQuery.isError) {
+      handledPaperParam.current = routePaperId
+      errorToast('Paper not found', 'The linked Feed paper could not be loaded.')
+      return
+    }
+    if (!deepLinkPaperQuery.data) return
+    handledPaperParam.current = routePaperId
+    setSelectedPaper(deepLinkPaperQuery.data)
+    setDetailOpen(true)
+  }, [deepLinkPaperQuery.data, deepLinkPaperQuery.isError, routePaperId])
+
   const feedQuery = useQuery({
     queryKey: ['feed-inbox', feedScope, filter, sort, feedLimit, hideLibrary],
     queryFn: () =>
@@ -299,17 +335,14 @@ export function FeedPage() {
     staleTime: 30_000,
   })
 
-  // Mark the Feed seen ONCE per visit, after the inbox has rendered. Until
-  // this fires, every paper fetched since the last visit — by you or by the
-  // scheduler while ALMa was closed — keeps counting as New, which is what
-  // "new" actually means to a reader. The ref guards React 18's double-invoke
-  // and stops a background refetch from re-stamping.
+  // Mark the Feed owner page reviewed ONCE per visit, after the inbox renders.
+  // This clears older Feed carryover on Home; Feed's own New markers remain
+  // purely latest-refresh-or-24-hours. The ref guards React 18 double-invoke.
   const feedSeenStamped = useRef(false)
   const markSeenMutation = useMutation({
     mutationFn: markFeedSeen,
     onSuccess: () => {
-      // Refresh the nav badge; the rendered cards keep their New marks so the
-      // batch you're looking at doesn't change under you.
+      // Home carryover changes, while the time-based Feed badge remains stable.
       void invalidateQueries(queryClient, ['bootstrap'], ['feed-status'])
     },
   })
@@ -504,16 +537,25 @@ export function FeedPage() {
 
   const items = useMemo(() => {
     const baseItems = feedQuery.data?.items ?? []
-    if (!authorFilter) return baseItems
+    if (!authorFilter && !monitorFilter) return baseItems
     return baseItems.filter((item) => {
       const matchedAuthorIds = item.matched_author_ids ?? []
-      return item.author_id === authorFilter || matchedAuthorIds.includes(authorFilter)
+      const authorMatches =
+        !authorFilter || item.author_id === authorFilter || matchedAuthorIds.includes(authorFilter)
+      const monitorMatches =
+        !monitorFilter ||
+        item.monitor_id === monitorFilter ||
+        (item.matched_monitors ?? []).some((monitor) => monitor.monitor_id === monitorFilter)
+      return authorMatches && monitorMatches
     })
-  }, [authorFilter, feedQuery.data])
+  }, [authorFilter, feedQuery.data, monitorFilter])
 
-  const total = authorFilter ? items.length : (feedQuery.data?.total ?? 0)
+  const total = authorFilter || monitorFilter ? items.length : (feedQuery.data?.total ?? 0)
   const filteredAuthorLabel = items[0]?.author_name || authorFilter
-  const monitors = monitorQueryState.data ?? []
+  const monitors = useMemo(
+    () => monitorQueryState.data ?? [],
+    [monitorQueryState.data],
+  )
   const journalMonitorCount = monitors.filter(
     (monitor) => monitor.monitor_type === 'venue' && monitor.enabled,
   ).length
@@ -985,17 +1027,17 @@ export function FeedPage() {
               journalMonitorCount === 0
                 ? 'Follow a journal from any paper’s venue, or add one under Settings → Feed Monitor Controls. New papers from that journal will collect here, out of your main inbox.'
                 : filter === 'new'
-                  ? "You're caught up on your journals for this refresh. Switch to Show all for the full 60-day window, or run Refresh Inbox."
+                  ? 'No journal papers were fetched in the latest refresh or during the last 24 hours. Switch to Show all for the full 60-day window, or run Refresh Inbox.'
                   : 'No papers from your followed journals in the last 60 days. Add a keyword filter to a busy journal in Settings, or run Refresh Inbox.'
             }
           />
         ) : (
           <EmptyState
             icon={Search}
-            title={filter === 'new' ? 'Nothing new from the latest fetch' : 'No papers published in the last 60 days'}
+            title={filter === 'new' ? 'Nothing new from the latest fetch or last 24 hours' : 'No papers published in the last 60 days'}
             description={
               filter === 'new'
-                ? "You're caught up on this refresh. Switch to Show all for your full 60-day inbox, or run Refresh Inbox to pull new papers."
+                ? 'No papers were fetched in either New window. Switch to Show all for your full 60-day inbox, or run Refresh Inbox.'
                 : 'The Feed only shows papers from the last 60 days by publication date. Run Refresh Inbox to pull new papers, or follow more authors / add new monitors in Settings.'
             }
           />

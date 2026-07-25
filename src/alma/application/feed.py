@@ -8,7 +8,7 @@ import re
 import sqlite3
 import uuid
 from concurrent.futures import as_completed
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from alma.application.feed_query_language import (
     FeedQuerySyntaxError,
@@ -690,20 +690,68 @@ def latest_feed_fetch_window(db: sqlite3.Connection) -> tuple[str | None, str | 
     return str(row["started_at"] or "").strip() or None, str(row["finished_at"] or "").strip() or None
 
 
-def _is_new_since_latest_fetch(
+FEED_NEW_LOOKBACK_HOURS = 24
+
+
+def feed_new_window(
+    db: sqlite3.Connection,
     *,
-    status: object,
-    fetched_at: object,
-    unseen_since: str,
-) -> bool:
-    """New = untriaged AND fetched after the user last opened the Feed."""
-    if str(status or "new").strip().lower() != "new":
-        return False
-    fetched = str(fetched_at or "").strip()
-    if not fetched:
-        return False
-    # Never looked (empty stamp) → everything untriaged is still unseen.
-    return fetched > unseen_since
+    now: datetime | None = None,
+) -> tuple[str, str, str]:
+    """Return the two windows whose union defines Feed ``New``.
+
+    A paper is new when any of its Feed rows was fetched either:
+
+    * during the latest completed/no-op Feed refresh; or
+    * within the rolling last 24 hours.
+
+    The latest refresh may be older than 24 hours, so it remains a separate
+    bounded interval rather than being folded into one overly broad cutoff.
+    """
+    recent_cutoff = (
+        (now or datetime.now(timezone.utc).replace(tzinfo=None))
+        - timedelta(hours=FEED_NEW_LOOKBACK_HOURS)
+    ).isoformat()
+    latest_start, latest_finish = latest_feed_fetch_window(db)
+    return recent_cutoff, latest_start or "", latest_finish or ""
+
+
+def _new_feed_time_predicate(alias: str) -> str:
+    """SQL predicate shared by the New list, card pills, and nav count."""
+    return f"""(
+        {alias}.fetched_at >= ?
+        OR (
+            ? <> ''
+            AND {alias}.fetched_at >= ?
+            AND {alias}.fetched_at <= ?
+        )
+    )"""
+
+
+def _new_feed_window_params(
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str, str, str]:
+    recent_cutoff, latest_start, latest_finish = feed_new_window(db, now=now)
+    return recent_cutoff, latest_start, latest_start, latest_finish
+
+
+def _new_feed_paper_ids(
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+) -> set[str]:
+    """Distinct paper ids matching the canonical New time predicate."""
+    rows = db.execute(
+        f"""
+        SELECT DISTINCT fi.paper_id
+        FROM feed_items fi
+        WHERE {_new_feed_time_predicate("fi")}
+        """,
+        _new_feed_window_params(db, now=now),
+    ).fetchall()
+    return {str(row["paper_id"]) for row in rows if row["paper_id"]}
 
 
 #: KV key holding the ISO timestamp of the last time the user actually LOOKED
@@ -724,56 +772,49 @@ def get_feed_last_seen(db: sqlite3.Connection) -> str | None:
     return value or None
 
 
-def unseen_feed_window(db: sqlite3.Connection, *, since_days: int = 60) -> tuple[str, str]:
-    """The window that defines "new": everything fetched since you last LOOKED.
+def count_new_feed_items(
+    db: sqlite3.Connection,
+    *,
+    since_days: int = 60,
+    now: datetime | None = None,
+) -> int:
+    """Count distinct visible papers in the canonical New time windows.
 
-    This is deliberately *not* "the latest fetch". Papers arrive from two
-    directions — you press Refresh, and the scheduler fetches while ALMa is
-    closed — and a latest-fetch window silently discards the earlier batch: a
-    manual refresh bringing 10 papers followed by an overnight run bringing 20
-    used to read "20 new", quietly burying the first 10. Unseen-since-last-visit
-    is what the user actually means by new, and it only clears when they open
-    the Feed (`mark_feed_seen`).
-
-    Returns ``(start, cutoff)``: `start` bounds the fetch time, `cutoff` is the
-    publication-recency floor the inbox is bounded to anyway.
+    Action state does not change recency: saving, liking, or queueing a paper
+    leaves it New until it ages out of both windows. Dismiss remains the sole
+    action that hides a Feed paper.
     """
-    cutoff = (datetime.utcnow() - timedelta(days=int(since_days))).isoformat()
-    # Never looked → everything still inside the inbox window is unseen.
-    return (get_feed_last_seen(db) or "", cutoff)
-
-
-def count_new_feed_items_since_latest_fetch(db: sqlite3.Connection, *, since_days: int = 60) -> int:
-    """Count distinct untriaged feed papers you haven't seen yet.
-
-    A paper credited to multiple authors has multiple ``feed_items`` rows; the
-    badge counts the *paper*, not the row, keyed on its EARLIEST surfacing so a
-    paper a second monitor re-surfaces doesn't re-light. Papers you've already
-    acted on (status no longer 'new') never count.
-
-    (Name kept for its callers; the definition is now unseen-since-last-visit —
-    see `unseen_feed_window`.)
-    """
-    start, cutoff = unseen_feed_window(db, since_days=since_days)
+    inbox_cutoff = (
+        (now or datetime.now(timezone.utc).replace(tzinfo=None))
+        - timedelta(days=int(since_days))
+    ).isoformat()
     try:
         row = db.execute(
-            """
+            f"""
             WITH per_paper AS (
-                SELECT paper_id,
-                       MIN(fetched_at) AS earliest,
-                       MAX(CASE WHEN status = 'new' THEN 1 ELSE 0 END) AS has_new
-                FROM feed_items
-                GROUP BY paper_id
+                SELECT
+                    fi.paper_id,
+                    MIN(fi.fetched_at) AS earliest,
+                    MAX(
+                        CASE WHEN {_new_feed_time_predicate("fi")}
+                        THEN 1 ELSE 0 END
+                    ) AS is_new,
+                    MAX(
+                        CASE WHEN COALESCE(fi.status, 'new') <> 'dismissed'
+                        THEN 1 ELSE 0 END
+                    ) AS is_visible
+                FROM feed_items fi
+                GROUP BY fi.paper_id
             )
             SELECT COUNT(*) AS c
             FROM per_paper pp
             LEFT JOIN papers p ON p.id = pp.paper_id
-            WHERE pp.has_new = 1
-              AND pp.earliest > ?
+            WHERE pp.is_new = 1
+              AND pp.is_visible = 1
               AND COALESCE(NULLIF(p.publication_date, ''), pp.earliest) >= ?
-              AND """ + standalone_paper_sql("p") + """
+              AND {standalone_paper_sql("p")}
             """,
-            (start, cutoff),
+            (*_new_feed_window_params(db, now=now), inbox_cutoff),
         ).fetchone()
     except sqlite3.OperationalError:
         return 0
@@ -792,6 +833,168 @@ def mark_feed_seen(db: sqlite3.Connection, *, when: str | None = None) -> str:
         (FEED_LAST_SEEN_KEY, stamp),
     )
     return stamp
+
+
+def home_feed_snapshot(
+    db: sqlite3.Connection,
+    *,
+    day_start: str,
+    recent_start: str,
+    inbox_cutoff: str,
+    candidate_limit: int = 20,
+) -> dict:
+    """Return Home's compact Feed projection without changing review state.
+
+    ``today`` is historical activity: one count per standalone paper keyed on
+    the paper's *first* Feed surfacing, so a second monitor cannot inflate it.
+    ``carryover`` is different from Feed's time-based New marker on purpose:
+    it represents still-untriaged papers first seen after the Feed owner's
+    review stamp and before today. Home only reads that stamp;
+    :func:`mark_feed_seen` remains the sole owner of clearing the carryover.
+
+    The candidate list is bounded and includes enough monitor provenance for
+    Home to explain a highlight without issuing an N+1 query.
+    """
+    last_seen = get_feed_last_seen(db) or recent_start
+    carryover_start = max(last_seen, recent_start)
+
+    stats = db.execute(
+        f"""
+        WITH per_paper AS (
+            SELECT
+                fi.paper_id,
+                MIN(fi.fetched_at) AS first_seen,
+                MAX(CASE WHEN fi.status = 'new' THEN 1 ELSE 0 END) AS has_new,
+                MAX(CASE WHEN COALESCE(fi.monitor_type, fm.monitor_type) = 'author' THEN 1 ELSE 0 END) AS via_author,
+                MAX(CASE WHEN COALESCE(fi.monitor_type, fm.monitor_type) = 'venue' THEN 1 ELSE 0 END) AS via_venue
+            FROM feed_items fi
+            LEFT JOIN feed_monitors fm ON fm.id = fi.monitor_id
+            GROUP BY fi.paper_id
+        )
+        SELECT
+            COUNT(DISTINCT CASE WHEN pp.first_seen >= ? THEN pp.paper_id END) AS today,
+            COUNT(DISTINCT CASE WHEN pp.first_seen >= ? AND pp.via_author = 1 THEN pp.paper_id END) AS authors,
+            COUNT(DISTINCT CASE WHEN pp.first_seen >= ? AND pp.via_author = 0 AND pp.via_venue = 1 THEN pp.paper_id END) AS journals,
+            COUNT(DISTINCT CASE WHEN pp.first_seen >= ? AND pp.via_author = 0 AND pp.via_venue = 0 THEN pp.paper_id END) AS other,
+            COUNT(DISTINCT CASE
+                WHEN pp.first_seen > ? AND pp.first_seen < ? AND pp.has_new = 1
+                THEN pp.paper_id
+            END) AS carryover
+        FROM per_paper pp
+        JOIN papers p ON p.id = pp.paper_id
+        WHERE COALESCE(NULLIF(p.publication_date, ''), pp.first_seen) >= ?
+          AND {standalone_paper_sql('p')}
+        """,
+        (
+            day_start,
+            day_start,
+            day_start,
+            day_start,
+            carryover_start,
+            day_start,
+            inbox_cutoff,
+        ),
+    ).fetchone()
+
+    candidates = [
+        dict(row)
+        for row in db.execute(
+            f"""
+            WITH per_paper AS (
+                SELECT
+                    fi.paper_id,
+                    MIN(fi.fetched_at) AS first_seen,
+                    MAX(COALESCE(fi.signal_value, 0)) AS relevance
+                FROM feed_items fi
+                GROUP BY fi.paper_id
+            )
+            SELECT
+                p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
+                p.url, p.doi, p.status, pp.first_seen, pp.relevance
+            FROM per_paper pp
+            JOIN papers p ON p.id = pp.paper_id
+            WHERE pp.first_seen >= ?
+              AND COALESCE(NULLIF(p.publication_date, ''), pp.first_seen) >= ?
+              AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
+            ORDER BY pp.relevance DESC, pp.first_seen DESC, p.id
+            LIMIT ?
+            """,
+            (recent_start, inbox_cutoff, max(1, min(int(candidate_limit), 100))),
+        ).fetchall()
+    ]
+
+    if candidates:
+        paper_ids = [str(row["id"]) for row in candidates]
+        placeholders = ",".join("?" for _ in paper_ids)
+        provenance_rows = db.execute(
+            f"""
+            SELECT
+                fi.paper_id,
+                COALESCE(fi.monitor_id, fm.id, '') AS monitor_id,
+                COALESCE(fi.monitor_type, fm.monitor_type, '') AS monitor_type,
+                COALESCE(fi.monitor_label, fm.label, '') AS monitor_label,
+                COALESCE(fm.author_id, fi.author_id, '') AS author_id
+            FROM feed_items fi
+            LEFT JOIN feed_monitors fm ON fm.id = fi.monitor_id
+            WHERE fi.paper_id IN ({placeholders})
+            ORDER BY
+                CASE COALESCE(fi.monitor_type, fm.monitor_type)
+                    WHEN 'author' THEN 0
+                    WHEN 'venue' THEN 1
+                    WHEN 'topic' THEN 2
+                    WHEN 'query' THEN 3
+                    WHEN 'branch' THEN 4
+                    ELSE 5
+                END,
+                fi.fetched_at DESC
+            """,
+            paper_ids,
+        ).fetchall()
+        by_paper: dict[str, list[dict]] = {}
+        for row in provenance_rows:
+            by_paper.setdefault(str(row["paper_id"]), []).append(dict(row))
+        for candidate in candidates:
+            candidate["monitors"] = by_paper.get(str(candidate["id"]), [])
+
+    source_updates = [
+        dict(row)
+        for row in db.execute(
+            f"""
+            SELECT
+                COALESCE(fi.monitor_id, fm.id, '') AS source_id,
+                COALESCE(fi.monitor_type, fm.monitor_type, '') AS source_type,
+                COALESCE(fi.monitor_label, fm.label, '') AS source_label,
+                COALESCE(fm.author_id, fi.author_id, '') AS author_id,
+                COUNT(DISTINCT fi.paper_id) AS paper_count,
+                MAX(fi.fetched_at) AS latest_at
+            FROM feed_items fi
+            LEFT JOIN feed_monitors fm ON fm.id = fi.monitor_id
+            JOIN papers p ON p.id = fi.paper_id
+            WHERE fi.fetched_at >= ?
+              AND COALESCE(fi.monitor_type, fm.monitor_type, '') IN ('author', 'venue')
+              AND COALESCE(p.status, '') NOT IN ('dismissed', 'removed')
+              AND {standalone_paper_sql('p')}
+            GROUP BY 1, 2, 3, 4
+            HAVING COUNT(DISTINCT fi.paper_id) > 0
+            ORDER BY paper_count DESC, latest_at DESC, source_label
+            LIMIT 10
+            """,
+            (recent_start,),
+        ).fetchall()
+    ]
+
+    return {
+        "today": int((stats["today"] if stats else 0) or 0),
+        "by_monitor_type": {
+            "authors": int((stats["authors"] if stats else 0) or 0),
+            "journals": int((stats["journals"] if stats else 0) or 0),
+            "other": int((stats["other"] if stats else 0) or 0),
+        },
+        "carryover": int((stats["carryover"] if stats else 0) or 0),
+        "candidates": candidates,
+        "source_updates": source_updates,
+    }
 
 
 def list_feed_items(
@@ -861,26 +1064,16 @@ def list_feed_items(
         if requested_status not in VALID_FEED_STATUSES:
             raise ValueError(f"Invalid feed status: {requested_status}")
         if requested_status == "new":
-            # "New" = every paper that arrived since you last LOOKED at the Feed
-            # — whether you fetched it yourself or the scheduler did while ALMa
-            # was closed. Both sources accumulate, which a latest-fetch window
-            # could not express (it discarded the earlier batch). The SAME
-            # `unseen_feed_window` drives the nav badge, so the count and the
-            # list can never disagree.
-            #
-            # Acting on a card (save / like / queue) must NOT drop it from this
-            # view — it's a stable triage surface, and only Dismiss hides
-            # (handled by the global ``<> 'dismissed'`` filter above). We bound
-            # on the paper's EARLIEST fetched_at so a paper a second monitor
-            # re-surfaces doesn't re-light as new. Opening the Feed advances the
-            # stamp: these papers age out of New but remain under "Show all".
-            unseen_start, _unseen_cutoff = unseen_feed_window(db)
+            # New is the union of the latest refresh and the rolling last 24h.
+            # The subquery is deliberately paper-global: if any monitor fetched
+            # the paper in either window, every Feed view renders the same New
+            # state. Save / Like / Queue do not alter recency; only Dismiss is
+            # hidden by the global filter above.
             where.append(
                 "fi.paper_id IN (SELECT paper_id FROM feed_items "
-                "GROUP BY paper_id "
-                "HAVING MIN(fetched_at) > ?)"
+                f"WHERE {_new_feed_time_predicate('feed_items')})"
             )
-            params.append(unseen_start)
+            params.extend(_new_feed_window_params(db))
         else:
             where.append("fi.status = ?")
             params.append(requested_status)
@@ -947,8 +1140,7 @@ def list_feed_items(
         ORDER BY {order}
     """
     rows = db.execute(query, params).fetchall()
-    unseen_since, _ = unseen_feed_window(db)
-    aggregated = _aggregate_feed_rows(rows, unseen_since=unseen_since)
+    aggregated = _aggregate_feed_rows(rows, new_paper_ids=_new_feed_paper_ids(db))
     total = len(aggregated)
     return aggregated[offset:offset + limit], total
 
@@ -1006,8 +1198,11 @@ def list_feed_items_for_ids(db: sqlite3.Connection, feed_item_ids: list[str]) ->
         """,
         feed_item_ids,
     ).fetchall()
-    unseen_since, _ = unseen_feed_window(db)
-    mapped = [_map_feed_row(r, unseen_since=unseen_since) for r in rows]
+    new_paper_ids = _new_feed_paper_ids(db)
+    mapped = [
+        _map_feed_row(r, is_new=str(r["paper_id"]) in new_paper_ids)
+        for r in rows
+    ]
     return mapped, len(mapped)
 
 
@@ -2289,7 +2484,7 @@ def refresh_feed_monitor(
 def _map_feed_row(
     row: sqlite3.Row,
     *,
-    unseen_since: str,
+    is_new: bool,
 ) -> dict:
     monitor_type = str(row["monitor_type"] or "").strip().lower() or None
     author_id = str(row["author_id"] or "").strip()
@@ -2324,11 +2519,7 @@ def _map_feed_row(
         "fetched_at": row["fetched_at"],
         "status": row["status"],
         "signal_value": int(row["signal_value"] or 0),
-        "is_new": _is_new_since_latest_fetch(
-            status=row["status"],
-            fetched_at=row["fetched_at"],
-            unseen_since=unseen_since,
-        ),
+        "is_new": is_new,
         "score_breakdown": _parse_json_dict(row["score_breakdown"]),
         "paper": {
             "id": row["p_id"],
@@ -2363,30 +2554,24 @@ def _map_feed_row(
 def _aggregate_feed_rows(
     rows: list[sqlite3.Row],
     *,
-    unseen_since: str,
+    new_paper_ids: set[str],
 ) -> list[dict]:
     """Collapse duplicate papers into one inbox card while preserving author provenance.
 
-    `is_new` is recomputed against the paper's earliest `fetched_at` across all
-    rows, not the most recent — otherwise a paper credited to multiple authors
-    re-lights as new every time a different author monitor surfaces it.
+    ``is_new`` is paper-global and comes from the same canonical time predicate
+    as the New filter and nav badge.
     """
     aggregated: dict[str, dict] = {}
     ordered_ids: list[str] = []
-    earliest_fetched: dict[str, str] = {}
-    has_new_status: dict[str, bool] = {}
 
     for row in rows:
-        mapped = _map_feed_row(row, unseen_since=unseen_since)
+        mapped = _map_feed_row(
+            row,
+            is_new=str(row["paper_id"]) in new_paper_ids,
+        )
         group_key = str(mapped.get("paper_id") or mapped.get("id") or "").strip()
         if not group_key:
             continue
-        row_fetched = str(row["fetched_at"] or "").strip()
-        prev_fetched = earliest_fetched.get(group_key)
-        if row_fetched and (not prev_fetched or row_fetched < prev_fetched):
-            earliest_fetched[group_key] = row_fetched
-        if str(row["status"] or "").strip().lower() == "new":
-            has_new_status[group_key] = True
         existing = aggregated.get(group_key)
         if existing is None:
             aggregated[group_key] = mapped
@@ -2394,14 +2579,6 @@ def _aggregate_feed_rows(
             continue
 
         _absorb_feed_card(existing, mapped)
-
-    for group_key, item in aggregated.items():
-        earliest = earliest_fetched.get(group_key, "")
-        item["is_new"] = bool(
-            earliest
-            and earliest > unseen_since
-            and has_new_status.get(group_key, False)
-        )
 
     # Second pass — logical-duplicate safety net. Pass 1 collapsed feed_items
     # that share a paper_id; this folds cards that are the SAME logical paper

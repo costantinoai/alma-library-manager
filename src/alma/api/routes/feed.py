@@ -20,7 +20,6 @@ from alma.api.models import (
     ReorderRequest,
 )
 from alma.application import feed as feed_app
-from alma.core.db_write import run_write_unit
 from alma.application import feed_monitors as monitor_app
 from alma.application.discovery import lens_crud
 from alma.core.db_write import run_write_unit
@@ -216,14 +215,14 @@ def get_feed_status(
 
     ``last_refresh_at`` is the latest ``finished_at`` across completed full
     inbox or per-monitor feed refreshes in ``operation_status``. ``new_count``
-    counts every still-untriaged paper fetched since you last OPENED the Feed —
-    manual refreshes and scheduler runs accumulate together until you look.
+    counts distinct visible papers fetched during that latest refresh OR
+    during the rolling last 24 hours.
     """
     try:
         _, last = feed_app.latest_feed_fetch_window(db)
         return {
             "last_refresh_at": last,
-            "new_count": feed_app.count_new_feed_items_since_latest_fetch(db),
+            "new_count": feed_app.count_new_feed_items(db),
             "last_seen_at": feed_app.get_feed_last_seen(db),
         }
     except Exception as exc:
@@ -233,17 +232,17 @@ def get_feed_status(
 @router.post(
     "/seen",
     summary="Mark the Feed as seen",
-    description="Stamps now() so the New count measures from this visit forward.",
+    description="Stamps owner review state for Home carryover; Feed New remains time-based.",
 )
 def post_feed_seen(
     db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    """Clear the New badge by recording that the user has now looked.
+    """Record that the Feed owner page has now been reviewed.
 
-    Separate from the GET on purpose: reading the Feed must not mutate what
-    "new" means mid-request (no writes on GET). The page fires this after it
-    renders, so the batch you are looking at is the batch that gets cleared.
+    Separate from the GET on purpose: reading the Feed remains a pure read.
+    The stamp clears older Feed carryover on Home; it does not change Feed's
+    latest-refresh-or-24-hours New markers.
     """
     try:
         stamp = run_write_unit(db, lambda: feed_app.mark_feed_seen(db))

@@ -33,6 +33,27 @@ def _table_exists(db: sqlite3.Connection, table: str) -> bool:
     return row is not None
 
 
+def count_delivered_since(db: sqlite3.Connection, since: str) -> int:
+    """Count successful digest deliveries in a window.
+
+    Home and Alerts use ``alert_history`` as the durable delivery truth. Empty,
+    failed, and skipped evaluations are operational history, not delivered
+    alerts, and therefore do not contribute to the daily brief.
+    """
+    if not _table_exists(db, "alert_history"):
+        return 0
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM alert_history
+        WHERE sent_at >= ?
+          AND status = 'sent'
+        """,
+        (since,),
+    ).fetchone()
+    return int((row["c"] if row else 0) or 0)
+
+
 def list_rules(db: sqlite3.Connection) -> list[dict]:
     """List alert rules in newest-first order."""
     rows = db.execute("SELECT * FROM alert_rules ORDER BY created_at DESC").fetchall()
@@ -1342,7 +1363,7 @@ def _evaluate_rule(
         if not collection_ref:
             return []
         row = db.execute(
-            f"""
+            """
             SELECT id
             FROM collections
             WHERE id = ? OR lower(name) = lower(?)

@@ -1,392 +1,364 @@
 /**
- * HomePage — the landing page (task 47 Phase 6).
+ * Home — a read-only daily research desk.
  *
- * Design thesis: a **note left on your desk overnight**, not a dashboard.
- * Dashboards imply monitoring; this page implies "here's what came in while
- * you were away, and here's what needs you". It answers those two questions
- * and then gets out of the way.
- *
- * Three modules, nothing else:
- *   1. THE BRIEF — the signature. What arrived since your last visit, set as a
- *      row of ledger figures in display type rather than metric tiles. Tiles
- *      are what every other page in this app uses; a landing page that looks
- *      like the Insights grid would read as templated. Zero counts stay in the
- *      row but recede, so the eye lands on what actually changed, and the row
- *      never reflows between visits. Each figure is a link to its surface.
- *   2. NEEDS YOU — actionable rows only. Renders NOTHING when everything is
- *      quiet: no "all good" card (a healthy system should be silent).
- *   3. ONE TO LOOK AT — the top unacted suggestion, rendered through the same
- *      PaperCard as Feed and Discovery so its actions are the real ones.
- *
- * The whole page costs ONE request: `GET /home/brief` carries the counts and
- * the suggestion. After it renders we fire `POST /home/seen`, so the brief you
- * are reading always describes the window you actually missed — a GET that
- * stamped the visit would let a refresh silently eat it.
+ * The page reports today's stable activity, preserves older carryover until
+ * Feed/Discovery themselves are reviewed, and hands every item to the surface
+ * that owns it. It never stamps review state or duplicates paper actions.
  */
-import { useEffect, useRef } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, FileUp, Loader2, Radio } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  BookOpen,
+  FileSearch,
+  FileUp,
+  HeartPulse,
+  Radio,
+  UserPlus,
+  Users,
+} from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 
 import {
-  addToLibrary,
-  dismissRecommendation,
   getHomeBrief,
-  markHomeSeen,
-  type HomeBrief,
+  type HomeHighlight,
+  type HomePaper,
 } from '@/api/client'
-import { PaperCard } from '@/components/shared'
+import { MetricTile } from '@/components/shared'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ErrorState } from '@/components/ui/ErrorState'
-import { RevealItem, RevealList } from '@/components/ui/reveal'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useToast, errorToast } from '@/hooks/useToast'
+import { StatusBadge } from '@/components/ui/status-badge'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
-import { cn } from '@/lib/utils'
+import { formatRelativeShort } from '@/lib/utils'
 
-/** One column of the brief ledger: a figure, its label, and where it goes. */
-interface BriefFigure {
-  value: number
+function greeting(name: string | null): string {
+  if (!name) return 'Your daily brief'
+  const firstName = name.trim().split(/\s+/)[0] || name
+  const hour = new Date().getHours()
+  if (hour < 12) return `Good morning, ${firstName}`
+  if (hour < 18) return `Good afternoon, ${firstName}`
+  return `Good evening, ${firstName}`
+}
+
+function localDate(): string {
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  }).format(new Date())
+}
+
+function paperByline(paper: HomePaper): string {
+  return [paper.authors, paper.journal, paper.year].filter(Boolean).join(' · ')
+}
+
+function excerpt(paper: HomePaper): string | null {
+  return paper.tldr?.trim() || paper.abstract?.trim() || null
+}
+
+function highlightHref(highlight: HomeHighlight): string {
+  if (highlight.kind === 'discovery_paper') {
+    return buildHashRoute('discovery', {
+      lens: highlight.lens_id,
+      paper: highlight.paper.id,
+    })
+  }
+  if (highlight.kind === 'source_update' && highlight.source?.type === 'author') {
+    return buildHashRoute('feed', {
+      author: highlight.source.author_id,
+      paper: highlight.paper.id,
+    })
+  }
+  const monitorType =
+    highlight.kind === 'source_update' ? highlight.source?.type : highlight.monitor_type
+  const monitorId =
+    highlight.kind === 'source_update' ? highlight.source?.id : highlight.monitor_id
+  return buildHashRoute('feed', {
+    scope: monitorType === 'venue' ? 'journals' : 'inbox',
+    monitor: monitorId,
+    paper: highlight.paper.id,
+  })
+}
+
+function HighlightRow({ highlight }: { highlight: HomeHighlight }) {
+  const summary = excerpt(highlight.paper)
+  return (
+    <a
+      href={highlightHref(highlight)}
+      className="group block border-b border-edge-1 px-4 py-4 transition-colors last:border-b-0 hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-alma-folio"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="mb-1.5 flex flex-wrap items-center gap-2">
+            <StatusBadge tone={highlight.period === 'today' ? 'accent' : 'neutral'} size="sm">
+              {highlight.period === 'today' ? 'Today' : 'Last 7 days'}
+            </StatusBadge>
+            <span className="text-xs font-medium text-alma-folio">
+              {highlight.reason.label}
+            </span>
+          </div>
+          <h3 className="font-brand text-base font-semibold leading-snug text-alma-800 transition-colors group-hover:text-alma-folio">
+            {highlight.paper.title}
+          </h3>
+          {paperByline(highlight.paper) && (
+            <p className="mt-1 truncate text-xs text-slate-500">
+              {paperByline(highlight.paper)}
+            </p>
+          )}
+          {summary && (
+            <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">
+              {summary}
+            </p>
+          )}
+        </div>
+        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-alma-folio" />
+      </div>
+    </a>
+  )
+}
+
+function PaperRow({ paper }: { paper: HomePaper }) {
+  return (
+    <a
+      href={buildHashRoute('library', { tab: 'reading', paper: paper.id })}
+      className="group flex items-center justify-between gap-4 border-b border-edge-1 px-4 py-3 last:border-b-0 hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-alma-folio"
+    >
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-medium text-alma-800 group-hover:text-alma-folio">
+          {paper.title}
+        </span>
+        {paperByline(paper) && (
+          <span className="mt-0.5 block truncate text-xs text-slate-500">
+            {paperByline(paper)}
+          </span>
+        )}
+      </span>
+      <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-alma-folio" />
+    </a>
+  )
+}
+
+interface AttentionRowProps {
+  icon: React.ComponentType<{ className?: string }>
   label: string
-  sub: string
   href: string
 }
 
-/** Humanised window: "since Tuesday", "since yesterday", "since this morning". */
-function windowLabel(since: string): string {
-  const then = new Date(since)
-  if (Number.isNaN(then.getTime())) return 'since your last visit'
-  const hours = (Date.now() - then.getTime()) / 36e5
-  if (hours < 1) return 'in the last hour'
-  if (hours < 12) return 'since earlier today'
-  if (hours < 36) return 'since yesterday'
-  if (hours < 24 * 7) {
-    return `since ${then.toLocaleDateString(undefined, { weekday: 'long' })}`
-  }
-  return `since ${then.toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}`
-}
-
-/**
- * The ledger. A figure sits over a hairline with its label beneath — the
- * hairline IS the link affordance, going folio-blue on hover, so the row reads
- * as a set of doors rather than a set of statistics.
- */
-function BriefLedger({ figures }: { figures: BriefFigure[] }) {
+function AttentionRow({ icon: Icon, label, href }: AttentionRowProps) {
   return (
-    <RevealList className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-4 sm:gap-x-8">
-      {figures.map((f, i) => (
-        <RevealItem key={f.label} index={i} stagger={0.06}>
-          <a
-            href={f.href}
-            className="group block focus-visible:outline-none"
-            aria-label={`${f.value} ${f.label} ${f.sub}`}
-          >
-            <span
-              className={cn(
-                'block font-brand text-[2.5rem] leading-none tabular-nums transition-colors sm:text-[3.25rem]',
-                // A zero is still true and still holds its column, but it must
-                // not compete with the number that changed.
-                f.value === 0
-                  ? 'text-slate-300'
-                  : 'text-alma-800 group-hover:text-alma-folio',
-              )}
-            >
-              {f.value}
-            </span>
-            <span
-              className={cn(
-                'mt-2 block border-t pt-2 text-xs leading-snug transition-colors',
-                f.value === 0
-                  ? 'border-edge-1 text-slate-400'
-                  : 'border-edge-2 text-slate-600 group-hover:border-alma-folio group-hover:text-alma-folio',
-              )}
-            >
-              <span className="font-medium">{f.label}</span>
-              <span className="block text-slate-400 group-hover:text-alma-folio/70">{f.sub}</span>
-            </span>
-          </a>
-        </RevealItem>
-      ))}
-    </RevealList>
-  )
-}
-
-/**
- * A compact paper line. Deliberately NOT a PaperCard: these lists are a
- * glance, not a workbench — the card's full action bar would turn a four-item
- * peek into a page of its own. The title is the affordance; acting happens on
- * the surface that owns the paper.
- */
-function PaperLine({
-  paper,
-  onOpen,
-}: {
-  paper: { paper_id: string; title: string; authors?: string | null; year?: number | null; journal?: string | null }
-  onOpen: (paperId: string) => void
-}) {
-  const byline = [paper.authors?.split(',')[0]?.trim(), paper.journal, paper.year]
-    .filter(Boolean)
-    .join(' · ')
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(paper.paper_id)}
-      className="group block w-full border-b border-edge-1 py-2 text-left last:border-b-0"
+    <a
+      href={href}
+      className="flex items-center justify-between gap-3 border-b border-edge-1 px-4 py-3 text-sm last:border-b-0 hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-alma-folio"
     >
-      <span className="block truncate text-sm text-alma-800 transition-colors group-hover:text-alma-folio">
-        {paper.title}
+      <span className="flex min-w-0 items-center gap-2.5 text-alma-800">
+        <Icon className="h-4 w-4 shrink-0 text-warning-700" />
+        <span>{label}</span>
       </span>
-      {byline && <span className="mt-0.5 block truncate text-xs text-slate-500">{byline}</span>}
-    </button>
-  )
-}
-
-/** One actionable row in "Needs you". */
-function AttentionRow({
-  icon: Icon,
-  text,
-  actionLabel,
-  onAction,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  text: string
-  actionLabel: string
-  onAction: () => void
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b border-edge-1 py-2.5 last:border-b-0">
-      <span className="flex min-w-0 items-center gap-2.5 text-sm text-alma-800">
-        <Icon className="h-4 w-4 shrink-0 text-alma-folio" />
-        <span className="truncate">{text}</span>
-      </span>
-      <Button size="sm" variant="outline" className="shrink-0" onClick={onAction}>
-        {actionLabel}
-        <ArrowRight className="h-3.5 w-3.5" />
-      </Button>
-    </div>
+      <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" />
+    </a>
   )
 }
 
 export function HomePage() {
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
-
   const briefQuery = useQuery({
     queryKey: ['home-brief'],
-    queryFn: getHomeBrief,
+    queryFn: () => getHomeBrief(),
     staleTime: 30_000,
-  })
-  const brief: HomeBrief | undefined = briefQuery.data
-
-  // Stamp the visit ONCE, after the brief has rendered. The ref guards against
-  // React 18 double-invocation in dev and against a refetch re-stamping.
-  const stamped = useRef(false)
-  const seenMutation = useMutation({ mutationFn: markHomeSeen })
-  useEffect(() => {
-    if (!brief || stamped.current) return
-    stamped.current = true
-    seenMutation.mutate()
-    // Intentionally fire-and-forget: a failed stamp just means the next brief
-    // reports a slightly wider window, which is harmless and honest.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [brief])
-
-  // Opening a paper from Home hands off to the surface that owns it, rather
-  // than duplicating a detail panel here.
-  const openPaper = (paperId: string) =>
-    navigateTo('library', { tab: 'saved', paper: paperId })
-
-  const saveMutation = useMutation({
-    mutationFn: (paperId: string) => addToLibrary(paperId),
-    onSuccess: async () => {
-      await invalidateQueries(queryClient, ['home-brief'], ['library'])
-      toast({ title: 'Saved to Library' })
-    },
-    onError: () => errorToast('Could not save', 'Please try again.'),
-  })
-  const dismissMutation = useMutation({
-    mutationFn: (recId: string) => dismissRecommendation(recId),
-    onSuccess: async () => {
-      await invalidateQueries(queryClient, ['home-brief'])
-    },
-    onError: () => errorToast('Could not dismiss', 'Please try again.'),
   })
 
   if (briefQuery.isLoading) {
     return (
-      <div className="space-y-8">
-        <Skeleton className="h-10 w-72" />
-        <Skeleton className="h-28 w-full" />
+      <div className="mx-auto max-w-5xl space-y-8 py-2">
+        <Skeleton className="h-14 w-80" />
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-24" />
+        </div>
+        <Skeleton className="h-72" />
       </div>
     )
   }
-  if (briefQuery.isError || !brief) {
-    return <ErrorState message="Couldn't load your brief." />
+  if (briefQuery.isError || !briefQuery.data) {
+    return <ErrorState message="Couldn't load your daily brief." />
   }
 
-  const { arrived, waiting, insight, recent_arrivals, reading_now } = brief
-  const figures: BriefFigure[] = [
-    {
-      value: arrived.feed_items,
-      label: 'new papers',
-      sub: 'in Feed',
-      href: buildHashRoute('feed'),
-    },
-    {
-      value: arrived.recommendations,
-      label: 'suggestions',
-      sub: 'from Discovery',
-      href: buildHashRoute('discovery'),
-    },
-    {
-      value: arrived.alerts_fired,
-      label: 'alerts',
-      sub: 'delivered',
-      href: buildHashRoute('alerts'),
-    },
-    {
-      value: waiting.reading,
-      label: 'to read',
-      sub: 'in your list',
-      href: buildHashRoute('library', { tab: 'reading' }),
-    },
-  ]
-
-  const hasAttention = waiting.imports_pending > 0 || waiting.monitors_need_attention > 0
+  const brief = briefQuery.data
+  const { feed, discovery, alerts } = brief.activity
+  const attentionTotal = Object.values(brief.attention).reduce((sum, value) => sum + value, 0)
+  const carryoverTotal = feed.carryover + discovery.carryover
 
   return (
-    <div className="mx-auto max-w-4xl space-y-10 py-2">
-      {/* ── 1. The brief ─────────────────────────────────────────────────── */}
-      <section className="space-y-6">
-        <div>
-          <h1 className="font-brand text-2xl font-semibold text-alma-800 sm:text-[1.75rem]">
-            {brief.first_visit ? "Here's where things stand." : 'Since you were last here'}
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            {brief.first_visit
-              ? 'Your first visit — showing the last 60 days.'
-              : `What arrived ${windowLabel(brief.since)}.`}
-          </p>
+    <div className="mx-auto max-w-5xl space-y-9 py-2">
+      <header className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="font-brand text-2xl font-semibold text-alma-800 sm:text-[1.75rem]">
+              {greeting(brief.user_name)}
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              {localDate()} · updated {formatRelativeShort(brief.generated_at)}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2" aria-label="Start a workflow">
+            <Button size="sm" onClick={() => navigateTo('discovery', { action: 'find' })}>
+              <FileSearch className="h-4 w-4" />
+              Find papers
+            </Button>
+            <Button size="sm" onClick={() => navigateTo('authors', { action: 'follow' })}>
+              <UserPlus className="h-4 w-4" />
+              Follow author
+            </Button>
+          </div>
         </div>
-        <BriefLedger figures={figures} />
+      </header>
+
+      <section className="space-y-3" aria-labelledby="home-activity">
+        <div>
+          <h2 id="home-activity" className="font-brand text-lg font-semibold text-alma-800">
+            Today in ALMa
+          </h2>
+          <p className="text-sm text-slate-500">Activity since your local midnight.</p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <MetricTile
+            label="new Feed papers"
+            value={feed.today}
+            hint={`${feed.by_monitor_type.authors} authors · ${feed.by_monitor_type.journals} journals · ${feed.by_monitor_type.other} other`}
+            tone={feed.today > 0 ? 'accent' : 'neutral'}
+            onClick={() => navigateTo('feed')}
+          />
+          <MetricTile
+            label="new suggestions"
+            value={discovery.today}
+            hint={`across ${discovery.lenses_today} ${discovery.lenses_today === 1 ? 'lens' : 'lenses'}`}
+            tone={discovery.today > 0 ? 'accent' : 'neutral'}
+            onClick={() => navigateTo('discovery')}
+          />
+          <MetricTile
+            label="alerts delivered"
+            value={alerts.today}
+            hint="successful digest deliveries"
+            tone={alerts.today > 0 ? 'info' : 'neutral'}
+            onClick={() => navigateTo('alerts', { tab: 'history' })}
+          />
+        </div>
+        {carryoverTotal > 0 && (
+          <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+            <BookOpen className="h-3.5 w-3.5 text-alma-folio" />
+            <span>
+              Still waiting from earlier:
+              {' '}
+              <a href={buildHashRoute('feed')} className="font-medium text-alma-folio hover:underline">
+                {feed.carryover} in Feed
+              </a>
+              {' · '}
+              <a href={buildHashRoute('discovery')} className="font-medium text-alma-folio hover:underline">
+                {discovery.carryover} in Discovery
+              </a>
+            </span>
+          </p>
+        )}
       </section>
 
-      {/* ── 2. Needs you — silent when there's nothing to do ─────────────── */}
-      {hasAttention && (
-        <section className="space-y-2">
-          <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-            Needs you
+      <section className="space-y-3" aria-labelledby="home-highlights">
+        <div>
+          <h2 id="home-highlights" className="font-brand text-lg font-semibold text-alma-800">
+            Worth your attention
           </h2>
-          <Card className="px-4 py-1">
-            {waiting.imports_pending > 0 && (
+          <p className="text-sm text-slate-500">
+            A balanced selection from monitored research and Discovery.
+          </p>
+        </div>
+        {brief.highlights.length > 0 ? (
+          <Card className="overflow-hidden">
+            {brief.highlights.map((highlight) => (
+              <HighlightRow
+                key={`${highlight.kind}-${highlight.paper.id}-${highlight.source?.id ?? highlight.lens_id ?? ''}`}
+                highlight={highlight}
+              />
+            ))}
+          </Card>
+        ) : (
+          <Card className="p-5">
+            <p className="text-sm text-slate-500">
+              No noteworthy research arrived in the last seven days. Your reading list and source pages remain available below.
+            </p>
+          </Card>
+        )}
+      </section>
+
+      {brief.reading.total > 0 && (
+        <section className="space-y-3" aria-labelledby="home-reading">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 id="home-reading" className="font-brand text-lg font-semibold text-alma-800">
+                Continue reading
+              </h2>
+              <p className="text-sm text-slate-500">
+                {brief.reading.total} {brief.reading.total === 1 ? 'paper' : 'papers'} on your reading list.
+              </p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => navigateTo('library', { tab: 'reading' })}>
+              Reading list
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+          <Card className="overflow-hidden">
+            {brief.reading.items.map((paper) => (
+              <PaperRow key={paper.id} paper={paper} />
+            ))}
+          </Card>
+        </section>
+      )}
+
+      {attentionTotal > 0 && (
+        <section className="space-y-3" aria-labelledby="home-attention">
+          <div>
+            <h2 id="home-attention" className="font-brand text-lg font-semibold text-alma-800">
+              Needs attention
+            </h2>
+            <p className="text-sm text-slate-500">Only decisions or blockers that need you.</p>
+          </div>
+          <Card className="overflow-hidden">
+            {brief.attention.imports_pending > 0 && (
               <AttentionRow
                 icon={FileUp}
-                text={`${waiting.imports_pending} imported ${
-                  waiting.imports_pending === 1 ? 'paper is' : 'papers are'
-                } waiting to be matched`}
-                actionLabel="Review"
-                onAction={() => navigateTo('library', { tab: 'imports' })}
+                label={`${brief.attention.imports_pending} imported ${brief.attention.imports_pending === 1 ? 'paper needs' : 'papers need'} review`}
+                href={buildHashRoute('library', { tab: 'imports' })}
               />
             )}
-            {waiting.monitors_need_attention > 0 && (
+            {brief.attention.monitors_need_resolution > 0 && (
               <AttentionRow
                 icon={Radio}
-                text={`${waiting.monitors_need_attention} ${
-                  waiting.monitors_need_attention === 1 ? 'monitor' : 'monitors'
-                } stopped and need re-linking`}
-                actionLabel="Fix"
-                onAction={() => navigateTo('settings', { anchor: 'feed-monitors' })}
+                label={`${brief.attention.monitors_need_resolution} ${brief.attention.monitors_need_resolution === 1 ? 'monitor needs' : 'monitors need'} relinking`}
+                href={buildHashRoute('settings', { anchor: 'feed-monitors' })}
+              />
+            )}
+            {brief.attention.author_decisions > 0 && (
+              <AttentionRow
+                icon={Users}
+                label={`${brief.attention.author_decisions} author ${brief.attention.author_decisions === 1 ? 'identity needs' : 'identities need'} review`}
+                href={buildHashRoute('authors', { focus: 'needs-attention' })}
+              />
+            )}
+            {brief.attention.critical_health > 0 && (
+              <AttentionRow
+                icon={HeartPulse}
+                label={`${brief.attention.critical_health} critical health ${brief.attention.critical_health === 1 ? 'issue needs' : 'issues need'} action`}
+                href={buildHashRoute('health')}
               />
             )}
           </Card>
         </section>
       )}
 
-      {/* ── 3. What actually arrived ─────────────────────────────────────
-          The brief's first figure says "12 new papers"; this says WHICH, so
-          Home is worth reading rather than just passing through. Absent when
-          nothing arrived. */}
-      {recent_arrivals.length > 0 && (
-        <section className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-              Newest in your Feed
-            </h2>
-            <button
-              type="button"
-              onClick={() => navigateTo('feed')}
-              className="text-xs text-slate-500 transition-colors hover:text-alma-folio"
-            >
-              Open Feed →
-            </button>
-          </div>
-          <Card className="px-4 py-1">
-            {recent_arrivals.map((p) => (
-              <PaperLine key={p.paper_id} paper={p} onOpen={openPaper} />
-            ))}
-          </Card>
-        </section>
-      )}
-
-      {/* ── 4. Continue reading — closes the loop on what you committed to ── */}
-      {reading_now.length > 0 && (
-        <section className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-              Still reading
-            </h2>
-            <button
-              type="button"
-              onClick={() => navigateTo('library', { tab: 'reading' })}
-              className="text-xs text-slate-500 transition-colors hover:text-alma-folio"
-            >
-              Reading list →
-            </button>
-          </div>
-          <Card className="px-4 py-1">
-            {reading_now.map((p) => (
-              <PaperLine key={p.paper_id} paper={p} onOpen={openPaper} />
-            ))}
-          </Card>
-        </section>
-      )}
-
-      {/* ── 5. One to look at — absent when there's no suggestion ────────── */}
-      {insight && (
-        <section className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
-              One to look at
-            </h2>
-            <button
-              type="button"
-              onClick={() => navigateTo('discovery')}
-              className="text-xs text-slate-500 transition-colors hover:text-alma-folio"
-            >
-              See all suggestions →
-            </button>
-          </div>
-          <PaperCard
-            paper={{
-              id: insight.paper_id,
-              title: insight.title,
-              authors: insight.authors ?? '',
-              year: insight.year ?? null,
-              journal: insight.journal ?? undefined,
-              url: insight.url ?? undefined,
-              doi: insight.doi ?? undefined,
-            }}
-            score={insight.score ?? undefined}
-            onAdd={() => saveMutation.mutate(insight.paper_id)}
-            onDismiss={() => dismissMutation.mutate(insight.id)}
-          />
-          {(saveMutation.isPending || dismissMutation.isPending) && (
-            <p className="flex items-center gap-1.5 text-xs text-slate-400">
-              <Loader2 className="h-3 w-3 animate-spin" /> Working…
-            </p>
-          )}
-        </section>
+      {attentionTotal === 0 && brief.reading.total === 0 && brief.highlights.length === 0 && (
+        <p className="flex items-center gap-2 text-sm text-slate-500">
+          <AlertTriangle className="h-4 w-4" />
+          Your workspace is quiet. Start by finding a paper or following an author.
+        </p>
       )}
     </div>
   )

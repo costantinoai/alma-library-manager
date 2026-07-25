@@ -208,7 +208,7 @@ store (`data/secrets.json`, key `smtp.password`) — never in
 `settings.json`. All are editable from **Settings → Email digests**;
 each also has an env-var override (`SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USERNAME`, `SMTP_FROM`, `SMTP_TO`, `SMTP_PASSWORD`). See the
-[Configuration reference](../reference/configuration.md#email--smtp).
+[Configuration reference](../reference/configuration.md#email-smtp).
 
 `slack_channel` accepts:
 

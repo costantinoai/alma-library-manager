@@ -97,7 +97,7 @@ ALMA_IMAGE_TAG=0.20.1 \
 
 State lives in the `alma-data` / `alma-config` named volumes (owned by
 the container app user — no host permission setup). See
-[Getting started → Docker](../getting-started/docker.md#path-2--docker-compose-named-volumes)
+[Getting started → Docker](../getting-started/docker.md#path-2-docker-compose-named-volumes)
 for the full list of compose flags (GPU overlay, lite image, build
 locally, etc.).
 

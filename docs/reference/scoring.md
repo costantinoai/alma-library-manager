@@ -479,7 +479,7 @@ $$
 
 `24` is the outer multiplier that puts the band around 0–100;
 topic / venue overlap contributions are prevalence-weighted
-(see [topic / venue weighting](#topic-venue-prevalence-weighting)
+(see [topic / venue weighting](#topic-venue-author-prevalence-weighting)
 below).
 
 A 5★ first-author of a 1-person paper saturates near 100; a

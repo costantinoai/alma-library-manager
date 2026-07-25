@@ -667,6 +667,41 @@ def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:
     return cursor.rowcount > 0
 
 
+def reading_preview(db: sqlite3.Connection, *, limit: int = 3) -> dict:
+    """Compact owner-consistent projection of the active Reading List.
+
+    Reading state is orthogonal to Library membership (D2), so this deliberately
+    does not require ``status='library'``. Ordering matches
+    ``GET /library/reading-queue``: the model has no dedicated
+    ``reading_started_at`` timestamp, making added/created time the only honest
+    stable ordering signal.
+    """
+    total_row = db.execute(
+        f"""
+        SELECT COUNT(*) AS c
+        FROM papers p
+        WHERE p.reading_status = 'reading'
+          AND {standalone_paper_sql('p')}
+        """
+    ).fetchone()
+    rows = db.execute(
+        f"""
+        SELECT p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
+               p.url, p.doi, p.status
+        FROM papers p
+        WHERE p.reading_status = 'reading'
+          AND {standalone_paper_sql('p')}
+        ORDER BY COALESCE(p.added_at, p.created_at, p.publication_date, '') DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit), 20)),),
+    ).fetchall()
+    return {
+        "total": int((total_row["c"] if total_row else 0) or 0),
+        "items": [dict(row) for row in rows],
+    }
+
+
 def delete_paper(db: sqlite3.Connection, paper_id: str) -> bool:
     """Soft-remove a paper by ID. Returns True if found."""
     if get_paper(db, paper_id) is None:

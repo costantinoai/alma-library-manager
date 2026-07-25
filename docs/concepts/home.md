@@ -1,79 +1,73 @@
 ---
 title: Home
-description: The landing page — what arrived since your last visit, what needs you, and one suggestion worth a look. Quiet when everything is fine.
+description: A quiet daily research desk — today's activity, unfinished review, balanced highlights, reading continuity, and blockers that need you.
 ---
 
 # Home
 
-**Home** is where ALMa opens. It answers two questions — *what happened while I
-was away*, and *what needs me* — and then gets out of the way. It is a note left
-on your desk, not a dashboard: there are no charts, no gauges, and nothing that
-exists only to look busy.
+**Home** is where ALMa opens. It is a daily research desk rather than a
+dashboard: it summarizes what arrived, selects a few explainable highlights,
+and hands each item to the page that owns it.
 
-Five modules, in this order — and every one after the brief is
-conditional, so a quiet day stays quiet.
+The brief uses the browser's local timezone. Refreshing Home never changes its
+counts or consumes unread state.
 
-## 1. The brief
+## Today in ALMa
 
-A row of figures for the window since you were last here:
+Three stable figures report activity since local midnight:
 
 | Figure | Links to |
 |---|---|
-| **new papers** in Feed | [Feed](feed.md) |
-| **suggestions** from Discovery | [Discovery](discovery.md) |
-| **alerts** delivered | [Alerts](alerts.md) |
-| **to read** in your list | Library → Reading list |
+| **new Feed papers** (distinct papers, split by source type) | [Feed](feed.md) |
+| **new suggestions** across active lenses | [Discovery](discovery.md) |
+| **alerts delivered successfully** | Alerts → History |
 
-Each figure is a door — click it and you land on the surface that owns it.
+Older, still-unreviewed Feed and Discovery items appear separately as
+**carryover**. Carryover clears only when you visit the owning Feed or
+Discovery lens. `GET /home/brief` is a pure read: Home has no “seen” endpoint
+and never stamps owner review state.
 
-A count of **zero stays in the row** rather than disappearing: it's still true,
-the row keeps the same shape between visits, and the numbers that *did* change
-are the ones that stand out. The window itself is stated in plain words
-("since Tuesday", "since yesterday").
+## Worth your attention
 
-On your **very first visit** there is no last-visit stamp, so ALMa doesn't
-invent one. The heading reads *"Here's where things stand"* and the figures
-cover the last 60 days — the same horizon the Feed inbox is bounded to.
+Home chooses up to three deterministic, source-balanced highlights:
 
-!!! note "How the window is tracked"
-    `GET /home/brief` computes the brief and is a **pure read**. The visit is
-    stamped separately by `POST /home/seen`, fired *after* the page renders.
-    That split matters: if loading the page stamped the visit, refreshing would
-    silently destroy the very window you were reading.
+- a monitored Feed paper;
+- a top pending Discovery match;
+- a paper representing an active followed author or journal.
 
-## 2. Needs you
+Each row states why it was selected and shows a short TLDR or abstract excerpt.
+Today's material is preferred. On quiet days ALMa may use the previous seven
+days, clearly labelled **Last 7 days**. The selection is structured curation,
+not AI-generated prose.
 
-Actionable rows, each with the control that resolves it:
+Home is navigation-only. Opening a highlight takes you to its Feed monitor,
+Discovery lens, or paper detail on the owner page; all save, rate, read, and
+dismiss actions remain there.
 
-* **Imported papers waiting to be matched** → Review (Library → Imports)
-* **Monitors that stopped and need re-linking** → Fix (Settings → Feed monitors)
+## Continue reading
 
-When there is nothing to do, **this module renders nothing at all**. ALMa never
-shows an "all good" card — a healthy system should be silent, so anything you
-see on Home is something you can act on.
+Up to three papers from the reading list provide continuity with work already
+in progress. Reading state is independent of Library membership, so an
+unsaved paper marked **Reading** still appears.
 
-## 3. Newest in your Feed
+## Needs attention
 
-The four most recent untriaged arrivals, over the same window as the brief. A
-count tells you something happened; a title tells you *what*, which is the
-difference between a page you read and one you pass through. Clicking a line
-opens the paper. Absent when nothing arrived.
+This section appears only for user-fixable decisions or blockers:
 
-## 4. Still reading
+- imported papers that need review;
+- Feed monitors that need relinking;
+- author identities that need a decision;
+- actionable critical Health findings.
 
-What you already committed to — up to three papers from your reading list — so
-Home closes that loop instead of only opening new ones. Absent when the list is
-empty.
+Routine background work and healthy-state reassurance stay off Home.
 
-## 5. One to look at
+## Start a workflow
 
-The top-ranked suggestion you haven't acted on yet, from the most recent
-Discovery refresh. It's a normal paper card, so **Save** and **Dismiss** here do
-exactly what they do in Feed and Discovery — including writing the preference
-signal that shapes the next refresh. If there are no pending suggestions, the
-module is absent.
+The header offers two shortcuts: **Find papers** and **Follow author**. They
+use ALMa's primary action treatment, open the corresponding owner workflow, and do not
+duplicate its controls on Home.
 
 ---
 
-Home is the default route: an empty address (`#/`) lands here, and Feed is one
-click away in the sidebar. Every existing deep link is unchanged.
+Home is the default route: an empty address (`#/`) lands here, and every section
+links back to the page that owns its data and actions.

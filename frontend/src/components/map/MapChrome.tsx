@@ -10,6 +10,11 @@
  *   - `ClusterLegendChips` — cluster chips as VIEW-ONLY dim toggles
  *     (dimmed = 15% opacity, never hidden, never a discovery signal)
  */
+import { useEffect, useState } from 'react'
+import { Settings2 } from 'lucide-react'
+
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Slider } from '@/components/ui/slider'
 import { cn } from '@/lib/utils'
 
 export function MapToolbar({ children }: { children: React.ReactNode }) {
@@ -135,6 +140,131 @@ export function ClusterLegendChips({
   )
 }
 
+
+/**
+ * SliderRow — the one labelled-slider idiom inside the tuning popover.
+ * Local state while dragging; the host's knob commits on release.
+ */
+export function SliderRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  format,
+  onCommit,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  format: (v: number) => string
+  onCommit: (v: number) => void
+}) {
+  const [local, setLocal] = useState(value)
+  useEffect(() => setLocal(value), [value])
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-slate-600">{label}</span>
+        <span className="tabular-nums text-slate-400">{format(local)}</span>
+      </div>
+      <Slider
+        value={[local]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={([v]) => setLocal(v)}
+        onValueCommit={([v]) => onCommit(v)}
+      />
+    </div>
+  )
+}
+
+/**
+ * MapTuningPopover — the ONE "Advanced" affordance every map host mounts
+ * (user call 2026-07-25: the tuning knobs belong to every map, not just the
+ * Map page). The shell is shared; hosts compose SliderRow /
+ * MapDisplayTuningRows + their own extras (layout blend, rebuild buttons)
+ * as children, so the same knob reads identically on every plate.
+ */
+export function MapTuningPopover({
+  children,
+  title = 'Fine tuning — dot size, word size, words per cluster',
+}: {
+  children: React.ReactNode
+  title?: string
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
+          title={title}
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+          Advanced
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 space-y-4 text-xs">
+        {children}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** The display-knob trio every map shares: dot size, word size, words per
+ *  cluster. One component so the ranges/labels can never drift per host. */
+export function MapDisplayTuningRows({
+  sizeScale,
+  onSizeScale,
+  wordScale,
+  onWordScale,
+  wordCount,
+  onWordCount,
+}: {
+  sizeScale: number
+  onSizeScale: (v: number) => void
+  wordScale: number
+  onWordScale: (v: number) => void
+  wordCount: number
+  onWordCount: (v: number) => void
+}) {
+  return (
+    <>
+      <SliderRow
+        label="Dot size"
+        value={sizeScale}
+        min={0.6}
+        max={2}
+        step={0.1}
+        format={(v) => `${v.toFixed(1)}×`}
+        onCommit={onSizeScale}
+      />
+      <SliderRow
+        label="Word size"
+        value={wordScale}
+        min={0.6}
+        max={2}
+        step={0.1}
+        format={(v) => `${v.toFixed(1)}×`}
+        onCommit={onWordScale}
+      />
+      <SliderRow
+        label="Words per cluster"
+        value={wordCount}
+        min={1}
+        max={3}
+        step={1}
+        format={(v) => String(v)}
+        onCommit={onWordCount}
+      />
+    </>
+  )
+}
 
 /**
  * ColourBarLegend — every colour ramp announces its scale: the gradient the
