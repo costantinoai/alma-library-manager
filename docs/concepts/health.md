@@ -168,6 +168,24 @@ are adjustable in **Settings → Data & system → Background operations**. The 
 `ALMA_DISABLE_IDLE_MAINTENANCE=1` is a global kill switch (see
 [Background jobs](../operations/background-jobs.md)).
 
+### Stopping a healer run means stopping it
+
+If you stop an unattended sweep from the Activity panel — either verb — that
+task goes on a **24-hour cooldown**. Neither the hourly healer tick nor the
+startup orphan-resume will schedule it again while the cooldown holds, so the
+job you stopped does not quietly reappear an hour later under a new id.
+
+The card says so out loud: the auto-repair label reads **(paused)** and a
+*Paused by you until …* line appears next to it, with a **Resume** control that
+lifts the hold immediately. Running the task yourself lifts it too — that is the
+natural "I want this again" gesture — and the stamp lapses on its own after 24 h.
+
+Your **Auto-repair** toggle is deliberately left alone. The cooldown is a
+temporary hold, not a change to the policy you configured, so the switch keeps
+showing what you chose and the pause line explains why nothing is running right
+now. A sweep the *app* paused to get out of your way writes no cooldown at all —
+that one resumes by itself on the next idle tick.
+
 ## How fresh is this?
 
 Everything is served from the fingerprint-keyed materialised-view cache (see
@@ -184,5 +202,6 @@ GET  /api/v1/health/operations                                 # ordered stages 
 GET  /api/v1/health/operations/{key}/estimate?scope=&dry_run=&batch_size=  # scope/batch-aware count + ETA
 POST /api/v1/health/operations/{key}/run                       # run now — atomic spec { max_items?, target_ids?, request_batch_size?, scope?, dry_run?, confirmation_token?, plan_fingerprint? }
 POST /api/v1/health/operations/{key}/config                    # { auto_enabled?, auto_daily_cap?, remembered_manual_limit?, request_batch_size? } — invalid → 422
+POST /api/v1/health/operations/{key}/resume                    # lift the 24h cooldown a manual stop left on this task
 GET  /api/v1/health/dimensions/{key}/items                     # affected papers (drilldown, paginated)
 ```

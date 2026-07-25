@@ -293,8 +293,18 @@ Delivery dedup (`alerted_publications`) is keyed per
 | `GET` | `/activity` | Active + recent operations |
 | `GET` | `/activity/{job_id}` | One operation status |
 | `GET` | `/activity/{job_id}/logs` | Per-job logs |
-| `POST` | `/activity/{job_id}/cancel` | Cancel a running job |
-| `DELETE` | `/activity/{job_id}` | Dismiss from history |
+| `POST` | `/activity/{job_id}/stop` | Graceful stop — finish the current batch, save, exit at the next checkpoint |
+| `POST` | `/activity/{job_id}/cancel` | Hard kill — interrupt the worker thread; the in-flight batch may be lost |
+| `DELETE` | `/activity/{job_id}` | Dismiss from history (terminal rows only) |
+
+Both stop verbs close the row outright when its worker is already gone
+(process restart or crash), and both put a **24-hour cooldown** on the
+operation when the run was a *background* one — so the app's own
+schedulers don't undo your stop. The response then carries an
+`automation_paused` block, and
+`POST /health/operations/{key}/resume` lifts the hold. Stopping a run you
+launched yourself changes no policy. Full rules:
+[Background jobs → Who may restart a job](../operations/background-jobs.md#who-may-restart-a-job).
 
 Operation rows that participate in a chained workflow (e.g. Library
 save → metadata hydrate → S2 vector fetch → local SPECTER2 fill)

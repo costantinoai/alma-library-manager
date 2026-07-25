@@ -43,13 +43,21 @@ stateDiagram-v2
     direction LR
     [*] --> queued
     queued --> running: scheduler picks up
+    queued --> cancelled: unscheduled before it starts
     running --> succeeded
     running --> failed
-    running --> cancelled: user cancel
+    running --> cancelling: you press Stop or Kill
+    cancelling --> cancelled: runner exits / thread killed
+    cancelling --> cancelled: reaped (no worker left)
     succeeded --> [*]
     failed --> [*]
     cancelled --> [*]
 ```
+
+`cancelling` is a *transient* state, never a resting one. Every path out
+of it is covered: the runner exits at its checkpoint, the killed thread
+unwinds, or — if no worker is left to do either — the row is closed
+outright. See [Cancellation](#cancellation).
 
 A job carries:
 
@@ -65,25 +73,102 @@ A job carries:
 
 ## Cancellation
 
-For long jobs (lens refresh, deep refresh all, bulk backfill), the
-Activity panel shows a Cancel button. It calls
-`POST /api/v1/activity/{job_id}/cancel`, which sets a cooperative
-flag the job polls between batches.
+Every active row in the Activity panel carries **two stop verbs** with
+different promises:
 
-Cancellation is **cooperative**, not forceful — if a job is in the
-middle of an HTTP call to an external API, it'll finish that call
-before checking the flag. Expect a few seconds of latency on
-cancel.
+| Control | Endpoint | Promise |
+|---|---|---|
+| **■ Square** — graceful stop | `POST /activity/{job_id}/stop` | The worker keeps control: it finishes the batch in flight, commits what it did, and exits at its next cooperative checkpoint. Nothing is lost. |
+| **✕ X** — hard kill | `POST /activity/{job_id}/cancel` | Raises the same flag **and** injects `JobCancelled` into the worker thread via `PyThreadState_SetAsyncExc`, so a pure-Python loop stops at the next bytecode boundary instead of waiting for a checkpoint. The in-flight batch may be lost. |
 
-The scheduler enforces cancellation centrally: once
-`cancel_requested=true` is recorded for a job, later progress updates
-cannot move it back to `running`, and a job that returns after a
-cancel request is finalized as `cancelled` instead of `completed`.
-Activity status/log checkpoints also raise a scheduler cancellation
-exception, so runners that report progress stop at the next checkpoint.
-Individual runners should still check `is_cancellation_requested()`
-inside long inner loops and before expensive external calls so they
-stop before the next Activity write when possible.
+Both act on the **operation**, never on the row: a running job cannot be
+dismissed from the panel, because a hidden job that keeps running is worse
+than a visible one.
+
+The graceful path is **cooperative**. A worker in the middle of an HTTP
+call to an external API finishes that call before checking the flag, so
+expect a few seconds of latency. The hard path narrows that window but
+cannot beat it entirely — a thread blocked in C-level socket I/O still
+only reacts when control returns to Python.
+
+The scheduler enforces cancellation centrally: once `cancel_requested=true`
+is recorded, later progress updates cannot move the job back to `running`,
+and a job that returns after a cancel request is finalized as `cancelled`
+rather than `completed`. Activity status/log checkpoints raise the
+cancellation exception on the hard path (never on the graceful one — that
+would abort the runner from outside and defeat the point). Runners should
+still check `is_cancellation_requested()` inside long inner loops and
+before expensive external calls, so they stop before the next Activity
+write when possible.
+
+### A stop verb always terminates the row
+
+A job's worker lives in the backend process. When that process dies —
+a `uvicorn --reload` restart during development, a crash, a container
+stop — the `operation_status` row survives in SQLite but the thread does
+not. Such a row is **ownerless**: no checkpoint will ever come around,
+and there is no thread to interrupt.
+
+Both stop verbs detect this (`scheduler.has_running_thread`) and close the
+row immediately as `cancelled`, with an error explaining that the worker
+was already gone. Without that check the row parks at `cancelling`
+forever, and — because every click re-stamps `updated_at` — each press
+resets the reaper's staleness clock and makes the ghost *less* likely to
+be cleaned up. (That was a live bug, fixed 2026-07-25.)
+
+### The orphan reaper
+
+`scheduler.reap_orphan_jobs` closes rows that say `queued / scheduled /
+running / cancelling` but have gone quiet for more than **300 s**. It runs
+at startup, on every `find_active_job` lookup, and on its own **5-minute
+interval** — the interval matters, because a job orphaned seconds before a
+restart is not yet 300 s stale at boot and would otherwise never be swept
+in an idle app.
+
+How a row is closed depends on why it stopped:
+
+* `cancel_requested = 0` → **orphan**: message `Orphaned across process
+  restart; auto-cancelled`. This exact string is what
+  `resume_orphaned_sweeps` keys its auto-resume on, so the interrupted
+  backlog continues after the restart.
+* `cancel_requested = 1` → **your stop**: message `Operation cancelled`,
+  flag preserved. Closing it as an orphan would launder a cancel into a
+  resume marker and relaunch the job you just killed.
+
+## Who may restart a job
+
+Three rules, and they follow from one principle: **the app may resume its
+own decisions; it may not overturn yours.**
+
+**1. A manual stop stays stopped.** Stopping a *background* run puts that
+operation on a **24-hour cooldown**
+(`maintenance.<task>.paused_by_user_until`). While it holds, both automatic
+schedulers skip the task: the hourly idle healer
+(`maintenance_repair_periodic`) and the startup orphan-resume
+(`resume_orphaned_sweeps`). The Health card shows *Paused by you until …*
+with a **Resume** control; the cooldown also lifts when you run the task
+by hand, or when the stamp lapses.
+
+The `auto_enabled` toggle is **not** touched — a stop is a "not now", not
+a policy change, so your standing automation preference survives it.
+
+Stopping a run **you** launched (Health → Run now, `trigger_source='user'`)
+aborts only that run. Your automation policy is none of that click's
+business.
+
+**2. An app-side pause resumes on its own.** When a sweep yields to you
+(`paused_for_user` — see the yield rules under
+[Concurrency](#concurrency-rules)) it writes **no** cooldown. The healer
+picks the work back up on its next tick once the prioritised operation is
+done and the app is idle again.
+
+**3. Superseded work is absorbed, not re-run.** Nothing anywhere stores a
+"resume job X" intent. Every resume path recomputes
+`task_pending_count` from live database state and skips the key when
+`find_active_job` reports one already in flight. So if the operation that
+took priority happened to drain the same backlog, the paused work simply
+has nothing left to do and is never scheduled — absorption by
+construction, not by bookkeeping.
 
 ## Concurrency rules
 
@@ -222,9 +307,32 @@ curl http://localhost:8000/api/v1/activity/f3b2a4e8-…
 # its logs
 curl http://localhost:8000/api/v1/activity/f3b2a4e8-…/logs
 
+# stop it gracefully / kill it
+curl -X POST http://localhost:8000/api/v1/activity/f3b2a4e8-…/stop
+curl -X POST http://localhost:8000/api/v1/activity/f3b2a4e8-…/cancel
+
+# lift the cooldown a manual stop left on a maintenance task
+curl -X POST http://localhost:8000/api/v1/health/operations/title_resolution/resume
+
 # scheduler health
 curl http://localhost:8000/api/v1/scheduler
 ```
 
 The same data is in the UI **Activity panel** (Operations + Logs
 tabs).
+
+A stop response carries an `automation_paused` block whenever it applied
+the cooldown, so a caller can say which task went quiet and until when:
+
+```json
+{
+  "success": true,
+  "status": "cancelling",
+  "cancel_requested": true,
+  "automation_paused": {
+    "task_key": "title_resolution",
+    "task_label": "Resolve missing identity",
+    "paused_by_user_until": "2026-07-26T13:47:02.114"
+  }
+}
+```
