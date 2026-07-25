@@ -2,17 +2,23 @@ import { useEffect, useState } from 'react'
 
 import type { Page } from '@/components/layout/AppShell'
 
-const VALID_PAGES: Page[] = [
-  'home',
-  'feed',
-  'discovery',
-  'authors',
-  'library',
-  'insights',
-  'health',
-  'alerts',
-  'settings',
-]
+// Record<Page, true> so tsc fails when a new Page is added but not routed —
+// a missing entry here made "#/map" silently parse as "home" (nav needed two
+// clicks to land on the Map page).
+const PAGE_ROUTES: Record<Page, true> = {
+  home: true,
+  feed: true,
+  discovery: true,
+  map: true,
+  authors: true,
+  library: true,
+  insights: true,
+  health: true,
+  alerts: true,
+  settings: true,
+}
+
+const VALID_PAGES = Object.keys(PAGE_ROUTES) as Page[]
 
 export interface HashRoute {
   page: Page
