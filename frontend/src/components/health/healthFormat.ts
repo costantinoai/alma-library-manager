@@ -71,6 +71,7 @@ export const COST_LABEL: Record<string, string> = {
  */
 export const DRILLDOWN_DIM_KEYS: ReadonlySet<string> = new Set([
   'identity.unresolved',
+  'identity.paper_group_integrity',
   'papers.missing_abstract',
   'papers.missing_doi',
   'papers.missing_url',

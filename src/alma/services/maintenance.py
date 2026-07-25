@@ -1076,7 +1076,10 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "chains are flattened, and child rows lose vectors, graph state, health "
                 "state, and preference sidecars so only the parent paper remains active."
             ),
-            health_dimensions=(),
+            # This op IS the repair for the group-integrity gap. Claiming it moves the
+            # dimension out of Health's "Observed — no automatic repair" section (where
+            # it read as unfixable) onto this card, next to the button that fixes it.
+            health_dimensions=("identity.paper_group_integrity",),
             candidate_path="",
             operation_key="papers.reconcile_groups",
             job_id_prefix="maint_paper_groups",

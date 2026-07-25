@@ -229,6 +229,19 @@ export interface HealthAction {
   kind: 'run_now' | 'auto_toggle' | 'link'
   operation_key: string
   target: string
+  /** Whether the backing maintenance task honours a per-paper target list. When
+   *  false the drilldown must NOT offer "Fix selected" — the run would ignore the
+   *  selection and process a bulk batch instead. */
+  supports_targets?: boolean
+}
+
+/** One explained sub-class of a compound gap (e.g. each paper-group defect kind):
+ *  what is broken, how many, and what the repair does about it. */
+export interface HealthDimensionDefect {
+  key: string
+  label: string
+  count: number
+  explanation: string
 }
 
 /** One canonical health dimension (problem + metric + how to fix). */
@@ -248,6 +261,9 @@ export interface HealthDimension {
   impact_tier?: string | null
   explanation: string
   impact: string
+  /** Explained sub-classes of a compound gap, worst-first. Null for the simple
+   *  single-cause dimensions (a missing abstract is just missing). */
+  breakdown?: HealthDimensionDefect[] | null
   repair_task: string | null
   actions: HealthAction[]
   scope: 'corpus' | 'library' | string
@@ -3087,6 +3103,13 @@ export function acceptAuthorUnidentified(
   return api.post(`/authors/${encodeURIComponent(authorId)}/accept-unidentified`)
 }
 
+/** Hard-delete an author: the author row, their authorship links, and any paper
+ *  left with no other tracked author. Also records a durable "don't suggest this
+ *  person again" signal, so the network rails stop re-discovering them. */
+export function deleteAuthor(authorId: string): Promise<void> {
+  return api.delete<void>(`/authors/${encodeURIComponent(authorId)}`)
+}
+
 export function listAuthorsNeedsAttention(
   limit: number = 50,
 ): Promise<{ total: number; items: AuthorNeedsAttentionRow[] }> {
@@ -4700,4 +4723,46 @@ export function createAuthor(body: {
   name?: string
 }): Promise<Author> {
   return api.post<Author>('/authors', body)
+}
+
+// ── Home ──
+/** The landing brief: what arrived since the last visit, what's waiting, and
+ * one suggestion worth a look. One request powers the whole page. */
+export interface HomeBrief {
+  since: string
+  first_visit: boolean
+  last_seen_at: string | null
+  insight: {
+    /** Recommendation id — what `dismissRecommendation` acts on. */
+    id: string
+    paper_id: string
+    title: string
+    authors?: string | null
+    year?: number | null
+    journal?: string | null
+    url?: string | null
+    doi?: string | null
+    score?: number | null
+    score_breakdown?: unknown
+    lens_id?: string | null
+    lens_name?: string | null
+  } | null
+  arrived: {
+    feed_items: number
+    alerts_fired: number
+    recommendations: number
+  }
+  waiting: {
+    reading: number
+    imports_pending: number
+    monitors_need_attention: number
+  }
+}
+export function getHomeBrief(): Promise<HomeBrief> {
+  return api.get<HomeBrief>('/home/brief')
+}
+/** Stamp this visit so the NEXT brief measures from now. Fired after render —
+ * the GET stays pure, so a refresh never eats the window it just reported. */
+export function markHomeSeen(): Promise<{ last_seen_at: string }> {
+  return api.post<{ last_seen_at: string }>('/home/seen', {})
 }

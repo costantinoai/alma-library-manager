@@ -638,19 +638,66 @@ def absorb_paper_group(
     }
 
 
-def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Return relationship defects used by Health and reconciliation previews."""
-    counts = {
-        "dangling_canonical": 0,
-        "dangling_parent": 0,
-        "self_links": 0,
-        "cycles": 0,
-        "chains": 0,
-        "component_roots": 0,
-        "published_under_preprint": 0,
-        "orphan_components": 0,
-        "subordinate_sidecars": 0,
-    }
+# The relationship defect vocabulary, in the order Health explains it. Health
+# owns the user-facing labels/explanations; this module owns the DETECTION and
+# the key names, so the ledger and the counts can never drift apart.
+PAPER_GROUP_DEFECT_KEYS: tuple[str, ...] = (
+    "dangling_canonical",
+    "dangling_parent",
+    "self_links",
+    "cycles",
+    "chains",
+    "component_roots",
+    "published_under_preprint",
+    "orphan_components",
+    "subordinate_sidecars",
+)
+
+
+def _has_pointer_cycle(paper_id: str, by_id: dict[str, Any]) -> bool:
+    """In-memory equivalent of ``resolve_paper_root_id``'s cycle guard.
+
+    Same walk (canonical first, then parent), but over the rows we already
+    fetched instead of one SELECT per hop — the whole scan is a single query.
+    A dangling hop is NOT a cycle: it ends the walk and is counted by its own
+    ``dangling_*`` defect.
+    """
+    seen: set[str] = set()
+    current = paper_id
+    while current:
+        if current in seen:
+            return True
+        seen.add(current)
+        row = by_id.get(current)
+        if row is None:
+            return False
+        nxt = str(row["canonical_paper_id"] or "").strip() or str(
+            row["parent_paper_id"] or ""
+        ).strip()
+        if not nxt:
+            return False
+        current = nxt
+    return False
+
+
+def paper_group_defect_map(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """Row-level relationship-defect ledger: ``paper_id -> {defect_key: count}``.
+
+    The single detection pass behind BOTH ``relationship_integrity_counts`` (its
+    per-key sum) and the Health drilldown that lists *which* papers are broken —
+    so the card's number and the list it opens can't disagree.
+
+    Every defect counts one occurrence per paper except ``subordinate_sidecars``,
+    which counts the child's leftover sidecar ROWS (a single child can hold many).
+    """
+    ledger: dict[str, dict[str, int]] = {}
+
+    def flag(paper_id: str, defect: str, occurrences: int = 1) -> None:
+        if occurrences <= 0:
+            return
+        entry = ledger.setdefault(paper_id, {})
+        entry[defect] = entry.get(defect, 0) + occurrences
+
     rows = conn.execute(
         "SELECT id, doi, work_type, preprint_source, canonical_paper_id, "
         "parent_paper_id, component_type FROM papers"
@@ -661,29 +708,28 @@ def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
         canonical = str(row["canonical_paper_id"] or "").strip()
         parent = str(row["parent_paper_id"] or "").strip()
         if canonical and canonical not in by_id:
-            counts["dangling_canonical"] += 1
+            flag(pid, "dangling_canonical")
         if parent and parent not in by_id:
-            counts["dangling_parent"] += 1
+            flag(pid, "dangling_parent")
         if pid in {canonical, parent}:
-            counts["self_links"] += 1
+            flag(pid, "self_links")
         target = by_id.get(canonical or parent)
         if target is not None:
             if str(target["canonical_paper_id"] or "").strip() or str(
                 target["parent_paper_id"] or ""
             ).strip():
-                counts["chains"] += 1
+                flag(pid, "chains")
             if is_component_row(target):
-                counts["component_roots"] += 1
+                flag(pid, "component_roots")
             if canonical and not is_preprint_row(row) and is_preprint_row(target):
-                counts["published_under_preprint"] += 1
+                flag(pid, "published_under_preprint")
         if is_component_row(row) and not parent:
-            counts["orphan_components"] += 1
-        try:
-            resolve_paper_root_id(conn, pid)
-        except PaperGroupIntegrityError as exc:
-            if "cycle" in str(exc):
-                counts["cycles"] += 1
+            flag(pid, "orphan_components")
+        if _has_pointer_cycle(pid, by_id):
+            flag(pid, "cycles")
 
+    # Leftover sidecar state on subordinate rows — counted per row so the fix
+    # ("purge N sidecar rows") is measured in the units it actually removes.
     subordinate_ids = [
         str(row["id"])
         for row in rows
@@ -694,15 +740,24 @@ def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
             continue
         placeholders = ",".join("?" for _ in subordinate_ids)
         try:
-            counts["subordinate_sidecars"] += int(
-                conn.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE paper_id IN ({placeholders})",
-                    subordinate_ids,
-                ).fetchone()[0]
-                or 0
-            )
+            sidecar_rows = conn.execute(
+                f"SELECT paper_id, COUNT(*) AS c FROM {table} "
+                f"WHERE paper_id IN ({placeholders}) GROUP BY paper_id",
+                subordinate_ids,
+            ).fetchall()
         except sqlite3.OperationalError:
             continue
+        for sidecar in sidecar_rows:
+            flag(str(sidecar["paper_id"]), "subordinate_sidecars", int(sidecar["c"] or 0))
+    return ledger
+
+
+def relationship_integrity_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Return relationship defects used by Health and reconciliation previews."""
+    counts = {key: 0 for key in PAPER_GROUP_DEFECT_KEYS}
+    for defects in paper_group_defect_map(conn).values():
+        for key, occurrences in defects.items():
+            counts[key] += int(occurrences or 0)
     return counts
 
 

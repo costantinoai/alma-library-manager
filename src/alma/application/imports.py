@@ -75,6 +75,22 @@ def list_resolution_queue(
     return [dict(r) for r in rows]
 
 
+def count_resolution_queue(
+    db: sqlite3.Connection,
+    *,
+    unresolved_only: bool = True,
+) -> int:
+    """How many imported papers are still awaiting review.
+
+    Shares ``_resolution_queue_where`` with the list/ids readers so the Home
+    attention strip can never disagree with the Imports panel it links to.
+    """
+    row = db.execute(
+        f"SELECT COUNT(*) FROM papers WHERE {_resolution_queue_where(unresolved_only)}"
+    ).fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
 def resolution_queue_ids(
     db: sqlite3.Connection,
     *,

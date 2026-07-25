@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Building2, Check, ExternalLink, GitMerge, Loader2, RefreshCw, Wrench } from 'lucide-react'
 
 import {
   acceptAuthorUnidentified,
@@ -34,6 +34,7 @@ import { LoadingState } from '@/components/ui/LoadingState'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { SubPanel } from '@/components/ui/sub-panel'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
+import { DeleteAuthorButton } from '@/components/authors/DeleteAuthorButton'
 import { resolvedBadgeSpec } from '@/components/authors/authorResolvedBadgeSpec'
 import type { AuthorAttentionRouter } from '@/components/authors/useAuthorAttentionRouter'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -93,9 +94,33 @@ export function AuthorsNeedsAttentionSection({
     )
   }
 
+  // "Fix all" only claims the rows whose fix needs no decision from the user —
+  // the button names that number so it can't imply it clears the whole list.
+  const autoFixable = router.countAutoFixable(rows)
+
   return (
     <section className="space-y-2">
-      <SectionHeader total={rows.length} />
+      <SectionHeader
+        total={rows.length}
+        action={
+          autoFixable > 0 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={router.isFixingAll}
+              onClick={() => router.fixAll(rows)}
+              title="Re-run the automatic resolver / monitor refresh / backfill for every row that has one. Rows needing your decision are left alone."
+            >
+              {router.isFixingAll ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wrench className="h-3.5 w-3.5" />
+              )}
+              Fix all ({autoFixable})
+            </Button>
+          ) : null
+        }
+      />
       <ul className="space-y-2">
         {rows.map((row) => (
           <NeedsAttentionRow
@@ -112,7 +137,7 @@ export function AuthorsNeedsAttentionSection({
   )
 }
 
-function SectionHeader({ total }: { total: number | null }) {
+function SectionHeader({ total, action }: { total: number | null; action?: ReactNode }) {
   return (
     <header className="flex items-center gap-2">
       <AlertTriangle className="h-4 w-4 text-warning-600" />
@@ -120,6 +145,7 @@ function SectionHeader({ total }: { total: number | null }) {
       <span className="text-xs text-slate-500">
         {total == null ? 'Checking…' : total === 0 ? 'All clear' : `${total} author${total === 1 ? '' : 's'}`}
       </span>
+      {action ? <div className="ml-auto">{action}</div> : null}
     </header>
   )
 }
@@ -192,6 +218,13 @@ function NeedsAttentionRow({
             {actionIcon}
             {row.suggested_action.label}
           </Button>
+          {/* Last resort, available on every row (some actions fire a job and
+              open no dialog): drop the author from the corpus entirely. */}
+          <DeleteAuthorButton
+            authorId={row.author_id}
+            authorName={row.author_name}
+            disabled={isRefreshing}
+          />
         </div>
       </div>
       {/* Warning bubble row, lower-right — same pattern as the Library
@@ -597,15 +630,28 @@ export function AddIdentifierDialog({
           </div>
         </div>
         <DialogFooter className="sm:justify-between">
-          <Button
-            variant="ghost"
-            className="text-slate-500 hover:text-slate-700"
-            onClick={() => acceptMutation.mutate()}
-            disabled={busy}
-          >
-            {acceptMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-            Can&apos;t identify
-          </Button>
+          {/* The two terminal exits, weakest first: keep the author but stop the
+              nagging, or remove them from the corpus altogether. */}
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              className="text-slate-500 hover:text-slate-700"
+              onClick={() => acceptMutation.mutate()}
+              disabled={busy}
+            >
+              {acceptMutation.isPending && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+              Can&apos;t identify
+            </Button>
+            {row ? (
+              <DeleteAuthorButton
+                authorId={row.author_id}
+                authorName={row.author_name}
+                variant="labelled"
+                disabled={busy}
+                onDeleted={onClose}
+              />
+            ) : null}
+          </div>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose} disabled={busy}>
               Cancel

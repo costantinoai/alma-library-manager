@@ -7,6 +7,7 @@ import { PageReveal } from '@/components/ui/reveal'
 import { OnboardingGate } from '@/components/onboarding'
 import { parseHashRoute, navigateTo } from '@/lib/hashRoute'
 
+const HomePage = lazy(() => import('@/pages/HomePage').then((m) => ({ default: m.HomePage })))
 const FeedPage = lazy(() => import('@/pages/FeedPage').then((m) => ({ default: m.FeedPage })))
 const DiscoveryPage = lazy(() => import('@/pages/DiscoveryPage').then((m) => ({ default: m.DiscoveryPage })))
 const AuthorsPage = lazy(() => import('@/pages/AuthorsPage').then((m) => ({ default: m.AuthorsPage })))
@@ -69,6 +70,8 @@ function AppContent() {
 
   const renderPage = () => {
     switch (currentPage) {
+      case 'home':
+        return <HomePage />
       case 'feed':
         return <FeedPage />
       case 'discovery':
@@ -86,7 +89,7 @@ function AppContent() {
       case 'settings':
         return <SettingsPage />
       default:
-        return <FeedPage />
+        return <HomePage />
     }
   }
 

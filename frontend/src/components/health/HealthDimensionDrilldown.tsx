@@ -158,9 +158,16 @@ export function HealthDimensionDrilldown({
     [itemsQuery.data],
   )
 
-  // The maintenance task a "Fix" should run for this dimension (first run_now action).
-  const fixActionKey = dim?.actions.find((a) => a.kind === 'run_now')?.operation_key ?? null
+  // The maintenance task a "Fix selected" should run for this dimension: the first
+  // run_now action whose task actually HONOURS a target list. A task with
+  // supports_targets=false ignores the ids and runs a bulk batch, so offering
+  // "Fix N selected" for it would be a lie — those dims get the header's
+  // whole-dimension run only.
+  const fixActionKey =
+    dim?.actions.find((a) => a.kind === 'run_now' && a.supports_targets)?.operation_key ?? null
   const runActions = dim?.actions.filter((a) => a.kind === 'run_now') ?? []
+  // Explained defect classes for a compound gap (empty for single-cause dims).
+  const breakdown = dim?.breakdown ?? []
 
   // Library keys included: edits/removals here change Library membership, so
   // the Library page must not keep serving its pre-edit cache.
@@ -311,6 +318,36 @@ export function HealthDimensionDrilldown({
             ) : null}
 
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-5 py-4">
+              {/* Compound gaps (paper-group integrity) arrive pre-split into their
+                  defect classes: each one says what is broken, how many, and what
+                  the repair above does about it — so the modal explains the problem
+                  before listing the papers that carry it. */}
+              {breakdown.length > 0 ? (
+                <div className="space-y-2 pb-2">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                    What&apos;s broken — and what the repair does
+                  </p>
+                  {breakdown.map((defect) => (
+                    <div
+                      key={defect.key}
+                      className="rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-sm"
+                    >
+                      <div className="flex items-baseline justify-between gap-3">
+                        <p className="text-sm font-medium text-alma-800">{defect.label}</p>
+                        <span className="shrink-0 text-xs tabular-nums text-slate-600">
+                          {defect.count.toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                        {defect.explanation}
+                      </p>
+                    </div>
+                  ))}
+                  <p className="pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                    Affected papers
+                  </p>
+                </div>
+              ) : null}
               {itemsQuery.isLoading ? (
                 <div className="flex items-center gap-2 text-sm text-slate-500">
                   <Loader2 className="h-4 w-4 animate-spin" /> Loading affected papers…

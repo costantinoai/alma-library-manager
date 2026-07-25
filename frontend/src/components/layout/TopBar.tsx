@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import type { Page } from './Sidebar'
 
 const pageTitles: Record<Page, string> = {
+  home: 'Home',
   feed: 'Feed',
   discovery: 'Discovery',
   authors: 'Authors',

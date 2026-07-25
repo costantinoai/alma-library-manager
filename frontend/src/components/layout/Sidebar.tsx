@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import {
+  House,
   Newspaper,
   Users,
   Bell,
@@ -19,6 +20,7 @@ import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { getNavBadgeCount } from './navBadgeCounts'
 
 export type Page =
+  | 'home'
   | 'feed'
   | 'discovery'
   | 'authors'
@@ -43,6 +45,8 @@ const navGroups: NavGroup[] = [
   {
     label: 'Explore',
     items: [
+      // Home is the landing page: what arrived, what needs you.
+      { id: 'home', label: 'Home', icon: House },
       { id: 'feed', label: 'Feed', icon: Newspaper },
       { id: 'discovery', label: 'Discovery', icon: Sparkles },
     ],

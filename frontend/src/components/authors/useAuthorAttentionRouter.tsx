@@ -19,8 +19,34 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 export interface AuthorAttentionRouter {
   openForRow: (row: AuthorNeedsAttentionRow) => void
   isRefreshingFor: (authorId: string) => boolean
+  /** Queue the automatic fix for every row that has one (see AUTO_FIX_CODES). */
+  fixAll: (rows: AuthorNeedsAttentionRow[]) => void
+  isFixingAll: boolean
+  /** How many of these rows "Fix all" can actually act on — 0 hides the button. */
+  countAutoFixable: (rows: AuthorNeedsAttentionRow[]) => number
   dialogs: ReactNode
 }
+
+/**
+ * Suggested-action codes whose fix needs no human judgement, so "Fix all" may
+ * fire them unattended:
+ *   - `refresh` / `retry_refresh` / `resolve_now` → re-run the identity+profile
+ *     resolver for that author;
+ *   - `refresh_monitor` → re-run the author's feed monitor;
+ *   - `backfill_author` → queue the historical works backfill.
+ *
+ * Everything else is deliberately excluded: `manual_search` means the automatic
+ * search already returned zero hits (re-running it just fails again), and
+ * `review_candidates` / `review_profiles` / `resolve_conflict` /
+ * `pick_affiliation` are decisions only the user can make.
+ */
+const AUTO_FIX_CODES = new Set([
+  'refresh',
+  'retry_refresh',
+  'resolve_now',
+  'refresh_monitor',
+  'backfill_author',
+])
 
 interface UseAuthorAttentionRouterOptions {
   authorsById?: Map<string, Author>
@@ -36,6 +62,7 @@ export function useAuthorAttentionRouter(
   const [identifierRow, setIdentifierRow] = useState<AuthorNeedsAttentionRow | null>(null)
   const [conflictRow, setConflictRow] = useState<AuthorNeedsAttentionRow | null>(null)
   const [affiliationRow, setAffiliationRow] = useState<AuthorNeedsAttentionRow | null>(null)
+  const [fixingAll, setFixingAll] = useState(false)
 
   const refreshMutation = useMutation({
     mutationFn: (authorId: string) =>
@@ -124,6 +151,77 @@ export function useAuthorAttentionRouter(
     refreshMutation.mutate(row.author_id)
   }
 
+  /**
+   * "Fix all": queue the automatic fix for every auto-fixable row, in sequence
+   * so N authors don't hammer the resolver at once. Rows needing a human
+   * decision are counted and reported rather than silently skipped, and a
+   * failing row doesn't abort the rest — the toast states queued / failed /
+   * manual so the result is never overstated.
+   */
+  const fixAll = async (rows: AuthorNeedsAttentionRow[]) => {
+    if (fixingAll) return
+    const autoRows = rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code))
+    const manualCount = rows.length - autoRows.length
+    if (autoRows.length === 0) {
+      toast({
+        title: 'Nothing to auto-fix',
+        description: `All ${rows.length} row${rows.length === 1 ? '' : 's'} need a manual decision.`,
+      })
+      return
+    }
+    // One job per target, not per row: an author can hold several attention rows.
+    const identityIds = new Set<string>()
+    const monitorIds = new Set<string>()
+    const backfillIds = new Set<string>()
+    for (const row of autoRows) {
+      const code = row.suggested_action.code
+      if (code === 'refresh_monitor') {
+        if (row.monitor_id) monitorIds.add(row.monitor_id)
+      } else if (code === 'backfill_author') {
+        backfillIds.add(row.author_id)
+      } else {
+        identityIds.add(row.author_id)
+      }
+    }
+
+    setFixingAll(true)
+    let queued = 0
+    let failed = 0
+    const run = async (task: Promise<unknown>) => {
+      try {
+        await task
+        queued += 1
+      } catch {
+        failed += 1
+      }
+    }
+    try {
+      for (const id of identityIds) {
+        await run(
+          api.post(`/authors/${encodeURIComponent(id)}/identity-profile-refresh`),
+        )
+      }
+      for (const id of monitorIds) await run(refreshFeedMonitor(id))
+      for (const id of backfillIds) await run(queueAuthorHistoryBackfill(id))
+    } finally {
+      setFixingAll(false)
+      void invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['authors-needs-attention'],
+        ['activity-operations'],
+        ['feed-monitors'],
+        ['insights-diag'],
+      )
+    }
+
+    const parts = [`${queued} fix${queued === 1 ? '' : 'es'} queued`]
+    if (failed) parts.push(`${failed} failed to queue`)
+    if (manualCount) parts.push(`${manualCount} need a manual decision`)
+    if (failed) errorToast('Fix all finished with errors', parts.join(' · '))
+    else toast({ title: 'Fix all queued', description: `${parts.join(' · ')} — track them in Activity.` })
+  }
+
   const dialogs = (
     <>
       <ReviewProfilesDialog row={reviewRow} onClose={() => setReviewRow(null)} />
@@ -138,6 +236,10 @@ export function useAuthorAttentionRouter(
     isRefreshingFor: (authorId) =>
       (refreshMutation.isPending && refreshMutation.variables === authorId) ||
       (backfillMutation.isPending && backfillMutation.variables === authorId),
+    fixAll: (rows) => void fixAll(rows),
+    isFixingAll: fixingAll,
+    countAutoFixable: (rows) =>
+      rows.filter((r) => AUTO_FIX_CODES.has(r.suggested_action.code)).length,
     dialogs,
   }
 }

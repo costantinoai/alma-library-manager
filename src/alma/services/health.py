@@ -30,11 +30,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 from alma.application import materialized_views as mv
+from alma.core.paper_groups import PAPER_GROUP_DEFECT_KEYS
 from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
@@ -411,6 +412,116 @@ _REPAIR_ACTIONS: dict[str, list[dict[str, str]]] = {
 }
 
 
+def _task_supports_targets(operation_key: str) -> bool:
+    """Does this maintenance task honour a per-paper target list?
+
+    Read straight off the maintenance registry (the owner of the flag) instead
+    of duplicating it here — a task that flips ``supports_targets`` changes the
+    UI's offered actions with no second edit. Unknown key → False (never claim a
+    targeting capability we can't prove).
+    """
+    try:
+        from alma.services.maintenance import REGISTRY
+
+        task = REGISTRY.get(operation_key)
+    except Exception:  # registry unavailable — stay conservative, not crash health
+        logger.debug("supports_targets lookup failed for %r", operation_key, exc_info=True)
+        return False
+    return bool(getattr(task, "supports_targets", False)) if task else False
+
+
+# --------------------------------------------------------------------------
+# Paper-group relationship defects — the user-facing half of the vocabulary
+# detected by ``alma.core.paper_groups.paper_group_defect_map``. Keys mirror
+# ``PAPER_GROUP_DEFECT_KEYS`` exactly; each entry is
+# (breakdown title, per-paper chip label, what it means + what the repair does).
+# This is the ONE place a defect is explained — the dimension breakdown and the
+# drilldown row chips both read it, so they can never describe it differently.
+# --------------------------------------------------------------------------
+
+_PAPER_GROUP_DEFECT_META: dict[str, tuple[str, str, str]] = {
+    "dangling_canonical": (
+        "Dangling canonical pointer",
+        "Canonical target missing",
+        "The paper is filed under a canonical paper that no longer exists, so it is "
+        "invisible everywhere the group's root is used. Reconciliation clears the "
+        "pointer and restores it as a standalone paper.",
+    ),
+    "dangling_parent": (
+        "Dangling parent pointer",
+        "Parent missing",
+        "A component row (chapter, dataset, erratum) points at a parent paper that is "
+        "no longer in the corpus. Reconciliation clears the link and purges the "
+        "orphan's leftover state.",
+    ),
+    "self_links": (
+        "Self-referencing pointer",
+        "Points at itself",
+        "The paper is its own canonical/parent, which makes root resolution "
+        "meaningless. Reconciliation clears the self-reference.",
+    ),
+    "cycles": (
+        "Pointer cycle",
+        "Pointer cycle",
+        "Two or more papers point at each other, so no root can ever be resolved and "
+        "every operation on the group fails. Reconciliation flattens the cycle onto a "
+        "single root.",
+    ),
+    "chains": (
+        "Chained pointer",
+        "Chained pointer",
+        "The paper points at another paper that itself points elsewhere (A → B → C). "
+        "Group membership then depends on how far a reader walks. Reconciliation "
+        "flattens the chain so every member points straight at the final root.",
+    ),
+    "component_roots": (
+        "Filed under a component",
+        "Filed under a component",
+        "The paper is filed under a component (a chapter, dataset or figure) instead "
+        "of a real paper. Reconciliation re-parents it onto the component's own "
+        "parent paper.",
+    ),
+    "published_under_preprint": (
+        "Published version filed under a preprint",
+        "Published under preprint",
+        "A published journal paper sits under its own preprint, so the preprint wins "
+        "in Library, Discovery and the graphs. Reconciliation promotes the published "
+        "version as the group root.",
+    ),
+    "orphan_components": (
+        "Component with no parent",
+        "Component with no parent",
+        "A component row has no parent paper at all, so it floats in the corpus as a "
+        "fragment. Reconciliation links it to its parent, or purges its state when "
+        "the parent isn't in the corpus.",
+    ),
+    "subordinate_sidecars": (
+        "Child rows still carrying sidecar state",
+        "Leftover sidecar rows",
+        "Child rows still own vectors, graph caches, enrichment status or preference "
+        "rows that belong to the parent, so they keep affecting counts, graphs and "
+        "recommendations. Reconciliation purges the child's sidecar rows. (Counted in "
+        "sidecar rows, not papers — one child can hold several.)",
+    ),
+}
+
+
+def paper_group_breakdown(counts: Mapping[str, int]) -> list[dict[str, Any]]:
+    """Explained, non-zero defect classes for the paper-group integrity dimension.
+
+    Shape: ``[{key, label, count, explanation}]`` in the canonical defect order —
+    the "actionable items" the Health drilldown lists above the affected papers.
+    """
+    out: list[dict[str, Any]] = []
+    for key in PAPER_GROUP_DEFECT_KEYS:
+        value = int(counts.get(key) or 0)
+        if value <= 0:
+            continue
+        label, _chip, explanation = _PAPER_GROUP_DEFECT_META[key]
+        out.append({"key": key, "label": label, "count": value, "explanation": explanation})
+    return out
+
+
 def _dimension(
     *,
     key: str,
@@ -421,6 +532,7 @@ def _dimension(
     severity: Severity,
     explanation: str,
     impact: str = "",
+    breakdown: list[dict[str, Any]] | None = None,
     repair_task: str | None = None,
     coverage_pct: float | None = None,
     scope: str = "corpus",
@@ -444,8 +556,19 @@ def _dimension(
     ``severity_reason`` / ``impact_tier`` (H-7): the one-line justification and
     the impact tier behind the severity, so the UI can explain WHY a row is the
     color it is rather than presenting an opaque verdict.
+
+    ``breakdown`` (optional): the explained sub-classes of a compound gap —
+    ``[{key, label, count, explanation}]``. The drilldown renders them as the
+    "what exactly is broken, and what does the fix do" list above the papers.
     """
-    actions = list(_REPAIR_ACTIONS.get(repair_task or "", []))
+    actions = [
+        # Truthful UI: stamp each action with whether its maintenance task can
+        # actually run on a SELECTION of papers. Without this the drilldown offers
+        # "Fix N selected" for tasks that ignore target ids and silently run a
+        # bulk batch instead.
+        {**action, "supports_targets": _task_supports_targets(action.get("operation_key", ""))}
+        for action in _REPAIR_ACTIONS.get(repair_task or "", [])
+    ]
     if extra_actions:
         actions = actions + extra_actions
     return {
@@ -460,6 +583,7 @@ def _dimension(
         "impact_tier": impact_tier,
         "explanation": explanation,
         "impact": impact,
+        "breakdown": breakdown,
         "repair_task": repair_task,
         "actions": actions,
         "scope": scope,
@@ -792,11 +916,6 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
         # Integrity tier: a single dangling pointer silently hides a paper, so any
         # occurrence warns (≥2% of the corpus escalates to critical).
         group_sev, _, group_reason = _assess_gap(group_defects, papers_total, impact="integrity")
-        detail = ", ".join(
-            f"{key.replace('_', ' ')}: {value}"
-            for key, value in sorted(group_integrity.items())
-            if int(value or 0) > 0
-        )
         dims.append(
             _dimension(
                 key="identity.paper_group_integrity",
@@ -808,12 +927,13 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 severity_reason=group_reason,
                 impact_tier="integrity",
                 explanation=(
-                    "Some paper-group pointers are inconsistent: "
-                    f"{detail}. Run reconciliation to promote published papers over "
-                    "preprints, flatten chains, and purge child sidecars."
+                    f"{group_defects} paper-group pointers are inconsistent. Each defect below "
+                    "says what is broken and what the repair does about it; the list underneath "
+                    "names the papers carrying them."
                 ),
                 impact="Broken paper-group pointers can hide papers or let child rows affect graphs, counts, and preferences.",
                 repair_task="paper_group_reconcile",
+                breakdown=paper_group_breakdown(group_integrity),
             )
         )
 
@@ -1398,6 +1518,9 @@ _DIMENSION_PREDICATES: dict[str, str] = {
 # Short, dimension-specific "what's wrong with this row" label.
 _DIMENSION_DETAIL: dict[str, str] = {
     "identity.unresolved": "No usable DOI / S2 identity",
+    # Fallback only — each row's real detail names its own defects
+    # (see `_paper_group_integrity_items`).
+    "identity.paper_group_integrity": "Broken group pointer",
     "papers.missing_abstract": "Abstract empty",
     "papers.missing_doi": "No DOI",
     "papers.missing_url": "No URL",
@@ -1417,12 +1540,21 @@ _ITEM_COLUMNS = (
 )
 
 
-def _project_dimension_rows(key: str, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
-    """Shape drilldown rows into the uniform item dict (shared by every dim path)."""
+def _project_dimension_rows(
+    key: str,
+    rows: list[sqlite3.Row],
+    *,
+    detail_by_id: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Shape drilldown rows into the uniform item dict (shared by every dim path).
+
+    ``detail_by_id`` overrides the dimension's single fixed detail label for
+    dimensions where each row is broken in its OWN way (paper-group integrity).
+    """
     out: list[dict[str, Any]] = []
     base_detail = _DIMENSION_DETAIL.get(key, "")
     for r in rows:
-        detail = base_detail
+        detail = (detail_by_id or {}).get(str(r["paper_id"]), base_detail)
         # `extra` only exists on the SQL-built rows; the key guard short-circuits
         # before touching it for paths (e.g. identity) whose rows omit the column.
         if key == "ledger.retry_waiting" and r["extra"]:
@@ -1442,6 +1574,47 @@ def _project_dimension_rows(key: str, rows: list[sqlite3.Row]) -> list[dict[str,
             }
         )
     return out
+
+
+def _paper_group_integrity_items(
+    conn: sqlite3.Connection, *, limit: int, offset: int
+) -> list[dict[str, Any]]:
+    """Papers carrying paper-group relationship defects, worst-first.
+
+    Reads the SAME row-level ledger the dimension's count sums
+    (``paper_group_defect_map``), so the list and the headline number describe
+    one population — the count is in DEFECTS, the list is in PAPERS, and each
+    row names the defects it carries.
+    """
+    from alma.core.paper_groups import paper_group_defect_map
+
+    ledger = paper_group_defect_map(conn)
+    if not ledger:
+        return []
+    # Worst-first: most defect occurrences, then id for a stable page boundary.
+    ordered = sorted(ledger, key=lambda pid: (-sum(ledger[pid].values()), pid))
+    page_ids = ordered[offset : offset + limit]
+    if not page_ids:
+        return []
+    placeholders = ",".join("?" for _ in page_ids)
+    rows = conn.execute(
+        f"SELECT {_ITEM_COLUMNS}, '' AS extra FROM papers p WHERE p.id IN ({placeholders})",
+        page_ids,
+    ).fetchall()
+    by_id = {str(r["paper_id"]): r for r in rows}
+    detail_by_id = {
+        pid: " · ".join(
+            _PAPER_GROUP_DEFECT_META[defect][1]
+            for defect in PAPER_GROUP_DEFECT_KEYS
+            if ledger[pid].get(defect)
+        )
+        for pid in page_ids
+    }
+    # Keep the worst-first page order (the IN-clause SELECT returns table order).
+    ordered_rows = [by_id[pid] for pid in page_ids if pid in by_id]
+    return _project_dimension_rows(
+        "identity.paper_group_integrity", ordered_rows, detail_by_id=detail_by_id
+    )
 
 
 def dimension_items(
@@ -1464,6 +1637,13 @@ def dimension_items(
             logger.error("dimension_items drilldown %r failed: %s", key, exc, exc_info=True)
             return []
         return _project_dimension_rows(key, rows)
+
+    if key == "identity.paper_group_integrity":
+        try:
+            return _paper_group_integrity_items(conn, limit=limit, offset=offset)
+        except sqlite3.OperationalError as exc:
+            logger.error("dimension_items drilldown %r failed: %s", key, exc, exc_info=True)
+            return []
 
     pred = _DIMENSION_PREDICATES.get(key)
     if pred is not None:
@@ -1567,6 +1747,7 @@ def dimension_items_page(
 # Valid drilldown keys = simple predicates + the special-cased dims.
 DIMENSION_ITEM_KEYS: frozenset[str] = frozenset(_DIMENSION_PREDICATES) | {
     "identity.unresolved",
+    "identity.paper_group_integrity",
     "embeddings.s2_vector_missing",
     "embeddings.coverage",
     "ledger.retry_waiting",

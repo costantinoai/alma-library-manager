@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { Page } from '@/components/layout/AppShell'
 
 const VALID_PAGES: Page[] = [
+  'home',
   'feed',
   'discovery',
   'authors',
@@ -24,8 +25,9 @@ export function parseHashRoute(rawHash?: string): HashRoute {
   const withoutHash = raw.startsWith('#') ? raw.slice(1) : raw
   const normalized = withoutHash.startsWith('/') ? withoutHash.slice(1) : withoutHash
   const [pagePart, queryPart = ''] = normalized.split('?', 2)
-  const pageCandidate = pagePart || 'feed'
-  const page = VALID_PAGES.includes(pageCandidate as Page) ? (pageCandidate as Page) : 'feed'
+  // An empty hash lands on Home (task 47 Phase 6); Feed stays one click away.
+  const pageCandidate = pagePart || 'home'
+  const page = VALID_PAGES.includes(pageCandidate as Page) ? (pageCandidate as Page) : 'home'
   return {
     page,
     params: new URLSearchParams(queryPart),

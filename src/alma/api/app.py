@@ -41,6 +41,7 @@ from alma.api.routes.logs import install_log_handler
 from alma.api.routes.logs import router as logs_router
 from alma.api.routes.onboarding import router as onboarding_router
 from alma.api.routes.operations import router as operations_router
+from alma.api.routes.home import router as home_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
@@ -503,6 +504,7 @@ app.include_router(feedback_router, prefix="/api/v1/feedback", tags=["feedback"]
 app.include_router(search_router, prefix="/api/v1", tags=["search"])
 app.include_router(backup_router, prefix="/api/v1", tags=["backup"])
 app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
+app.include_router(home_router, prefix="/api/v1/home", tags=["home"])
 app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
 app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
