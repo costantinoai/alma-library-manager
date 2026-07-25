@@ -35,6 +35,7 @@ import { invalidateQueries } from '@/lib/queryHelpers'
 import { formatDate, formatRelativeTime } from '@/lib/utils'
 import { type CollectionItemData, PRESET_COLORS } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
+import { CollectionIntelligenceCard } from './CollectionIntelligenceCard'
 import { ColorPicker } from './ColorPicker'
 
 interface CollectionsTabProps {
@@ -503,6 +504,11 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
         onConfirm={() => deleteId && deleteMutation.mutate(deleteId)}
         isPending={deleteMutation.isPending}
       />
+
+      {/* Per-collection analytics, beside the collections they describe (this
+          used to sit a page away in Reports). Generate-on-demand: it's an
+          expensive aggregate and most visits here are about editing. */}
+      {collections.length > 0 && <CollectionIntelligenceCard />}
     </div>
   )
 }

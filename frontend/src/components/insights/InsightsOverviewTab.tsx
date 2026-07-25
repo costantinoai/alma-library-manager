@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import {
   BarChart3,
   BookOpen,
-  Building2,
   Database,
   FolderOpen,
   Globe,
@@ -49,7 +48,7 @@ import {
 } from '@/components/insights/chartSeries'
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
-import { formatNumber, truncate } from '@/lib/utils'
+import { cn, formatNumber, truncate } from '@/lib/utils'
 
 interface Palette {
   blue: string
@@ -134,6 +133,26 @@ export function InsightsOverviewTab({
     const v = value == null ? '' : String(value)
     if (v) setDrilldown({ filterType, filterValue: v, scope: 'library', title: label })
   }
+
+  // Provenance: countries and institutions are the same question at two zoom
+  // levels, so one switch drives one chart.
+  const [provenanceMode, setProvenanceMode] = useState<'countries' | 'institutions'>('countries')
+  const provenanceRows = useMemo(() => {
+    if (provenanceMode === 'countries') {
+      return countries.map((c) => ({
+        label: c.country_code,
+        fullLabel: c.country_code,
+        drillValue: c.country_code,
+        count: c.count,
+      }))
+    }
+    return top_institutions.map((i) => ({
+      label: truncate(i.institution_name, 30),
+      fullLabel: `${i.institution_name} (${i.country_code})`,
+      drillValue: i.institution_name,
+      count: i.count,
+    }))
+  }, [provenanceMode, countries, top_institutions])
 
   // Cluster vocabulary is the Overview's topic source (47-E). `top_topics`
   // (the OpenAlex taxonomy) stays in the payload for paper drilldown rows.
@@ -297,26 +316,69 @@ export function InsightsOverviewTab({
 
       {/* ── Geography + Topics ── */}
       <div className="grid gap-6 lg:grid-cols-2">
+        {/* Provenance — where the work came from. Countries and institutions
+            answer the SAME question at two zoom levels, so they share one card
+            and a switch instead of two charts competing side by side. */}
         <Card>
-          <SectionHeader icon={Globe} accent="text-alma-folio" title="Geographic Distribution" />
+          <ActionCardHeader
+            icon={Globe}
+            accent="text-alma-folio"
+            title="Provenance"
+            action={
+              <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
+                {(['countries', 'institutions'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setProvenanceMode(mode)}
+                    className={cn(
+                      'px-2 py-1 text-xs font-medium capitalize transition-colors',
+                      provenanceMode === mode
+                        ? 'bg-accent-soft text-alma-folio'
+                        : 'bg-surface-2 text-slate-600 hover:bg-surface-3',
+                    )}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            }
+          />
           <CardContent>
-            {countries.length === 0 ? (
-              <EmptyChart message="No institution data available" />
+            {provenanceRows.length === 0 ? (
+              <EmptyChart message={`No ${provenanceMode} data available`} />
             ) : (
-              <ResponsiveContainer width="100%" height={Math.max(250, countries.length * 28)}>
-                <BarChart data={countries} layout="vertical" margin={{ left: 10 }}>
+              <ResponsiveContainer width="100%" height={Math.max(250, provenanceRows.length * 28)}>
+                <BarChart data={provenanceRows} layout="vertical" margin={{ left: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <YAxis dataKey="country_code" type="category" width={40} tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <Tooltip {...tooltipStyle} />
+                  <YAxis
+                    dataKey="label"
+                    type="category"
+                    width={provenanceMode === 'countries' ? 48 : 200}
+                    tick={<SingleLineTick />}
+                    stroke="#D9CBAF"
+                  />
+                  <Tooltip
+                    {...tooltipStyle}
+                    formatter={(value: number) => [value, 'Publications']}
+                    labelFormatter={(label: string) => {
+                      const row = provenanceRows.find((r) => r.label === label)
+                      return row?.fullLabel ?? label
+                    }}
+                  />
                   <Bar
                     dataKey="count"
                     name="Publications"
                     fill={colors.green}
                     radius={[0, 2, 2, 0]}
                     cursor="pointer"
-                    onClick={(d: { country_code?: string }) =>
-                      openDrilldown('country', d?.country_code, `Papers from ${d?.country_code}`)
+                    onClick={(d: { drillValue?: string; fullLabel?: string }) =>
+                      openDrilldown(
+                        provenanceMode === 'countries' ? 'country' : 'institution',
+                        d?.drillValue,
+                        `Papers from ${d?.fullLabel ?? d?.drillValue}`,
+                      )
                     }
                   />
                 </BarChart>
@@ -466,50 +528,6 @@ export function InsightsOverviewTab({
           </CardContent>
         </Card>
 
-        <Card>
-          <SectionHeader icon={Building2} accent="text-alma-folio" title="Top Institutions" />
-          <CardContent>
-            {top_institutions.length === 0 ? (
-              <EmptyChart message="No institution data available" />
-            ) : (
-              <ResponsiveContainer width="100%" height={Math.max(250, top_institutions.length * 28)}>
-                <BarChart
-                  data={top_institutions.map((i) => ({
-                    ...i,
-                    label: truncate(i.institution_name, 30),
-                    drillValue: i.institution_name,
-                  }))}
-                  layout="vertical"
-                  margin={{ left: 10 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                  <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                  <YAxis dataKey="label" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
-                  <Tooltip
-                    {...tooltipStyle}
-                    formatter={(value: number) => [value, 'Publications']}
-                    labelFormatter={(label: string) => {
-                      const inst = top_institutions.find(
-                        (i) => truncate(i.institution_name, 30) === label,
-                      )
-                      return inst ? `${inst.institution_name} (${inst.country_code})` : label
-                    }}
-                  />
-                  <Bar
-                    dataKey="count"
-                    name="Publications"
-                    fill={colors.green}
-                    radius={[0, 2, 2, 0]}
-                    cursor="pointer"
-                    onClick={(d: { drillValue?: string }) =>
-                      openDrilldown('institution', d?.drillValue, `Papers from: ${d?.drillValue}`)
-                    }
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
       </div>
 
       {/* ── Recommendations + Library ── */}

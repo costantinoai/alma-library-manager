@@ -12,7 +12,6 @@ import {
   type InsightsData,
   type AIStatus,
   getWeeklyBrief,
-  getCollectionIntelligence,
   getTopicDrift,
   getSignalImpact,
 } from '@/api/client'
@@ -55,12 +54,6 @@ export function AnalyticsTab() {
     queryFn: getWeeklyBrief,
     staleTime: 120_000,
     enabled: activeReport === 'weekly',
-  })
-  const { data: collectionIntel, isLoading: collectionLoading } = useQuery({
-    queryKey: ['report-collections'],
-    queryFn: getCollectionIntelligence,
-    staleTime: 120_000,
-    enabled: activeReport === 'collections',
   })
   const { data: topicDriftData, isLoading: driftLoading } = useQuery({
     queryKey: ['report-drift'],
@@ -121,8 +114,6 @@ export function AnalyticsTab() {
           <InsightsReportsTab
             weeklyBrief={weeklyBrief}
             weeklyLoading={weeklyLoading}
-            collectionIntel={collectionIntel}
-            collectionLoading={collectionLoading}
             topicDriftData={topicDriftData}
             driftLoading={driftLoading}
             signalImpactData={signalImpactData}

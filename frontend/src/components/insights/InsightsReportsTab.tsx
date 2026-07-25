@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import {
   ArrowUpDown,
   FileText,
-  FolderOpen,
   Loader2,
   TrendingUp,
 } from 'lucide-react'
@@ -19,7 +18,6 @@ import {
 import type { ColumnDef } from '@tanstack/react-table'
 
 import type {
-  CollectionIntelligenceData,
   SignalImpactData,
   TopicDriftData,
   WeeklyBriefData,
@@ -46,8 +44,6 @@ interface TooltipStyle {
 interface InsightsReportsTabProps {
   weeklyBrief?: WeeklyBriefData
   weeklyLoading: boolean
-  collectionIntel?: CollectionIntelligenceData
-  collectionLoading: boolean
   topicDriftData?: TopicDriftData
   driftLoading: boolean
   signalImpactData?: SignalImpactData
@@ -57,14 +53,11 @@ interface InsightsReportsTabProps {
   tooltipStyle: TooltipStyle
 }
 
-type CollectionRow = CollectionIntelligenceData['collections'][number]
 type SignalRow = SignalImpactData['signals'][number]
 
 export function InsightsReportsTab({
   weeklyBrief,
   weeklyLoading,
-  collectionIntel,
-  collectionLoading,
   topicDriftData,
   driftLoading,
   signalImpactData,
@@ -73,105 +66,6 @@ export function InsightsReportsTab({
   colors,
   tooltipStyle,
 }: InsightsReportsTabProps) {
-  const collectionColumns = useMemo<ColumnDef<CollectionRow>[]>(() => [
-    {
-      id: 'name',
-      accessorKey: 'name',
-      header: 'Collection',
-      size: 220,
-      // Flex row with colour dot + name — handle truncation via `min-w-0`
-      // on the name span so the dot stays visible.
-      meta: { cellOverflow: 'none' },
-      cell: ({ row }) => (
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-            style={{ backgroundColor: row.original.color || colors.slate }}
-          />
-          <span className="min-w-0 flex-1 truncate font-medium text-alma-800" title={row.original.name}>
-            {row.original.name}
-          </span>
-        </div>
-      ),
-    },
-    {
-      id: 'paper_count',
-      accessorKey: 'paper_count',
-      header: 'Papers',
-      size: 90,
-      meta: { cellOverflow: 'none' },
-      cell: ({ row }) => <span className="block text-right tabular-nums text-slate-700">{row.original.paper_count}</span>,
-    },
-    {
-      id: 'avg_citations',
-      accessorKey: 'avg_citations',
-      header: 'Avg Cit.',
-      size: 100,
-      meta: { cellOverflow: 'none' },
-      cell: ({ row }) => <span className="block text-right tabular-nums text-slate-700">{row.original.avg_citations.toFixed(1)}</span>,
-    },
-    {
-      id: 'avg_rating',
-      accessorKey: 'avg_rating',
-      header: 'Avg Rating',
-      size: 110,
-      meta: { cellOverflow: 'none' },
-      cell: ({ row }) => (
-        <span className="block text-right tabular-nums text-slate-700">
-          {row.original.avg_rating > 0 ? row.original.avg_rating.toFixed(1) : '—'}
-        </span>
-      ),
-    },
-    {
-      id: 'year_range',
-      header: 'Years',
-      size: 110,
-      enableSorting: false,
-      cell: ({ row }) => {
-        const { min, max } = row.original.year_range
-        return (
-          <span className="text-xs text-slate-500">
-            {min && max ? `${min}–${max}` : '—'}
-          </span>
-        )
-      },
-    },
-    {
-      // I-29: a real diversity figure (normalized topic evenness 0..1) plus the
-      // raw distinct-topic count — replaces the old len(top5) that maxed at 5.
-      id: 'topic_diversity',
-      accessorKey: 'topic_diversity',
-      header: 'Diversity',
-      size: 110,
-      meta: { cellOverflow: 'none' },
-      cell: ({ row }) => (
-        <span
-          className="block text-right tabular-nums text-slate-700"
-          title={`Topic evenness ${formatPercent(row.original.topic_diversity, 0)} across ${row.original.distinct_topics} distinct topics`}
-        >
-          {row.original.distinct_topics > 1 ? formatPercent(row.original.topic_diversity, 0) : '—'}
-          <span className="ml-1 text-xs text-slate-400">/ {row.original.distinct_topics}</span>
-        </span>
-      ),
-    },
-    {
-      id: 'top_topics',
-      header: 'Top Topics',
-      size: 240,
-      enableSorting: false,
-      meta: { cellOverflow: 'wrap' },
-      cell: ({ row }) => (
-        <div className="flex flex-wrap gap-1">
-          {row.original.top_topics.slice(0, 3).map((t) => (
-            <Badge key={t.topic} variant="secondary" className="text-xs" title={t.topic}>
-              {truncate(t.topic, 20)}
-            </Badge>
-          ))}
-        </div>
-      ),
-    },
-  ], [colors])
-
   const signalColumns = useMemo<ColumnDef<SignalRow>[]>(() => [
     {
       id: 'signal',
@@ -337,40 +231,6 @@ export function InsightsReportsTab({
                 </span>
               </div>
             </div>
-          </CardContent>
-        )}
-      </Card>
-
-      {/* ── Collection Intelligence ── */}
-      <Card>
-        <ActionCardHeader
-          icon={FolderOpen}
-          accent="text-accent"
-          title="Collection Intelligence"
-          description="Detailed analytics for each of your collections"
-          action={
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={collectionLoading}
-              onClick={() => onGenerate('collections')}
-            >
-              {collectionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Generate'}
-            </Button>
-          }
-        />
-        {collectionIntel && (
-          <CardContent>
-            {collectionIntel.collections.length === 0 ? (
-              <p className="text-sm text-slate-400">No collections found.</p>
-            ) : (
-              <DataTable<CollectionRow>
-                data={collectionIntel.collections}
-                columns={collectionColumns}
-                storageKey="insights.collection-intelligence"
-                getRowId={(row) => row.id}
-              />
-            )}
           </CardContent>
         )}
       </Card>
