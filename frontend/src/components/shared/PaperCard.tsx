@@ -3,6 +3,8 @@ import { ChevronDown, ExternalLink, HelpCircle, Loader2, Plus, Compass } from 'l
 
 import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
 import { SignalChip } from '@/components/shared/SignalChip'
+import { ScoreMeter } from '@/components/shared/ScoreMeter'
+import { Meter } from '@/components/ui/meter'
 
 import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -190,26 +192,6 @@ function signalMeta(key: string): { label: string; color: string; description?: 
   return base ? { ...base, color } : { label: key.replace(/_/g, ' '), color }
 }
 
-// ── Score bar ──
-
-function ScoreBar({ score }: { score: number }) {
-  const pct = Math.round(score)
-  let barColor: string
-  if (pct >= 70) barColor = 'bg-success-500'
-  else if (pct >= 40) barColor = 'bg-warning-500'
-  else barColor = 'bg-critical-500'
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200">
-        <div
-          className={`h-1.5 rounded-full transition-all ${barColor}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="text-xs font-semibold tabular-nums text-slate-600">{pct}</span>
-    </div>
-  )
-}
 
 // ── Score breakdown teaser (HoverCard preview) ──
 //
@@ -316,12 +298,12 @@ function ScoreBreakdownPanel({
                 </span>
               </span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-              <div
-                className={`h-1.5 rounded-full transition-all duration-300 ${meta.color}`}
-                style={{ width: `${barPct}%`, opacity: 0.85 }}
-              />
-            </div>
+            <Meter
+              value={barPct}
+              fillClassName={cn(meta.color, 'opacity-85')}
+              size="sm"
+              decorative
+            />
           </div>
         )
       })}
@@ -524,14 +506,14 @@ export function PaperCard({
           spans the full card height without being part of the flow; the
           content div reserves `pl-11` to keep the title off the rail.
           Idle: invisible. Hover: soft slate fill + checkbox fades in.
-          Selected: alma ribbon + inverted (white-on-alma) checkbox. */}
+          Selected: folio ribbon + inverted (white-on-accent) checkbox. */}
       {selection && (
         <div
           className={cn(
             'absolute inset-y-0 left-0 z-10 flex w-8 items-start justify-center pt-[18px] transition-colors duration-200',
             selection.checked
-              ? 'bg-alma-500'
-              : 'bg-transparent group-hover/paper-card:bg-surface-1',
+              ? 'bg-alma-folio'
+              : 'bg-transparent group-hover/paper-card:bg-control-quiet',
           )}
           onClick={(e) => e.stopPropagation()}
         >
@@ -549,7 +531,7 @@ export function PaperCard({
               onCheckedChange={(value) => selection.onCheckedChange(value === true)}
               className={cn(
                 selection.checked &&
-                  'border-white/80 data-[state=checked]:border-white data-[state=checked]:bg-surface-1 data-[state=checked]:text-alma-600',
+                  'border-white/80 data-[state=checked]:border-white data-[state=checked]:bg-surface-4 data-[state=checked]:text-alma-600',
               )}
             />
           </div>
@@ -561,7 +543,7 @@ export function PaperCard({
         <div className="flex items-start gap-3">
           {/* Rank pill */}
           {rank != null && (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface-2 text-[11px] font-bold text-slate-500">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-control-quiet text-[11px] font-bold text-slate-500">
               {rank}
             </div>
           )}
@@ -586,8 +568,8 @@ export function PaperCard({
                       title="Discover similar papers — re-seed Discovery with this paper as the anchor"
                       aria-label="Discover similar papers"
                       className={cn(
-                        'inline-flex h-7 w-7 items-center justify-center rounded-full border border-[var(--color-border)] bg-surface-1 text-slate-500 shadow-sm transition-colors duration-150',
-                        'hover:border-alma-300 hover:bg-alma-50 hover:text-alma-700',
+                        'inline-flex h-7 w-7 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-500 shadow-sm transition-colors duration-150',
+                        'hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-700',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500 focus-visible:ring-offset-1',
                       )}
                     >
@@ -635,7 +617,7 @@ export function PaperCard({
                   const isPending = followAuthorPendingName === normalized
                   const canWrapHover = authorNames.length > 0
                   const label = (
-                    <span className="cursor-default rounded px-0.5 transition-colors hover:bg-surface-2 hover:text-slate-700">
+                    <span className="cursor-default rounded px-0.5 transition-colors hover:bg-control-quiet hover:text-slate-700">
                       {authorName}
                     </span>
                   )
@@ -656,7 +638,7 @@ export function PaperCard({
                       {canFollowAuthors && !isFollowed && (
                         <button
                           type="button"
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--color-border)] bg-surface-1 text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-alma-200 hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-control-edge bg-control-well text-slate-400 opacity-0 transition group-hover/author:opacity-100 hover:border-control-edge-strong hover:text-alma-600 disabled:cursor-not-allowed disabled:opacity-100"
                           onClick={(event) => {
                             event.preventDefault()
                             event.stopPropagation()
@@ -695,7 +677,7 @@ export function PaperCard({
                         followPending={venueFollowPending === paper.journal.toLowerCase()}
                         onFollow={onFollowVenue}
                       >
-                        <span className="cursor-default truncate rounded px-0.5 transition-colors hover:bg-surface-2 hover:not-italic hover:text-slate-700">
+                        <span className="cursor-default truncate rounded px-0.5 transition-colors hover:bg-control-quiet hover:not-italic hover:text-slate-700">
                           {truncate(paper.journal, 60)}
                         </span>
                       </VenueHoverCard>
@@ -711,7 +693,7 @@ export function PaperCard({
                 bullet separators (T15, 2026-04-24). Holds venue,
                 citations (with S2 influential-count when > 0),
                 paper_signal ranking, user star rating, and the
-                Discovery ScoreBar + Why affordance. Every field is
+                Discovery ScoreMeter + Why affordance. Every field is
                 optional (sparse-field policy); the row hides entirely
                 when nothing to show. Year is in the authors row
                 above. */}
@@ -758,7 +740,7 @@ export function PaperCard({
                   <>
                     {(citationsLabel || rankDisplay != null || starDisplay) && <span className="text-slate-300">·</span>}
                     <span className="inline-flex items-center gap-2">
-                      <ScoreBar score={score} />
+                      <ScoreMeter score={score} />
                       {(hasBreakdown || hasExplanation) && (
                         <HoverCard openDelay={200} closeDelay={100}>
                           <HoverCardTrigger asChild>
@@ -770,7 +752,7 @@ export function PaperCard({
                                 setShowBreakdown(next)
                                 if (next && onExpandBreakdown) onExpandBreakdown()
                               }}
-                              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-surface-2 hover:text-slate-600"
+                              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-control-quiet hover:text-slate-600"
                               title="Show score breakdown"
                             >
                               Why
@@ -858,7 +840,7 @@ export function PaperCard({
               </div>
             )}
             {!suppressSummaries && showAbstractByDefault && !paper.abstract && (
-              <div className="mt-1.5 rounded-md border border-dashed border-slate-200 px-3 py-2 text-xs italic text-slate-400">
+              <div className="mt-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-2 text-xs italic text-slate-400">
                 No abstract available.
               </div>
             )}

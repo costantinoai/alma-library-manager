@@ -90,7 +90,7 @@ export function AnalyticsTab() {
           </TabsList>
           {isRefreshing ? (
             <span
-              className="inline-flex items-center gap-1.5 rounded-full border border-alma-200 bg-alma-50 px-2.5 py-1 text-xs text-alma-700"
+              className="inline-flex items-center gap-1.5 rounded-full border border-control-edge bg-control-quiet px-2.5 py-1 text-xs text-alma-700"
               title="Analytics are being recomputed in the background. This view is from the previous snapshot."
             >
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-alma-folio" aria-hidden />

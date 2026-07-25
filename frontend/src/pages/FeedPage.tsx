@@ -860,13 +860,13 @@ export function FeedPage() {
                 if (value) setFilter(value as FeedFilter)
               }}
               aria-label="Feed filter"
-              className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
+              variant="segment"
             >
               {FEED_FILTERS.map((value) => (
                 <ToggleGroupItem
                   key={value}
                   value={value}
-                  className="h-7 min-w-0 rounded-sm px-3 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+                  className="h-7 min-w-0 px-3 text-xs font-medium"
                 >
                   {FEED_FILTER_LABELS[value]}
                 </ToggleGroupItem>
@@ -1034,7 +1034,7 @@ export function FeedPage() {
                     type="button"
                     onClick={() => toggleJournalOpen(entry.journal)}
                     aria-expanded={open}
-                    className="flex w-full items-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition-colors hover:bg-surface-3"
+                    className="flex w-full items-center gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left transition-colors hover:bg-control-quiet"
                   >
                     <ChevronRight
                       className={cn(

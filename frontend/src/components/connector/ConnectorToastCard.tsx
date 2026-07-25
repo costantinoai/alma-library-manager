@@ -56,7 +56,7 @@ export function ConnectorToastCard({
         <button
           type="button"
           onClick={onClose}
-          className="mt-2.5 rounded-sm border border-alma-200 px-2.5 py-1 text-xs font-medium text-alma-700 transition-colors hover:bg-alma-50"
+          className="mt-2.5 rounded-sm border border-control-edge px-2.5 py-1 text-xs font-medium text-alma-700 transition-colors hover:bg-control-quiet"
         >
           Got it
         </button>
@@ -66,7 +66,7 @@ export function ConnectorToastCard({
         type="button"
         aria-label="Dismiss"
         onClick={onClose}
-        className="absolute right-2 top-2 rounded-sm p-1 text-alma-400 transition-colors hover:bg-surface-2 hover:text-alma-700"
+        className="absolute right-2 top-2 rounded-sm p-1 text-alma-400 transition-colors hover:bg-control-quiet hover:text-alma-700"
       >
         <X className="h-3.5 w-3.5" />
       </button>

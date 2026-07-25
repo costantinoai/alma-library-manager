@@ -234,7 +234,7 @@ export function RepairConfirmDialog({
             pending={running}
             // No fresh token (still loading, or nothing to apply) → can't confirm.
             disabled={!token || !fingerprint || (plan?.selected_items ?? 0) <= 0}
-            className="border-critical-200 text-critical-700 hover:bg-critical-50"
+            className="border-control-edge text-critical-700 hover:bg-critical-700/10"
             onClick={() =>
               onConfirm({
                 ...request,

@@ -36,6 +36,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -188,12 +189,12 @@ function MonitorRow({ monitor }: { monitor: FeedMonitor }) {
                 placeholder="Display label"
                 disabled={busy}
               />
-              <textarea
+              <Textarea
+          className="min-h-[72px]"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 rows={monitor.monitor_type === 'query' ? 3 : 2}
                 disabled={busy}
-                className="min-h-[72px] rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-slate-700 shadow-paper-inset-cool outline-none transition focus:border-info-500 focus:ring-2 focus:ring-info-100"
                 placeholder={
                   monitor.monitor_type === 'query'
                     ? 'Examples: manifold AND representations\n(protein OR antibody) AND design NOT vaccine'

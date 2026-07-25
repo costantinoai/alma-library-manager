@@ -934,7 +934,7 @@ export function SystemStatusCards() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
               aria-label={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
-              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
               <Icon className="mt-0.5 h-4 w-4 shrink-0 text-alma-500" />
               <span className="min-w-0 flex-1">

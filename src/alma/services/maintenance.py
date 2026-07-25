@@ -37,7 +37,7 @@ import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import materialized_views as mv
@@ -1346,6 +1346,84 @@ def _read_raw_setting(conn: sqlite3.Connection, key: str) -> str | None:
     return row["value"] if isinstance(row, sqlite3.Row) else row[0]
 
 
+# How long a manual stop keeps the automation off that operation. A cooldown
+# rather than a permanent opt-out: "stop" means "not now", and the app should
+# never silently give up on a health task forever. Cleared early by a manual
+# Run now or the explicit Resume control.
+USER_PAUSE_HOURS = 24
+
+
+def get_task_user_pause(conn: sqlite3.Connection, task: MaintenanceTask) -> datetime | None:
+    """When this task's automation is paused until, or None if it may run.
+
+    Set when the user manually stops a BACKGROUND run of the task (see
+    `pause_task_by_operation_key`). An expired stamp reads as None — the
+    cooldown lapses on its own, no sweeper needed.
+    """
+    raw = (_read_raw_setting(conn, _setting_key(task.key, "paused_by_user_until")) or "").strip()
+    if not raw:
+        return None
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        logger.warning("maintenance: unparseable user pause for %s: %r", task.key, raw)
+        return None
+    return until if until > datetime.utcnow() else None
+
+
+def set_task_user_pause(
+    conn: sqlite3.Connection, task: MaintenanceTask, *, hours: int = USER_PAUSE_HOURS
+) -> datetime:
+    """Hold the automation off ``task`` for ``hours``; returns the expiry."""
+    from alma.application.discovery import upsert_setting
+    from alma.core.db_write import run_write_unit
+
+    until = datetime.utcnow() + timedelta(hours=max(1, int(hours)))
+    run_write_unit(
+        conn,
+        lambda: upsert_setting(
+            conn, _setting_key(task.key, "paused_by_user_until"), until.isoformat()
+        ),
+        label=f"maintenance user pause {task.key}",
+    )
+    return until
+
+
+def clear_task_user_pause(conn: sqlite3.Connection, task: MaintenanceTask) -> None:
+    """Re-arm the automation for ``task`` (explicit Resume, or a manual run)."""
+    from alma.application.discovery import upsert_setting
+    from alma.core.db_write import run_write_unit
+
+    if _read_raw_setting(conn, _setting_key(task.key, "paused_by_user_until")) is None:
+        return  # never paused — don't write a row just to say "not paused"
+    run_write_unit(
+        conn,
+        lambda: upsert_setting(conn, _setting_key(task.key, "paused_by_user_until"), ""),
+        label=f"maintenance user resume {task.key}",
+    )
+
+
+def task_for_operation_key(operation_key: str) -> MaintenanceTask | None:
+    """The registry task owning ``operation_key``, if any."""
+    if not operation_key:
+        return None
+    return next((t for t in REGISTRY.values() if t.operation_key == operation_key), None)
+
+
+def pause_task_by_operation_key(
+    conn: sqlite3.Connection, operation_key: str, *, hours: int = USER_PAUSE_HOURS
+) -> tuple[MaintenanceTask, datetime] | None:
+    """Apply the manual-stop cooldown to whichever task owns ``operation_key``.
+
+    Returns ``(task, until)``, or None when the key is not a maintenance task
+    (nothing schedules those automatically, so there is nothing to suppress).
+    """
+    task = task_for_operation_key(operation_key)
+    if task is None:
+        return None
+    return (task, set_task_user_pause(conn, task, hours=hours))
+
+
 def get_task_auto_enabled(conn: sqlite3.Connection, task: MaintenanceTask) -> bool:
     raw = _read_raw_setting(conn, _setting_key(task.key, "auto_enabled"))
     if raw is None:
@@ -1865,6 +1943,13 @@ def describe_task(
         "eta": budget["eta"],
         "auto_enabled": get_task_auto_enabled(conn, task),
         "default_auto_enabled": task.default_auto_enabled,
+        # Set when the user manually stopped a background run: automation skips
+        # this task until the stamp lapses, they press Resume, or they run it by
+        # hand. `auto_enabled` stays as they configured it — the pause is a
+        # cooldown, not a policy change.
+        "paused_by_user_until": (
+            until.isoformat() if (until := get_task_user_pause(conn, task)) else None
+        ),
         "auto_daily_cap": get_task_auto_daily_cap(conn, task),
         "max_auto_daily_cap": task.max_auto_daily_cap,
         "manual_limit": get_task_manual_limit(conn, task),
@@ -2282,6 +2367,10 @@ def run_task_now(
         }.items()
         if value is not None
     }
+    # Running it by hand IS the re-arm gesture: whatever manual stop put this
+    # task on cooldown, the user has clearly changed their mind.
+    clear_task_user_pause(conn, task)
+
     targets = plan.spec.target_ids or None
     bits = [f"{len(targets)} selected" if targets else f"limit {plan.spec.max_items}"]
     if effective:
@@ -2405,6 +2494,16 @@ def maintenance_repair_periodic() -> None:
             if find_active_job(task.operation_key):
                 continue
             if not get_task_auto_enabled(conn, task):
+                continue
+            # A manual stop means "not now" — honour the cooldown before
+            # spending a tick on work the user just walked away from.
+            paused_until = get_task_user_pause(conn, task)
+            if paused_until is not None:
+                logger.info(
+                    "idle maintenance: %s paused by user until %s",
+                    task.key,
+                    paused_until.isoformat(),
+                )
                 continue
             pending = task_pending_count(conn, task, payload)
             if pending <= 0:
@@ -2828,6 +2927,16 @@ def resume_orphaned_sweeps() -> int:
                 continue
             if find_active_job(opkey):
                 continue  # already running (sibling worker / fresh user click)
+            paused_until = get_task_user_pause(conn, task)
+            if paused_until is not None:
+                # The user stopped this operation by hand. A restart must not
+                # smuggle it back in as an "orphan" resume.
+                logger.info(
+                    "auto-resume: skipping %s — paused by user until %s",
+                    task.key,
+                    paused_until.isoformat(),
+                )
+                continue
             try:
                 pending = int(task_pending_count(conn, task, payload) or 0)
             except Exception:

@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { Meter, type MeterTone } from '@/components/ui/meter'
 
 interface AuthorSignalBarProps {
   signal: AuthorSignal | null
@@ -23,18 +24,18 @@ interface AuthorSignalBarProps {
 }
 
 /** Composite fill: colour by strength of a (non-negative) like-signal. */
-function signalFillClass(score: number): string {
-  if (score >= 60) return 'bg-success-500'
-  if (score >= 30) return 'bg-warning-500'
-  if (score > 0) return 'bg-slate-400'
-  return 'bg-slate-300'
+function signalTone(score: number): MeterTone {
+  if (score >= 60) return 'success'
+  if (score >= 30) return 'warning'
+  if (score > 0) return 'neutral'
+  return 'muted'
 }
 
 /** Component fill: colour by direction (positive/negative/neutral). */
-function toneFillClass(tone: AuthorSignalComponent['tone']): string {
-  if (tone === 'positive') return 'bg-success-500'
-  if (tone === 'negative') return 'bg-critical-500'
-  return 'bg-slate-300'
+function componentTone(tone: AuthorSignalComponent['tone']): MeterTone {
+  if (tone === 'positive') return 'success'
+  if (tone === 'negative') return 'critical'
+  return 'muted'
 }
 
 function ComponentRow({ component }: { component: AuthorSignalComponent }) {
@@ -43,12 +44,7 @@ function ComponentRow({ component }: { component: AuthorSignalComponent }) {
   return (
     <div className="flex items-center gap-2">
       <span className="w-[4.5rem] shrink-0 text-[11px] text-slate-500">{component.label}</span>
-      <div className="relative h-1 flex-1 overflow-hidden rounded-full bg-parchment-200">
-        <div
-          className={cn('absolute inset-y-0 left-0 rounded-full', toneFillClass(component.tone))}
-          style={{ width: `${width}%` }}
-        />
-      </div>
+      <Meter value={width} tone={componentTone(component.tone)} size="xs" decorative />
       <span className="w-6 shrink-0 text-right text-[11px] tabular-nums text-slate-600">
         {sign}
         {Math.round(component.score)}
@@ -83,25 +79,20 @@ export function AuthorSignalBar({
   if (!signal) {
     return (
       <div className={cn('inline-flex items-center gap-2 text-[11px] text-slate-400', className)}>
-        <span className="inline-block h-1 w-14 rounded-full bg-parchment-200" />
+        <Meter value={0} size="xs" className="w-14" decorative />
         <span>no signal yet</span>
       </div>
     )
   }
   const pct = Math.max(0, Math.min(100, signal.score))
-  const fill = signalFillClass(pct)
+  const tone = signalTone(pct)
   const components = signal.components ?? []
   const hasBreakdown = breakdown !== 'none' && components.length > 0
 
   return (
     <div className={cn('space-y-1', className)}>
       <div className="flex items-center gap-2">
-        <div className="relative h-1 w-full overflow-hidden rounded-full bg-parchment-200">
-          <div
-            className={cn('absolute inset-y-0 left-0 rounded-full transition-all', fill)}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
+        <Meter value={pct} tone={tone} size="xs" decorative />
         <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
           {Math.round(pct)}
         </span>

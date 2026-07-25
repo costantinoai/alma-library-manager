@@ -19,7 +19,16 @@ const ToggleGroup = React.forwardRef<
 >(({ className, variant, size, children, ...props }, ref) => (
   <ToggleGroupPrimitive.Root
     ref={ref}
-    className={cn("flex items-center justify-center gap-1", className)}
+    className={cn(
+      "flex items-center justify-center gap-1",
+      // `segment` is the segmented-control shape: the ROOT is the recessed
+      // ink rail and each ON item lifts off it as a raised white knob (see
+      // `toggleVariants.segment`). Owning the rail here is what stops every
+      // caller from hand-rolling its own — they used to reach for a paper
+      // step (`bg-surface-2/80`) and the segments dissolved into it.
+      variant === "segment" && "gap-0 rounded-sm bg-control-track p-0.5",
+      className,
+    )}
     {...props}
   >
     <ToggleGroupContext.Provider value={{ variant, size }}>

@@ -143,7 +143,7 @@ export function SimilarResultsDialog({
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-surface-2 hover:text-slate-700"
+                          className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-control-quiet hover:text-slate-700"
                           title="Open paper"
                         >
                           <ExternalLink className="h-4 w-4" />
@@ -152,7 +152,7 @@ export function SimilarResultsDialog({
                       <button
                         type="button"
                         onClick={() => onLike(item)}
-                        className="inline-flex items-center justify-center rounded-md p-2 text-slate-500 hover:bg-accent-soft hover:text-accent"
+                        className="inline-flex items-center justify-center rounded-sm p-2 text-slate-500 hover:bg-accent-soft hover:text-accent"
                         title="Save to library"
                       >
                         <Heart className="h-4 w-4" />

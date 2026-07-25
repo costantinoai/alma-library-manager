@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils'
 import { dimensionBadgeTone, severityLabel } from './healthFormat'
 
 const BASE =
-  'flex w-full items-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left'
+  'flex w-full items-center gap-3 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left'
 
 interface StatusRowProps {
   severity?: string | null
@@ -50,7 +50,7 @@ export function StatusRow({ severity, label, metric, onOpen, title }: StatusRowP
       title={title}
       className={cn(
         BASE,
-        'group transition-colors hover:border-alma-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+        'group transition-colors hover:border-control-edge-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
       )}
     >
       {inner}

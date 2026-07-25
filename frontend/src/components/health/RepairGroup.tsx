@@ -29,6 +29,8 @@ interface RepairGroupProps {
       request_batch_size?: number
     },
   ) => void
+  /** Lift the cooldown a manual stop put on this task. */
+  onResume: (key: string) => void
   onOpenDim: (dim: HealthDimension) => void
   runningKey: string | null
   /** H-11: key of the op whose config write is in flight (shows "Saving…"). */
@@ -41,6 +43,7 @@ export function RepairGroup({
   dimsOf,
   onRun,
   onConfig,
+  onResume,
   onOpenDim,
   runningKey,
   configSavingKey,
@@ -68,6 +71,7 @@ export function RepairGroup({
         dims={dimsOf(op)}
         onRun={onRun}
         onConfig={onConfig}
+        onResume={onResume}
         onOpenDim={onOpenDim}
         running={runningKey === op.key}
         savingConfig={configSavingKey === op.key}
@@ -106,8 +110,8 @@ export function RepairGroup({
                   className={
                     'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio ' +
                     (open
-                      ? 'border-alma-300 bg-alma-50 text-alma-800'
-                      : 'border-[var(--color-border)] bg-surface-2 text-alma-700 hover:border-alma-300')
+                      ? 'border-alma-folio bg-accent-soft text-alma-folio'
+                      : 'border-control-edge bg-control-well text-alma-700 hover:border-control-edge-strong')
                   }
                 >
                   <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />

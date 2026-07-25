@@ -38,7 +38,7 @@ export function EtaHint({ eta, className }: EtaHintProps) {
           aria-label={`Estimated time ${eta.label}. How is this computed?`}
           className={cn(
             'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] font-medium text-slate-500',
-            'transition-colors hover:bg-alma-50 hover:text-slate-700',
+            'transition-colors hover:bg-control-quiet hover:text-slate-700',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio/50',
             className,
           )}

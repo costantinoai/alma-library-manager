@@ -316,7 +316,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
             'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
             showSeen
               ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-[var(--color-border)] bg-surface-2 text-slate-600 hover:bg-surface-3',
+              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
           )}
           title="Show the top papers you've seen but not acted on — the frontier"
         >
@@ -330,7 +330,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
             'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
             showEdges
               ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-[var(--color-border)] bg-surface-2 text-slate-600 hover:bg-surface-3',
+              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
           )}
           title="Draw citation links (shared references + cited-together) between the papers on the map"
         >
@@ -352,7 +352,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
                   'px-2 py-1 text-xs font-medium transition-colors',
                   groupBy === mode
                     ? 'bg-accent-soft text-alma-folio'
-                    : 'bg-surface-2 text-slate-600 hover:bg-surface-3',
+                    : 'bg-control-well text-slate-600 hover:bg-control-quiet',
                 )}
                 title={
                   mode === 'branches'
@@ -376,7 +376,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
               'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
               selectMode
                 ? 'border-accent-edge bg-accent-soft text-alma-folio'
-                : 'border-[var(--color-border)] bg-surface-2 text-slate-600 hover:bg-surface-3',
+                : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
             )}
             title="Drag a box around a cluster of papers to name it and explore that direction"
           >
@@ -387,7 +387,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
         <button
           type="button"
           onClick={resetView}
-          className="inline-flex items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-2 px-2 py-1 text-xs text-slate-600 hover:bg-surface-3"
+          className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2 py-1 text-xs text-slate-600 hover:bg-control-quiet"
           title="Reset view"
         >
           <Maximize2 className="h-3.5 w-3.5" />
@@ -546,7 +546,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
             <button
               type="button"
               onClick={cancelRegion}
-              className="rounded-sm p-0.5 text-slate-400 hover:bg-surface-3 hover:text-slate-600"
+              className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
               aria-label="Cancel selection"
             >
               <X className="h-3.5 w-3.5" />
@@ -601,7 +601,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
                 <button
                   type="button"
                   onClick={cancelRegion}
-                  className="rounded-sm border border-[var(--color-border)] bg-surface-3 px-2.5 py-1.5 text-xs text-slate-600 hover:bg-surface-2"
+                  className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-slate-600 hover:bg-control-quiet"
                 >
                   Cancel
                 </button>
@@ -659,7 +659,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
                     'inline-flex items-center gap-1 rounded-full border transition-colors',
                     highlightBranch === id
                       ? 'border-transparent text-white'
-                      : 'border-[var(--color-border)] bg-surface-1 text-slate-600',
+                      : 'border-control-edge bg-control-quiet text-slate-600',
                     state === 'muted' && 'opacity-50',
                   )}
                   style={highlightBranch === id ? { background: b.color } : undefined}
@@ -716,7 +716,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
             {[...clusterColors.entries()].slice(0, 8).map(([id, c]) => (
               <span
                 key={id}
-                className="inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-[var(--color-border)] bg-surface-1 px-1.5 py-0.5 text-slate-600"
+                className="inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600"
                 title={`${c.label} · ${c.count} papers`}
               >
                 <span

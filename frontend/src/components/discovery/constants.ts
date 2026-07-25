@@ -40,72 +40,50 @@ export interface AuthorSuggestion {
 
 export const FOLLOWED_SIGNAL_SOURCES = new Set<string>(['followed_author', 'openalex_topic'])
 
-export const SOURCE_TYPE_CONFIG: Record<string, { label: string; icon: typeof Link; color: string; badgeClass: string }> = {
+export const SOURCE_TYPE_CONFIG: Record<string, { label: string; icon: typeof Link }> = {
   openalex_related: {
     label: 'Related Works',
     icon: Link,
-    color: '#3B82F6',
-    badgeClass: 'bg-alma-100 text-alma-800 border-alma-200',
   },
   openalex_topic: {
     label: 'Topic Search',
     icon: Search,
-    color: '#10B981',
-    badgeClass: 'bg-green-100 text-green-800 border-green-200',
   },
   followed_author: {
     label: 'Followed Authors',
     icon: UserCheck,
-    color: '#8B5CF6',
-    badgeClass: 'bg-purple-100 text-purple-800 border-purple-200',
   },
   coauthor_network: {
     label: 'Co-author Network',
     icon: Users,
-    color: '#F59E0B',
-    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
   },
   citation_chain: {
     label: 'Citation Chain',
     icon: GitBranch,
-    color: '#EF4444',
-    badgeClass: 'bg-red-100 text-red-800 border-red-200',
   },
   semantic_scholar: {
     label: 'Semantic Scholar',
     icon: BookOpen,
-    color: '#06B6D4',
-    badgeClass: 'bg-cyan-100 text-cyan-800 border-cyan-200',
   },
   preprint_lane: {
     label: 'Preprint Lane',
     icon: BookOpen,
-    color: '#0891B2',
-    badgeClass: 'bg-sky-100 text-sky-800 border-sky-200',
   },
   taste_topic: {
     label: 'Favorite Topic',
     icon: Search,
-    color: '#0F766E',
-    badgeClass: 'bg-teal-100 text-teal-800 border-teal-200',
   },
   taste_author: {
     label: 'Favorite Author',
     icon: UserCheck,
-    color: '#B45309',
-    badgeClass: 'bg-amber-100 text-amber-800 border-amber-200',
   },
   taste_venue: {
     label: 'Favorite Venue',
     icon: BookOpen,
-    color: '#047857',
-    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200',
   },
   recent_win: {
     label: 'Recent Win',
     icon: GitBranch,
-    color: '#BE185D',
-    badgeClass: 'bg-pink-100 text-pink-800 border-pink-200',
   },
 }
 

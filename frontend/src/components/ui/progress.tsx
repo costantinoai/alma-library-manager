@@ -12,7 +12,9 @@ const Progress = React.forwardRef<
   <ProgressPrimitive.Root
     ref={ref}
     className={cn(
-      "relative h-2 w-full overflow-hidden rounded-full bg-parchment-200",
+      // Ink rail, folio fill — shared with Slider / Meter so every track in
+      // the app is the same object.
+      "relative h-2 w-full overflow-hidden rounded-full bg-control-track",
       className
     )}
     {...props}

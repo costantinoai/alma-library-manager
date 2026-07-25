@@ -3,7 +3,6 @@ import type { ComponentType, ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { ACTION_QUEUE_CLASSES } from '@/lib/palette'
 
 type Tone = 'neutral' | 'queue' | 'add' | 'collection' | 'like' | 'love' | 'dismiss' | 'dislike'
 
@@ -58,62 +57,77 @@ interface PaperActionBarProps {
 }
 
 /**
- * Per-tone resting and active styling, post-rebrand softening.
+ * Per-tone icon / hover / active styling.
  *
- * Each reaction keeps a distinct hue (semantic at-a-glance), but the
- * active state is now a *soft tinted chip* rather than a saturated
- * solid fill — colored bg at the 50/100 step, darker text + icon at
- * the 700/800 step, with a 200-step border. Reads as a stamped /
- * highlighted index card, not a punch-in-the-eye SaaS button. Fits
- * the v2 paper-warm story where nothing on the page should compete
- * with content for attention.
+ * COLOUR IS VALENCE, ICON IS ACTION — the same two-channel rule the chips
+ * follow (CLAUDE.md → "Chips & pills"). Four groups, not six identity hues:
+ *
+ *   critical  arguing AGAINST  — Skip, Dislike
+ *   neutral   no valence       — Queue (deferred; neither a save nor a signal)
+ *   accent    commit to library— Save, Add to collection
+ *   success   YOUR positive feedback — Like, Love
+ *
+ * The previous map spent a distinct hue on every button, which left colour
+ * unable to answer the only question that matters at triage speed. Worse, it
+ * pointed the wrong way: Save was amber (warning = "proceed with care"), Love
+ * was critical red (= destructive), and Dislike was info blue (= neutral
+ * reference). Two of the three positive actions read as caution or danger.
+ *
+ * Within a group the ICON disambiguates (✕ vs 👎, ＋ vs 📁), and Love outranks
+ * Like by filling its heart. Active states use the shared chip wash
+ * (`hue-700 @ 10%` + `hue-800` text), so an applied action has exactly the
+ * weight of the pills above it rather than the heavier retired `-50/-100`
+ * tint pair.
  */
 const toneClasses: Record<Tone, { icon: string; hover: string; active: string }> = {
   neutral: {
     icon: 'text-slate-500',
-    hover: 'hover:bg-surface-2 hover:text-alma-900',
-    active: 'border-[var(--color-border)] bg-surface-2 text-slate-800',
+    hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
+    active: 'border-transparent bg-control-track text-alma-900',
   },
-  // Queue — violet (centralized in the palette, 44.5). Reading list is
-  // pre-commit limbo: neither a library save nor a negative signal, so its
-  // identity color sits outside the semantic state tokens.
-  queue: ACTION_QUEUE_CLASSES,
-  // Save — amber. Warm counterpoint to alma teal; reads as "bookmarked".
+  // Queue — deferred. Reading list is pre-commit limbo: neither a library
+  // save nor a signal, so it carries no valence colour at all.
+  queue: {
+    icon: 'text-slate-500',
+    hover: 'hover:bg-control-quiet-hover hover:text-alma-900',
+    active: 'border-transparent bg-control-track text-alma-900',
+  },
+  // Save — the primary affirmative: this paper joins the library. Accent
+  // (folio) is the app's single interactive identity.
   add: {
-    icon: 'text-warning-600',
-    hover: 'hover:bg-warning-50 hover:text-warning-700',
-    active: 'border-warning-100 bg-warning-50 text-warning-700',
+    icon: 'text-alma-folio',
+    hover: 'hover:bg-accent-soft hover:text-alma-folio',
+    active: 'border-transparent bg-accent-soft text-alma-folio',
   },
-  // Add to collection — accent (folio), the single interactive identity. Distinct
-  // from the amber Save so "file into this collection" reads as its own action.
+  // Add to collection — the same commit family; the folder icon separates it.
   collection: {
     icon: 'text-alma-folio',
     hover: 'hover:bg-accent-soft hover:text-alma-folio',
-    active: 'border-alma-folio bg-accent-soft text-alma-folio',
+    active: 'border-transparent bg-accent-soft text-alma-folio',
   },
   like: {
     icon: 'text-success-600',
-    hover: 'hover:bg-success-50 hover:text-success-700',
-    active: 'border-success-100 bg-success-50 text-success-700',
+    hover: 'hover:bg-success-700/10 hover:text-success-800',
+    active: 'border-transparent bg-success-700/10 text-success-800',
   },
+  // Love — same valence as Like, one step stronger. The filled heart carries
+  // the difference; a second hue would have to lie about the direction.
   love: {
-    icon: 'text-critical-500',
-    hover: 'hover:bg-critical-50 hover:text-critical-700',
-    active: 'border-critical-100 bg-critical-50 text-critical-700',
+    icon: 'text-success-600',
+    hover: 'hover:bg-success-700/10 hover:text-success-800',
+    active: 'border-transparent bg-success-700/15 text-success-800',
   },
-  // Dismiss / Remove — rose. Destructive intent but the active chip
-  // stays soft to match the rest of the bar.
+  // Dismiss / Skip — negative.
   dismiss: {
     icon: 'text-slate-500',
-    hover: 'hover:bg-critical-50 hover:text-critical-700',
-    active: 'border-critical-100 bg-critical-50 text-critical-700',
+    hover: 'hover:bg-critical-700/10 hover:text-critical-700',
+    active: 'border-transparent bg-critical-700/10 text-critical-700',
   },
-  // Dislike — blue. Distinct from emerald like so the two thumbs
-  // read clearly at a glance.
+  // Dislike — negative, same as Skip. The thumb icon says which one.
   dislike: {
-    icon: 'text-info-600',
-    hover: 'hover:bg-info-50 hover:text-info-700',
-    active: 'border-info-100 bg-info-50 text-info-700',
+    icon: 'text-slate-500',
+    hover: 'hover:bg-critical-700/10 hover:text-critical-700',
+    active: 'border-transparent bg-critical-700/10 text-critical-700',
   },
 }
 
@@ -153,17 +167,16 @@ function ActionButton({
       aria-label={title}
       aria-pressed={active}
       className={cn(
-        // Route through the Button primitive but keep the per-tone soft-chip
-        // language: a modest 6px corner (bookish/index-card per the v2 brand)
-        // and a soft hairline border throughout. The variant + tone classes
-        // below override the ghost defaults so the toggle states stay intact.
-        'gap-1.5 whitespace-nowrap rounded-md border font-medium',
+        // Route through the Button primitive, keeping the per-tone chip
+        // language. Shape matches every other button in the app: `rounded-sm`
+        // letterpress corner, control hairline, ink well at rest.
+        'gap-1.5 whitespace-nowrap rounded-sm border font-medium',
         'focus-visible:ring-offset-1',
         'disabled:opacity-40',
         compact ? 'h-7 px-2.5 text-[11px]' : 'h-8 px-3 text-xs',
         active
           ? activeClass
-          : cn('border-[var(--color-border)] bg-surface-1 text-alma-900', hover),
+          : cn('border-control-edge bg-control-well text-alma-900', hover),
       )}
     >
       <Icon
@@ -234,7 +247,7 @@ export function PaperActionBar({
         />
       )}
 
-      {hasRemove && hasReactions && <div className="mx-0.5 h-4 w-px bg-slate-200" aria-hidden />}
+      {hasRemove && hasReactions && <div className="mx-0.5 h-4 w-px bg-control-edge" aria-hidden />}
 
       {onQueue && (
         <ActionButton

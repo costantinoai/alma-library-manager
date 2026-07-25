@@ -35,7 +35,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
           actionButton:
             "group-[.toast]:bg-alma-800 group-[.toast]:text-alma-cream group-[.toast]:rounded-sm",
           cancelButton:
-            "group-[.toast]:bg-parchment-100 group-[.toast]:text-alma-700 group-[.toast]:rounded-sm",
+            "group-[.toast]:bg-control-quiet group-[.toast]:text-alma-700 group-[.toast]:rounded-sm",
         },
       }}
       {...props}

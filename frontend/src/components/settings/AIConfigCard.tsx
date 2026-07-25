@@ -758,7 +758,7 @@ export function AIConfigCard() {
                 <div className="flex items-center gap-3">
                   <Progress
                     value={coveragePct}
-                    className="h-2 flex-1 bg-surface-2 [&>*]:bg-alma-500"
+                    className="h-2 flex-1"
                   />
                   <span className="font-mono text-xs text-slate-600">
                     {status.embeddings.total} papers ({coveragePct.toFixed(1)}%)
@@ -1014,7 +1014,7 @@ export function AIConfigCard() {
                   )}
                   {status.dependency_setup_suggestions &&
                     status.dependency_setup_suggestions.length > 0 && (
-                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-lg border border-alma-100 bg-alma-50 p-3 text-xs text-alma-900">
+                      <ol className="mt-2 list-inside list-decimal space-y-1 rounded-lg border border-control-edge bg-control-well p-3 text-xs text-alma-900">
                         {status.dependency_setup_suggestions.map((step, idx) => (
                           <li key={`${idx}-${step}`} className="font-mono text-[11px]">
                             {step}
@@ -1029,7 +1029,7 @@ export function AIConfigCard() {
                     <CollapsibleTrigger
                       className={cn(
                         'group flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left',
-                        'hover:bg-surface-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-500',
+                        'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
                       )}
                     >
                       <div className="flex items-center gap-2 text-xs font-semibold text-slate-600">
@@ -1039,7 +1039,7 @@ export function AIConfigCard() {
                       <ChevronDown className="h-4 w-4 text-slate-400 transition-transform group-data-[state=open]:rotate-180" />
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <div className="space-y-1 border-t border-parchment-300/50 px-3 py-2 text-xs">
+                      <div className="space-y-1 border-t border-[var(--color-border)] px-3 py-2 text-xs">
                         <KeyValueRow
                           label="Configured type"
                           value={dependencyEnv.type || 'system'}

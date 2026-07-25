@@ -944,7 +944,7 @@ function RelatedWorksSection({
         <Button
           type="button"
           variant="outline"
-          className="group/rel flex h-auto w-full items-center justify-between gap-2 rounded-md border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left font-normal shadow-none hover:border-[var(--color-border)] hover:bg-surface-2/70"
+          className="group/rel flex h-auto w-full items-center justify-between gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left font-normal shadow-none hover:border-control-edge-strong hover:bg-control-quiet"
         >
           <div className="flex min-w-0 items-center gap-2">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">

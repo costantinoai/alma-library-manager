@@ -11,7 +11,10 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex h-10 items-center justify-center rounded-sm bg-parchment-100 p-1 text-alma-700',
+      // The list is a recessed INK rail; the active trigger is a raised
+      // white segment on top of it (see TabsTrigger). A cream rail on a
+      // cream card had no edge to lift off.
+      'inline-flex h-10 items-center justify-center rounded-sm bg-control-track p-1 text-alma-700',
       className,
     )}
     {...props}
@@ -26,9 +29,10 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      // Active tab lifts to a lighter surface (shadow distinguishes it from
-      // the track) AND takes folio accent text — the shared active signal.
-      'inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-surface-1 data-[state=active]:text-alma-folio data-[state=active]:shadow-paper-sm cursor-pointer',
+      // Raised-knob exception: the active tab lifts to the TOP of the paper
+      // ladder so it reads as a segment sitting on the ink rail at any
+      // elevation, and takes folio text — the shared active signal.
+      'inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-surface-4 data-[state=active]:text-alma-folio data-[state=active]:shadow-paper-sm cursor-pointer',
       className,
     )}
     {...props}

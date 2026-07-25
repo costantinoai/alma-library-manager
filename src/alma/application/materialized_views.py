@@ -309,6 +309,44 @@ def get(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     )
 
 
+def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
+    """Serve the stored payload WITHOUT computing a fingerprint or enqueuing.
+
+    Task 50 M1: graph views moved freshness ownership from the GET path to the
+    scheduled graph-layout maintenance job (drift is measured there, on the
+    embedding set — see ``routes/graphs.py``). A GET is therefore a pure row
+    read: return the stored envelope if a decodable row exists, else ``None``
+    (the route answers 202 and enqueues the first build). ``rebuilding`` still
+    reflects a live in-flight job so the UI can show "Refreshing…".
+    """
+    view = get_view(view_key)
+    row = _read_row(conn, view_key)
+    if row is None:
+        return None
+    payload = _decode_payload(row.get("payload"))
+    if payload is None:
+        return None
+    return _envelope(
+        payload=payload,
+        fingerprint=str(row.get("fingerprint") or ""),
+        computed_at=str(row.get("computed_at") or ""),
+        stale=False,
+        rebuilding=_has_active_job(view),
+    )
+
+
+def stored_meta(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
+    """Row metadata (no payload decode) for freshness decisions: ``computed_at``
+    + ``fingerprint``, or ``None`` when the view has never been built."""
+    row = _read_row(conn, view_key)
+    if row is None:
+        return None
+    return {
+        "computed_at": str(row.get("computed_at") or ""),
+        "fingerprint": str(row.get("fingerprint") or ""),
+    }
+
+
 def rebuild(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     """Synchronously rebuild ``view_key`` and persist the new payload.
 
@@ -431,6 +469,90 @@ def get_or_build_variant(
     except Exception:  # noqa: BLE001 — cache write must never break the response
         logger.exception("materialized_views: failed to persist variant %s", view_key)
     return payload
+
+
+def get_or_enqueue_variant(
+    conn: sqlite3.Connection,
+    *,
+    view_key: str,
+    build_fn: Callable[[sqlite3.Connection], dict],
+    make_fingerprint: Callable[[sqlite3.Connection], str],
+    is_fresh: Callable[[str], bool],
+    job_label: str,
+) -> dict | None:
+    """Async twin of :func:`get_or_build_variant`: NEVER builds inline.
+
+    Task 50 M1 — a variant build is a full re-cluster/re-layout (the >200 s
+    author-network case), so a GET must not run it in-request. A fresh cached
+    row is returned as before; a miss enqueues ONE background build (deduped on
+    the variant key) and returns ``None`` so the route can answer 202
+    ``{status: 'building'}`` and the client polls. ``make_fingerprint`` takes
+    the build connection (the request connection is gone by the time the job
+    runs).
+    """
+    row = _read_row(conn, view_key)
+    if row is not None:
+        cached = _decode_payload(row.get("payload"))
+        if cached is not None and is_fresh(str(row.get("fingerprint") or "")):
+            return cached
+
+    from alma.api.scheduler import find_active_job, schedule_immediate, set_job_status
+
+    operation_key = f"materialize.variant:{view_key}"
+    if find_active_job(operation_key) is not None:
+        return None  # already building — client keeps polling
+
+    job_id = f"materialize_variant_{uuid.uuid4().hex[:8]}"
+    set_job_status(
+        job_id,
+        status="queued",
+        operation_key=operation_key,
+        trigger_source="auto:graph_variant",
+        started_at=datetime.utcnow().isoformat(),
+        message=f"Building {job_label}",
+    )
+
+    def _runner() -> dict:
+        from alma.api.deps import open_db_connection
+
+        runner_conn = open_db_connection()
+        try:
+            started = perf_counter()
+            payload = build_fn(runner_conn)
+            if not isinstance(payload, dict):
+                raise TypeError(
+                    f"variant build_fn for {view_key!r} returned "
+                    f"{type(payload).__name__}, expected dict"
+                )
+            compute_ms = int(round((perf_counter() - started) * 1000))
+            fingerprint = make_fingerprint(runner_conn)
+
+            def _persist() -> None:
+                _write_row(
+                    runner_conn,
+                    view_key=view_key,
+                    fingerprint=fingerprint,
+                    payload=payload,
+                    compute_ms=compute_ms,
+                )
+                _prune_variant_rows(
+                    runner_conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE
+                )
+
+            run_write_unit(runner_conn, _persist, label=f"mv.variant:{view_key}")
+            return {"view_key": view_key, "message": f"Built {job_label} ({compute_ms} ms)"}
+        finally:
+            try:
+                runner_conn.close()
+            except Exception:
+                pass
+
+    try:
+        schedule_immediate(job_id, _runner)
+    except Exception:
+        logger.exception("materialized_views: failed to schedule variant build %s", view_key)
+        return None
+    return None
 
 
 def _variant_base(view_key: str) -> str:

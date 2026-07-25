@@ -23,10 +23,14 @@ export const buttonVariants = cva(
           'bg-success-600 text-white shadow-paper-sm hover:bg-success-700 hover:shadow-paper-md active:bg-success-700',
         gold:
           'bg-gold-400 text-alma-900 shadow-paper-sm hover:bg-gold-500 hover:text-alma-cream hover:shadow-paper-md',
+        // Unfilled variants fill from the CONTROL INK ladder, never from the
+        // paper ramps: an outline button on a cream card used to wear the
+        // desk's own cream, and inside a near-white popover the same button
+        // read as a dark slab. Ink composites the same on every host.
         outline:
-          'border border-[var(--color-border)] bg-surface-0 text-alma-900 shadow-paper-sm hover:border-parchment-400 hover:bg-parchment-100',
-        secondary: 'bg-parchment-100 text-alma-900 hover:bg-parchment-200',
-        ghost: 'text-alma-700 hover:bg-parchment-100 hover:text-alma-900',
+          'border border-control-edge bg-control-well text-alma-900 shadow-paper-sm hover:border-control-edge-strong hover:bg-control-quiet',
+        secondary: 'bg-control-quiet text-alma-900 hover:bg-control-quiet-hover',
+        ghost: 'text-alma-700 hover:bg-control-quiet hover:text-alma-900',
         link:
           'rounded-none px-0 text-alma-folio underline-offset-4 shadow-none hover:underline hover:text-alma-folio-600',
       },

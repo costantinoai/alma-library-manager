@@ -19,7 +19,7 @@ export function AuthorSuggestionCard({ suggestion }: AuthorSuggestionCardProps) 
   const [expanded, setExpanded] = useState(false)
 
   return (
-    <Card className="border-slate-200">
+    <Card className="border-edge-1">
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
@@ -33,7 +33,7 @@ export function AuthorSuggestionCard({ suggestion }: AuthorSuggestionCardProps) 
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-1 px-2 text-xs text-alma-600 hover:bg-alma-50 hover:text-alma-700"
+            className="h-7 gap-1 px-2 text-xs text-alma-600 hover:bg-control-quiet hover:text-alma-700"
             onClick={() => setExpanded((prev) => !prev)}
           >
             <Info className="h-3 w-3" />

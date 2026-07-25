@@ -35,6 +35,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -59,7 +60,8 @@ import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
 import { invalidateQueries } from '@/lib/queryHelpers'
-import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { cn, formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
@@ -469,24 +471,26 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             </SelectContent>
           </Select>
         )}
-        <div className="flex items-center gap-1 rounded-sm border border-[var(--color-border)] p-0.5">
-          <button
-            type="button"
-            onClick={() => setViewMode('cards')}
-            className={`rounded-md p-1.5 ${viewMode === 'cards' ? 'bg-slate-200 text-alma-800' : 'text-slate-400 hover:text-slate-600'}`}
-            title="Card view"
-          >
+        {/* Same segmented control as every other view switcher in the app —
+            ink rail, raised active segment. It used to be two hand-rolled
+            buttons whose on-state was a raw slate fill: neither the active
+            colour (folio) nor a token. */}
+        <ToggleGroup
+          type="single"
+          variant="segment"
+          value={viewMode}
+          onValueChange={(value) => {
+            if (value === 'cards' || value === 'compact') setViewMode(value)
+          }}
+          aria-label="View mode"
+        >
+          <ToggleGroupItem value="cards" title="Card view" className="h-7 min-w-0 px-2">
             <LayoutGrid className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('compact')}
-            className={`rounded-md p-1.5 ${viewMode === 'compact' ? 'bg-slate-200 text-alma-800' : 'text-slate-400 hover:text-slate-600'}`}
-            title="Compact table view"
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="compact" title="Compact table view" className="h-7 min-w-0 px-2">
             <List className="h-4 w-4" />
-          </button>
-        </div>
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       {/* Content */}
@@ -650,7 +654,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
           <Button
             size="sm"
             variant="outline"
-            className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
+            className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             onClick={() => setBulkDeleteOpen(true)}
           >
             <Trash2 className="h-4 w-4" />
@@ -695,12 +699,11 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium text-slate-700">Notes</label>
-              <textarea
+              <Textarea
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
                 placeholder="Add personal notes about this paper..."
                 rows={3}
-                className="flex w-full rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
               />
             </div>
           </div>
@@ -748,7 +751,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                     }
                   }}
                   disabled={addToCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-[var(--color-border)] px-4 py-3 text-left transition-colors hover:border-alma-300 hover:bg-alma-50"
+                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div
                     className="h-3 w-3 rounded-full shrink-0"
@@ -791,7 +794,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
                   key={coll.id}
                   onClick={() => bulkCollectionMutation.mutate({ ids: Array.from(selectedKeys), collectionId: coll.id })}
                   disabled={bulkCollectionMutation.isPending}
-                  className="flex w-full items-center gap-3 rounded-sm border border-[var(--color-border)] px-4 py-3 text-left transition-colors hover:border-alma-300 hover:bg-alma-50"
+                  className="flex w-full items-center gap-3 rounded-sm border border-control-edge px-4 py-3 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
                 >
                   <div className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: coll.color }} />
                   <div className="min-w-0 flex-1">
@@ -1010,7 +1013,7 @@ function SavedCompactTable({
         return (
           <Badge
             variant="secondary"
-            className={`text-[10px] ${SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR}`}
+            className={cn('text-[10px]', SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR)}
           >
             {SOURCE_LABELS[src] ?? src}
           </Badge>

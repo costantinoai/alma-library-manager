@@ -164,7 +164,7 @@ export function StepKeywords({ state, patch, next, back }: StepContext) {
                 <button
                   type="button"
                   onClick={() => remove(m)}
-                  className="shrink-0 rounded-sm p-1 text-slate-400 transition-colors hover:bg-surface-3 hover:text-critical-600"
+                  className="shrink-0 rounded-sm p-1 text-slate-400 transition-colors hover:bg-control-quiet hover:text-critical-600"
                   aria-label={`Remove monitor ${m.query}`}
                 >
                   <X className="h-4 w-4" />

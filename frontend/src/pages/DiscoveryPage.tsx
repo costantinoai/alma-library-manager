@@ -1177,7 +1177,7 @@ export function DiscoveryPage() {
               <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:hidden">Show</span>
               <span className="hidden text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500 group-open:inline">Hide</span>
             </summary>
-            <div className="border-t border-parchment-300/50 px-2 pb-2 pt-3">
+            <div className="border-t border-[var(--color-border)] px-2 pb-2 pt-3">
               <LensWeightsPanel
                 lens={selectedLens as Lens | null}
                 onSave={(weights) => {

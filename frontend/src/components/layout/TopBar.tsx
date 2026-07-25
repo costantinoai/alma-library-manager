@@ -45,7 +45,7 @@ export function TopBar({
       <div className="flex items-center gap-4">
         <button
           onClick={onMenuClick}
-          className="rounded-md p-2 text-alma-700 hover:bg-surface-2 hover:text-alma-900 lg:hidden"
+          className="rounded-sm p-2 text-alma-700 hover:bg-control-quiet hover:text-alma-900 lg:hidden"
           aria-label="Open navigation"
         >
           <Menu className="h-5 w-5" />
@@ -67,7 +67,7 @@ export function TopBar({
           <button
             type="button"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-md border border-[var(--color-border)] bg-surface-1 px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-parchment-400 hover:text-alma-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio sm:flex"
+            className="hidden items-center gap-2 rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-alma-700 transition-colors hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio sm:flex"
             aria-label="Open command palette"
             title="Open command palette"
           >

@@ -587,7 +587,7 @@ export function SuggestedAuthorsRail({
                       size="sm"
                       variant="outline"
                       disabled={busy || !s.openalex_id}
-                      className="h-7 gap-1 border-alma-200 text-alma-700 hover:bg-alma-50"
+                      className="h-7 gap-1 border-control-edge text-alma-700 hover:bg-control-quiet"
                       onClick={() => mergeMutation.mutate(s)}
                     >
                       <GitMerge className="h-3.5 w-3.5" aria-hidden />
@@ -598,7 +598,7 @@ export function SuggestedAuthorsRail({
                       variant="ghost"
                       title="Different person — show as a new author to follow"
                       disabled={busy}
-                      className="h-7 gap-1 text-slate-600 hover:bg-surface-3"
+                      className="h-7 gap-1 text-slate-600 hover:bg-control-quiet"
                       onClick={() => notDuplicateMutation.mutate(s)}
                     >
                       <X className="h-3.5 w-3.5" aria-hidden />

@@ -246,7 +246,7 @@ export function OptionCard({
           ? 'cursor-not-allowed border-[var(--color-border)] bg-surface-2 opacity-70'
           : selected
             ? 'cursor-pointer border-alma-folio bg-accent-soft'
-            : 'cursor-pointer border-[var(--color-border)] hover:bg-surface-2',
+            : 'cursor-pointer border-control-edge hover:bg-control-quiet',
         className,
       )}
     >
@@ -498,7 +498,7 @@ export function SettingsSection({
       <CollapsibleTrigger
         className={cn(
           'group flex w-full items-center justify-between gap-3 rounded-t-sm px-4 py-3 text-left',
-          'hover:bg-surface-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+          'hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
           'data-[state=closed]:rounded-b-sm',
         )}
       >
@@ -508,7 +508,7 @@ export function SettingsSection({
         </div>
         {trailing ? <div className="flex shrink-0 items-center gap-2">{trailing}</div> : null}
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t border-parchment-300/50 px-4 py-4">
+      <CollapsibleContent className="border-t border-[var(--color-border)] px-4 py-4">
         {description ? (
           <p className="mb-3 text-xs text-slate-500">{description}</p>
         ) : null}

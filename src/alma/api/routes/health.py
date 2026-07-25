@@ -12,6 +12,8 @@ served by ``/api/v1/insights/health`` (Pillar 1); this router exposes the
   (the visible Run-now values travel with the click; bounded, idempotent).
 - ``POST /health/operations/{key}/config`` — set any of the four separated
   controls; impossible values are rejected with 422, never silently clamped.
+- ``POST /health/operations/{key}/resume`` — clear the cooldown a manual stop
+  put on the task, re-arming the idle healer for it.
 
 All reads ride the existing materialised-view + operation_status layers; no
 new tables. The dedicated Health page (Phase 3) is the primary consumer.
@@ -235,6 +237,27 @@ def run_operation(
         "message": outcome.message,
         "plan": outcome.plan.to_wire(),
     }
+
+
+@router.post(
+    "/operations/{key}/resume",
+    summary="Re-arm automation for a manually stopped task",
+    description=(
+        "Clear the cooldown a manual stop put on this task, so the idle healer "
+        "and the startup orphan-resume may schedule it again. No-op when the "
+        "task is not paused."
+    ),
+)
+def resume_operation(
+    key: str,
+    db: sqlite3.Connection = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+):
+    task = maintenance.REGISTRY.get(key)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Unknown maintenance task: {key}")
+    maintenance.clear_task_user_pause(db, task)
+    return maintenance.describe_task(db, task, _health_payload(db))
 
 
 class MaintenanceConfigRequest(BaseModel):

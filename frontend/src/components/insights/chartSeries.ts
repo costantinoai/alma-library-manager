@@ -13,14 +13,14 @@ export const PAPERS_AVG_CIT_SERIES: SeriesToggleSpec[] = [
     label: 'Papers',
     title: 'Toggle papers series',
     activeClassName:
-      'data-[state=on]:border-alma-700 data-[state=on]:bg-alma-100 data-[state=on]:text-alma-800',
+      'data-[state=on]:border-accent-edge data-[state=on]:bg-alma-folio/10 data-[state=on]:text-alma-folio',
   },
   {
     key: 'avg_citations',
     label: 'Avg Citations',
     title: 'Toggle average citations series',
     activeClassName:
-      'data-[state=on]:border-gold-300 data-[state=on]:bg-gold-100 data-[state=on]:text-gold-700',
+      'data-[state=on]:border-gold-300 data-[state=on]:bg-gold-400/12 data-[state=on]:text-gold-700',
   },
 ]
 
@@ -37,14 +37,14 @@ export const TIMELINE_SERIES: SeriesToggleSpec[] = [
     label: 'Median Citations',
     title: 'Toggle the median citations line (the typical paper that year)',
     activeClassName:
-      'data-[state=on]:border-gold-300 data-[state=on]:bg-gold-100 data-[state=on]:text-gold-700',
+      'data-[state=on]:border-gold-300 data-[state=on]:bg-gold-400/12 data-[state=on]:text-gold-700',
   },
   {
     key: 'avg_citations',
     label: 'Mean',
     title: 'Toggle the mean citations line (sensitive to one runaway paper)',
     activeClassName:
-      'data-[state=on]:border-alma-200 data-[state=on]:bg-surface-3 data-[state=on]:text-slate-700',
+      'data-[state=on]:border-control-edge-strong data-[state=on]:bg-control-quiet data-[state=on]:text-slate-700',
   },
 ]
 

@@ -232,7 +232,7 @@ export function SettingsPage() {
                     <section.icon className="h-3.5 w-3.5" />
                     {section.label}
                   </EyebrowLabel>
-                  <ul className="space-y-0.5 border-l border-slate-200 pl-2">
+                  <ul className="space-y-0.5 border-l border-[var(--color-border)] pl-2">
                     {entries.map((entry) => {
                       const active = activeAnchor === entry.id
                       return (
@@ -243,7 +243,7 @@ export function SettingsPage() {
                             className={cn(
                               '-ml-[calc(0.5rem+1px)] flex w-full items-center rounded-r-md border-l-2 py-1 pl-3 pr-2 text-left text-sm transition-colors',
                               active
-                                ? 'border-alma-500 bg-alma-50/50 font-medium text-alma-800'
+                                ? 'border-alma-folio bg-accent-soft font-medium text-alma-folio'
                                 : 'border-transparent text-slate-600 hover:border-[var(--color-border)] hover:text-alma-800',
                             )}
                           >

@@ -690,7 +690,7 @@ export function DiscoveryWeightsCard() {
           </SettingsSections>
 
           {/* Footer */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--color-border)] pt-4">
             <p className="text-sm text-slate-500">
               Discovery settings affect Discovery refresh and Feed monitor intake.
             </p>

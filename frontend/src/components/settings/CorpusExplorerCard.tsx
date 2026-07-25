@@ -259,7 +259,7 @@ export function CorpusExplorerCard() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex h-[90vh] max-w-6xl flex-col overflow-hidden p-0">
-          <DialogHeader className="border-b border-slate-200 px-6 py-4">
+          <DialogHeader className="border-b border-[var(--color-border)] px-6 py-4">
             <DialogTitle className="flex items-center gap-2 text-base">
               <Database className="size-4 text-slate-500" />
               Corpus explorer
@@ -489,7 +489,7 @@ function CorpusExplorerBody() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="inline-flex rounded-md p-1 text-slate-400 transition-colors hover:bg-surface-2 hover:text-alma-700"
+                  className="inline-flex rounded-sm p-1 text-slate-400 transition-colors hover:bg-control-quiet hover:text-alma-700"
                   aria-label="Open paper URL"
                   title="Open paper URL"
                 >
@@ -503,7 +503,7 @@ function CorpusExplorerBody() {
                   e.stopPropagation()
                   setRemoveTarget(p)
                 }}
-                className="inline-flex h-auto rounded-md p-1 text-slate-400 shadow-none hover:bg-critical-50 hover:text-critical-700"
+                className="inline-flex h-auto rounded-sm p-1 text-slate-400 shadow-none hover:bg-critical-700/10 hover:text-critical-700"
                 aria-label="Remove paper (soft delete)"
                 title="Remove paper (status → removed, row stays in DB)"
               >

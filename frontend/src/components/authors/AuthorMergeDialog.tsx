@@ -334,7 +334,7 @@ export function AuthorMergeDialog({
                       className={`w-full rounded-sm border p-3 text-left shadow-paper-sm transition ${
                         isSelected
                           ? 'border-accent bg-accent-soft'
-                          : 'border-edge-2 bg-surface-2 hover:border-accent'
+                          : 'border-control-edge bg-control-well hover:border-control-edge-strong'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -418,7 +418,7 @@ export function AuthorMergeDialog({
                                 className={`flex cursor-pointer items-start gap-2 rounded-sm border p-2 text-sm transition ${
                                   isSelected
                                     ? 'border-accent bg-accent-soft'
-                                    : 'border-edge-2 bg-surface-2 hover:border-accent'
+                                    : 'border-control-edge bg-control-well hover:border-control-edge-strong'
                                 }`}
                               >
                                 <RadioGroupItem

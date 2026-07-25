@@ -668,7 +668,7 @@ export function ForceGraph({
   }, [])
 
   const zoomButtonClass =
-    'flex h-7 w-7 items-center justify-center rounded-sm border border-edge-2 bg-surface-3 text-slate-600 shadow-sm transition-colors hover:bg-surface-4'
+    'flex h-7 w-7 items-center justify-center rounded-sm border border-control-edge bg-control-well text-slate-600 shadow-sm transition-colors hover:bg-surface-4'
 
   return (
     <div ref={containerRef} className="relative w-full" style={{ height }}>

@@ -10,11 +10,11 @@
  * Used by `RepairCard` (the gaps an op repairs) and `DiagnosticsSection` (the
  * observed-only dimensions with no repair op).
  */
-import { cn } from '@/lib/utils'
 import { navigateTo } from '@/lib/hashRoute'
 import type { HealthDimension } from '@/api/client'
 import { canDrilldown } from './healthFormat'
 import { StatusRow } from './StatusRow'
+import { Meter } from '@/components/ui/meter'
 
 export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOpen: () => void }) {
   const isAuthorDim = dim.key.startsWith('authors.')
@@ -56,12 +56,13 @@ export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOp
     </span>
   ) : isCoverage ? (
     <span className="flex items-center gap-2">
-      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200" aria-hidden>
-        <span
-          className={cn('block h-full rounded-full', pct >= 80 ? 'bg-success-600' : 'bg-warning-500')}
-          style={{ width: `${Math.min(100, pct)}%` }}
-        />
-      </span>
+      <Meter
+        value={pct}
+        tone={pct >= 80 ? 'success' : 'warning'}
+        size="sm"
+        className="w-16"
+        decorative
+      />
       <span className="text-xs tabular-nums text-slate-600">{pct}%</span>
     </span>
   ) : (

@@ -20,10 +20,12 @@ import { cn } from '@/lib/utils'
  *   (`shadow-paper-sm`) and lift slightly on hover (`shadow-paper-md`).
  *   No colored-glow halo, no inset white ring, no gradient. The fill
  *   does the work; the shadow just suggests paper resting on paper.
- * - **Outline / secondary / ghost** read on the warm `cream` surface
- *   with parchment-tinted hover states. The outline variant uses the
- *   v2 hairline border (`var(--color-border)`); ghost stays chrome-free
- *   at rest.
+ * - **Outline / secondary / ghost** fill from the CONTROL INK ladder
+ *   (`control-well` / `control-quiet`), not from the paper ramps — see
+ *   "controls are ink, surfaces are paper" in index.css. That keeps an
+ *   unfilled button reading as the same object whether it sits on a card,
+ *   a panel, or inside a near-white popover, instead of borrowing (and
+ *   dissolving into) whatever cream is under it.
  * - **Gold** is reserved for fine accents / premium actions (export,
  *   citation copy, decorative CTAs). It is NOT a default CTA.
  * - **Focus** — teal halo (the v2 accent) on the warm paper offset, so

@@ -34,7 +34,7 @@ const emptyMediaVariants = cva(
     variants: {
       variant: {
         default: "bg-transparent",
-        icon: "bg-parchment-100 text-alma-800 flex size-10 shrink-0 items-center justify-center rounded-sm [&_svg:not([class*='size-'])]:size-6",
+        icon: "bg-control-quiet text-alma-800 flex size-10 shrink-0 items-center justify-center rounded-sm [&_svg:not([class*='size-'])]:size-6",
       },
     },
     defaultVariants: {

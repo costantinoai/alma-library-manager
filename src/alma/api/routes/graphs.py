@@ -28,6 +28,17 @@ from alma.ai.graph_versions import (
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import table_exists
 from alma.application import materialized_views as mv
+from alma.application.graph_substrate import (
+    INCREMENTAL_MIN_COSINE,
+    OUTLIER_CLUSTER_ID,
+    OUTLIER_LABEL,
+    SUBSTRATE_CLUSTER_RESOLUTION,
+    SUBSTRATE_SCOPE,
+    SubstrateUnavailable,
+    assign_to_centroids,
+    cluster_jitter,
+    substrate_row_count,
+)
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
 from alma.core.sql_helpers import standalone_paper_sql
@@ -163,27 +174,36 @@ class _VariantDataGauge:
 
 
 def _paper_scope_gauge(conn: sqlite3.Connection, scope: Scope) -> _VariantDataGauge:
-    """Proportional gauge over papers-in-scope — shared by both graph variant caches.
+    """Proportional gauge over the EMBEDDING SET in scope (task 50 M1).
 
-    The version tuple folds in the active embedding model so a model switch
-    invalidates variants exactly (not proportionally); data drift is measured on
-    the scoped ``papers`` set (count + ``updated_at`` watermark), which captures
-    adds, removes, and edits.
+    The old gauge measured ``papers.updated_at`` drift — but the hydration
+    pipeline touches ~75% of rows weekly (metadata fills bump ``updated_at``),
+    so every cached graph read as stale and rebuilt. Embedding-derived
+    artifacts (layout, cluster structure, semantic edges) change when the
+    VECTOR SET changes: rows added/removed for the active model, or the model
+    itself switching (the model rides in the version tuple → exact
+    invalidation). Node cosmetics (a corrected title) ride along on scheduled
+    rebuilds instead of invalidating a multi-second fit. See
+    ``tasks/lessons.md`` → "Semantic maps".
     """
     filt = scope.paper_filter("p", leading_and=False)
-    where = f" WHERE {filt}" if filt else ""
+    where_extra = f" AND {filt}" if filt else ""
     try:
         from alma.discovery.similarity import get_active_embedding_model
 
         model = get_active_embedding_model(conn) or ""
     except Exception:
         model = ""
+    model_sql = model.replace("'", "''")
+    base = (
+        "FROM publication_embeddings pe JOIN papers p ON p.id = pe.paper_id "
+        f"WHERE pe.model = '{model_sql}'{where_extra}"
+    )
     return _VariantDataGauge(
         versions=(CLUSTERING_ALGO_VERSION, PROJECTION_ALGO_VERSION, LABELLING_VERSION, model),
-        count_sql=f"SELECT COUNT(*) FROM papers p{where}",
-        watermark_sql=f"SELECT COALESCE(MAX(p.updated_at), '') FROM papers p{where}",
-        changed_since_sql="SELECT COUNT(*) FROM papers p WHERE p.updated_at > ?"
-        + (f" AND {filt}" if filt else ""),
+        count_sql=f"SELECT COUNT(*) {base}",
+        watermark_sql=f"SELECT COALESCE(MAX(pe.created_at), '') {base}",
+        changed_since_sql=f"SELECT COUNT(*) {base} AND pe.created_at > ?",
     )
 
 
@@ -205,25 +225,52 @@ def _serve_graph_variant(
     options: tuple,
     scope: Scope,
     build_fn: "Callable[[sqlite3.Connection], dict]",
-) -> GraphData:
-    """Serve a graph variant from the durable, proportionally-invalidated cache.
+    job_label: str,
+) -> GraphData | None:
+    """Serve a graph variant from the durable cache, or enqueue its build.
 
-    The ONE path shared by the paper-map and author-network variant routes (DRY):
-    key the variant by its options, gauge freshness by papers-in-scope drift, and
-    return a validated GraphData. ``build_fn(conn) -> payload dict`` does the
-    cache-miss build (a pure read of the underlying layout, persisting only the
-    variant payload — never the resolution-1.0 publication layout, I-2).
+    The ONE path shared by the paper-map and author-network variant routes
+    (DRY): key the variant by its options, gauge freshness by embedding-set
+    drift, and return a validated GraphData. Task 50 M1: a cache miss NEVER
+    builds inline (a variant is a full re-cluster/re-layout — the >200 s
+    author-network case) — it enqueues one background build and returns
+    ``None`` so the route answers 202 and the client polls.
     """
     variant_key = _variant_view_key(base_view_key, options)
     gauge = _paper_scope_gauge(conn, scope)
-    payload = mv.get_or_build_variant(
+    payload = mv.get_or_enqueue_variant(
         conn,
         view_key=variant_key,
         build_fn=build_fn,
-        make_fingerprint=lambda: gauge.signature(conn),
+        make_fingerprint=lambda c: _paper_scope_gauge(c, scope).signature(c),
         is_fresh=lambda stored: gauge.is_fresh(conn, stored),
+        job_label=job_label,
     )
+    if payload is None:
+        return None
     return GraphData(**payload)
+
+
+def _enqueue_graph_view_build(view_key: str) -> dict:
+    """First-run bootstrap for a registered graph view: enqueue ONE background
+    build (deduped by the view's operation key) and describe it for the 202."""
+    job_id = mv.enqueue_rebuild(view_key)
+    return {"job_id": job_id or "", "message": "Building the graph…"}
+
+
+def _layout_freshness(conn: sqlite3.Connection, scope: Scope, computed_at: str) -> dict:
+    """Honest staleness annotation for a stored graph payload: when it was
+    built and how many in-scope vectors arrived since (those papers are on the
+    substrate via incremental placement but not yet in this cached payload —
+    the scheduled maintenance rebuild folds them in)."""
+    gauge = _paper_scope_gauge(conn, scope)
+    try:
+        new_since = int(
+            conn.execute(gauge.changed_since_sql, (computed_at or "",)).fetchone()[0] or 0
+        )
+    except sqlite3.OperationalError:
+        new_since = 0
+    return {"computed_at": computed_at, "new_vectors_since_build": new_since}
 
 
 @router.get("/paper-map", response_model=GraphData)
@@ -233,7 +280,7 @@ def get_paper_map(
     size_by: str = Query("citations", description="Size by: citations, uniform, rating"),
     show_edges: bool = Query(True, description="Show edges between nodes"),
     scope: str = Query("library", description="library (default: Library-only papers) or corpus (every stored paper)"),
-    cluster_resolution: float = Query(1.5, ge=0.5, le=3.0, description="Cluster detail (default 1.5): >1 finer (more clusters), <1 coarser. Non-1.0 serves from the durable variant cache."),
+    cluster_resolution: float = Query(SUBSTRATE_CLUSTER_RESOLUTION, ge=0.5, le=3.0, description="Cluster detail (default = the substrate resolution, 1.5): >1 finer (more clusters), <1 coarser. Non-default builds a variant in the background (202 while building)."),
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic-similarity weight in the fused layout"),
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
@@ -258,13 +305,25 @@ def get_paper_map(
         and color_by == "cluster"
         and size_by == "citations"
         and show_edges
-        and abs(cluster_resolution - 1.0) < 1e-6
+        # The frontend default MUST equal the substrate resolution — a
+        # mismatch silently routes every visit down the variant path (the
+        # 1.5-vs-1.0 bug, tasks/lessons.md "Semantic maps").
+        and abs(cluster_resolution - SUBSTRATE_CLUSTER_RESOLUTION) < 1e-6
         and not fused_layout
     )
 
     if is_default_options:
+        # Task 50 M1: a GET is a pure stored read. Freshness is owned by the
+        # scheduled graph-layout maintenance job (embedding-set drift), never
+        # by the request path — no fingerprint compute, no rebuild enqueue,
+        # and NEVER an inline UMAP.
         view_key = scope.view_key("paper_map")
-        envelope = mv.get(conn, view_key)
+        envelope = mv.get_stored(conn, view_key)
+        if envelope is None:
+            return JSONResponse(
+                status_code=202,
+                content={"status": "building", **_enqueue_graph_view_build(view_key)},
+            )
         graph = _graph_data_from_envelope(envelope)
         # Citation-edge coverage is a cheap live stat, not cached data — compute
         # it fresh on the read so it tracks reference backfills immediately
@@ -272,6 +331,7 @@ def get_paper_map(
         graph.metadata = {
             **(graph.metadata or {}),
             "citation_coverage": _citation_edge_coverage(conn, scope),
+            "layout": _layout_freshness(conn, scope, str(envelope.get("computed_at") or "")),
         }
         return graph
 
@@ -337,7 +397,13 @@ def get_paper_map(
         ),
         scope=scope,
         build_fn=_build_variant,
+        job_label=f"paper map variant ({scope.label()})",
     )
+    if graph is None:
+        return JSONResponse(
+            status_code=202,
+            content={"status": "building", "message": "Building this map variant…"},
+        )
     # Citation-edge coverage is a cheap live stat, computed on the read so it's
     # correct even when the variant payload was cached before this annotation
     # existed (and so it tracks reference backfills immediately). Pure read.
@@ -750,8 +816,15 @@ def get_author_network(
     scope = Scope.parse(scope)
     fused = w_coauthorship > 0 or w_bibliographic > 0
     if abs(cluster_resolution - 1.0) < 1e-6 and not fused:
+        # Task 50 M1: stored read only — freshness is the maintenance job's,
+        # never the GET's (see get_paper_map).
         view_key = scope.view_key("author_network")
-        envelope = mv.get(conn, view_key)
+        envelope = mv.get_stored(conn, view_key)
+        if envelope is None:
+            return JSONResponse(
+                status_code=202,
+                content={"status": "building", **_enqueue_graph_view_build(view_key)},
+            )
         return _graph_data_from_envelope(envelope)
 
     def _build_variant(c: sqlite3.Connection) -> dict:
@@ -766,16 +839,23 @@ def get_author_network(
             },
         )
 
-    # Same durable, proportionally-invalidated cache as the paper map — gauged on
-    # papers-in-scope drift (the author graph derives from co-authorship).
-    return _serve_graph_variant(
+    # Same durable cache as the paper map — gauged on embedding-set drift. A
+    # miss enqueues the (formerly >200 s inline) re-layout in the background.
+    graph = _serve_graph_variant(
         conn,
         base_view_key=scope.view_key("author_network"),
         options=(round(cluster_resolution, 3), round(w_semantic, 3),
                  round(w_coauthorship, 3), round(w_bibliographic, 3)),
         scope=scope,
         build_fn=_build_variant,
+        job_label=f"author network variant ({scope.label()})",
     )
+    if graph is None:
+        return JSONResponse(
+            status_code=202,
+            content={"status": "building", "message": "Building this network variant…"},
+        )
+    return graph
 
 
 def _build_author_network_payload(
@@ -1581,19 +1661,9 @@ CLUSTER_COLORS = [
     "#A855F7",
 ]
 
-# Outlier group (I-6): papers HDBSCAN judged to be density noise are retained as
-# a distinct "Unclustered" group rather than force-merged into a real cluster.
-# A negative id keeps them out of the dense 0..N-1 cluster colour ramp, and the
-# neutral slate fill signals "no confident topic" instead of a misleading colour.
-OUTLIER_CLUSTER_ID = -1
-OUTLIER_LABEL = "Unclustered"
+# Outlier group (I-6): ids/labels live in graph_substrate (the substrate owns
+# cluster identity); only the render colour is a route concern.
 OUTLIER_COLOR = "#94A3B8"  # slate-400: the same neutral used for "no cluster"
-
-# Incremental layout: a brand-new paper is only attached to an existing cluster
-# centroid when it is genuinely close (cosine ≥ this). A novel paper that sits
-# far from every centroid stays Unclustered until the next full rebuild, instead
-# of being jittered into whichever centroid happens to be least-far (I-6/I-7).
-_INCREMENTAL_MIN_COSINE = 0.10
 
 # Cluster-stability (mean pairwise ARI across UMAP seeds) re-fits UMAP+HDBSCAN
 # ``n_seeds`` (5) extra times. That's cheap for a personal library but multiplies
@@ -2441,10 +2511,16 @@ def _build_embedding_paper_map(
     color_by = opts.get("color_by", "cluster")
     size_by = opts.get("size_by", "citations")
     show_edges = opts.get("show_edges", True)
-    # I-1: the cluster-layout cache is keyed by scope, so a Corpus build never
-    # overwrites the Library layout (and vice-versa). Read + persist only this
-    # scope's rows.
-    layout_scope = str(opts.get("scope", "library") or "library")
+    # 50-G: ONE substrate. Layout rows are read + persisted for the corpus
+    # scope only, regardless of which papers this build renders — a Library
+    # build FILTERS the corpus layout, it never fits its own.
+    layout_scope = SUBSTRATE_SCOPE
+    # Whether this build may run a FULL re-cluster/re-projection when the
+    # cached substrate can't serve it: True for the corpus substrate build and
+    # for ad-hoc in-memory variants (persist=False); False for the default
+    # Library build, which must assemble from the substrate (the caller
+    # ensures the substrate exists first and retries).
+    allow_full_rebuild = bool(opts.get("allow_full_rebuild", True))
 
     def _cosine(a: np.ndarray, b: np.ndarray) -> float:
         na = float(np.linalg.norm(a))
@@ -2453,11 +2529,8 @@ def _build_embedding_paper_map(
             return 0.0
         return float(np.dot(a, b) / (na * nb))
 
-    def _cluster_jitter(paper_id: str, cluster_id: int, index: int) -> tuple[float, float]:
-        digest = hashlib.sha1(f"{paper_id}:{cluster_id}:{index}".encode()).hexdigest()
-        angle = (int(digest[:8], 16) / float(16**8)) * (2.0 * np.pi)
-        radius = 0.035 + 0.01 * (index % 3)
-        return float(np.cos(angle) * radius), float(np.sin(angle) * radius)
+    # Deterministic placement jitter is owned by graph_substrate (shared with
+    # the standalone placement sweep) — see `cluster_jitter`.
 
     paper_ids = list(embeddings.keys())
     vectors_by_id = {
@@ -2534,10 +2607,15 @@ def _build_embedding_paper_map(
     clustering_meta: dict[str, Any] = {}
     node_probabilities: dict[str, float] = {}
 
-    # A non-default cluster_resolution must actually RE-CLUSTER: the cached
-    # publication_clusters layout was built at resolution 1.0, so reusing it
-    # would silently ignore the requested detail level. Force a full recompute.
-    if abs(float(opts.get("cluster_resolution", 1.0) or 1.0) - 1.0) > 1e-6:
+    # A non-substrate cluster_resolution must actually RE-CLUSTER: the cached
+    # publication_clusters layout was built at SUBSTRATE_CLUSTER_RESOLUTION, so
+    # reusing it would silently ignore the requested detail level. Force a full
+    # recompute (variant builds only — they pass persist=False).
+    requested_resolution = float(
+        opts.get("cluster_resolution", SUBSTRATE_CLUSTER_RESOLUTION)
+        or SUBSTRATE_CLUSTER_RESOLUTION
+    )
+    if abs(requested_resolution - SUBSTRATE_CLUSTER_RESOLUTION) > 1e-6:
         stale_ids = list(paper_ids)
         stable_ids = []
 
@@ -2553,8 +2631,15 @@ def _build_embedding_paper_map(
             if cached.get("label"):
                 labels_by_cluster[cid] = str(cached["label"])
 
-    # 2) Partial refresh: update only new/stale papers by nearest cached centroids.
-    elif stable_ids and stale_ids and len(stale_ids) <= max(3, int(round(len(paper_ids) * 0.25))):
+    # 2) Partial refresh: update only new/stale papers by nearest cached
+    # centroids. Full-rebuild-capable builds cap this at 25% drift (beyond
+    # that a fresh fit is more honest); substrate-only builds (the default
+    # Library assembly) place EVERY missing paper incrementally — a full fit
+    # is never theirs to run.
+    elif stable_ids and stale_ids and (
+        not allow_full_rebuild
+        or len(stale_ids) <= max(3, int(round(len(paper_ids) * 0.25)))
+    ):
         layout_mode = "embeddings_incremental"
         for paper_id in stable_ids:
             cached = layout_rows[paper_id]
@@ -2587,22 +2672,16 @@ def _build_embedding_paper_map(
             layout_mode = "embeddings_full"
         else:
             for paper_id in stale_ids:
-                vec = vectors_by_id[paper_id]
-                best_cid = max(
-                    centroid_vectors.keys(),
-                    key=lambda cid: _cosine(vec, centroid_vectors[cid]),
+                # Shared nearest-centroid rule (graph_substrate): attach only
+                # when genuinely close, else the honest Unclustered group
+                # (I-6/I-7) — identical to the standalone placement sweep so a
+                # paper can't cluster differently depending on which path
+                # placed it.
+                cid = assign_to_centroids(
+                    vectors_by_id[paper_id], centroid_vectors, min_cosine=INCREMENTAL_MIN_COSINE
                 )
-                best_sim = _cosine(vec, centroid_vectors[best_cid])
-                # I-6/I-7: only attach a new paper to a cluster it is genuinely
-                # close to. A novel paper far from every centroid stays
-                # Unclustered (honest) instead of being jittered into the
-                # least-far centroid as if it belonged.
-                if best_sim < _INCREMENTAL_MIN_COSINE:
-                    assignments[paper_id] = OUTLIER_CLUSTER_ID
-                    cluster_members[OUTLIER_CLUSTER_ID].append(paper_id)
-                else:
-                    assignments[paper_id] = int(best_cid)
-                    cluster_members[int(best_cid)].append(paper_id)
+                assignments[paper_id] = cid
+                cluster_members[cid].append(paper_id)
 
             # Place incremental nodes around cluster centroids with deterministic jitter.
             stale_idx_by_cluster: dict[int, int] = defaultdict(int)
@@ -2611,13 +2690,21 @@ def _build_embedding_paper_map(
                 cx, cy = centroid_coords.get(cid, (0.5, 0.5))
                 idx = stale_idx_by_cluster[cid]
                 stale_idx_by_cluster[cid] += 1
-                jx, jy = _cluster_jitter(paper_id, cid, idx)
+                jx, jy = cluster_jitter(paper_id, cid, idx)
                 coords[paper_id] = (
                     min(0.98, max(0.02, cx + jx)),
                     min(0.98, max(0.02, cy + jy)),
                 )
 
     # 3) Full rebuild: clustering + 2D projection.
+    if layout_mode == "embeddings_full" and not allow_full_rebuild:
+        # A substrate-only build (default Library assembly) landed here, which
+        # means the corpus substrate is missing/empty. The caller must build
+        # the substrate first and retry — loud, never a silent library-only fit
+        # persisted as the substrate (50-G).
+        raise SubstrateUnavailable(
+            "corpus substrate missing; build the corpus layout before assembling a library view"
+        )
     if layout_mode == "embeddings_full":
         # task #21 perf: the 5-D clustering substrate and the 2-D display
         # projection are two UMAP fits over the SAME cosine neighbourhood. At
@@ -2642,7 +2729,7 @@ def _build_embedding_paper_map(
         clustering = cluster_publications(
             embeddings,
             compute_stability=persist and len(embeddings) <= _STABILITY_MAX_NODES,
-            resolution=float(opts.get("cluster_resolution", 1.0) or 1.0),
+            resolution=requested_resolution,
             precomputed_knn=shared_knn,
         )
         clusters = clustering.clusters
@@ -2712,11 +2799,15 @@ def _build_embedding_paper_map(
     # ``tasks/10_ACTIVITY_CONCURRENCY.md``). Task 09: routes the old raw per-batch
     # commit through the central writer-gate primitive.
     if persist:
+        # Full rebuilds persist every row (the layout moved); cached/incremental
+        # builds persist ONLY the newly placed papers — rewriting 8k unchanged
+        # rows per rebuild bumped their updated_at for nothing.
+        persist_ids = list(paper_ids) if layout_mode == "embeddings_full" else list(stale_ids)
         now_iso = datetime.now().isoformat()
         cluster_batch_size = 200
         try:
-            for batch_start in range(0, len(paper_ids), cluster_batch_size):
-                batch = paper_ids[batch_start:batch_start + cluster_batch_size]
+            for batch_start in range(0, len(persist_ids), cluster_batch_size):
+                batch = persist_ids[batch_start:batch_start + cluster_batch_size]
                 with write_section(conn, label="graphs paper_map: persist clusters"):
                     for paper_id in batch:
                         # Default to the Unclustered group (not cluster 0) for any
@@ -3315,12 +3406,27 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
         "size_by": "citations",
         "show_edges": True,
         "scope": scope,
+        "cluster_resolution": SUBSTRATE_CLUSTER_RESOLUTION,
+        # 50-G: only the corpus build may fit a layout — it IS the substrate
+        # build. The library build assembles (filters + incremental placement)
+        # from the substrate.
+        "allow_full_rebuild": scope == SUBSTRATE_SCOPE,
     }
     embeddings = _load_embeddings(conn, scope=scope)
     if embeddings and len(embeddings) >= 5:
-        result = _build_embedding_paper_map(
-            conn, embeddings, ai_state=ai_state, graph_options=graph_options
-        )
+        try:
+            result = _build_embedding_paper_map(
+                conn, embeddings, ai_state=ai_state, graph_options=graph_options
+            )
+        except SubstrateUnavailable:
+            # Library assembly found no substrate (fresh DB / post-migration).
+            # Build the corpus substrate once — the ONE full fit — then retry
+            # the assembly, which now reads it.
+            logger.info("paper_map(library): substrate missing — building corpus layout first")
+            mv.rebuild(conn, Scope.corpus.view_key("paper_map"))
+            result = _build_embedding_paper_map(
+                conn, embeddings, ai_state=ai_state, graph_options=graph_options
+            )
     else:
         result = _build_text_paper_map(
             conn, scope=scope, ai_state=ai_state

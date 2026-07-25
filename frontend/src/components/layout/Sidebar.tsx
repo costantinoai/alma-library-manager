@@ -142,7 +142,7 @@ export function Sidebar({
         >
           <button
             onClick={onClose}
-            className="absolute right-3 top-3 rounded-md p-1 text-alma-700 hover:bg-surface-2 lg:hidden"
+            className="absolute right-3 top-3 rounded-sm p-1 text-alma-700 hover:bg-control-quiet lg:hidden"
             aria-label="Close navigation"
           >
             <X className="h-5 w-5" />

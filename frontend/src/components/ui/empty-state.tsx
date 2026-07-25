@@ -31,7 +31,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
         {Icon && (
           <EmptyMedia
             variant="icon"
-            className="size-12 rounded-full bg-parchment-100 text-alma-700 ring-1 ring-[var(--color-border)]"
+            className="size-12 rounded-full bg-control-quiet text-alma-700 ring-1 ring-control-edge"
           >
             <Icon className="size-5" />
           </EmptyMedia>

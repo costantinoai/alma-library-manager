@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { Meter } from '@/components/ui/meter'
 import { cn } from '@/lib/utils'
 
 /**
@@ -130,12 +131,13 @@ export function GoalMeter({
   const pct = Math.min(100, Math.round((done / Math.max(1, target)) * 100))
   return (
     <div className="flex items-center gap-3">
-      <div className="h-1.5 w-28 overflow-hidden rounded-full bg-surface-3">
-        <div
-          className={cn('h-full rounded-full transition-all', met ? 'bg-success-500' : 'bg-alma-folio')}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <Meter
+        value={pct}
+        tone={met ? 'success' : 'accent'}
+        size="sm"
+        className="w-28"
+        decorative
+      />
       <span className={cn('text-xs font-medium', met ? 'text-success-700' : 'text-slate-500')}>
         {met ? `${done} ${noun} — nice` : `${done} of ${target} ${noun}`}
       </span>

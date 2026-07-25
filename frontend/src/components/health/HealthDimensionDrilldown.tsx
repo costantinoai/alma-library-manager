@@ -93,7 +93,7 @@ function DrilldownRunButton({
       icon={<Wrench className="h-4 w-4" />}
       pending={runningKey === action.operation_key}
       disabled={runningKey != null && runningKey !== action.operation_key}
-      className="border-alma-200 text-alma-700 hover:bg-alma-50"
+      className="border-control-edge text-alma-700 hover:bg-control-quiet"
       onClick={() => onRun(action.operation_key)}
     >
       {action.label}
@@ -293,7 +293,7 @@ export function HealthDimensionDrilldown({
                         variant="outline"
                         icon={<Wrench className="h-4 w-4" />}
                         pending={fixSelectedMutation.isPending}
-                        className="border-alma-200 text-alma-700 hover:bg-alma-50"
+                        className="border-control-edge text-alma-700 hover:bg-control-quiet"
                         onClick={() => fixSelectedMutation.mutate(selectedIds)}
                       >
                         Fix {selected.size}
@@ -448,7 +448,7 @@ export function HealthDimensionDrilldown({
                             <Button
                               size="sm"
                               variant="outline"
-                              className="border-alma-200 text-alma-700 hover:bg-alma-50"
+                              className="border-control-edge text-alma-700 hover:bg-control-quiet"
                               onClick={() => {
                                 setEditingId(item.paper_id)
                                 setDraft(editField === 'authors' ? (item.authors ?? '') : '')

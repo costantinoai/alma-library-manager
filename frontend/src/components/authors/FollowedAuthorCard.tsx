@@ -93,7 +93,7 @@ export function FollowedAuthorCard({
                   .join(' — ') || attentionRow.suggested_action.hint
               }
               aria-label={`Resolve ${attentionRow.reason} for ${author.name}`}
-              className="rounded-full text-critical-600 hover:bg-critical-100 hover:text-critical-700"
+              className="rounded-full text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             >
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
             </Button>

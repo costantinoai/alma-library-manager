@@ -1,9 +1,10 @@
 import type { ScoreBreakdown, ScoreSignalDetail } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
+import { Meter } from '@/components/ui/meter'
 import { SubPanel } from '@/components/ui/sub-panel'
+import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
 import {
-  SIGNAL_COLORS,
   SIGNAL_LABELS,
   SIGNAL_ORDER,
   SOURCE_TYPE_LABELS,
@@ -29,7 +30,7 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
       value: detail?.value ?? 0,
       weight: detail?.weight ?? 0,
       weighted: detail?.weighted ?? 0,
-      color: SIGNAL_COLORS[key] ?? '#94A3B8',
+      color: SIGNAL_COLORS[key] ?? SIGNAL_FALLBACK_COLOR,
       degraded: isSignalDegraded(key, breakdown),
     }
   })
@@ -63,25 +64,22 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
       </div>
 
       {/* Stacked bar chart — slim, ribbon-like, sitting on a hairline rule
-          so it reads as a printed band, not a chip. */}
-      <div className="flex h-4 w-full overflow-hidden rounded-sm bg-parchment-200/60 ring-1 ring-parchment-300/60">
-        {signals.map((s) => {
-          const pct = totalWeighted > 0 ? (Math.max(0, s.weighted) / totalWeighted) * 100 : 0
-          if (pct < 0.5) return null
-          return (
-            <div
-              key={s.key}
-              className="transition-all duration-300"
-              style={{
-                width: `${pct}%`,
-                backgroundColor: s.weighted > 0 ? s.color : '#CBD5E1',
-                minWidth: pct > 0 ? '3px' : '0',
-              }}
-              title={`${s.label}: ${formatPercent(s.weighted, 1)}`}
-            />
-          )
-        })}
-      </div>
+          so it reads as a printed band, not a chip. Squared off and taller
+          than a standard Meter rail on purpose: this is the summary band,
+          not one of the per-signal rails below it. */}
+      <Meter
+        segments={signals
+          .filter((s) => (totalWeighted > 0 ? Math.max(0, s.weighted) / totalWeighted : 0) >= 0.005)
+          .map((s) => ({
+            value: Math.max(0, s.weighted),
+            fillClassName: s.weighted > 0 ? s.color : SIGNAL_FALLBACK_COLOR,
+          }))}
+        className="h-4 rounded-sm ring-1 ring-control-edge"
+        label={`Score composition: ${signals
+          .filter((s) => s.weighted > 0)
+          .map((s) => `${s.label} ${formatPercent(s.weighted, 1)}`)
+          .join(', ')}`}
+      />
 
       {/* Signal detail rows — each one a sub-cell. The TOP signal lifts
           onto a paper-tone sub-panel so it reads as the lead voice in
@@ -122,15 +120,12 @@ export function ScoreBreakdownPanel({ breakdown }: ScoreBreakdownPanelProps) {
                 ×{s.weight.toFixed(2)}
               </span>
               <div className="flex-1">
-                <div className="h-1 w-full rounded-full bg-parchment-200/70">
-                  <div
-                    className="h-1 rounded-full transition-all duration-300"
-                    style={{
-                      width: `${s.weighted > 0 ? Math.min(100, (s.weighted / maxWeighted) * 100) : 0}%`,
-                      backgroundColor: s.weighted > 0 ? s.color : '#CBD5E1',
-                    }}
-                  />
-                </div>
+                <Meter
+                  value={s.weighted > 0 ? (s.weighted / maxWeighted) * 100 : 0}
+                  fillClassName={s.weighted > 0 ? s.color : SIGNAL_FALLBACK_COLOR}
+                  size="xs"
+                  decorative
+                />
               </div>
               <span
                 className={cn(

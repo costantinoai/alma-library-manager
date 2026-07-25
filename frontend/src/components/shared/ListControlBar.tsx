@@ -56,7 +56,7 @@ export function ListControlBar({
         onClick={sort.onToggle}
         title={sort.title}
         aria-label={sort.ariaLabel}
-        className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-[var(--color-border)] bg-surface-1 px-3 text-xs font-medium text-alma-800 transition-colors hover:bg-surface-2"
+        className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-3 text-xs font-medium text-alma-800 transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
       >
         <ArrowDownWideNarrow className="h-3.5 w-3.5 text-slate-500" />
         {sort.label}
@@ -90,14 +90,14 @@ export function ListControlBar({
             if (value) view.onChange(value)
           }}
           aria-label={view.ariaLabel}
-          className="gap-0 rounded-sm bg-surface-2/80 p-0.5"
+          variant="segment"
         >
           {view.options.map(({ value, label, icon: Icon, title }) => (
             <ToggleGroupItem
               key={value}
               value={value}
               title={title}
-              className="h-7 min-w-0 gap-1 rounded-sm px-2.5 text-xs font-medium text-slate-600 hover:bg-transparent hover:text-alma-800 data-[state=on]:bg-surface-1 data-[state=on]:text-alma-800 data-[state=on]:shadow-paper-sm data-[state=on]:ring-1 data-[state=on]:ring-[var(--color-border)]"
+              className="h-7 min-w-0 gap-1 px-2.5 text-xs font-medium"
             >
               <Icon className="h-3.5 w-3.5" />
               <span className="hidden md:inline">{label}</span>

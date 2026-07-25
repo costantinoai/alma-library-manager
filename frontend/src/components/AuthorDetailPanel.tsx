@@ -903,7 +903,7 @@ export function AuthorDetailPanel({
               variant="ghost"
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              className="text-critical-600 hover:bg-critical-50 hover:text-critical-700"
+              className="text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
             >
               {deleteMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

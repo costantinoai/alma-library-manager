@@ -397,6 +397,14 @@ export interface MaintenanceOperation {
   request_batch_unit: string | null
   auto_enabled: boolean
   default_auto_enabled: boolean
+  /**
+   * ISO timestamp until which automation skips this task because YOU stopped a
+   * background run of it by hand — a cooldown, not a policy change, so
+   * `auto_enabled` stays as configured. Null when the task may run.
+   * Cleared by `resumeMaintenanceTask`, by running the task manually, or by
+   * the stamp lapsing.
+   */
+  paused_by_user_until: string | null
   auto_daily_cap: number
   max_auto_daily_cap: number
   manual_limit: number
@@ -621,6 +629,14 @@ export function estimateMaintenanceOperation(
   const query = qs.toString()
   return api.get<MaintenanceEstimate>(
     `/health/operations/${encodeURIComponent(key)}/estimate${query ? `?${query}` : ''}`,
+  )
+}
+
+/** Re-arm automation for a task a manual stop put on cooldown. */
+export function resumeMaintenanceTask(key: string): Promise<MaintenanceOperation> {
+  return api.post<MaintenanceOperation>(
+    `/health/operations/${encodeURIComponent(key)}/resume`,
+    {},
   )
 }
 

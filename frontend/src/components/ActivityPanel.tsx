@@ -437,7 +437,7 @@ function OperationsView({
         {isExpandableParent ? (
           <button
             type="button"
-            className="mt-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+            className="mt-0.5 rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
             onClick={(e) => {
               e.stopPropagation()
               setExpandedParents((prev) => ({
@@ -486,7 +486,7 @@ function OperationsView({
               {terminal ? (
                 <button
                   type="button"
-                  className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                  className="rounded p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-700"
                   title="Dismiss operation"
                   aria-label="Dismiss operation"
                   onClick={(e) => {
@@ -500,7 +500,7 @@ function OperationsView({
                 <>
                   <button
                     type="button"
-                    className="rounded p-0.5 text-warning-600 hover:bg-warning-100 hover:text-warning-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded p-0.5 text-warning-600 hover:bg-warning-700/12 hover:text-warning-800 disabled:cursor-not-allowed disabled:opacity-40"
                     title={
                       op.status === 'cancelling'
                         ? 'Stopping — finishing current batch'
@@ -517,7 +517,7 @@ function OperationsView({
                   </button>
                   <button
                     type="button"
-                    className="rounded p-0.5 text-critical-500 hover:bg-critical-100 hover:text-critical-700"
+                    className="rounded p-0.5 text-critical-500 hover:bg-critical-700/10 hover:text-critical-700"
                     title="Kill now (interrupts worker thread; in-flight batch may be lost)"
                     aria-label="Kill operation"
                     onClick={(e) => {

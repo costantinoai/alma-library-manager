@@ -29,6 +29,7 @@ import {
   getHealthSnapshot,
   getJobStatus,
   runMaintenanceOperation,
+  resumeMaintenanceTask,
   setMaintenanceConfig,
   type HealthDimension,
   type MaintenanceOperation,
@@ -199,6 +200,17 @@ export function HealthPage() {
     onError: (err) => errorToast('Could not update setting', String(err)),
   })
 
+  // Re-arm a task a manual stop put on cooldown. Separate from configMutation:
+  // the pause is not one of the four persisted config controls, it's a
+  // temporary hold that Resume lifts.
+  const resumeMutation = useMutation({
+    mutationFn: (key: string) => resumeMaintenanceTask(key),
+    onSuccess: async () => {
+      await invalidateQueries(queryClient, OPERATIONS_KEY)
+    },
+    onError: (err) => errorToast('Could not resume automation', String(err)),
+  })
+
   // ['insights-diag'] included: the System status band below reads the eight
   // diagnostics-section queries — an explicit Refresh must refresh it too.
   const refresh = () => invalidateQueries(queryClient, SNAPSHOT_KEY, OPERATIONS_KEY, ['insights-diag'])
@@ -317,8 +329,17 @@ export function HealthPage() {
       request_batch_size?: number
     },
   ) => configMutation.mutate({ key, body })
+  const onResume = (key: string) => resumeMutation.mutate(key)
 
-  const groupProps = { dimsOf, onRun, onConfig, onOpenDim: setOpenDim, runningKey, configSavingKey }
+  const groupProps = {
+    dimsOf,
+    onRun,
+    onConfig,
+    onResume,
+    onOpenDim: setOpenDim,
+    runningKey,
+    configSavingKey,
+  }
 
   return (
     <div className="space-y-6">
@@ -394,7 +415,7 @@ export function HealthPage() {
             </Button>
           </div>
         ) : snapshotQuery.isLoading ? (
-          <div className="h-24 animate-pulse rounded-sm bg-surface-2" />
+          <div className="h-24 animate-pulse rounded-sm bg-control-quiet" />
         ) : snapshot ? (
           <HealthVitals snapshot={snapshot} />
         ) : null}

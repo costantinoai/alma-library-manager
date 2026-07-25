@@ -41,7 +41,7 @@ export function HealthVitals({ snapshot }: { snapshot: HealthSnapshot }) {
     <div>
       {/* Vitals ribbon */}
       <div
-        className="flex h-2 w-full overflow-hidden rounded-full bg-alma-100"
+        className="flex h-2 w-full overflow-hidden rounded-full bg-control-track"
         role="img"
         aria-label={`${bySeverity.critical ?? 0} critical, ${bySeverity.warning ?? 0} warning, ${bySeverity.info ?? 0} info, ${bySeverity.ok ?? 0} healthy dimensions`}
       >

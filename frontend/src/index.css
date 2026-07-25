@@ -82,6 +82,35 @@
   --color-edge-3: #F0EADC;
   --color-edge-4: #F2EEE4;   /* faintest, on white */
 
+  /* ── Control ink ladder — controls are ink, surfaces are paper ─────────
+   * The surface ladder above belongs to CONTAINERS (desk, card, panel,
+   * popover). A CONTROL — button, field, chip, toggle, rail — never takes a
+   * step on it. It fills instead with a translucent `alma-800` wash that
+   * composites over whatever paper it happens to sit on.
+   *
+   * Why translucent ink rather than another set of solid hexes: a control
+   * appears at every elevation. Pinned to a fixed cream (the old
+   * `bg-surface-0` on Input) it reads as a well inside a Card and as a dark
+   * slab inside a near-white popover, and a control that borrows its host's
+   * own cream dissolves into it outright. One wash yields the SAME relative
+   * contrast step everywhere, with no per-elevation variants. This is the
+   * rule the chip layer already adopted (StatusBadge `neutral`); these
+   * tokens carry it through the rest of the control layer.
+   *
+   * Base is alma-800 #14233A = rgb(20 35 58).
+   *
+   * The ONE exception is the RAISED KNOB — switch thumb, slider thumb,
+   * active segment of a segmented rail. Those sit at the TOP of the paper
+   * ladder (`bg-surface-4` + `shadow-paper-sm`): a white knob on an ink
+   * rail is maximum legibility and reads as a physical control resting on
+   * the page. */
+  --color-control-well:        rgb(20 35 58 / 0.045); /* field rest fill        */
+  --color-control-quiet:       rgb(20 35 58 / 0.07);  /* secondary btn, kbd     */
+  --color-control-quiet-hover: rgb(20 35 58 / 0.12);  /* hover: quiet / ghost   */
+  --color-control-track:       rgb(20 35 58 / 0.14);  /* rails, switch off      */
+  --color-control-edge:        rgb(20 35 58 / 0.16);  /* control hairline       */
+  --color-control-edge-strong: rgb(20 35 58 / 0.30);  /* hover / focus hairline */
+
   /* ── Activity surface variant — the ONE deliberate exception ──────────
    * The Activity panel is system telemetry, not editorial reading, so it
    * sits on its own neutral ladder instead of the warm cream one. The tone
@@ -332,6 +361,25 @@
  *   level but recesses (inset shadow). Portals reset the counter: dialog/
  *   sheet → level 1, popover/dropdown/menu → level 3, tooltip → off-ladder
  *   dark ink chip.
+ *
+ * CONTROLS ARE INK, SURFACES ARE PAPER. The ladder above is for containers
+ * only. A control — button, field, chip, toggle, rail, meter — never wears a
+ * step of it: it fills from the translucent `control-*` ink ladder, which
+ * composites over any host paper and so is the identical object at every
+ * elevation.
+ *
+ *   control-well         field rest fill (input, textarea, select trigger,
+ *                        checkbox, radio, outline button, toggle pill)
+ *   control-quiet        secondary button, kbd, skeleton, icon medallion
+ *   control-quiet-hover  hover on quiet / ghost / outline
+ *   control-track        rails: switch off, slider, progress, Meter
+ *   control-edge         control hairline (NOT --color-border, which is the
+ *                        paper divider/separator hairline)
+ *   control-edge-strong  hovered / focused control hairline
+ *
+ *   Raised knob exception: switch thumb, slider thumb, and the active
+ *   segment of a segmented rail take `bg-surface-4` + `shadow-paper-sm`.
+ *   Rails are the only path for a progress/score bar — use `<Meter>`.
  *
  * SEMANTIC + INTERACTIVE COLOR (the meaning contract):
  *   ink        alma-900/800 text; slate-* is the neutral TEXT ramp only

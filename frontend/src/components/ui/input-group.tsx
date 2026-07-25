@@ -15,7 +15,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
         // Recessed paper well — matches the Input/Select/Textarea
         // primitives so command-bar style search inputs sit consistently
         // INSIDE cream cards instead of disappearing into them.
-        "group/input-group bg-surface-0 border-[var(--color-border)] shadow-paper-inset-cool relative flex w-full items-center rounded-sm border outline-none transition-[color,box-shadow]",
+        "group/input-group bg-control-well border-control-edge shadow-paper-inset-cool relative flex w-full items-center rounded-sm border outline-none transition-[color,box-shadow]",
         "h-9 has-[>textarea]:h-auto",
 
         // Variants based on alignment.

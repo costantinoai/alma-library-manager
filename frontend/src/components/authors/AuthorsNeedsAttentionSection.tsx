@@ -466,7 +466,7 @@ function ProfileRow({
         href={`https://openalex.org/${openalexId}`}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 rounded-sm border border-edge-1 bg-surface-1 px-2 py-1 text-[11px] text-alma-700 hover:border-alma-300 hover:text-alma-800"
+        className="inline-flex items-center gap-1 rounded-sm border border-control-edge bg-control-well px-2 py-1 text-[11px] text-alma-700 hover:border-control-edge-strong hover:bg-control-quiet hover:text-alma-800"
       >
         Open
         <ExternalLink className="h-3 w-3" />

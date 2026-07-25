@@ -119,7 +119,7 @@ export function VenueHoverCard({
           )}
 
           {notFound && (
-            <p className="rounded-md border border-dashed border-slate-200 bg-surface-2/60 px-2 py-1.5 text-[11px] text-slate-500">
+            <p className="rounded-md border border-dashed border-[var(--color-border)] bg-surface-2/60 px-2 py-1.5 text-[11px] text-slate-500">
               No OpenAlex journal matched “{journal}”. Try following it from Settings → Feed Monitor
               Controls.
             </p>

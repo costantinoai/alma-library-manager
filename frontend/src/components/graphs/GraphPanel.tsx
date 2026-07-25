@@ -683,7 +683,7 @@ export function GraphPanel() {
                             aria-pressed={active}
                             onClick={() => setSelectedClusterId(cluster.id)}
                             className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors ${
-                              active ? 'bg-accent-soft text-alma-folio' : 'text-slate-700 hover:bg-surface-1'
+                              active ? 'bg-accent-soft text-alma-folio' : 'text-slate-700 hover:bg-control-quiet'
                             }`}
                           >
                             <span className="min-w-0 flex-1 truncate">{cluster.label}</span>
@@ -801,7 +801,7 @@ export function GraphPanel() {
                                 }
                               }
                             }}
-                            className="w-full rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2 text-left hover:border-[var(--color-border)] hover:bg-surface-1"
+                            className="w-full rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left hover:border-control-edge-strong hover:bg-control-quiet"
                           >
                             <p className="text-sm font-medium text-alma-800">{paper.title}</p>
                             <p className="mt-1 text-xs text-slate-500">

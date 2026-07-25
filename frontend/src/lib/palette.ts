@@ -42,21 +42,33 @@ export const SIGNAL_FALLBACK_COLOR = 'bg-slate-400'
 
 /**
  * Provenance source → Library chip classes (background + text together).
- * `feed` reuses the info token; `manual` is the neutral surface chip.
+ *
+ * IDENTITY colour: the hue answers *where did this paper come from*, not how
+ * good it is — the documented exception to the valence contract. Every fill
+ * uses the SAME wash formula as `StatusBadge` (`hue-700 @ 10%` over
+ * `hue-800` text) so an identity chip has identical weight, radius and
+ * metrics to a semantic one; only the hue differs. They previously used the
+ * heavier `hue-100 / hue-700` pair and read as a louder class of pill.
  */
 export const SOURCE_COLORS: Record<string, string> = {
-  import: 'bg-indigo-100 text-indigo-700',
-  feed: 'bg-info-100 text-info-700',
-  discovery: 'bg-violet-100 text-violet-700',
-  discovery_save: 'bg-violet-100 text-violet-700',
-  discovery_like: 'bg-violet-100 text-violet-700',
-  discovery_manual: 'bg-violet-100 text-violet-700',
-  manual: 'bg-surface-2 text-slate-600',
-  library_similarity: 'bg-teal-100 text-teal-700',
-  online_search: 'bg-cyan-100 text-cyan-700',
+  import: 'bg-indigo-700/10 text-indigo-800',
+  feed: 'bg-info-700/10 text-info-800',
+  discovery: 'bg-violet-700/10 text-violet-800',
+  discovery_save: 'bg-violet-700/10 text-violet-800',
+  discovery_like: 'bg-violet-700/10 text-violet-800',
+  discovery_manual: 'bg-violet-700/10 text-violet-800',
+  library_similarity: 'bg-teal-700/10 text-teal-800',
+  online_search: 'bg-cyan-700/10 text-cyan-800',
+  // `manual` has no identity hue — it falls through to the shell's neutral.
 }
-/** Unknown source → neutral surface chip. */
-export const SOURCE_FALLBACK_COLOR = 'bg-surface-2 text-slate-600'
+/**
+ * Unknown / hueless source → EMPTY, which leaves the `StatusBadge` shell on
+ * its own `neutral` tone. Deliberately not a copy of that tone's classes:
+ * the old fallback spelled `bg-surface-2`, a cream chip that dissolved into
+ * the cream table it sat in, and any literal copy here would be a second
+ * definition free to drift from the one in `status-badge.tsx`.
+ */
+export const SOURCE_FALLBACK_COLOR = ''
 
 /**
  * Alert-template category → icon color. `feed_monitor`/`branch` reuse semantic
@@ -77,17 +89,22 @@ export const CATEGORY_ICON_FALLBACK_COLOR = 'text-warning-600'
  * surfaced" pills on Feed cards. `venue` reuses the accent (folio) identity so
  * the pill matches the venue chip on the paper card; `author` reuses the
  * indigo it carries elsewhere; the rest are categorical hues with no token.
+ *
+ * Same wash formula as `SOURCE_COLORS` and `StatusBadge`: `hue-700 @ 10%`
+ * over `hue-800` text. Hue says WHICH monitor; weight is identical to every
+ * other pill in the app.
  */
 export const MONITOR_TYPE_CHIP: Record<string, string> = {
-  author: 'bg-indigo-100 text-indigo-700',
-  topic: 'bg-success-100 text-success-700',
-  venue: 'bg-accent-soft text-alma-folio',
-  preprint: 'bg-orange-100 text-orange-700',
-  query: 'bg-cyan-100 text-cyan-700',
-  branch: 'bg-violet-100 text-violet-700',
+  author: 'bg-indigo-700/10 text-indigo-800',
+  topic: 'bg-success-700/10 text-success-800',
+  venue: 'bg-alma-folio/10 text-alma-folio',
+  preprint: 'bg-orange-700/10 text-orange-800',
+  query: 'bg-cyan-700/10 text-cyan-800',
+  branch: 'bg-violet-700/10 text-violet-800',
 }
-/** Unknown monitor type → neutral surface chip. */
-export const MONITOR_TYPE_CHIP_FALLBACK = 'bg-surface-2 text-slate-600'
+/** Unknown monitor type → EMPTY: the `StatusBadge` shell's own neutral tone.
+ *  See the note on `SOURCE_FALLBACK_COLOR`. */
+export const MONITOR_TYPE_CHIP_FALLBACK = ''
 
 /**
  * Discovery frontier map — the three layers + the branch hue ramp. This is the
@@ -120,13 +137,3 @@ export function branchMapColor(index: number): string {
   return BRANCH_MAP_COLORS[((index % n) + n) % n]
 }
 
-/**
- * Triage "Queue" action identity — violet, deliberately distinct from amber
- * Save / emerald Like / rose Dismiss (which are semantic tokens). Queue is the
- * one triage tone whose color is a pure identity, not a state, so it lives here.
- */
-export const ACTION_QUEUE_CLASSES = {
-  icon: 'text-violet-600',
-  hover: 'hover:bg-violet-50 hover:text-violet-800',
-  active: 'border-violet-200 bg-violet-50 text-violet-800',
-}

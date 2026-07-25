@@ -84,7 +84,7 @@ function SortableLensChip({
         'group inline-flex items-stretch overflow-hidden rounded-sm border transition-colors',
         isActive
           ? 'border-alma-folio bg-alma-folio-soft'
-          : 'border-[var(--color-border)] bg-surface-2 hover:border-parchment-400',
+          : 'border-control-edge bg-control-well hover:border-control-edge-strong',
         isDragging && 'opacity-80 shadow-paper-md',
       )}
     >
@@ -122,8 +122,8 @@ function SortableLensChip({
         className={cn(
           'inline-flex items-center justify-center border-l px-2 transition-colors',
           isActive
-            ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-50 hover:text-critical-700'
-            : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-50 hover:text-critical-700',
+            ? 'border-alma-folio/40 text-alma-folio/70 hover:bg-critical-700/10 hover:text-critical-700'
+            : 'border-[var(--color-border)] text-slate-400 hover:bg-critical-700/10 hover:text-critical-700',
         )}
         aria-label={`Delete ${lens.name}`}
         title={`Delete ${lens.name}`}

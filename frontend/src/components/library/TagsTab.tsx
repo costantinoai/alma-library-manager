@@ -216,7 +216,7 @@ export function TagsTab() {
             <p className="text-sm text-slate-500">
               {tags.length} tag{tags.length !== 1 ? 's' : ''}
             </p>
-            <div className="flex items-center gap-1 rounded-md bg-alma-50 px-2 py-1">
+            <div className="flex items-center gap-1 rounded-md bg-control-quiet px-2 py-1">
               <Info className="h-3 w-3 text-alma-500" />
               <span className="text-xs text-alma-700">Tags boost recommendation scores by 2x</span>
             </div>
@@ -505,8 +505,8 @@ export function TagsTab() {
                     onClick={() => setAssignPubKey(like.id)}
                     className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
                       assignPubKey === like.id
-                        ? 'border-alma-500 bg-alma-50'
-                        : 'border-slate-200 hover:border-[var(--color-border)] hover:bg-surface-2'
+                        ? 'border-alma-folio bg-accent-soft'
+                        : 'border-control-edge hover:border-control-edge-strong hover:bg-control-quiet'
                     }`}
                   >
                     <BookOpen className="h-4 w-4 shrink-0 text-slate-400" />

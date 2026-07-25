@@ -321,7 +321,7 @@ export function LibraryPage() {
           the Library and Feed surfaces read as the same product.
       ─────────────────────────────────────────────────────────────────── */}
       <div
-        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm border border-[var(--color-border)] bg-surface-2/80 p-1 shadow-sm"
+        className="inline-flex w-full items-center gap-0.5 overflow-x-auto rounded-sm bg-control-track p-1"
         role="tablist"
         aria-label="Library sections"
       >
@@ -339,8 +339,8 @@ export function LibraryPage() {
               }}
               className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-surface-1 text-alma-800 shadow-paper-sm ring-1 ring-[var(--color-border)]'
-                  : 'text-slate-600 hover:bg-surface-1/60 hover:text-alma-800'
+                  ? 'bg-surface-4 text-alma-800 shadow-paper-sm'
+                  : 'text-slate-600 hover:bg-control-quiet hover:text-alma-800'
               }`}
             >
               <tab.icon className={`h-4 w-4 ${isActive ? 'text-alma-folio' : 'text-slate-400'}`} />

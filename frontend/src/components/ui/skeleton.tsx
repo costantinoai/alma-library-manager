@@ -6,10 +6,10 @@ function Skeleton({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      // Parchment-warm pulse instead of slate — keeps the loading state
-      // anchored in the v2 paper-warm palette so the page doesn't go
-      // cool-grey while waiting for data.
-      className={cn("animate-pulse rounded-md bg-parchment-100", className)}
+      // Control ink wash, not a paper step: a skeleton has to be visible on
+      // every host (desk, card, panel, popover) and a fixed cream fill
+      // vanishes on the surfaces closest to it.
+      className={cn("animate-pulse rounded-md bg-control-quiet", className)}
       {...props}
     />
   )

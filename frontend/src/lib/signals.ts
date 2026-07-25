@@ -1,15 +1,8 @@
-export const SIGNAL_COLORS: Record<string, string> = {
-  source_relevance: '#3B82F6',
-  topic_score: '#8B5CF6',
-  text_similarity: '#EC4899',
-  author_affinity: '#F59E0B',
-  journal_affinity: '#10B981',
-  recency_boost: '#06B6D4',
-  citation_quality: '#6366F1',
-  feedback_adj: '#F97316',
-  preference_affinity: '#14B8A6',
-  usefulness_boost: '#0F766E',
-}
+/* Signal → colour lives in `lib/palette.ts` (the single source for
+ * categorical colour). A second, drifted hex map used to live here and fed
+ * `style={{ backgroundColor }}` in ScoreBreakdownPanel, so one signal wore
+ * two different hues depending on the surface. Import SIGNAL_COLORS /
+ * SIGNAL_FALLBACK_COLOR from `@/lib/palette` instead. */
 
 export const SIGNAL_LABELS: Record<string, string> = {
   source_relevance: 'Source Relevance',

@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
@@ -212,7 +213,7 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
           onClick={() => fileInputRef.current?.click()}
-          className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-surface-2 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
+          className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
         >
           <Upload className="h-8 w-8 text-slate-400" />
           {file ? (
@@ -249,14 +250,14 @@ function BibtexTab({ onImportComplete }: { onImportComplete?: () => void }) {
           />
         </div>
       ) : (
-        <textarea
+        <Textarea
+          className="h-48 resize-y font-mono"
           value={text}
           onChange={(e) => {
             setText(e.target.value)
             setPreflight(null)
           }}
           placeholder={`@article{doe2024,\n  title = {My Paper Title},\n  author = {Doe, John and Smith, Jane},\n  year = {2024},\n  journal = {Nature},\n}`}
-          className="h-48 w-full resize-y rounded-sm border border-[var(--color-border)] bg-surface-1 p-3 font-mono text-sm text-alma-800 shadow-paper-inset-cool placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
         />
       )}
 
@@ -488,8 +489,8 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
               }}
               className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
                 selectedCollectionKey === null
-                  ? 'bg-alma-50 text-alma-700'
-                  : 'text-slate-600 hover:bg-surface-2'
+                  ? 'bg-accent-soft text-alma-folio'
+                  : 'text-slate-600 hover:bg-control-quiet'
               }`}
             >
               <FolderOpen className="h-4 w-4" />
@@ -504,8 +505,8 @@ function ZoteroTab({ onImportComplete }: { onImportComplete?: () => void }) {
                 }}
                 className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors ${
                   selectedCollectionKey === c.key
-                    ? 'bg-alma-50 text-alma-700'
-                    : 'text-slate-600 hover:bg-surface-2'
+                    ? 'bg-accent-soft text-alma-folio'
+                    : 'text-slate-600 hover:bg-control-quiet'
                 }`}
               >
                 <span className="flex items-center gap-2">
@@ -649,7 +650,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
         onDrop={handleDrop}
         onDragOver={(e) => e.preventDefault()}
         onClick={() => fileInputRef.current?.click()}
-        className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-[var(--color-border)] bg-surface-2 p-8 text-center transition-colors hover:border-alma-400 hover:bg-alma-50/50"
+        className="flex cursor-pointer flex-col items-center gap-3 rounded-lg border-2 border-dashed border-control-edge bg-control-well p-8 text-center transition-colors hover:border-control-edge-strong hover:bg-control-quiet"
       >
         <Upload className="h-8 w-8 text-slate-400" />
         {file ? (
@@ -662,7 +663,7 @@ function ZoteroRdfTab({ onImportComplete }: { onImportComplete?: () => void }) {
                 setFile(null)
                 setPreflight(null)
               }}
-              className="rounded p-0.5 hover:bg-slate-200"
+              className="rounded p-0.5 hover:bg-control-quiet"
             >
               <X className="h-3.5 w-3.5 text-slate-400" />
             </button>
@@ -736,7 +737,7 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
   const sourceCalls = preflight.likely_source_calls
 
   return (
-    <div className="rounded-sm border border-alma-200 bg-alma-50 p-4">
+    <div className="rounded-sm border border-accent-edge bg-accent-soft p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <CheckCircle className="h-5 w-5 text-alma-700" />
@@ -779,7 +780,7 @@ function ImportPreflightDisplay({ preflight }: { preflight: ImportPreflight }) {
 function ImportQueuedDisplay({ envelope }: { envelope: ImportOperationEnvelope }) {
   const alreadyRunning = envelope.status === 'already_running'
   return (
-    <div className="rounded-lg border border-alma-200 bg-alma-50 p-4">
+    <div className="rounded-lg border border-accent-edge bg-accent-soft p-4">
       <div className="mb-2 flex items-center gap-2">
         <Loader2 className="h-5 w-5 animate-spin text-alma-600" />
         <span className="font-medium text-alma-800">

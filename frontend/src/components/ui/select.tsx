@@ -15,10 +15,10 @@ const SelectTrigger = React.forwardRef<
   <SelectPrimitive.Trigger
     ref={ref}
     className={cn(
-      // Trigger reads as a recessed well (paper + cool inset shadow),
-      // matching the Input + Textarea + Checkbox primitives so all
-      // form controls sit consistently INSIDE cream cards.
-      'flex h-10 w-full items-center justify-between rounded-sm border border-[var(--color-border)] bg-surface-0 px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
+      // Trigger reads as a recessed INK well, matching the Input + Textarea
+      // + Checkbox primitives so every form control sits consistently inside
+      // its host instead of wearing that host's own cream.
+      'flex h-10 w-full items-center justify-between rounded-sm border border-control-edge bg-control-well px-3 py-2 text-sm text-alma-900 placeholder:text-slate-400 shadow-paper-inset-cool focus:outline-none focus:ring-2 focus:ring-alma-folio focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-slate-400',
       className,
     )}
     {...props}

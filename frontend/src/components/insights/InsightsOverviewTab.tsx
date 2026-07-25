@@ -335,7 +335,7 @@ export function InsightsOverviewTab({
                       'px-2 py-1 text-xs font-medium capitalize transition-colors',
                       provenanceMode === mode
                         ? 'bg-accent-soft text-alma-folio'
-                        : 'bg-surface-2 text-slate-600 hover:bg-surface-3',
+                        : 'bg-control-well text-slate-600 hover:bg-control-quiet',
                     )}
                   >
                     {mode}
@@ -476,7 +476,7 @@ export function InsightsOverviewTab({
                         onClick={() =>
                           openDrilldown('journal', j.journal, `Papers in journal: ${j.journal}`)
                         }
-                        className="flex w-full items-center gap-3 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                        className="flex w-full items-center gap-3 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-control-quiet"
                       >
                         <span className="min-w-0 flex-1">
                           <span className="flex items-baseline justify-between gap-2">

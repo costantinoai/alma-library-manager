@@ -30,7 +30,7 @@ import { MetricTile } from '@/components/shared/MetricTile'
 import { AsyncButton, SettingsNumberField } from '@/components/settings/primitives'
 import { EtaHint } from '@/components/shared/EtaHint'
 import { JargonHint } from '@/components/shared/JargonHint'
-import { formatRelativeShort } from '@/lib/utils'
+import { formatRelativeShort, parseAlmaTimestamp } from '@/lib/utils'
 import {
   estimateMaintenanceOperation,
   type HealthDimension,
@@ -63,6 +63,8 @@ interface RepairCardProps {
       request_batch_size?: number
     },
   ) => void
+  /** Lift the cooldown a manual stop put on this task. */
+  onResume: (key: string) => void
   /** Open the affected-papers drilldown for one dimension. */
   onOpenDim: (dim: HealthDimension) => void
   running: boolean
@@ -77,7 +79,24 @@ function prettyScope(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
-export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savingConfig }: RepairCardProps) {
+export function RepairCard({
+  op,
+  dims,
+  onRun,
+  onConfig,
+  onResume,
+  onOpenDim,
+  running,
+  savingConfig,
+}: RepairCardProps) {
+  // A manual stop of a BACKGROUND run holds automation off this task for a
+  // cooldown window. `auto_enabled` is untouched, so the switch alone would
+  // claim "on" while nothing runs — say the pause out loud instead.
+  // (The stamp is naive UTC; `parseAlmaTimestamp` is the one parser that
+  //  knows that, so a local-time reading can't shift it by the TZ offset.)
+  const pausedUntil = op.paused_by_user_until
+    ? parseAlmaTimestamp(op.paused_by_user_until)
+    : null
   const [autoCap, setAutoCap] = useState(op.auto_daily_cap)
   useEffect(() => setAutoCap(op.auto_daily_cap), [op.auto_daily_cap])
   const [manualLimit, setManualLimit] = useState(op.manual_limit)
@@ -241,12 +260,26 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savi
               />
               <span className="inline-flex items-center gap-1">
                 Auto-repair
-                <span className="text-xs text-slate-400">{op.auto_enabled ? '(on)' : '(opt-in)'}</span>
+                <span className="text-xs text-slate-400">
+                  {pausedUntil ? '(paused)' : op.auto_enabled ? '(on)' : '(opt-in)'}
+                </span>
               </span>
             </label>
           ) : (
             <span className="text-xs font-medium text-warning-700">Never runs automatically</span>
           )}
+          {pausedUntil ? (
+            <span className="inline-flex items-center gap-1 text-xs text-warning-700">
+              Paused by you until {formatDateTime(pausedUntil)}
+              <button
+                type="button"
+                className="rounded px-1.5 py-0.5 font-medium text-accent-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
+                onClick={() => onResume(op.key)}
+              >
+                Resume
+              </button>
+            </span>
+          ) : null}
           {/* H-11: config write in flight — the controls will snap to server
               truth on success, so name the save rather than let it look like a bug. */}
           {savingConfig ? (
@@ -329,7 +362,7 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savi
               variant="ghost"
               icon={<Eye className="h-4 w-4" />}
               pending={running}
-              className="text-alma-700 hover:bg-alma-50"
+              className="text-alma-700 hover:bg-control-quiet"
               onClick={() => onRun(op.key, runRequest({ dry_run: true }))}
             >
               Preview
@@ -340,7 +373,7 @@ export function RepairCard({ op, dims, onRun, onConfig, onOpenDim, running, savi
             variant="outline"
             icon={<Play className="h-4 w-4" />}
             pending={running}
-            className="border-alma-200 text-alma-700 hover:bg-alma-50"
+            className="border-control-edge text-alma-700 hover:bg-control-quiet"
             // 42.2: a pending prerequisite is a WARNING (banner above), not a hard
             // block — one stuck upstream op (e.g. a throttled title_resolution)
             // must not freeze every downstream repair. The backend DAG still

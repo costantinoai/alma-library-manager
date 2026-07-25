@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { Meter } from '@/components/ui/meter'
 import { truncate } from '@/lib/utils'
 
 interface SuggestedAuthorCardProps {
@@ -192,12 +193,7 @@ export function SuggestedAuthorCard({
       {showScore ? (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <div className="relative h-1 w-full overflow-hidden rounded-full bg-parchment-200">
-              <div
-                className="absolute inset-y-0 left-0 rounded-full bg-alma-500 transition-all"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
+            <Meter value={pct} tone="neutral" size="xs" decorative />
             <span className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-700">
               {Math.round(pct)}
             </span>
@@ -263,7 +259,7 @@ export function SuggestedAuthorCard({
         <Button
           size="sm"
           variant="ghost"
-          className="shrink-0 text-critical-600 hover:bg-critical-50 hover:text-critical-700"
+          className="shrink-0 text-critical-600 hover:bg-critical-700/10 hover:text-critical-700"
           onClick={(e) => {
             e.stopPropagation()
             if (!alreadyFollowed) onReject()

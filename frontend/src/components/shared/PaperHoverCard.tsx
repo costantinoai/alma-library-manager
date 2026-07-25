@@ -1,25 +1,12 @@
 import { ExternalLink } from 'lucide-react'
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { ScoreMeter } from '@/components/shared/ScoreMeter'
 import { byWeightedDesc } from '@/lib/sort'
 import { SIGNAL_COLORS, SIGNAL_FALLBACK_COLOR } from '@/lib/palette'
 import { PAPER_SIGNAL_META, scoreSignalEntries } from '@/lib/signals'
 import type { ScoreBreakdown } from '@/api/client'
 import type { PaperCardPaper } from './PaperCard'
-
-function ScoreBar({ score }: { score: number }) {
-  const pct = Math.round(score)
-  const barColor =
-    pct >= 70 ? 'bg-success-500' : pct >= 40 ? 'bg-warning-500' : 'bg-critical-500'
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-parchment-200">
-        <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs font-semibold tabular-nums text-slate-600">{pct}</span>
-    </div>
-  )
-}
 
 function TopSignals({
   breakdown,
@@ -134,7 +121,7 @@ export function PaperHoverCard({
                 {paper.cited_by_count.toLocaleString()} citations
               </span>
             )}
-            {score != null && <ScoreBar score={score} />}
+            {score != null && <ScoreMeter score={score} />}
           </div>
 
           <TopSignals breakdown={scoreBreakdown} explanation={explanation} />

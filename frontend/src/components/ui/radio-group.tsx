@@ -28,7 +28,9 @@ const RadioGroupItem = React.forwardRef<
     <RadioGroupPrimitive.Item
       ref={ref}
       className={cn(
-        "aspect-square h-4 w-4 rounded-full border border-[var(--color-border)] bg-surface-1 text-alma-folio shadow-paper-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 disabled:cursor-not-allowed disabled:opacity-50",
+        // Same recessed ink well as Checkbox — the two controls answer the
+        // same question and must read as the same object at rest.
+        "aspect-square h-4 w-4 rounded-full border border-control-edge bg-control-well text-alma-folio shadow-paper-inset-cool focus:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio focus-visible:ring-offset-2 focus-visible:ring-offset-surface-1 disabled:cursor-not-allowed disabled:opacity-50",
         className
       )}
       {...props}

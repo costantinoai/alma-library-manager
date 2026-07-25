@@ -17,6 +17,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { PaperCard, SignalChip, type PaperCardPaper } from '@/components/shared'
@@ -212,12 +213,11 @@ export function CollectionsTab({ initialCollectionId = null }: CollectionsTabPro
       </div>
       <div className="space-y-2">
         <label className="text-sm font-medium text-slate-700">Description</label>
-        <textarea
+        <Textarea
           value={formDescription}
           onChange={(e) => setFormDescription(e.target.value)}
           placeholder="A short description of this collection..."
           rows={2}
-          className="flex w-full rounded-lg border border-[var(--color-border)] bg-surface-1 px-3 py-2 text-sm text-alma-800 placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-alma-500"
         />
       </div>
       <div className="space-y-2">
