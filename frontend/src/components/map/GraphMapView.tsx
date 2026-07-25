@@ -376,14 +376,15 @@ export function GraphMapView({
             />
           )}
           {showTerrain && terrainStats && (
-            // Divergent, SYMMETRIC about true 0 (neutral valence): the wash
-            // saturates at the largest observed |value|. Space-owned stats —
-            // stable whatever the colour mode or visible layers.
+            // Two-slope scale: yellow is ALWAYS 0 (neutral), each side
+            // stretches to its own observed extreme — labels show the TRUE
+            // asymmetric range, never a fixed ±1 (user call 2026-07-25).
+            // Space-owned stats — stable whatever the visible layers.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.divergent}
-              min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
+              min={terrainStats.min.toFixed(2)}
               mid="0"
-              max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+              max={terrainStats.max.toFixed(2)}
               mean={terrainStats.mean.toFixed(2)}
             />
           )}

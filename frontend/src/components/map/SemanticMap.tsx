@@ -383,23 +383,33 @@ export function SemanticMap({
         const img = hctx.createImageData(gw, gh)
         let maxW = 0
         for (let i = 0; i < wsum.length; i++) if (wsum[i] > maxW) maxW = wsum[i]
-        // SYMMETRIC normalisation about zero: on a divergent ramp the
-        // midpoint must MEAN neutral (valence 0), so cells scale by the
-        // largest observed |mean| — full saturation is reachable on
-        // whichever side has data, and yellow stays honest. (A min–max
-        // stretch moved the yellow to "average of what we saw".)
-        let vmax = 0
+        // TWO-SLOPE normalisation (matplotlib TwoSlopeNorm): zero is ALWAYS
+        // yellow (neutral must mean neutral), but each side stretches
+        // independently to its own observed range, at the 98th percentile
+        // so one extreme pocket can't flatten its side. Needed because the
+        // full-coverage field carries a lot of neutral mass — a single
+        // symmetric ±max scale left every local mean near zero and the
+        // whole plate yellow (user call 2026-07-25).
+        const negMeans: number[] = []
+        const posMeans: number[] = []
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
-          const m = Math.abs(vsum[i] / wsum[i])
-          if (m > vmax) vmax = m
+          const m = vsum[i] / wsum[i]
+          if (m < 0) negMeans.push(-m)
+          else if (m > 0) posMeans.push(m)
         }
-        if (vmax <= 0) vmax = 1
+        const p98 = (vs: number[]) => {
+          if (vs.length === 0) return 1
+          vs.sort((a, b) => a - b)
+          return Math.max(1e-6, vs[Math.min(vs.length - 1, Math.floor(vs.length * 0.98))])
+        }
+        const negMax = p98(negMeans)
+        const posMax = p98(posMeans)
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
           const mean = vsum[i] / wsum[i]
           // Divergent ramp: -1 red (220,68,61) → 0 yellow (233,196,76) → +1 green (64,160,92)
-          const t = Math.max(-1, Math.min(1, mean / vmax))
+          const t = Math.max(-1, Math.min(1, mean < 0 ? mean / negMax : mean / posMax))
           const [r, g, b] =
             t < 0
               ? [220 + (233 - 220) * (1 + t), 68 + (196 - 68) * (1 + t), 61 + (76 - 61) * (1 + t)]

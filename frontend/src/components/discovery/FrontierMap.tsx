@@ -573,11 +573,13 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               />
             )}
             {showTerrain && terrainStats && (
+              // Two-slope scale: yellow = 0 always; sides stretch to their
+              // own true extremes (never a fixed ±1).
               <ColourBarLegend
                 gradient={RAMP_GRADIENTS.divergent}
-                min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
+                min={terrainStats.min.toFixed(2)}
                 mid="0"
-                max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+                max={terrainStats.max.toFixed(2)}
                 mean={terrainStats.mean.toFixed(2)}
               />
             )}
