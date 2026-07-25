@@ -4768,6 +4768,27 @@ export interface HomeBrief {
     lens_id?: string | null
     lens_name?: string | null
   } | null
+  /** The newest untriaged arrivals themselves — a title says what happened,
+   *  where a count only says that something did. */
+  recent_arrivals: Array<{
+    paper_id: string
+    title: string
+    authors?: string | null
+    year?: number | null
+    journal?: string | null
+    url?: string | null
+    doi?: string | null
+  }>
+  /** What you already committed to reading. */
+  reading_now: Array<{
+    paper_id: string
+    title: string
+    authors?: string | null
+    year?: number | null
+    journal?: string | null
+    url?: string | null
+    doi?: string | null
+  }>
   arrived: {
     feed_items: number
     alerts_fired: number

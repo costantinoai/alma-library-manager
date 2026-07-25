@@ -112,6 +112,36 @@ function BriefLedger({ figures }: { figures: BriefFigure[] }) {
   )
 }
 
+/**
+ * A compact paper line. Deliberately NOT a PaperCard: these lists are a
+ * glance, not a workbench — the card's full action bar would turn a four-item
+ * peek into a page of its own. The title is the affordance; acting happens on
+ * the surface that owns the paper.
+ */
+function PaperLine({
+  paper,
+  onOpen,
+}: {
+  paper: { paper_id: string; title: string; authors?: string | null; year?: number | null; journal?: string | null }
+  onOpen: (paperId: string) => void
+}) {
+  const byline = [paper.authors?.split(',')[0]?.trim(), paper.journal, paper.year]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(paper.paper_id)}
+      className="group block w-full border-b border-edge-1 py-2 text-left last:border-b-0"
+    >
+      <span className="block truncate text-sm text-alma-800 transition-colors group-hover:text-alma-folio">
+        {paper.title}
+      </span>
+      {byline && <span className="mt-0.5 block truncate text-xs text-slate-500">{byline}</span>}
+    </button>
+  )
+}
+
 /** One actionable row in "Needs you". */
 function AttentionRow({
   icon: Icon,
@@ -162,6 +192,11 @@ export function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brief])
 
+  // Opening a paper from Home hands off to the surface that owns it, rather
+  // than duplicating a detail panel here.
+  const openPaper = (paperId: string) =>
+    navigateTo('library', { tab: 'saved', paper: paperId })
+
   const saveMutation = useMutation({
     mutationFn: (paperId: string) => addToLibrary(paperId),
     onSuccess: async () => {
@@ -190,7 +225,7 @@ export function HomePage() {
     return <ErrorState message="Couldn't load your brief." />
   }
 
-  const { arrived, waiting, insight } = brief
+  const { arrived, waiting, insight, recent_arrivals, reading_now } = brief
   const figures: BriefFigure[] = [
     {
       value: arrived.feed_items,
@@ -268,7 +303,56 @@ export function HomePage() {
         </section>
       )}
 
-      {/* ── 3. One to look at — absent when there's no suggestion ────────── */}
+      {/* ── 3. What actually arrived ─────────────────────────────────────
+          The brief's first figure says "12 new papers"; this says WHICH, so
+          Home is worth reading rather than just passing through. Absent when
+          nothing arrived. */}
+      {recent_arrivals.length > 0 && (
+        <section className="space-y-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+              Newest in your Feed
+            </h2>
+            <button
+              type="button"
+              onClick={() => navigateTo('feed')}
+              className="text-xs text-slate-500 transition-colors hover:text-alma-folio"
+            >
+              Open Feed →
+            </button>
+          </div>
+          <Card className="px-4 py-1">
+            {recent_arrivals.map((p) => (
+              <PaperLine key={p.paper_id} paper={p} onOpen={openPaper} />
+            ))}
+          </Card>
+        </section>
+      )}
+
+      {/* ── 4. Continue reading — closes the loop on what you committed to ── */}
+      {reading_now.length > 0 && (
+        <section className="space-y-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">
+              Still reading
+            </h2>
+            <button
+              type="button"
+              onClick={() => navigateTo('library', { tab: 'reading' })}
+              className="text-xs text-slate-500 transition-colors hover:text-alma-folio"
+            >
+              Reading list →
+            </button>
+          </div>
+          <Card className="px-4 py-1">
+            {reading_now.map((p) => (
+              <PaperLine key={p.paper_id} paper={p} onOpen={openPaper} />
+            ))}
+          </Card>
+        </section>
+      )}
+
+      {/* ── 5. One to look at — absent when there's no suggestion ────────── */}
       {insight && (
         <section className="space-y-2">
           <div className="flex items-baseline justify-between gap-3">

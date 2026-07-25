@@ -181,11 +181,67 @@ def get_home_brief(
         except sqlite3.OperationalError:
             insight = None
 
+        # ── The actual papers, not just the counts ──────────────────────────
+        #
+        # A number tells you something happened; a title tells you WHAT, which
+        # is the difference between a landing page you read and one you skip.
+        # Both lists are small and cheap, and travel in this same payload so
+        # Home still costs one request.
+        def _papers(sql: str, params: tuple) -> list[dict[str, Any]]:
+            try:
+                return [
+                    {
+                        "paper_id": str(r["id"]),
+                        "title": r["title"],
+                        "authors": r["authors"],
+                        "year": r["year"],
+                        "journal": r["journal"],
+                        "url": r["url"],
+                        "doi": r["doi"],
+                    }
+                    for r in db.execute(sql, params).fetchall()
+                ]
+            except sqlite3.OperationalError:
+                return []
+
+        # Newest arrivals you haven't triaged, newest first.
+        recent_arrivals = _papers(
+            f"""
+            SELECT p.id, p.title, p.authors, p.year, p.journal, p.url, p.doi,
+                   MIN(fi.fetched_at) AS first_seen
+            FROM feed_items fi
+            JOIN papers p ON p.id = fi.paper_id
+            WHERE fi.fetched_at > ?
+              AND COALESCE(fi.status, '') = 'new'
+              AND {standalone_paper_sql('p')}
+            GROUP BY p.id
+            ORDER BY first_seen DESC
+            LIMIT 4
+            """,
+            (window_start,),
+        )
+
+        # What you already committed to reading — Home closes that loop too.
+        reading_now = _papers(
+            f"""
+            SELECT p.id, p.title, p.authors, p.year, p.journal, p.url, p.doi
+            FROM papers p
+            WHERE p.status = 'library'
+              AND COALESCE(p.reading_status, '') = 'reading'
+              AND {standalone_paper_sql('p')}
+            ORDER BY COALESCE(p.added_at, '') DESC
+            LIMIT 3
+            """,
+            (),
+        )
+
         return {
             "since": window_start,
             "first_visit": first_visit,
             "last_seen_at": stored_seen or None,
             "insight": insight,
+            "recent_arrivals": recent_arrivals,
+            "reading_now": reading_now,
             "arrived": {
                 "feed_items": new_feed_items,
                 "alerts_fired": alerts_fired,
