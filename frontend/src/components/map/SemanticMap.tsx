@@ -355,9 +355,17 @@ export function SemanticMap({
       const cell = 8
       const gw = Math.max(1, Math.ceil(width / cell))
       const gh = Math.max(1, Math.ceil(height / cell))
-      const wsum = new Float32Array(gw * gh)
+      const wsum = new Float32Array(gw * gh) // signal-weighted (colour)
+      const dsum = new Float32Array(gw * gh) // plain density (alpha)
       const vsum = new Float32Array(gw * gh)
       const radius = 5 // grid cells (~40 px)
+      // SIGNAL-WEIGHTED local mean: the full-coverage field is mostly
+      // neutral mass, and a plain average drowned every opinionated pocket
+      // to ≈0 — the terrain vanished (user catch 2026-07-25). A neutral
+      // point still covers space (no holes) but carries a fraction of an
+      // opinionated point's weight, so where signal exists it shows at
+      // its real strength; genuinely empty regions stay pale.
+      const NEUTRAL_WEIGHT = 0.15
       for (const [px, py, value] of heatPoints) {
         const gx = px / cell
         const gy = py / cell
@@ -365,14 +373,16 @@ export function SemanticMap({
         const x1 = Math.min(gw - 1, Math.ceil(gx + radius))
         const y0 = Math.max(0, Math.floor(gy - radius))
         const y1 = Math.min(gh - 1, Math.ceil(gy + radius))
+        const signalW = NEUTRAL_WEIGHT + (1 - NEUTRAL_WEIGHT) * Math.abs(value)
         for (let yy = y0; yy <= y1; yy++) {
           for (let xx = x0; xx <= x1; xx++) {
             const d2 = (xx - gx) ** 2 + (yy - gy) ** 2
             const wgt = Math.exp(-d2 / (2 * (radius / 2) ** 2))
             if (wgt < 0.01) continue
             const idx = yy * gw + xx
-            wsum[idx] += wgt
-            vsum[idx] += wgt * value
+            dsum[idx] += wgt
+            wsum[idx] += wgt * signalW
+            vsum[idx] += wgt * signalW * value
           }
         }
       }
@@ -383,7 +393,7 @@ export function SemanticMap({
       if (hctx) {
         const img = hctx.createImageData(gw, gh)
         let maxW = 0
-        for (let i = 0; i < wsum.length; i++) if (wsum[i] > maxW) maxW = wsum[i]
+        for (let i = 0; i < dsum.length; i++) if (dsum[i] > maxW) maxW = dsum[i]
         // TWO-SLOPE normalisation (matplotlib TwoSlopeNorm): zero is ALWAYS
         // the neutral centre stop, each side anchored on the REAL extremes
         // of the SOURCE values — the exact numbers the colourbar labels —
@@ -412,8 +422,8 @@ export function SemanticMap({
             t < 0
               ? [RN[0] + (RM[0] - RN[0]) * (1 + t), RN[1] + (RM[1] - RN[1]) * (1 + t), RN[2] + (RM[2] - RN[2]) * (1 + t)]
               : [RM[0] + (RP[0] - RM[0]) * t, RM[1] + (RP[1] - RM[1]) * t, RM[2] + (RP[2] - RM[2]) * t]
-          const densityAlpha = Math.min(0.45, 0.1 + 0.55 * (wsum[i] / maxW))
-          const alpha = densityAlpha * (0.2 + 0.8 * Math.abs(t)) * 255
+          const densityAlpha = Math.min(0.5, 0.12 + 0.55 * (dsum[i] / maxW))
+          const alpha = densityAlpha * (0.35 + 0.65 * Math.abs(t)) * 255
           const o = i * 4
           img.data[o] = r
           img.data[o + 1] = g
