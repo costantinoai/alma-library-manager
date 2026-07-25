@@ -1261,6 +1261,36 @@ def setup_scheduler() -> None:
             "Registered maintain_citation_graph job (interval=%dh)", graph_maintenance_hours,
         )
 
+    # -- Graph layout maintenance (interval, task 50 M1) --------------------
+    # GETs on /graphs/* are pure stored reads; THIS job owns freshness:
+    # incremental substrate placement every tick, full MV rebuilds only on
+    # embedding-set drift / algo-version change / weekly age floor. Idle-gated
+    # inside the job, so a short interval only costs a cheap check.
+    layout_maintenance_hours = _discovery_schedule_interval_hours(
+        "schedule.graph_layout_interval_hours",
+        6,
+    )
+    if layout_maintenance_hours > 0:
+        sched.add_job(
+            graph_layout_maintenance_periodic,
+            trigger=IntervalTrigger(hours=layout_maintenance_hours),
+            id="graph_layout_maintenance",
+            name="Graph layout maintenance",
+            replace_existing=True,
+        )
+        with _job_lock:
+            _job_meta["graph_layout_maintenance"] = {
+                "action": "graph_layout_maintenance",
+                "name": "Graph layout maintenance",
+                "description": (
+                    f"Places new vectors on the semantic-map substrate and rebuilds stale "
+                    f"graph views every {layout_maintenance_hours}h (idle-gated)"
+                ),
+            }
+        logger.info(
+            "Registered graph_layout_maintenance job (interval=%dh)", layout_maintenance_hours,
+        )
+
     # -- DB maintenance (daily) -------------------------------------------
     # Reclaims free pages and prunes stale operation_logs. Runs at 04:30
     # UTC — well after the daily author refresh at AUTHOR_REFRESH_HOUR
@@ -1841,6 +1871,151 @@ def maintain_citation_graph_periodic() -> None:
             error=f"{type(exc).__name__}: {exc}",
         )
         add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+
+
+def graph_layout_maintenance_periodic() -> None:
+    """Keep the semantic-map substrate + graph MVs fresh in the background.
+
+    Task 50 M1 — GETs on /graphs/* are pure stored reads now, so freshness is
+    owned HERE, on the embedding set (never ``papers.updated_at`` — hydration
+    churns it; see tasks/lessons.md "Semantic maps"):
+
+    1. **Incremental placement** (always, cheap): papers that gained a vector
+       since the last tick get nearest-centroid coords on the corpus substrate.
+    2. **Full MV rebuilds** (rare, deliberate): a registered graph view rebuilds
+       when it has never been built, its algo/model versions changed, the
+       embedding set drifted ≥ :data:`_LAYOUT_REBUILD_DRIFT`, or it is older
+       than :data:`_LAYOUT_REBUILD_MAX_AGE_DAYS`. Corpus paper map first — it
+       IS the substrate build the others read.
+
+    Idle-gated: yields untouched to `may_background_run` so it never competes
+    with a user-facing action.
+    """
+    job_id = "periodic_graph_layout_maintenance"
+    operation_key = "graphs.layout_maintenance"
+    from alma.api.deps import open_db_connection
+
+    conn = open_db_connection()
+    try:
+        ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+        if not ok:
+            logger.debug("graph layout maintenance skipped: %s", reason)
+            return
+
+        set_job_status(
+            job_id,
+            status="running",
+            trigger_source="scheduler",
+            started_at=datetime.utcnow().isoformat(),
+            operation_key=operation_key,
+            message="Graph layout maintenance (placement + freshness)",
+        )
+
+        from alma.application import materialized_views as mv
+        from alma.application.discovery.lens_crud import read_settings, upsert_setting
+        from alma.application.graph_substrate import place_missing_papers
+        from alma.api.routes.graphs import _paper_scope_gauge
+        from alma.core.db_write import write_section
+        from alma.core.scope import Scope
+
+        placement = place_missing_papers(conn)
+        if placement.get("placed") or placement.get("outliers"):
+            add_job_log(job_id, "Placed new vectors on the substrate", step="placement", data=placement)
+
+        # Corpus paper map FIRST: its build persists the substrate every other
+        # view (and the frontier map) reads.
+        views = [
+            (Scope.corpus, Scope.corpus.view_key("paper_map")),
+            (Scope.library, Scope.library.view_key("paper_map")),
+            (Scope.library, Scope.library.view_key("author_network")),
+            (Scope.corpus, Scope.corpus.view_key("author_network")),
+        ]
+        settings = read_settings(conn)
+        rebuilt: list[str] = []
+        for scope, view_key in views:
+            gauge = _paper_scope_gauge(conn, scope)
+            meta = mv.stored_meta(conn, view_key)
+            sig_kv = str(settings.get(f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}") or "")
+            stale_reason: str | None = None
+            if meta is None:
+                stale_reason = "never_built"
+            elif not sig_kv or not gauge.is_fresh(conn, sig_kv, threshold=_LAYOUT_REBUILD_DRIFT):
+                stale_reason = "embedding_drift_or_version"
+            else:
+                age_days = _iso_age_days(str(meta.get("computed_at") or ""))
+                if age_days is None or age_days >= _LAYOUT_REBUILD_MAX_AGE_DAYS:
+                    stale_reason = "age_floor"
+            if stale_reason is None:
+                continue
+
+            add_job_log(job_id, f"Rebuilding {view_key} ({stale_reason})", step="rebuild")
+            try:
+                mv.rebuild(conn, view_key)
+                with write_section(conn, label="graph layout maintenance: signature"):
+                    upsert_setting(
+                        conn, f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}", gauge.signature(conn)
+                    )
+                rebuilt.append(view_key)
+            except Exception as exc:  # noqa: BLE001 — one view failing must not sink the rest
+                logger.warning("graph layout maintenance: rebuild failed for %s: %s", view_key, exc)
+                add_job_log(
+                    job_id, f"Rebuild failed for {view_key}: {exc}", step="rebuild", level="error"
+                )
+
+            # Re-check the idle gate between expensive rebuilds: yield the
+            # moment the user does anything (pull-based pause).
+            ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+            if not ok:
+                add_job_log(job_id, f"Yielding after {len(rebuilt)} rebuild(s): {reason}", step="yield")
+                break
+
+        set_job_status(
+            job_id,
+            status="completed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=datetime.utcnow().isoformat(),
+            message=(
+                f"Graph layout maintenance: placed {placement.get('placed', 0)}, "
+                f"rebuilt {len(rebuilt)} view(s)"
+            ),
+            result={"placement": placement, "rebuilt": rebuilt},
+        )
+    except Exception as exc:
+        logger.exception("Fatal error in graph_layout_maintenance_periodic")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=datetime.utcnow().isoformat(),
+            message="Graph layout maintenance failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# Task 50 M1 knobs: a full re-layout is a rare, deliberate event. 20% embedding-set
+# drift (double the serve-while-stale variant tolerance) or a weekly age floor —
+# incremental placement keeps the substrate current in between.
+_LAYOUT_REBUILD_DRIFT = 0.20
+_LAYOUT_REBUILD_MAX_AGE_DAYS = 7
+_LAYOUT_SIG_KEY_PREFIX = "graph.layout_sig:"
+
+
+def _iso_age_days(stamp: str) -> float | None:
+    """Age in days of an ISO timestamp, or None when unparseable."""
+    if not stamp:
+        return None
+    try:
+        then = datetime.fromisoformat(stamp.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+    return max(0.0, (datetime.utcnow() - then).total_seconds() / 86400.0)
 
 
 def _operation_log_retention_days() -> int:

@@ -415,6 +415,19 @@ def run_embedding_computation(
                             "author centroid refresh skipped after batch insert",
                             exc_info=True,
                         )
+                    # Keep the semantic-map substrate coherent (task 50 M1):
+                    # place freshly embedded papers at their nearest cluster
+                    # centroid so maps show them without a full re-layout.
+                    # Non-fatal; the maintenance tick catches anything missed.
+                    try:
+                        from alma.application.graph_substrate import place_missing_papers
+
+                        place_missing_papers(conn, inserted_paper_ids)
+                    except Exception:
+                        logger.debug(
+                            "substrate placement skipped after batch insert",
+                            exc_info=True,
+                        )
                 except Exception as batch_exc:
                     add_job_log(
                         job_id,

@@ -156,8 +156,19 @@ class _VariantDataGauge:
             sort_keys=True,
         )
 
-    def is_fresh(self, conn: sqlite3.Connection, stored: str) -> bool:
-        """True when the cached variant is still within the drift tolerance."""
+    def is_fresh(
+        self,
+        conn: sqlite3.Connection,
+        stored: str,
+        *,
+        threshold: float = _VARIANT_DRIFT_THRESHOLD,
+    ) -> bool:
+        """True when the cached variant is still within the drift tolerance.
+
+        ``threshold`` lets the scheduled maintenance job apply its own (looser)
+        full-rebuild tolerance over the same gauge (task 50 M1) — one drift
+        definition, two policies.
+        """
         try:
             meta = json.loads(stored)
         except (TypeError, ValueError):
@@ -170,7 +181,7 @@ class _VariantDataGauge:
             return current_n == 0  # built on empty data; fresh only if still empty
         changed = int(self._scalar(conn, self.changed_since_sql, (str(meta.get("t") or ""),)) or 0)
         drift = max(abs(current_n - built_n), changed) / built_n
-        return drift < _VARIANT_DRIFT_THRESHOLD
+        return drift < threshold
 
 
 def _paper_scope_gauge(conn: sqlite3.Connection, scope: Scope) -> _VariantDataGauge:
@@ -2973,15 +2984,21 @@ def _build_embedding_paper_map(
         edge_dicts, edge_layers = build_typed_edges(
             embeddings,
             coupling_specs=[
+                # Every structural layer is sparsified to each node's strongest
+                # ~10 ties (like the semantic mutual-kNN at k=8) — a coupling
+                # layer left dense is a payload bomb, not information (the
+                # corpus map shipped 1.43M edges / 200 MB before these caps).
                 CouplingSpec(
                     edge_type="bibliographic_coupling",
                     pairs=_paper_bibliographic_coupling(conn, paper_ids, min_shared_refs=3),
                     weight_floor=0.4, weight_span=0.5,
+                    top_k_per_node=10,
                 ),
                 CouplingSpec(
                     edge_type="co_authorship",
                     pairs=_paper_coauthorship(conn, paper_ids, min_shared_authors=1),
                     weight_floor=0.4, weight_span=0.2, weight_mode="linear_capped",
+                    top_k_per_node=10,
                 ),
                 # Co-citation: papers cited together by ≥2 other papers (shared
                 # reception). The forward-looking twin of bibliographic coupling
@@ -2990,6 +3007,7 @@ def _build_embedding_paper_map(
                     edge_type="co_citation",
                     pairs=_paper_cocitation(conn, paper_ids, min_shared_citers=2),
                     weight_floor=0.4, weight_span=0.5,
+                    top_k_per_node=10,
                 ),
             ],
             semantic_k=8,
@@ -3137,15 +3155,22 @@ def _paper_coauthorship(
     paper_ids: list[str],
     *,
     min_shared_authors: int = 1,
+    max_author_df: int | None = 50,
 ) -> dict[tuple[str, str], int]:
     """Pairs of papers that share at least ``min_shared_authors`` authors.
 
     Co-authorship edge layer for the paper map (Phase 3 / I-11): papers keyed by
     their (case-folded) OpenAlex author ids, paired via the shared
     ``cooccurrence_pairs`` primitive (one indexed scan + inverted index, NOT a
-    self-join). No df cap — the "feature" is an author, and a prolific author who
-    wrote many papers in the set legitimately co-authors them all. Silently
-    returns {} when the table is missing.
+    self-join).
+
+    ``max_author_df`` drops authors appearing on more than N in-set papers
+    before pairing. A followed author with 500 corpus papers is *legitimately*
+    on all of them — but C(500,2) ≈ 125k clique edges carry zero visual
+    information and were the payload bomb the 2026-07-25 audit found on the
+    corpus map (1.33M co-authorship edges, 200 MB of JSON). Same philosophy as
+    the bib-coupling hub-reference cap and the author-network mega-consortium
+    cap (2026.07-4/-6). Silently returns {} when the table is missing.
     """
     if not paper_ids or not table_exists(conn, "publication_authors"):
         return {}
@@ -3167,7 +3192,9 @@ def _paper_coauthorship(
         pid = r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]
         oid = r["oid"] if isinstance(r, sqlite3.Row) else r[1]
         paper_authors[str(pid)].append(str(oid))
-    return cooccurrence_pairs(paper_authors, min_shared=min_shared_authors)
+    return cooccurrence_pairs(
+        paper_authors, min_shared=min_shared_authors, max_feature_df=max_author_df
+    )
 
 
 def _paper_bibliographic_coupling(

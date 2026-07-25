@@ -1053,6 +1053,23 @@ def _m_0031_ai_provider_local_when_available(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0032_single_corpus_substrate(conn: sqlite3.Connection) -> None:
+    """Task 50 M1 (50-G): ONE computed layout — the corpus substrate.
+
+    ``publication_clusters`` used to carry two independently-fitted layouts
+    (scope 'library' + 'corpus'). Library views now FILTER the corpus
+    substrate, so persisted library-scope rows are dead data — and worse,
+    a stale second vocabulary (their cluster ids/labels no longer match
+    anything rendered). Forward-only: delete them; the corpus rows are
+    untouched (rebuilt on their own cadence by graph-layout maintenance).
+    """
+    if not _table_exists(conn, "publication_clusters"):
+        return
+    if "scope" not in _table_columns(conn, "publication_clusters"):
+        return  # pre-#21 shape; #21 runs first and creates the scoped table
+    conn.execute("DELETE FROM publication_clusters WHERE scope != 'corpus'")
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1085,6 +1102,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (29, "venue_monitor_source_id", _m_0029_venue_monitor_source_id),
     (30, "reorder_position", _m_0030_reorder_position),
     (31, "ai_provider_local_when_available", _m_0031_ai_provider_local_when_available),
+    (32, "single_corpus_substrate", _m_0032_single_corpus_substrate),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -68,7 +68,12 @@ from __future__ import annotations
 #            ≥2 other papers) alongside semantic / bibliographic_coupling /
 #            co_authorship — a new default edge topology, so the cached paper maps
 #            must rebuild to carry the new edges + edge_layers count (task 47 §7).
-PROJECTION_ALGO_VERSION = "2026.07-8"
+# 2026.07-9: task 50 M1 — structural edge layers are SPARSE by contract:
+#            co-authorship gains an author-df cap (50, mirroring the hub-ref and
+#            mega-consortium caps) and every coupling layer keeps only each
+#            node's ~10 strongest ties. The corpus map shipped 1.43M edges
+#            (200 MB JSON) before; the edge set changes, cached maps rebuild.
+PROJECTION_ALGO_VERSION = "2026.07-9"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.
@@ -82,7 +87,14 @@ PROJECTION_ALGO_VERSION = "2026.07-8"
 #            to recover the own-kNN/500 coverage — 0.741 on the corpus — whereas
 #            200 under-settles it to 0.723). Coverage is preserved; the layout
 #            shifts marginally, so the cached clustering rebuilds once.
-CLUSTERING_ALGO_VERSION = "2026.07-5"
+# 2026.07-6: task 50 M1 (50-G) — ONE corpus substrate. The library map no longer
+#            fits its own layout: it filters the corpus substrate (positions +
+#            cluster ids/labels change for the library view). Substrate cluster
+#            resolution is now 1.5 (graph_substrate.SUBSTRATE_CLUSTER_RESOLUTION,
+#            matching the frontend default — 1.0 merged a coherent single-user
+#            corpus into a few mega-clusters), so the corpus layout re-clusters
+#            once too.
+CLUSTERING_ALGO_VERSION = "2026.07-6"
 
 # Cluster-label generation (ai/clustering.py score_cluster_terms): c-TF-IDF
 # term selection + word clouds, and the label-signature content hash.
@@ -128,7 +140,11 @@ LABELLING_VERSION = "2026.07-8"
 #            cited work; the payload gains `cluster_topics` — the library's OWN
 #            c-TF-IDF cluster labels, which replace the OpenAlex taxonomy as the
 #            Overview's "topics". New payload fields → cached overview rebuilds.
-INSIGHTS_LOGIC_VERSION = "2026.07-7"
+# 2026.07-8: task 50 M1 — `cluster_topics` now reads the ONE corpus substrate
+#            (scope='corpus', filtered to library rows) instead of the deleted
+#            library-scope layout; the vocabulary becomes the corpus cluster
+#            labels (same words as the map). Cached overview must rebuild.
+INSIGHTS_LOGIC_VERSION = "2026.07-8"
 
 
 def with_version(fingerprint_sql: str, *versions: str) -> str:

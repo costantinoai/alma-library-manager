@@ -1778,8 +1778,10 @@ def get_insights_papers(
 ):
     ft = (filter_type or "").strip().lower()
 
-    # The cluster filter is special: it reads the scope-keyed publication_clusters
-    # side table (I-1), so its WHERE binds two params (scope + cluster id).
+    # The cluster filter is special: it reads the publication_clusters side
+    # table. Task 50 M1 (50-G): cluster identity lives on the ONE corpus
+    # substrate — `scope` narrows which PAPERS are listed (library = saved
+    # rows only), never which layout is read.
     if ft == "cluster":
         try:
             cluster_id = int(filter_value)
@@ -1787,8 +1789,10 @@ def get_insights_papers(
             raise HTTPException(status_code=422, detail="cluster filter_value must be an integer")
         sc = scope if scope in ("library", "corpus") else "library"
         join = "JOIN publication_clusters pc ON pc.paper_id = p.id"
-        where = f"pc.scope = ? AND pc.cluster_id = ? AND {standalone_paper_sql('p')}"
-        params: list[Any] = [sc, cluster_id]
+        where = f"pc.scope = 'corpus' AND pc.cluster_id = ? AND {standalone_paper_sql('p')}"
+        if sc == "library":
+            where += " AND p.status = 'library'"
+        params: list[Any] = [cluster_id]
     else:
         spec = _DRILLDOWN_FILTERS.get(ft)
         if spec is None:
@@ -2179,16 +2183,17 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                 ).fetchall()
             top_topics = [dict(r) for r in rows]
 
-        # ── Cluster vocabulary (47-E) ──
+        # ── Cluster vocabulary (47-E, 50-G) ──
         #
-        # YOUR library's own topic structure: the c-TF-IDF labels the graph
-        # already computed for scope='library', grouped and counted. This is
-        # what the Overview shows as "topics", because it describes how YOUR
-        # papers actually group — whereas `top_topics` above is OpenAlex's
-        # global taxonomy applied to them. The taxonomy stays available inside
-        # paper drilldown rows, but it never stands in for this: if clusters
-        # aren't computed yet the UI says so and points at Settings → AI,
-        # rather than silently showing a different thing under the same word.
+        # YOUR library's own topic structure: your saved papers grouped by the
+        # c-TF-IDF cluster labels of the ONE corpus substrate (task 50 —
+        # library views filter the substrate, they never grow a second
+        # vocabulary). Same words as the map clusters, counted over library
+        # rows only. `top_topics` above is OpenAlex's global taxonomy; it
+        # stays available inside paper drilldowns but never stands in for
+        # this. If clusters aren't computed yet the UI says so and points at
+        # Settings → AI, rather than silently showing a different thing under
+        # the same word.
         cluster_topics: list[dict[str, Any]] = []
         if table_exists(db, "publication_clusters"):
             try:
@@ -2200,7 +2205,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                            ROUND(COALESCE(AVG(p.cited_by_count), 0), 1) AS avg_citations
                     FROM publication_clusters pc
                     JOIN papers p ON p.id = pc.paper_id
-                    WHERE pc.scope = 'library'
+                    WHERE pc.scope = 'corpus'
                       AND pc.cluster_id >= 0
                       AND TRIM(COALESCE(pc.label, '')) <> ''
                       AND {library_where_p}
