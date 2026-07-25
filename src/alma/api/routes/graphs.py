@@ -37,11 +37,11 @@ from alma.application.graph_substrate import (
     SubstrateUnavailable,
     assign_to_centroids,
     cluster_jitter,
-    substrate_row_count,
 )
 from alma.core.db_write import write_section
 from alma.core.scope import Scope
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -442,7 +442,7 @@ def _enqueue_corpus_layout_build() -> dict:
         status="queued",
         operation_key=operation_key,
         trigger_source="auto:frontier",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Building corpus semantic layout for the frontier map",
     )
     add_job_log(job_id, "Queued corpus layout build for the frontier map", step="queued")
@@ -933,7 +933,19 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
         )
         if v is None:
             v = VALENCE_NO_SIGNAL
-        points.append({"x": float(row["x"]), "y": float(row["y"]), "v": round(v, 3)})
+        points.append(
+            {
+                "id": str(row["paper_id"]),
+                "x": float(row["x"]),
+                "y": float(row["y"]),
+                "v": round(v, 3),
+                # Raw internal score (0-100, latest recommendation) rides
+                # along so hosts colour Score mode LIVE — scores move with
+                # every refresh while the cached layout payload does not,
+                # and a stale materialized view must never grey the dots.
+                "score": float(row["rec_score"]) if row["rec_score"] is not None else None,
+            }
+        )
         vmin = min(vmin, v)
         vmax = max(vmax, v)
         vsum += v
@@ -1620,7 +1632,7 @@ def refresh_cluster_labels(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Refreshing cluster labels ({graph_type}, {scope})",
     )
     add_job_log(
@@ -1687,7 +1699,7 @@ def rebuild_graphs(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Rebuilding graph cache",
     )
 
@@ -1740,7 +1752,7 @@ def backfill_graph_references(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Backfilling publication references",
     )
 

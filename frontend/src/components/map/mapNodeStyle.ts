@@ -213,9 +213,21 @@ export function summarizeValues(values: number[]): { min: number; max: number; m
   return { min, max, mean: sum / vs.length }
 }
 
+/** Terrain ramp — the ONE owner of the preference-field colours (splat +
+ *  legend read THESE stops). Deep ends, near-parchment centre: a neutral
+ *  cell blends into the paper instead of blanketing the plate in yellow;
+ *  only real deviations take colour (user call 2026-07-25). The splat
+ *  additionally scales alpha by |deviation|, so neutral fades out. */
+export const TERRAIN_RAMP = {
+  neg: [165, 0, 38] as const, // deep red — strongest against
+  mid: [252, 245, 224] as const, // pale parchment — neutral, near-invisible
+  pos: [0, 104, 55] as const, // deep green — strongest for
+}
+
 /** CSS gradients matching the canvas ramps exactly — the legend bar must be
  *  the same ramp the dots use. */
 export const RAMP_GRADIENTS = {
   divergent: 'linear-gradient(to right, rgb(220,68,61), rgb(233,196,76), rgb(64,160,92))',
+  terrain: `linear-gradient(to right, rgb(${TERRAIN_RAMP.neg.join(',')}), rgb(${TERRAIN_RAMP.mid.join(',')}), rgb(${TERRAIN_RAMP.pos.join(',')}))`,
   year: 'linear-gradient(to right, #440154, #3B528B, #21918C, #5EC962, #FDE725)',
 } as const

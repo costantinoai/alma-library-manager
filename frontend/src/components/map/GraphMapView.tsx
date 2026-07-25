@@ -144,6 +144,32 @@ export function GraphMapView({
     [nodes],
   )
 
+  // 50-J terrain + live scores. Paper maps read BOTH from the SPACE-OWNED
+  // field (/graphs/signal-field): the terrain valences AND the raw internal
+  // scores. Scores move with every Discovery refresh while the cached
+  // layout payload does not — colouring from the payload's baked-in score
+  // left every dot grey on a stale materialized view (user catch
+  // 2026-07-25). The author network has its own layout space and payload,
+  // so it keeps metadata-derived values.
+  const isPaperMap = endpoint === 'paper-map'
+  const signalField = useSignalField((showTerrain || colourMode === 'score') && isPaperMap)
+
+  /** metadata.score arrives as number | null | absent — Number(null) is 0,
+   *  which would paint never-scored papers full red. Type-check, never
+   *  coerce. */
+  const metaScore = (n: GraphNode): number | null => {
+    const raw = n.metadata?.score
+    return typeof raw === 'number' ? raw : null
+  }
+  const liveScore = useCallback(
+    (n: GraphNode): number | null => {
+      if (isPaperMap) return signalField.scoresById.get(n.id) ?? null
+      const raw = n.metadata?.score
+      return typeof raw === 'number' ? raw : null
+    },
+    [isPaperMap, signalField.scoresById],
+  )
+
   const dataColour = useCallback(
     (n: GraphNode): string | undefined => {
       if (colourMode === 'year' && yearRange) {
@@ -156,8 +182,8 @@ export function GraphMapView({
         // Internal relevance score (0–100), divergent about the neutral 50:
         // red = the engine scored it weak, green = strong. Never-scored
         // papers (no recommendation yet) stay recessive.
-        const s = Number(n.metadata?.score)
-        if (!Number.isFinite(s)) return MAP_INK.ambientSoft
+        const s = liveScore(n)
+        if (s == null) return MAP_INK.ambientSoft
         const t = Math.max(-1, Math.min(1, (s - 50) / 50))
         const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
         return t < 0
@@ -166,23 +192,15 @@ export function GraphMapView({
       }
       return undefined
     },
-    [colourMode, yearRange],
+    [colourMode, yearRange, liveScore],
   )
 
-  // 50-J terrain. Paper maps splat the SPACE-OWNED field
-  // (/graphs/signal-field): one valence per corpus paper, independent of
-  // which dots this view renders — the terrain never changes when a layer
-  // is toggled (user call 2026-07-25). The author network has its own
-  // layout space, so it keeps a per-node valence (its payload always
-  // carries every author).
-  const isPaperMap = endpoint === 'paper-map'
-  const signalField = useSignalField(showTerrain && isPaperMap)
   const terrainValues = useMemo(() => {
     if (!showTerrain || isPaperMap) return undefined
     const m = new Map<string, number>()
     for (const n of nodes) {
-      const s = Number(n.metadata?.score)
-      if (Number.isFinite(s)) m.set(n.id, Math.max(-1, Math.min(1, (s - 50) / 50)))
+      const s = metaScore(n)
+      if (s != null) m.set(n.id, Math.max(-1, Math.min(1, (s - 50) / 50)))
       else m.set(n.id, 0)
     }
     return m
@@ -194,8 +212,11 @@ export function GraphMapView({
     [nodes],
   )
   const scoreStats = useMemo(
-    () => summarizeValues(nodes.map((n) => Number(n.metadata?.score))),
-    [nodes],
+    () =>
+      summarizeValues(
+        nodes.map((n) => liveScore(n)).filter((s): s is number => s != null),
+      ),
+    [nodes, liveScore],
   )
   // Terrain bar: field stats are the SPACE's stats (stable across view
   // state); node-derived stats only for the author network's own space.
@@ -357,10 +378,13 @@ export function GraphMapView({
           </span>
           <span className="text-slate-400">{nodes.length} on the map</span>
           {colourMode === 'year' && yearRange && yearStats && (
+            // Ramp clamps at p10–p90 for contrast; the labels say so with
+            // extend notation ("≤2004" = everything older saturates at the
+            // dark end) so the bar never hides the real data range.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.year}
-              min={String(yearRange.lo)}
-              max={String(yearRange.hi)}
+              min={yearStats.min < yearRange.lo ? `≤${yearRange.lo}` : String(yearRange.lo)}
+              max={yearStats.max > yearRange.hi ? `≥${yearRange.hi}` : String(yearRange.hi)}
               mean={String(Math.round(yearStats.mean))}
             />
           )}
@@ -376,12 +400,12 @@ export function GraphMapView({
             />
           )}
           {showTerrain && terrainStats && (
-            // Two-slope scale: yellow is ALWAYS 0 (neutral), each side
-            // stretches to its own observed extreme — labels show the TRUE
-            // asymmetric range, never a fixed ±1 (user call 2026-07-25).
-            // Space-owned stats — stable whatever the visible layers.
+            // Two-slope scale on the TERRAIN ramp (pale centre = neutral
+            // fades into the paper): labels are the field's TRUE asymmetric
+            // min / 0 / max — exactly the ramp's anchors, never a fixed ±1
+            // (user call 2026-07-25). Space-owned, stable across layers.
             <ColourBarLegend
-              gradient={RAMP_GRADIENTS.divergent}
+              gradient={RAMP_GRADIENTS.terrain}
               min={terrainStats.min.toFixed(2)}
               mid="0"
               max={terrainStats.max.toFixed(2)}

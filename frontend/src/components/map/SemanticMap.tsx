@@ -40,6 +40,7 @@ import {
   MAP_INK,
   MAP_NODE_STYLES,
   SELECTION_RING,
+  TERRAIN_RAMP,
   radiusFor,
   type MapNodeKind,
 } from './mapNodeStyle'
@@ -384,37 +385,35 @@ export function SemanticMap({
         let maxW = 0
         for (let i = 0; i < wsum.length; i++) if (wsum[i] > maxW) maxW = wsum[i]
         // TWO-SLOPE normalisation (matplotlib TwoSlopeNorm): zero is ALWAYS
-        // yellow (neutral must mean neutral), but each side stretches
-        // independently to its own observed range, at the 98th percentile
-        // so one extreme pocket can't flatten its side. Needed because the
-        // full-coverage field carries a lot of neutral mass — a single
-        // symmetric ±max scale left every local mean near zero and the
-        // whole plate yellow (user call 2026-07-25).
-        const negMeans: number[] = []
-        const posMeans: number[] = []
-        for (let i = 0; i < wsum.length; i++) {
-          if (wsum[i] <= 0.02) continue
-          const m = vsum[i] / wsum[i]
-          if (m < 0) negMeans.push(-m)
-          else if (m > 0) posMeans.push(m)
+        // the neutral centre stop, each side anchored on the REAL extremes
+        // of the SOURCE values — the exact numbers the colourbar labels —
+        // so the ramp ends mean the field's true min / max (user call
+        // 2026-07-25). Anchoring on source values (not smoothed cell
+        // means) keeps the scale stable across zoom levels and identical
+        // to the legend.
+        let srcMin = 0
+        let srcMax = 0
+        for (const [, , v] of heatPoints) {
+          if (v < srcMin) srcMin = v
+          if (v > srcMax) srcMax = v
         }
-        const p98 = (vs: number[]) => {
-          if (vs.length === 0) return 1
-          vs.sort((a, b) => a - b)
-          return Math.max(1e-6, vs[Math.min(vs.length - 1, Math.floor(vs.length * 0.98))])
-        }
-        const negMax = p98(negMeans)
-        const posMax = p98(posMeans)
+        const negMax = Math.max(1e-6, -srcMin)
+        const posMax = Math.max(1e-6, srcMax)
+        // TERRAIN_RAMP (mapNodeStyle owns the stops): deep red → pale
+        // parchment → deep green. Alpha scales with |deviation| so a
+        // neutral cell fades into the paper instead of blanketing the
+        // plate in mid-ramp wash — only real diffs take colour.
+        const { neg: RN, mid: RM, pos: RP } = TERRAIN_RAMP
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
           const mean = vsum[i] / wsum[i]
-          // Divergent ramp: -1 red (220,68,61) → 0 yellow (233,196,76) → +1 green (64,160,92)
           const t = Math.max(-1, Math.min(1, mean < 0 ? mean / negMax : mean / posMax))
           const [r, g, b] =
             t < 0
-              ? [220 + (233 - 220) * (1 + t), 68 + (196 - 68) * (1 + t), 61 + (76 - 61) * (1 + t)]
-              : [233 + (64 - 233) * t, 196 + (160 - 196) * t, 76 + (92 - 76) * t]
-          const alpha = Math.min(0.4, 0.12 + 0.5 * (wsum[i] / maxW)) * 255
+              ? [RN[0] + (RM[0] - RN[0]) * (1 + t), RN[1] + (RM[1] - RN[1]) * (1 + t), RN[2] + (RM[2] - RN[2]) * (1 + t)]
+              : [RM[0] + (RP[0] - RM[0]) * t, RM[1] + (RP[1] - RM[1]) * t, RM[2] + (RP[2] - RM[2]) * t]
+          const densityAlpha = Math.min(0.45, 0.1 + 0.55 * (wsum[i] / maxW))
+          const alpha = densityAlpha * (0.2 + 0.8 * Math.abs(t)) * 255
           const o = i * 4
           img.data[o] = r
           img.data[o + 1] = g

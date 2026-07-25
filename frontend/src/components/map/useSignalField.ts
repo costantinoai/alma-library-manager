@@ -18,9 +18,14 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
 
 export interface SignalFieldPoint {
+  id: string
   x: number
   y: number
   v: number
+  /** Raw internal score (0–100, latest recommendation) — null if never
+   *  recommended. Rides along so Score mode colours LIVE instead of from
+   *  the cached layout payload (which goes stale between refreshes). */
+  score: number | null
 }
 
 export interface SignalFieldStats {
@@ -39,6 +44,8 @@ interface SignalFieldResponse {
 export function useSignalField(enabled: boolean): {
   points: SignalFieldPoint[]
   stats: SignalFieldStats | null
+  /** Live internal score per paper id — the Score colour mode's source. */
+  scoresById: ReadonlyMap<string, number>
 } {
   const query = useQuery({
     queryKey: ['signal-field'],
@@ -50,9 +57,17 @@ export function useSignalField(enabled: boolean): {
   })
 
   const points = useMemo(
-    () => (query.data?.points ?? []).map((p) => ({ x: p.x, y: 1 - p.y, v: p.v })),
+    () => (query.data?.points ?? []).map((p) => ({ ...p, y: 1 - p.y })),
     [query.data],
   )
 
-  return { points, stats: query.data?.stats ?? null }
+  const scoresById = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of query.data?.points ?? []) {
+      if (typeof p.score === 'number') m.set(p.id, p.score)
+    }
+    return m
+  }, [query.data])
+
+  return { points, stats: query.data?.stats ?? null, scoresById }
 }

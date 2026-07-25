@@ -565,18 +565,20 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               Suggestions {counts ? `(${counts.recs})` : ''} — hollow
             </span>
             {groupBy === 'year' && yearRange && yearStats && (
+              // Ramp clamps at p10–p90 for contrast; extend notation
+              // ("≤2004") keeps the real data range honest.
               <ColourBarLegend
                 gradient={RAMP_GRADIENTS.year}
-                min={String(yearRange.lo)}
-                max={String(yearRange.hi)}
+                min={yearStats.min < yearRange.lo ? `≤${yearRange.lo}` : String(yearRange.lo)}
+                max={yearStats.max > yearRange.hi ? `≥${yearRange.hi}` : String(yearRange.hi)}
                 mean={String(Math.round(yearStats.mean))}
               />
             )}
             {showTerrain && terrainStats && (
-              // Two-slope scale: yellow = 0 always; sides stretch to their
-              // own true extremes (never a fixed ±1).
+              // Two-slope terrain ramp (pale centre): labels are the true
+              // asymmetric min / 0 / max — the ramp's exact anchors.
               <ColourBarLegend
-                gradient={RAMP_GRADIENTS.divergent}
+                gradient={RAMP_GRADIENTS.terrain}
                 min={terrainStats.min.toFixed(2)}
                 mid="0"
                 max={terrainStats.max.toFixed(2)}
