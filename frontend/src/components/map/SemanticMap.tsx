@@ -414,8 +414,8 @@ export function SemanticMap({
           const mean = vsum[i] / wsum[i]
           const t = Math.max(-1, Math.min(1, mean / absMax))
           const [r, g, b] = terrainColor(t)
-          const densityAlpha = Math.min(0.75, 0.25 + 0.7 * (dsum[i] / maxW))
-          const alpha = densityAlpha * (0.45 + 0.55 * Math.abs(t)) * 255
+          const densityAlpha = Math.min(0.9, 0.45 + 0.6 * (dsum[i] / maxW))
+          const alpha = densityAlpha * (0.6 + 0.4 * Math.abs(t)) * 255
           const o = i * 4
           img.data[o] = r
           img.data[o + 1] = g
