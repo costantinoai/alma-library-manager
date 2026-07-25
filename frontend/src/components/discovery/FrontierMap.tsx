@@ -1,3 +1,15 @@
+/**
+ * FrontierMap — the Discovery host of the shared `<SemanticMap>` primitive
+ * (task 50 M2; layers/decisions from task 47 P3/P8).
+ *
+ * This file owns Discovery-specific meaning ONLY: the frontier query, layer
+ * toggles, the branches/clusters grouping switch (47-H: one grouping at a
+ * time), branch legend chips that steer `branch_controls` through the shared
+ * hook, and the lasso → describe → adopt-a-Direction loop. All rendering,
+ * hit-testing, zoom/pan, toponym placement, and node semantics live in
+ * `components/map/SemanticMap` — the same instrument every other map host
+ * uses, so visuals and knobs cannot fork per surface (50-E/50-F).
+ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -7,7 +19,6 @@ import {
   EyeOff,
   LassoSelect,
   Loader2,
-  Maximize2,
   Share2,
   Sparkles,
   X,
@@ -16,13 +27,11 @@ import {
 import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
+import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
+import { MAP_INK } from '@/components/map/mapNodeStyle'
 import { StatusBadge } from '@/components/ui/status-badge'
-import { FRONTIER_MAP, branchMapColor } from '@/lib/palette'
+import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
-
-const VB_W = 1000
-const VB_H = 620
-const PAD = 40
 
 interface FrontierMapProps {
   lensId: string | null
@@ -38,6 +47,8 @@ interface FrontierMapProps {
     terms: string[]
     member_paper_ids: string[]
   }) => void
+  /** 50-B map→list sync: filter the rec list below to a lassoed region. */
+  onFilterList?: (paperIds: string[]) => void
 }
 
 /** A pending region selection: the ids under the lasso + its describe payload. */
@@ -45,11 +56,6 @@ interface RegionSelection {
   ids: string[]
   anchor: { x: number; y: number }
   description?: RegionDescription
-}
-
-interface Placed extends FrontierNode {
-  px: number
-  py: number
 }
 
 /** Map distinct branch ids → {color, label, index} in first-seen order. */
@@ -75,25 +81,21 @@ function useBranchColors(nodes: FrontierNode[]) {
   }, [nodes])
 }
 
-export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: FrontierMapProps) {
+export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onFilterList }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
-  const [hover, setHover] = useState<{ node: Placed; branchColor?: string } | null>(null)
-  // Pan/zoom transform.
-  const [view, setView] = useState({ tx: 0, ty: 0, scale: 1 })
-  const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null)
-  // Region selection: in select mode a drag draws a rectangle (viewBox coords)
-  // instead of panning; on release the papers inside become a candidate
-  // Direction. `region` holds the pending selection + its describe payload.
+  const [hoverId, setHoverId] = useState<string | null>(null)
   // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
   // (the recs are its hero layer); corpus clusters are the alternative lens on
   // the same points. Never both — two colourings on one scatter is a lie about
   // which structure you're looking at.
   const [groupBy, setGroupBy] = useState<'branches' | 'clusters'>('branches')
+  // Legend chips as toggles: a dimmed cluster recedes (never disappears —
+  // the territory stays honest), so you can mute the mega-cluster and read
+  // the rest. Reset on grouping switch.
+  const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
-  const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
-  const selRef = useRef<{ x1: number; y1: number } | null>(null)
   const [region, setRegion] = useState<RegionSelection | null>(null)
 
   const query = useQuery({
@@ -110,6 +112,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
   const counts = query.data?.counts
   const branchColors = useBranchColors(nodes)
   const branchControls = useBranchControls(lens)
+  const nodesById = useMemo(() => new Map(nodes.map((n) => [n.paper_id, n])), [nodes])
 
   // Corpus clusters present on the map, largest first, each with a stable hue.
   // Unclustered (-1) is deliberately excluded from the legend: it is the
@@ -144,133 +147,57 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
     prevRecIds.current = current
   }, [nodes, query.data?.status])
 
-  // Normalize raw layout coords → viewBox pixels (fit bounds).
-  const placed = useMemo<Placed[]>(() => {
-    if (nodes.length === 0) return []
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const n of nodes) {
-      minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x)
-      minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y)
-    }
-    const spanX = maxX - minX || 1
-    const spanY = maxY - minY || 1
-    return nodes.map((n) => ({
-      ...n,
-      px: PAD + ((n.x - minX) / spanX) * (VB_W - 2 * PAD),
-      // Flip Y so higher-y sits at the top, like a chart.
-      py: PAD + (1 - (n.y - minY) / spanY) * (VB_H - 2 * PAD),
-    }))
-  }, [nodes])
+  // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
+  const mapNodes = useMemo<SemanticMapNode[]>(() => {
+    return nodes.map((n): SemanticMapNode => {
+      const kind = n.layer === 'library' ? 'library' : n.layer === 'rec' ? 'suggestion' : 'seen'
+      // Colour follows whichever grouping is active — never both (47-H).
+      let color: string | undefined
+      if (groupBy === 'clusters') {
+        color =
+          typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id)?.color : undefined
+      } else if (n.layer === 'rec') {
+        color = n.branch_id ? branchColors.get(n.branch_id)?.color : branchMapColor(0)
+      }
+      return {
+        id: n.paper_id,
+        x: n.x,
+        // Flip Y so higher-y sits at the top, like a chart (legacy convention).
+        y: 1 - n.y,
+        kind,
+        color,
+        sizeValue: n.layer === 'rec' ? (n.score ?? null) : null,
+        clusterId: n.cluster_id ?? undefined,
+        clusterLabel: n.cluster_label ?? undefined,
+        dimmed:
+          (groupBy === 'branches' &&
+            highlightBranch != null &&
+            n.layer === 'rec' &&
+            n.branch_id !== highlightBranch) ||
+          (groupBy === 'clusters' &&
+            typeof n.cluster_id === 'number' &&
+            dimmedClusters.has(n.cluster_id)),
+        halo: newRecIds.has(n.paper_id),
+      }
+    })
+  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters])
 
-  // Back-to-front so the hero (recs) sit on top of the terrain and frontier.
-  const seenNodes = placed.filter((n) => n.layer === 'seen')
-  const libraryNodes = placed.filter((n) => n.layer === 'library')
-  const recNodes = placed.filter((n) => n.layer === 'rec')
-
-  // Citation edges between placed nodes (drawn under the dots when the overlay
-  // is on). Resolve endpoints to their pixel coords; drop any pointing at an
-  // unplaced node (e.g. a rec with no corpus coords).
-  const placedById = useMemo(() => {
-    const m = new Map<string, Placed>()
-    for (const n of placed) m.set(n.paper_id, n)
-    return m
-  }, [placed])
-  const drawnEdges = useMemo(
+  const mapEdges = useMemo(
     () =>
-      edges
-        .map((e) => ({ a: placedById.get(e.source), b: placedById.get(e.target), type: e.edge_type }))
-        .filter((e): e is { a: Placed; b: Placed; type: (typeof edges)[number]['edge_type'] } =>
-          !!e.a && !!e.b,
-        ),
-    [edges, placedById],
+      edges.map((e) => ({
+        source: e.source,
+        target: e.target,
+        color: LAYER_COLORS[e.edge_type] ?? LAYER_FALLBACK_COLOR,
+      })),
+    [edges],
   )
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault()
-    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    const mx = ((e.clientX - rect.left) / rect.width) * VB_W
-    const my = ((e.clientY - rect.top) / rect.height) * VB_H
-    setView((v) => {
-      const next = Math.min(6, Math.max(0.5, v.scale * (e.deltaY < 0 ? 1.12 : 1 / 1.12)))
-      // Keep the cursor point fixed while zooming.
-      const k = next / v.scale
-      return { scale: next, tx: mx - k * (mx - v.tx), ty: my - k * (my - v.ty) }
-    })
-  }
   const describeMutation = useMutation({
     mutationFn: (ids: string[]) => describeRegion(ids),
     onSuccess: (desc) => setRegion((r) => (r ? { ...r, description: desc } : r)),
   })
 
-  // Pointer → viewBox coordinates (matches the wheel-zoom math).
-  const toViewBox = (e: React.PointerEvent) => {
-    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    return {
-      x: ((e.clientX - rect.left) / rect.width) * VB_W,
-      y: ((e.clientY - rect.top) / rect.height) * VB_H,
-    }
-  }
-
-  const onPointerDown = (e: React.PointerEvent) => {
-    ;(e.currentTarget as SVGSVGElement).setPointerCapture(e.pointerId)
-    if (selectMode) {
-      const p = toViewBox(e)
-      selRef.current = { x1: p.x, y1: p.y }
-      setSelRect({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
-      setRegion(null)
-      return
-    }
-    dragRef.current = { x: e.clientX, y: e.clientY, moved: false }
-  }
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (selectMode && selRef.current) {
-      const p = toViewBox(e)
-      setSelRect({ x1: selRef.current.x1, y1: selRef.current.y1, x2: p.x, y2: p.y })
-      return
-    }
-    if (!dragRef.current) return
-    const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    const dx = ((e.clientX - dragRef.current.x) / rect.width) * VB_W
-    const dy = ((e.clientY - dragRef.current.y) / rect.height) * VB_H
-    if (Math.abs(e.clientX - dragRef.current.x) + Math.abs(e.clientY - dragRef.current.y) > 3) {
-      dragRef.current.moved = true
-    }
-    dragRef.current.x = e.clientX
-    dragRef.current.y = e.clientY
-    setView((v) => ({ ...v, tx: v.tx + dx, ty: v.ty + dy }))
-  }
-  const onPointerUp = () => {
-    if (selectMode && selRef.current && selRect) {
-      const x1 = Math.min(selRect.x1, selRect.x2)
-      const x2 = Math.max(selRect.x1, selRect.x2)
-      const y1 = Math.min(selRect.y1, selRect.y2)
-      const y2 = Math.max(selRect.y1, selRect.y2)
-      selRef.current = null
-      setSelRect(null)
-      // Hit-test placed nodes against the rect in screen (post-transform) coords.
-      if (x2 - x1 > 4 && y2 - y1 > 4) {
-        const ids: string[] = []
-        for (const n of placed) {
-          const sx = view.tx + view.scale * n.px
-          const sy = view.ty + view.scale * n.py
-          if (sx >= x1 && sx <= x2 && sy >= y1 && sy <= y2) ids.push(n.paper_id)
-        }
-        if (ids.length) {
-          setRegion({ ids, anchor: { x: x2, y: y2 } })
-          describeMutation.mutate(ids.slice(0, 300))
-        }
-      }
-      return
-    }
-    dragRef.current = null
-  }
-  const resetView = () => setView({ tx: 0, ty: 0, scale: 1 })
-
-  const cancelRegion = () => {
-    setRegion(null)
-    setSelRect(null)
-    selRef.current = null
-  }
+  const cancelRegion = () => setRegion(null)
   const adoptRegion = () => {
     if (!region?.description || !region.description.sufficient) return
     onAdoptDirection?.({
@@ -282,10 +209,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
     setSelectMode(false)
   }
 
-  const nodeClick = (n: Placed) => {
-    if (dragRef.current?.moved) return
-    onSelectPaper(n.paper_id)
-  }
+  const hoverNode = hoverId ? nodesById.get(hoverId) : null
 
   if (!lensId) {
     return (
@@ -306,9 +230,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
   }
 
   return (
-    <div className="relative overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1">
-      {/* Controls */}
-      <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
+    <div className="overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1">
+      {/* Toolbar — a real bar above the plate, never buttons floating on it
+          (user call 2026-07-25; also the 50-I controls contract). */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-surface-2 px-3 py-2">
         <button
           type="button"
           onClick={() => setShowSeen((s) => !s)}
@@ -347,6 +272,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
                 onClick={() => {
                   setGroupBy(mode)
                   setHighlightBranch(null)
+                  setDimmedClusters(new Set())
                 }}
                 className={cn(
                   'px-2 py-1 text-xs font-medium transition-colors',
@@ -384,357 +310,281 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: F
             Select a direction
           </button>
         )}
-        <button
-          type="button"
-          onClick={resetView}
-          className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2 py-1 text-xs text-slate-600 hover:bg-control-quiet"
-          title="Reset view"
-        >
-          <Maximize2 className="h-3.5 w-3.5" />
-        </button>
       </div>
 
-      <svg
-        viewBox={`0 0 ${VB_W} ${VB_H}`}
-        preserveAspectRatio="xMidYMid meet"
-        className={cn(
-          'h-[520px] w-full touch-none select-none',
-          selectMode ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing',
-        )}
-        onWheel={onWheel}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerLeave={onPointerUp}
-        role="img"
-        aria-label="Semantic frontier map of your library, suggestions, and seen papers"
+      <SemanticMap
+        nodes={mapNodes}
+        edges={mapEdges}
+        showEdges={showEdges}
+        // Toponyms belong to the clusters lens — branch mode keeps the field
+        // calm (branch identity already lives in the legend chips).
+        showToponyms={groupBy === 'clusters'}
+        height={520}
+        lassoMode={selectMode}
+        onLasso={(ids, anchor) => {
+          setRegion({ ids, anchor })
+          describeMutation.mutate(ids.slice(0, 300))
+        }}
+        onClickNode={(id) => onSelectPaper(id)}
+        onHover={(id) => setHoverId(id)}
+        className="rounded-none border-0"
       >
-        <g transform={`translate(${view.tx} ${view.ty}) scale(${view.scale})`}>
-          {/* Citation edges — drawn first so they sit UNDER the nodes. Coupling
-              (shared references) + co-citation (cited together), colored by the
-              same layer palette as the Analytics graph. */}
-          {showEdges && (
-            <g className="frontier-layer-edges">
-              {drawnEdges.map((e, i) => (
-                <line
-                  key={i}
-                  x1={e.a.px}
-                  y1={e.a.py}
-                  x2={e.b.px}
-                  y2={e.b.py}
-                  stroke={LAYER_COLORS[e.type] ?? LAYER_FALLBACK_COLOR}
-                  strokeWidth={0.5}
-                />
-              ))}
-            </g>
-          )}
-          {/* Seen — faint frontier (fades in last visually, drawn first) */}
-          {showSeen && (
-            <g className="frontier-layer-seen" style={{ opacity: 0.55 }}>
-              {seenNodes.map((n) => (
-                <circle
-                  key={n.paper_id}
-                  cx={n.px}
-                  cy={n.py}
-                  r={1.6}
-                  fill={FRONTIER_MAP.seen}
-                  onMouseEnter={() => setHover({ node: n })}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={() => nodeClick(n)}
-                  className="cursor-pointer"
-                />
-              ))}
-            </g>
-          )}
-          {/* Library — the terrain */}
-          <g className="frontier-layer-library">
-            {libraryNodes.map((n) => (
-              <circle
-                key={n.paper_id}
-                cx={n.px}
-                cy={n.py}
-                r={3}
-                fill={
-                  groupBy === 'clusters' && typeof n.cluster_id === 'number'
-                    ? (clusterColors.get(n.cluster_id)?.color ?? FRONTIER_MAP.library)
-                    : FRONTIER_MAP.library
-                }
-                fillOpacity={0.85}
-                onMouseEnter={() => setHover({ node: n })}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => nodeClick(n)}
-                className="cursor-pointer"
-              />
-            ))}
-          </g>
-          {/* Recs — the hero layer, colored by branch, sized by score */}
-          <g className="frontier-layer-rec">
-            {recNodes.map((n) => {
-              // Colour follows whichever grouping is active — never both.
-              const bc = n.branch_id ? branchColors.get(n.branch_id) : undefined
-              const cc =
-                typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id) : undefined
-              const color =
-                groupBy === 'clusters'
-                  ? (cc?.color ?? FRONTIER_MAP.library)
-                  : (bc?.color ?? branchMapColor(0))
-              const dim =
-                groupBy === 'branches' && highlightBranch != null && n.branch_id !== highlightBranch
-              const isNew = newRecIds.has(n.paper_id)
-              const r = 4 + Math.max(0, Math.min(1, (n.score ?? 0) / 100)) * 4
-              return (
-                <g key={n.paper_id}>
-                  {/* A halo, not a different colour: "new" is a temporal fact
-                      about the same node, so it must not fight the grouping. */}
-                  {isNew && (
-                    <circle
-                      cx={n.px}
-                      cy={n.py}
-                      r={r + 3.5}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={1}
-                      strokeOpacity={dim ? 0.15 : 0.55}
-                      strokeDasharray="2 2"
-                    />
-                  )}
-                  <circle
-                    cx={n.px}
-                    cy={n.py}
-                    r={r}
-                    fill={color}
-                    fillOpacity={dim ? 0.18 : 0.9}
-                    stroke="var(--color-surface-0)"
-                    strokeWidth={0.8}
-                    onMouseEnter={() => setHover({ node: n, branchColor: color })}
-                    onMouseLeave={() => setHover(null)}
-                    onClick={() => nodeClick(n)}
-                    className="cursor-pointer transition-opacity"
-                  />
-                </g>
-              )
-            })}
-          </g>
-        </g>
-        {/* Selection rectangle — drawn in raw viewBox coords (outside the
-            pan/zoom group) since selRect is captured in screen viewBox space. */}
-        {selRect && (
-          <rect
-            x={Math.min(selRect.x1, selRect.x2)}
-            y={Math.min(selRect.y1, selRect.y2)}
-            width={Math.abs(selRect.x2 - selRect.x1)}
-            height={Math.abs(selRect.y2 - selRect.y1)}
-            fill="var(--color-accent-soft)"
-            fillOpacity={0.25}
-            stroke="var(--color-alma-folio)"
-            strokeWidth={1}
-            strokeDasharray="4 3"
-          />
-        )}
-      </svg>
-
-      {/* Region popover — the describe payload + adopt action. Appears when a
-          selection has been made; meaning (label + terms + counts) is shown
-          before the action, per 47 §8. */}
-      {region && (
-        <div className="absolute right-3 top-14 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
-          <div className="mb-2 flex items-start justify-between gap-2">
-            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-              <Sparkles className="h-3.5 w-3.5 text-alma-folio" />
-              Direction
-            </div>
-            <button
-              type="button"
-              onClick={cancelRegion}
-              className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
-              aria-label="Cancel selection"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          {describeMutation.isPending || !region.description ? (
-            <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin text-alma-folio" />
-              Characterizing {region.ids.length} papers…
-            </div>
-          ) : !region.description.sufficient ? (
-            <p className="py-2 text-xs text-slate-500">
-              Too few papers to characterize — select a larger cluster (5+).
-            </p>
-          ) : (
-            <>
-              <p className="text-sm font-semibold capitalize text-alma-800">
-                {region.description.label}
-              </p>
-              {region.description.top_terms.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {region.description.top_terms.slice(0, 6).map((t) => (
-                    <StatusBadge key={t} tone="neutral" size="sm">
-                      {t}
-                    </StatusBadge>
-                  ))}
-                </div>
-              )}
-              <p className="mt-2 text-[11px] text-slate-500">
-                {region.description.counts.library} in library ·{' '}
-                {region.description.counts.recs} suggestions ·{' '}
-                {region.description.counts.seen} seen here
-              </p>
-              {region.description.sample.length > 0 && (
-                <ul className="mt-1.5 space-y-0.5">
-                  {region.description.sample.map((s, i) => (
-                    <li key={i} className="line-clamp-1 text-[11px] text-slate-400">
-                      · {s}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="mt-3 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={adoptRegion}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm bg-alma-800 px-2.5 py-1.5 text-xs font-medium text-alma-cream hover:bg-alma-900"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Explore this direction
-                </button>
-                <button
-                  type="button"
-                  onClick={cancelRegion}
-                  className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-slate-600 hover:bg-control-quiet"
-                >
-                  Cancel
-                </button>
+        {/* Region popover — the describe payload + adopt action. Meaning
+            (label + terms + counts) is shown before the action, per 47 §8. */}
+        {region && (
+          <div className="absolute right-3 top-3 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                <Sparkles className="h-3.5 w-3.5 text-alma-folio" />
+                Direction
               </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Hover tooltip */}
-      {hover && (
-        <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
-          <p className="line-clamp-2 font-medium text-alma-800">{hover.node.title || hover.node.paper_id}</p>
-          <p className="mt-0.5 text-slate-500">
-            {hover.node.layer === 'library' ? 'In your library' : hover.node.layer === 'rec' ? 'Suggestion' : 'Seen'}
-            {hover.node.year ? ` · ${hover.node.year}` : ''}
-            {hover.node.branch_label ? ` · ${hover.node.branch_label}` : ''}
-          </p>
-        </div>
-      )}
-
-      {/* Legend */}
-      <div className="absolute bottom-3 left-3 z-10 max-w-[60%] rounded-sm border border-[var(--color-border)] bg-surface-2/90 p-2.5 text-xs backdrop-blur-sm">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-slate-600">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: FRONTIER_MAP.library }} />
-            Library {counts ? `(${counts.library})` : ''}
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: branchMapColor(0) }} />
-            Suggestions {counts ? `(${counts.recs})` : ''}
-          </span>
-          {showSeen && (
-            <span className="inline-flex items-center gap-1.5 text-slate-400">
-              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: FRONTIER_MAP.seen }} />
-              {counts
-                ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
-                  (query.data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
-                : 'seen'}
-            </span>
-          )}
-        </div>
-        {/* Branch chips — highlight on click, and (when the lens is available)
-            steer the branch inline. Boost/mute here write the SAME
-            branch_controls Branch Studio writes, through the shared hook: one
-            state, two views. */}
-        {groupBy === 'branches' && branchColors.size > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-            {[...branchColors.entries()].map(([id, b]) => {
-              const state = lens ? branchControls.stateOf(id) : 'normal'
-              return (
-                <span
-                  key={id}
-                  className={cn(
-                    'inline-flex items-center gap-1 rounded-full border transition-colors',
-                    highlightBranch === id
-                      ? 'border-transparent text-white'
-                      : 'border-control-edge bg-control-quiet text-slate-600',
-                    state === 'muted' && 'opacity-50',
-                  )}
-                  style={highlightBranch === id ? { background: b.color } : undefined}
-                >
+              <button
+                type="button"
+                onClick={cancelRegion}
+                className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
+                aria-label="Cancel selection"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {describeMutation.isPending || !region.description ? (
+              <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin text-alma-folio" />
+                Characterizing {region.ids.length} papers…
+              </div>
+            ) : !region.description.sufficient ? (
+              <p className="py-2 text-xs text-slate-500">
+                Too few papers to characterize — select a larger cluster (5+).
+              </p>
+            ) : (
+              <>
+                <p className="text-sm font-semibold capitalize text-alma-800">
+                  {region.description.label}
+                </p>
+                {region.description.top_terms.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {region.description.top_terms.slice(0, 6).map((t) => (
+                      <StatusBadge key={t} tone="neutral" size="sm">
+                        {t}
+                      </StatusBadge>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {region.description.counts.library} in library ·{' '}
+                  {region.description.counts.recs} suggestions ·{' '}
+                  {region.description.counts.seen} seen here
+                </p>
+                {region.description.sample.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {region.description.sample.map((s, i) => (
+                      <li key={i} className="line-clamp-1 text-[11px] text-slate-400">
+                        · {s}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-3 flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
-                    className="inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 hover:opacity-80"
-                    title={`Highlight the "${b.label}" branch`}
+                    onClick={adoptRegion}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm bg-alma-800 px-2.5 py-1.5 text-xs font-medium text-alma-cream hover:bg-alma-900"
                   >
-                    <span
-                      className="inline-block h-2 w-2 rounded-full"
-                      style={{ background: b.color }}
-                    />
-                    {b.label} · {b.count}
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Explore this direction
                   </button>
-                  {lens && (
-                    <span className="flex items-center pr-1">
-                      <button
-                        type="button"
-                        onClick={() => branchControls.cycleBranchState(id, 'boosted')}
-                        disabled={branchControls.isPending}
-                        className={cn(
-                          'rounded-full p-0.5 transition-colors hover:text-alma-folio',
-                          state === 'boosted' ? 'text-alma-folio' : 'opacity-50 hover:opacity-100',
-                        )}
-                        title={state === 'boosted' ? 'Remove boost' : 'Boost this branch'}
-                      >
-                        <ChevronUp className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => branchControls.cycleBranchState(id, 'muted')}
-                        disabled={branchControls.isPending}
-                        className={cn(
-                          'rounded-full p-0.5 transition-colors hover:text-warning-700',
-                          state === 'muted' ? 'text-warning-700' : 'opacity-50 hover:opacity-100',
-                        )}
-                        title={state === 'muted' ? 'Unmute this branch' : 'Mute this branch'}
-                      >
-                        <ChevronDown className="h-3 w-3" />
-                      </button>
-                    </span>
+                  {onFilterList && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onFilterList(region.ids)
+                        cancelRegion()
+                        setSelectMode(false)
+                      }}
+                      className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-slate-600 hover:bg-control-quiet"
+                      title="Show only these papers in the list below"
+                    >
+                      Filter list
+                    </button>
                   )}
-                </span>
-              )
-            })}
+                  <button
+                    type="button"
+                    onClick={cancelRegion}
+                    className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-slate-600 hover:bg-control-quiet"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {/* Cluster chips — identity only; corpus clusters aren't steerable. */}
-        {groupBy === 'clusters' && clusterColors.size > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-            {[...clusterColors.entries()].slice(0, 8).map(([id, c]) => (
-              <span
-                key={id}
-                className="inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600"
-                title={`${c.label} · ${c.count} papers`}
-              >
-                <span
-                  className="inline-block h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: c.color }}
-                />
-                <span className="truncate">{c.label}</span>
-                <span className="shrink-0 text-slate-400">· {c.count}</span>
-              </span>
-            ))}
+        {/* Hover tooltip */}
+        {hoverNode && (
+          <div className="pointer-events-none absolute bottom-3 right-12 z-10 max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
+            <p className="line-clamp-2 font-medium text-alma-800">
+              {hoverNode.title || hoverNode.paper_id}
+            </p>
+            <p className="mt-0.5 text-slate-500">
+              {hoverNode.layer === 'library'
+                ? 'In your library'
+                : hoverNode.layer === 'rec'
+                  ? 'Suggestion'
+                  : 'Seen'}
+              {hoverNode.year ? ` · ${hoverNode.year}` : ''}
+              {hoverNode.branch_label ? ` · ${hoverNode.branch_label}` : ''}
+            </p>
           </div>
         )}
-        {counts && counts.recs_unplaced > 0 && (
-          <p className="mt-1.5 text-[11px] text-slate-400">
-            {counts.recs_unplaced} suggestion{counts.recs_unplaced === 1 ? '' : 's'} not on the map (no abstract yet)
-          </p>
-        )}
-      </div>
+
+      </SemanticMap>
+
+      {/* Legend — its own section BELOW the plate (user call 2026-07-25):
+          ownership semantics from the registry (filled vs hollow), grouping
+          chips per the active mode. Never an overlay hiding dots. */}
+      <div className="border-t border-[var(--color-border)] bg-surface-2 px-3 py-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-slate-600">
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ background: MAP_INK.library }}
+              />
+              Library {counts ? `(${counts.library})` : ''} — filled
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full border-2 bg-transparent"
+                style={{ borderColor: branchMapColor(0) }}
+              />
+              Suggestions {counts ? `(${counts.recs})` : ''} — hollow
+            </span>
+            {showSeen && (
+              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                <span
+                  className="inline-block h-1.5 w-1.5 rounded-full"
+                  style={{ background: MAP_INK.ambientSoft }}
+                />
+                {counts
+                  ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
+                    (query.data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
+                  : 'seen'}
+              </span>
+            )}
+          </div>
+          {/* Branch chips — highlight on click, and (when the lens is available)
+              steer the branch inline. Boost/mute here write the SAME
+              branch_controls Branch Studio writes, through the shared hook: one
+              state, two views. */}
+          {groupBy === 'branches' && branchColors.size > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+              {[...branchColors.entries()].map(([id, b]) => {
+                const state = lens ? branchControls.stateOf(id) : 'normal'
+                return (
+                  <span
+                    key={id}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full border transition-colors',
+                      highlightBranch === id
+                        ? 'border-transparent text-white'
+                        : 'border-control-edge bg-control-quiet text-slate-600',
+                      state === 'muted' && 'opacity-50',
+                    )}
+                    style={highlightBranch === id ? { background: b.color } : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
+                      className="inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 hover:opacity-80"
+                      title={`Highlight the "${b.label}" branch`}
+                    >
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ background: b.color }}
+                      />
+                      {b.label} · {b.count}
+                    </button>
+                    {lens && (
+                      <span className="flex items-center pr-1">
+                        <button
+                          type="button"
+                          onClick={() => branchControls.cycleBranchState(id, 'boosted')}
+                          disabled={branchControls.isPending}
+                          className={cn(
+                            'rounded-full p-0.5 transition-colors hover:text-alma-folio',
+                            state === 'boosted' ? 'text-alma-folio' : 'opacity-50 hover:opacity-100',
+                          )}
+                          title={state === 'boosted' ? 'Remove boost' : 'Boost this branch'}
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => branchControls.cycleBranchState(id, 'muted')}
+                          disabled={branchControls.isPending}
+                          className={cn(
+                            'rounded-full p-0.5 transition-colors hover:text-warning-700',
+                            state === 'muted' ? 'text-warning-700' : 'opacity-50 hover:opacity-100',
+                          )}
+                          title={state === 'muted' ? 'Unmute this branch' : 'Mute this branch'}
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                  </span>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Cluster chips — TOGGLES: click to dim a cluster's dots (they
+              recede, never vanish), click again to restore. Corpus clusters
+              aren't steerable, so this is a reading aid, not a signal. */}
+          {groupBy === 'clusters' && clusterColors.size > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+              {[...clusterColors.entries()].slice(0, 8).map(([id, c]) => {
+                const dimmed = dimmedClusters.has(id)
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() =>
+                      setDimmedClusters((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(id)) next.delete(id)
+                        else next.add(id)
+                        return next
+                      })
+                    }
+                    aria-pressed={!dimmed}
+                    className={cn(
+                      'inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600 transition-opacity hover:bg-control-quiet-hover',
+                      dimmed && 'opacity-40',
+                    )}
+                    title={
+                      dimmed
+                        ? `Show "${c.label}" (${c.count} papers)`
+                        : `Dim "${c.label}" (${c.count} papers)`
+                    }
+                  >
+                    <span
+                      className="inline-block h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: c.color }}
+                    />
+                    <span className={cn('truncate', dimmed && 'line-through')}>{c.label}</span>
+                    <span className="shrink-0 text-slate-400">· {c.count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {counts && counts.recs_unplaced > 0 && (
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              {counts.recs_unplaced} suggestion{counts.recs_unplaced === 1 ? '' : 's'} not on the map (no abstract yet)
+            </p>
+          )}
+        </div>
     </div>
   )
 }

@@ -1,0 +1,474 @@
+/**
+ * SemanticMap — the ONE scatter-map renderer (task 50 M2).
+ *
+ * Every map host (Discovery frontier panel, the Map page, Authors network
+ * scatter) draws through this component, so visuals, semantics, and
+ * interactions can never fork per surface:
+ *
+ *   - node meaning comes from the `mapNodeStyle` registry (50-E) — hosts pass
+ *     a `kind` + optional grouping colour, never raw styles;
+ *   - all map text goes through the collision-free `labelLayout` pass (50-H):
+ *     cluster names render as TOPONYMS — letterspaced uppercase place names,
+ *     sized by cluster mass, dropped (never stacked) when ground runs out;
+ *   - canvas, not SVG: 8k+ corpus dots pan/zoom smoothly (the old SVG
+ *     frontier degraded past ~5k DOM nodes). Fixed substrate coordinates —
+ *     no force simulation;
+ *   - viewport culling + a uniform-grid hit index keep draw + hover O(visible);
+ *   - selection ring is ALWAYS the folio accent; the lasso is the accent too
+ *     (accent = selected, per the control contract).
+ *
+ * The component owns rendering + spatial interaction only. Data fetching,
+ * legends, control bars, hover cards, and region popovers belong to hosts —
+ * they receive screen anchors through the callbacks and overlay HTML on top.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import { cn } from '@/lib/utils'
+import { placeLabels, type LabelInput } from './labelLayout'
+import {
+  DIMMED_OPACITY,
+  HOLLOW_FILL_ALPHA,
+  HOLLOW_STROKE_WIDTH,
+  HOVER_RING,
+  MAP_FIELD,
+  MAP_INK,
+  MAP_NODE_STYLES,
+  SELECTION_RING,
+  radiusFor,
+  type MapNodeKind,
+} from './mapNodeStyle'
+import { useMapViewport, worldToScreen } from './useMapViewport'
+
+export interface SemanticMapNode {
+  id: string
+  /** World coordinates in the substrate's unit square. */
+  x: number
+  y: number
+  kind: MapNodeKind
+  /** Grouping colour (branch / cluster hue). Registry default when absent. */
+  color?: string
+  /** Magnitude for the single size channel (citations, publications…). */
+  sizeValue?: number | null
+  clusterId?: number
+  clusterLabel?: string
+  /** Dimmed by an active host filter — drawn faint, never hidden. */
+  dimmed?: boolean
+  /** New-in-latest-set marker: a dashed halo in the node's own grouping
+   *  colour — a temporal fact about the same node, never a colour change. */
+  halo?: boolean
+}
+
+export interface SemanticMapEdge {
+  source: string
+  target: string
+  weight?: number
+  color?: string
+}
+
+export interface SemanticMapProps {
+  nodes: SemanticMapNode[]
+  edges?: SemanticMapEdge[]
+  showEdges?: boolean
+  /** Cluster toponyms on/off (50-H pass). */
+  showToponyms?: boolean
+  height?: number
+  selectedIds?: ReadonlySet<string>
+  onHover?: (id: string | null, anchor: { x: number; y: number } | null) => void
+  onClickNode?: (id: string) => void
+  /** Rectangle-select mode: drag selects instead of panning. */
+  lassoMode?: boolean
+  onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
+  /** Host HTML overlays (hover card, region popover) — absolutely positioned. */
+  children?: React.ReactNode
+  className?: string
+}
+
+const NODE_HIT_RADIUS = 9
+const GRID_CELL = 36
+
+/** Toponym type ramp: mass → font px. Small caps + tracking happen at draw. */
+function toponymFontPx(count: number, maxCount: number): number {
+  const t = maxCount > 1 ? Math.sqrt(count) / Math.sqrt(maxCount) : 1
+  return Math.round(10 + t * 7)
+}
+
+export function SemanticMap({
+  nodes,
+  edges = [],
+  showEdges = false,
+  showToponyms = true,
+  height = 560,
+  selectedIds,
+  onHover,
+  onClickNode,
+  lassoMode = false,
+  onLasso,
+  children,
+  className,
+}: SemanticMapProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const [width, setWidth] = useState(800)
+  const { viewport, fit, zoomAt, panStart, panMove, panEnd, isPanning } = useMapViewport(width, height)
+  const [hoverId, setHoverId] = useState<string | null>(null)
+  const [lassoRect, setLassoRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  const lassoRef = useRef<{ x1: number; y1: number } | null>(null)
+  const movedRef = useRef(false)
+
+  // Track the rendered width responsively.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? 800)
+      if (w > 0) setWidth(w)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // Refit when the node set identity changes materially (first data arrival).
+  const nodeCount = nodes.length
+  useEffect(() => {
+    fit()
+  }, [fit, nodeCount > 0])
+
+  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  const maxSizeValue = useMemo(
+    () => Math.max(1, ...nodes.map((n) => n.sizeValue ?? 0)),
+    [nodes],
+  )
+
+  // ── Screen positions + spatial index (rebuilt per draw inputs) ───────────
+  const screenPos = useMemo(() => {
+    const pos = new Map<string, [number, number]>()
+    for (const n of nodes) pos.set(n.id, worldToScreen(viewport, n.x, n.y))
+    return pos
+  }, [nodes, viewport])
+
+  const grid = useMemo(() => {
+    const g = new Map<string, string[]>()
+    for (const [id, [sx, sy]] of screenPos) {
+      if (sx < -GRID_CELL || sy < -GRID_CELL || sx > width + GRID_CELL || sy > height + GRID_CELL) continue
+      const key = `${Math.floor(sx / GRID_CELL)}:${Math.floor(sy / GRID_CELL)}`
+      const bucket = g.get(key)
+      if (bucket) bucket.push(id)
+      else g.set(key, [id])
+    }
+    return g
+  }, [screenPos, width, height])
+
+  const hitTest = useCallback(
+    (sx: number, sy: number): string | null => {
+      const cx = Math.floor(sx / GRID_CELL)
+      const cy = Math.floor(sy / GRID_CELL)
+      let best: string | null = null
+      let bestD = NODE_HIT_RADIUS * NODE_HIT_RADIUS
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const id of grid.get(`${cx + dx}:${cy + dy}`) ?? []) {
+            const p = screenPos.get(id)
+            if (!p) continue
+            const d = (p[0] - sx) ** 2 + (p[1] - sy) ** 2
+            if (d < bestD) {
+              bestD = d
+              best = id
+            }
+          }
+        }
+      }
+      return best
+    },
+    [grid, screenPos],
+  )
+
+  // ── Toponyms: cluster aggregation → collision-free placement (50-H) ──────
+  const toponyms = useMemo(() => {
+    if (!showToponyms) return []
+    const clusters = new Map<number, { label: string; count: number; sx: number; sy: number }>()
+    for (const n of nodes) {
+      if (typeof n.clusterId !== 'number' || n.clusterId < 0 || !n.clusterLabel) continue
+      const p = screenPos.get(n.id)
+      if (!p) continue
+      const c = clusters.get(n.clusterId)
+      if (c) {
+        c.count += 1
+        c.sx += p[0]
+        c.sy += p[1]
+      } else {
+        clusters.set(n.clusterId, { label: n.clusterLabel, count: 1, sx: p[0], sy: p[1] })
+      }
+    }
+    const maxCount = Math.max(1, ...[...clusters.values()].map((c) => c.count))
+    const inputs: LabelInput[] = []
+    for (const [cid, c] of clusters) {
+      const fontPx = toponymFontPx(c.count, maxCount)
+      const text = c.label.toUpperCase()
+      // Canvas-free measurement: tracked uppercase at ~0.68em/char + tracking.
+      const w = text.length * fontPx * 0.68 + text.length * 1.5
+      inputs.push({
+        id: `c${cid}`,
+        x: c.sx / c.count,
+        y: c.sy / c.count,
+        width: w,
+        height: fontPx + 4,
+        priority: c.count,
+      })
+    }
+    const placed = placeLabels(inputs, width, height)
+    return placed.map((p) => {
+      const cid = Number(p.id.slice(1))
+      const c = clusters.get(cid)!
+      return { ...p, text: c.label.toUpperCase(), fontPx: toponymFontPx(c.count, maxCount) }
+    })
+  }, [nodes, screenPos, showToponyms, width, height])
+
+  // ── Draw ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = width * dpr
+    canvas.height = height * dpr
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.scale(dpr, dpr)
+
+    // The cool field under warm paper — the cartographic inversion.
+    ctx.fillStyle = MAP_FIELD.background
+    ctx.fillRect(0, 0, width, height)
+
+    const visible = (sx: number, sy: number) =>
+      sx >= -20 && sy >= -20 && sx <= width + 20 && sy <= height + 20
+
+    // Edges first, under everything. Only at meaningful zoom or small counts.
+    if (showEdges && edges.length > 0) {
+      ctx.lineWidth = 0.6
+      for (const e of edges) {
+        const a = screenPos.get(e.source)
+        const b = screenPos.get(e.target)
+        if (!a || !b) continue
+        if (!visible(a[0], a[1]) && !visible(b[0], b[1])) continue
+        ctx.strokeStyle = e.color ?? MAP_FIELD.edgeLine
+        ctx.globalAlpha = 0.25 + 0.45 * (e.weight ?? 0.5)
+        ctx.beginPath()
+        ctx.moveTo(a[0], a[1])
+        ctx.lineTo(b[0], b[1])
+        ctx.stroke()
+      }
+      ctx.globalAlpha = 1
+    }
+
+    // Nodes by layer weight: ambient first, hero last (draw order = z order).
+    const drawOrder: MapNodeKind[] = ['seen', 'corpus', 'author', 'library', 'suggestion']
+    for (const kind of drawOrder) {
+      const style = MAP_NODE_STYLES[kind]
+      for (const n of nodes) {
+        if (n.kind !== kind) continue
+        const p = screenPos.get(n.id)
+        if (!p || !visible(p[0], p[1])) continue
+        const r = radiusFor(kind, n.sizeValue ?? null, maxSizeValue)
+        const color = n.color ?? style.defaultColor
+        ctx.globalAlpha = n.dimmed ? DIMMED_OPACITY : style.opacity
+        if (n.halo) {
+          // "New this refresh": dashed halo in the grouping colour.
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], r + 3.5, 0, Math.PI * 2)
+          ctx.lineWidth = 1
+          ctx.strokeStyle = color
+          ctx.setLineDash([2, 2])
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
+        ctx.beginPath()
+        ctx.arc(p[0], p[1], r, 0, Math.PI * 2)
+        if (style.filled) {
+          ctx.fillStyle = color
+          ctx.fill()
+        } else {
+          // Hollow = not yours yet (50-E): ring dot with a faint wash of its
+          // own hue inside — a dot, not a hole, beside the filled points.
+          ctx.fillStyle = MAP_FIELD.background
+          ctx.fill()
+          const wash = ctx.globalAlpha
+          ctx.globalAlpha = wash * HOLLOW_FILL_ALPHA
+          ctx.fillStyle = color
+          ctx.fill()
+          ctx.globalAlpha = wash
+          ctx.lineWidth = HOLLOW_STROKE_WIDTH
+          ctx.strokeStyle = color
+          ctx.stroke()
+        }
+      }
+    }
+    ctx.globalAlpha = 1
+
+    // Transient rings: hover (ink) under selection (accent — always accent).
+    const ring = (id: string, spec: { color: string; width: number }, pad: number) => {
+      const n = byId.get(id)
+      const p = screenPos.get(id)
+      if (!n || !p) return
+      const r = radiusFor(n.kind, n.sizeValue ?? null, maxSizeValue)
+      ctx.beginPath()
+      ctx.arc(p[0], p[1], r + pad, 0, Math.PI * 2)
+      ctx.lineWidth = spec.width
+      ctx.strokeStyle = spec.color
+      ctx.stroke()
+    }
+    if (hoverId && (!selectedIds || !selectedIds.has(hoverId))) ring(hoverId, HOVER_RING, 2.5)
+    for (const id of selectedIds ?? []) ring(id, SELECTION_RING, 3)
+
+    // Toponyms — the atlas plate. Halo first, then tracked uppercase ink.
+    for (const t of toponyms) {
+      ctx.font = `600 ${t.fontPx}px ui-sans-serif, system-ui, sans-serif`
+      const letterSpacing = `${Math.max(1, Math.round(t.fontPx / 8))}px`
+      // letterSpacing is supported in all evergreen canvases; harmless if not.
+      ;(ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = letterSpacing
+      ctx.textBaseline = 'top'
+      ctx.lineWidth = 3
+      ctx.strokeStyle = MAP_INK.toponymHalo
+      ctx.strokeText(t.text, t.left, t.top)
+      ctx.fillStyle = MAP_INK.toponym
+      ctx.fillText(t.text, t.left, t.top)
+      ;(ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '0px'
+    }
+
+    // Active lasso rectangle — accent, like every selection.
+    if (lassoRect) {
+      const { x1, y1, x2, y2 } = lassoRect
+      ctx.strokeStyle = SELECTION_RING.color
+      ctx.lineWidth = 1.5
+      ctx.setLineDash([5, 4])
+      ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1))
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(47, 128, 196, 0.08)'
+      ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1))
+    }
+  }, [
+    nodes,
+    edges,
+    showEdges,
+    byId,
+    screenPos,
+    toponyms,
+    hoverId,
+    selectedIds,
+    lassoRect,
+    width,
+    height,
+    maxSizeValue,
+  ])
+
+  // ── Pointer interactions ──────────────────────────────────────────────────
+  const localPoint = (e: React.PointerEvent): [number, number] => {
+    const rect = canvasRef.current!.getBoundingClientRect()
+    return [e.clientX - rect.left, e.clientY - rect.top]
+  }
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    const [sx, sy] = localPoint(e)
+    movedRef.current = false
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    if (lassoMode) {
+      lassoRef.current = { x1: sx, y1: sy }
+      setLassoRect({ x1: sx, y1: sy, x2: sx, y2: sy })
+    } else {
+      panStart(sx, sy, viewport)
+    }
+  }
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    const [sx, sy] = localPoint(e)
+    if (lassoRef.current) {
+      movedRef.current = true
+      setLassoRect({ ...lassoRef.current, x2: sx, y2: sy })
+      return
+    }
+    if (isPanning()) {
+      movedRef.current = true
+      panMove(sx, sy)
+      return
+    }
+    const id = hitTest(sx, sy)
+    if (id !== hoverId) {
+      setHoverId(id)
+      const p = id ? screenPos.get(id) : null
+      onHover?.(id, p ? { x: p[0], y: p[1] } : null)
+    }
+  }
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    const [sx, sy] = localPoint(e)
+    if (lassoRef.current) {
+      const r = { ...lassoRef.current, x2: sx, y2: sy }
+      lassoRef.current = null
+      setLassoRect(null)
+      const left = Math.min(r.x1, r.x2)
+      const right = Math.max(r.x1, r.x2)
+      const top = Math.min(r.y1, r.y2)
+      const bottom = Math.max(r.y1, r.y2)
+      if (right - left > 6 && bottom - top > 6) {
+        const ids: string[] = []
+        for (const [id, [px, py]] of screenPos) {
+          if (px >= left && px <= right && py >= top && py <= bottom) ids.push(id)
+        }
+        if (ids.length > 0) onLasso?.(ids, { x: right, y: top })
+      }
+      return
+    }
+    panEnd()
+    if (!movedRef.current) {
+      const id = hitTest(sx, sy)
+      if (id) onClickNode?.(id)
+    }
+  }
+
+  // Wheel zoom must never scroll the page. React's synthetic onWheel is
+  // registered PASSIVE, so preventDefault inside it is silently ignored (the
+  // "zooms but also moves the page" bug) — attach a native non-passive
+  // listener instead.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      zoomAt(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.18 : 1 / 1.18)
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
+
+  return (
+    <div
+      ref={containerRef}
+      className={cn('relative w-full overflow-hidden rounded-lg border border-edge-1', className)}
+      style={{ height }}
+    >
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label={`Semantic map with ${nodes.length} papers`}
+        style={{ width, height, cursor: lassoMode ? 'crosshair' : isPanning() ? 'grabbing' : 'grab', touchAction: 'none', display: 'block' }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={() => {
+          setHoverId(null)
+          onHover?.(null, null)
+        }}
+      />
+      {/* Fit-to-view — the one navigation affordance the canvas itself owns. */}
+      <button
+        type="button"
+        onClick={fit}
+        className="absolute bottom-2 right-2 rounded-md border border-control-edge bg-control-quiet px-2 py-1 text-[11px] text-slate-600 hover:bg-control-quiet-hover"
+        title="Fit map to view"
+      >
+        Fit
+      </button>
+      {children}
+    </div>
+  )
+}

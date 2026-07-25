@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
-import { Plus, Users } from 'lucide-react'
+import { Plus, Share2, Users } from 'lucide-react'
 
 import {
   api,
@@ -24,6 +24,7 @@ import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
+import { GraphPanel } from '@/components/graphs/GraphPanel'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
 import {
@@ -58,6 +59,10 @@ export function AuthorsPage() {
   const [selectedSuggestion, setSelectedSuggestion] = useState<AuthorSuggestion | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [addAuthorOpen, setAddAuthorOpen] = useState(false)
+  // Task 50 M5: co-authorship network section — lazy, persisted open state.
+  const [networkOpen, setNetworkOpen] = useState(
+    () => localStorage.getItem('alma.authors.networkOpen') === 'true',
+  )
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -341,6 +346,33 @@ export function AuthorsPage() {
             ))}
           </RevealList>
         )}
+      </section>
+
+      {/* Task 50 M5 (50-C): the co-authorship network lives WITH the authors it
+          describes — moved here from Library › Analytics. Collapsed by default
+          and lazy-mounted: the graph payload is heavy, so it only fetches when
+          opened. The open state persists per user. */}
+      <section className="space-y-3" data-tour="authors-network">
+        <header className="flex items-center gap-2">
+          <Share2 className="h-4 w-4 text-alma-600" />
+          <h2 className="text-sm font-semibold text-alma-800">Author network</h2>
+          <span className="text-xs text-slate-500">
+            co-authorship structure across your corpus
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setNetworkOpen((open) => {
+                localStorage.setItem('alma.authors.networkOpen', String(!open))
+                return !open
+              })
+            }
+            className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
+          >
+            {networkOpen ? 'Hide network' : 'Show network'}
+          </button>
+        </header>
+        {networkOpen && <GraphPanel initialView="author-network" lockedView />}
       </section>
 
       <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />

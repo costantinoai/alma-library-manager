@@ -112,8 +112,16 @@ function metadataList(metadata: Record<string, unknown>, key: string): string[] 
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
 }
 
-export function GraphPanel() {
-  const [activeView, setActiveView] = useState<GraphView>('paper-map')
+interface GraphPanelProps {
+  /** Which graph opens first. Default: the paper map. */
+  initialView?: GraphView
+  /** Task 50 M5: a host that IS one graph (Authors → author network) locks the
+   *  view — no paper/author switcher, the surface owns one meaning. */
+  lockedView?: boolean
+}
+
+export function GraphPanel({ initialView = 'paper-map', lockedView = false }: GraphPanelProps = {}) {
+  const [activeView, setActiveView] = useState<GraphView>(initialView)
   const [searchQuery, setSearchQuery] = useState('')
   const [showLabels, setShowLabels] = useState(false)
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
@@ -192,11 +200,17 @@ export function GraphPanel() {
     activeView === 'paper-map'
       ? ['graph', 'paper-map', labelMode, colorBy, sizeBy, scope, clusterResolution, wSem, wCo, wBib, wCite]
       : ['graph', 'author-network', scope, clusterResolution, wSem, wCo, wBib, wCite]
-  const { data, isLoading, error } = useQuery<GraphData>({
+  // Task 50 M1: /graphs/* never computes in-request. A missing/stale-variant
+  // payload answers 202 {status:'building'} while a background job builds it —
+  // poll until the real payload lands (same contract as the frontier map).
+  const { data: rawData, isLoading, error } = useQuery<GraphData & { status?: string }>({
     queryKey,
-    queryFn: () => api.get<GraphData>(`/graphs/${activeView}${queryParams}`),
+    queryFn: () => api.get<GraphData & { status?: string }>(`/graphs/${activeView}${queryParams}`),
     staleTime: 60_000,
+    refetchInterval: (q) => (q.state.data?.status === 'building' ? 2500 : false),
   })
+  const isBuilding = rawData?.status === 'building'
+  const data = isBuilding ? undefined : (rawData as GraphData | undefined)
 
   const rebuildMutation = useMutation({
     // I-3: pass the displayed scope so Rebuild refreshes the graph the user is
@@ -418,23 +432,25 @@ export function GraphPanel() {
         </p>
       </ConceptCallout>
 
-      <div className="flex gap-2">
-        {(Object.keys(VIEW_CONFIG) as GraphView[]).map((view) => {
-          const viewConfig = VIEW_CONFIG[view]
-          const Icon = viewConfig.icon
-          return (
-            <Button
-              key={view}
-              variant={activeView === view ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveView(view)}
-            >
-              <Icon className="mr-1.5 h-4 w-4" />
-              {viewConfig.label}
-            </Button>
-          )
-        })}
-      </div>
+      {!lockedView && (
+        <div className="flex gap-2">
+          {(Object.keys(VIEW_CONFIG) as GraphView[]).map((view) => {
+            const viewConfig = VIEW_CONFIG[view]
+            const Icon = viewConfig.icon
+            return (
+              <Button
+                key={view}
+                variant={activeView === view ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setActiveView(view)}
+              >
+                <Icon className="mr-1.5 h-4 w-4" />
+                {viewConfig.label}
+              </Button>
+            )
+          })}
+        </div>
+      )}
 
       <Card>
         <CardHeader className="pb-3">
@@ -523,9 +539,14 @@ export function GraphPanel() {
                 Interactive {config.label.toLowerCase()} visualization showing {data.nodes.length} nodes and {data.edges.length} connections. Use the controls panel to filter and configure the graph.
               </span>
             )}
-            {isLoading ? (
-              <div className="flex h-[72vh] min-h-[640px] items-center justify-center">
+            {isLoading || isBuilding ? (
+              <div className="flex h-[72vh] min-h-[640px] flex-col items-center justify-center gap-3">
                 <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+                {isBuilding && (
+                  <p className="text-sm text-slate-500">
+                    Building this view in the background — it appears automatically when ready.
+                  </p>
+                )}
               </div>
             ) : error ? (
               <div className="flex h-[72vh] min-h-[640px] flex-col items-center justify-center text-slate-500">

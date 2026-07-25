@@ -83,7 +83,9 @@ import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from 
 // `recent` re-sorts by publication date desc so the user can scan
 // what's new in the lens without losing the underlying scoring.
 type DiscoverySort = 'relevance' | 'recent'
-type DiscoveryViewMode = 'compact' | 'normal' | 'extended' | 'map'
+// Task 50 M4: `map` is no longer a view mode — the frontier map is a panel
+// above the list (50-B), so the list density and the map are independent.
+type DiscoveryViewMode = 'compact' | 'normal' | 'extended'
 // Per-refresh target — number of recommendations actually staged on
 // the Discovery page after dedup, diversity, lifecycle filters, and
 // truncation. The backend oversamples internally so the post-filter
@@ -147,6 +149,13 @@ export function DiscoveryPage() {
   // density (compact / normal / extended), and bulk-selection set.
   const [sort, setSort] = useState<DiscoverySort>('relevance')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
+  // Task 50 M4 (50-B): the frontier map is a PANEL above the rec list — both
+  // visible at once, selection flows down. Open state persists per user; a
+  // lasso on the map can filter the list below (cleared on lens switch).
+  const [mapOpen, setMapOpen] = useState(
+    () => localStorage.getItem('alma.discovery.mapOpen') !== 'false',
+  )
+  const [mapFilterIds, setMapFilterIds] = useState<Set<string> | null>(null)
   const [selectedRecIds, setSelectedRecIds] = useState<Set<string>>(new Set())
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
@@ -498,7 +507,11 @@ export function DiscoveryPage() {
   // DESC, falling back to `year` when no full date is set.
   const recommendations = useMemo(() => {
     const visible = allRecommendations.filter(
-      (rec) => !dismissedIds.has(rec.id) && rec.user_action !== 'dismiss',
+      (rec) =>
+        !dismissedIds.has(rec.id) &&
+        rec.user_action !== 'dismiss' &&
+        // 50-B map→list sync: an active map-region filter narrows the list.
+        (!mapFilterIds || mapFilterIds.has(rec.paper_id)),
     )
     if (sort === 'relevance') {
       return [...visible].sort((a, b) => {
@@ -527,7 +540,12 @@ export function DiscoveryPage() {
       if (!dateB) return -1
       return dateB.localeCompare(dateA)
     })
-  }, [allRecommendations, dismissedIds, sort])
+  }, [allRecommendations, dismissedIds, sort, mapFilterIds])
+
+  // A map-region filter is lens-local — switching lens clears it.
+  useEffect(() => {
+    setMapFilterIds(null)
+  }, [selectedLensId])
 
   // Bulk-selection helpers — mirror the Feed page so the affordance
   // feels identical between the two surfaces.
@@ -1202,6 +1220,60 @@ export function DiscoveryPage() {
             select-all] · [view mode]. Nothing here mutates data — all
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
+        {/* Task 50 M4 (50-B): frontier map panel ABOVE the list — the map is a
+            control surface for the deck, not an alternative to it. Collapsible,
+            persisted; lasso → adopt a Direction or filter the list below. */}
+        {selectedLensId && (
+          <section className="space-y-2">
+            <header className="flex items-center gap-2">
+              <MapIcon className="h-4 w-4 text-alma-600" />
+              <h3 className="text-sm font-semibold text-alma-800">Frontier map</h3>
+              <span className="text-xs text-slate-500">
+                your library, this lens&apos;s suggestions, and the space between
+              </span>
+              {mapFilterIds && (
+                <button
+                  type="button"
+                  onClick={() => setMapFilterIds(null)}
+                  className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
+                  title="Clear the map-region filter"
+                >
+                  Map region · {recommendations.length} shown ×
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  setMapOpen((open) => {
+                    localStorage.setItem('alma.discovery.mapOpen', String(!open))
+                    return !open
+                  })
+                }
+                className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
+              >
+                {mapOpen ? 'Hide map' : 'Show map'}
+              </button>
+            </header>
+            {mapOpen && (
+              <FrontierMap
+                lensId={selectedLensId}
+                lens={selectedLens as Lens | null}
+                onSelectPaper={async (paperId) => {
+                  try {
+                    const paper = await getPaperById(paperId)
+                    setSelectedPaper(paper)
+                    setDetailOpen(true)
+                  } catch {
+                    /* deep-link 404s are handled elsewhere; ignore here */
+                  }
+                }}
+                onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
+                onFilterList={(ids) => setMapFilterIds(new Set(ids))}
+              />
+            )}
+          </section>
+        )}
+
         <ListControlBar
           leading={
             <>
@@ -1246,11 +1318,12 @@ export function DiscoveryPage() {
             value: viewMode,
             ariaLabel: 'Discovery view mode',
             onChange: (value) => setViewMode(value as DiscoveryViewMode),
+            // Task 50 M4: `map` left the view modes — the frontier map is the
+            // panel above, visible ALONGSIDE whichever list density is active.
             options: [
               { value: 'compact', label: 'Compact', icon: Rows3, title: 'Compact dense rows' },
               { value: 'normal', label: 'Normal', icon: LayoutGrid, title: 'Normal card view' },
               { value: 'extended', label: 'Extended', icon: LayoutList, title: 'Extended view — includes abstracts' },
-              { value: 'map', label: 'Map', icon: MapIcon, title: 'Frontier map — your library, suggestions, and the frontier in semantic space' },
             ],
           }}
         />
@@ -1279,21 +1352,6 @@ export function DiscoveryPage() {
                   Refresh lens
                 </Button>
               ) : undefined}
-            />
-          ) : viewMode === 'map' ? (
-            <FrontierMap
-              lensId={selectedLensId}
-              lens={selectedLens as Lens | null}
-              onSelectPaper={async (paperId) => {
-                try {
-                  const paper = await getPaperById(paperId)
-                  setSelectedPaper(paper)
-                  setDetailOpen(true)
-                } catch {
-                  /* deep-link 404s are handled elsewhere; ignore here */
-                }
-              }}
-              onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
             />
           ) : viewMode === 'compact' ? (
             <DiscoveryCompactTable
