@@ -15,10 +15,7 @@ from alma.application.feed_query_language import (
     keyword_expression_matches,
     keyword_retrieval_query,
 )
-from alma.core.components import (
-    link_orphan_components,
-    resolve_component,
-)
+from alma.core.components import resolve_component
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
 from alma.core.db_write import run_write_unit, write_section
@@ -27,13 +24,8 @@ from alma.core.http_sources import (
     openalex_usage_snapshot,
     source_diagnostics_scope,
 )
-from alma.core.paper_groups import (
-    absorb_paper_group,
-    promote_matching_preprints,
-    purge_orphan_subordinate_state,
-)
+from alma.core.paper_groups import settle_new_paper_group
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.settings_helpers import (
     setting_bool as _setting_bool,
 )
@@ -43,6 +35,7 @@ from alma.core.settings_helpers import (
 from alma.core.settings_helpers import (
     setting_int as _setting_int,
 )
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     clean_display_text,
     normalize_doi,
@@ -594,22 +587,18 @@ def _upsert_candidate_paper(
             ),
         )
 
-    if component_type is not None:
-        # Classification is a write invariant: strip an old vector/signal/cache
-        # immediately, and consolidate into the root when the authoritative
-        # relation is already known.
-        if parent_paper_id:
-            absorb_paper_group(
-                db, paper_id, parent_paper_id, reason="feed_component_ingest"
-            )
-        else:
-            purge_orphan_subordinate_state(db, paper_id)
-    else:
-        # Journal arrival promotes an existing preprint group before any new
-        # sidecar or Feed row can target the old root.
-        promote_matching_preprints(db, paper_id)
-        if doi:
-            link_orphan_components(db, parent_paper_id=paper_id, parent_doi=doi)
+    # Classification is a write invariant: a component strips its old
+    # vector/signal/cache immediately and consolidates into its root, while a
+    # journal arrival promotes an existing preprint group and adopts orphan
+    # components — before any new sidecar or Feed row can target the old root.
+    settle_new_paper_group(
+        db,
+        paper_id,
+        component_type=component_type,
+        parent_paper_id=parent_paper_id,
+        doi=doi,
+        reason="feed_component_ingest",
+    )
 
     try:
         from alma.openalex.client import upsert_work_sidecars

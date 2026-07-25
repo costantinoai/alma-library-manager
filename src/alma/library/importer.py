@@ -18,11 +18,7 @@ from typing import Any
 
 from alma.core.components import resolve_component
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
-from alma.core.paper_groups import (
-    absorb_paper_group,
-    purge_orphan_subordinate_state,
-    resolve_paper_root_id,
-)
+from alma.core.paper_groups import settle_new_paper_group
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import (
     clean_display_text,
@@ -38,6 +34,12 @@ from alma.core.utils import (
 logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD = 0.70
+
+# Upper bound for the post-import paper-group reconcile stage. Matches the
+# maintenance registry's `default_manual_limit` for `paper_group_reconcile`, so
+# the import path can't do more group work in one go than the user's own
+# "Reconcile paper groups" button would.
+_IMPORT_GROUP_RECONCILE_LIMIT = 1_000
 
 
 def _import_work_type(raw_type: object) -> str | None:
@@ -1791,16 +1793,14 @@ def _import_or_stage_paper(
                 "WHERE id = ?",
                 (work_type, component_type, parent_paper_id, component_id),
             )
-        if parent_paper_id:
-            absorb_paper_group(
-                conn,
-                component_id,
-                parent_paper_id,
-                reason="import_component",
-            )
-            component_id = resolve_paper_root_id(conn, component_id, strict=False)
-        else:
-            purge_orphan_subordinate_state(conn, component_id)
+        component_id = settle_new_paper_group(
+            conn,
+            component_id,
+            component_type=component_type,
+            parent_paper_id=parent_paper_id,
+            doi=doi,
+            reason="import_component",
+        )
         return component_id, "component"
     if existing_id:
         if work_type:
@@ -1916,6 +1916,28 @@ def _import_or_stage_paper(
         work_type=work_type,
     )
     return paper_id, "imported"
+
+
+def run_import_group_reconcile(conn: sqlite3.Connection) -> dict:
+    """Post-import stage: settle paper groups AFTER enrichment, before dedup.
+
+    Write-time settling (`settle_new_paper_group`) can only classify what a row
+    already carries. An import that arrives as title + author only has no DOI and
+    no work type, so its figure / supplementary / preprint nature becomes visible
+    only once the enrichment stage above fills those fields. This pass is where
+    those late-classified rows join their group.
+
+    It is the SAME idempotent op Health exposes as "Reconcile paper groups"
+    (`paper_group_reconcile`), bounded by `_IMPORT_GROUP_RECONCILE_LIMIT` so a
+    large import can't turn a post-import step into an unbounded corpus sweep.
+    """
+    from alma.services.paper_group_reconcile import reconcile_paper_groups
+
+    return run_write_unit(
+        conn,
+        lambda: reconcile_paper_groups(conn, limit=_IMPORT_GROUP_RECONCILE_LIMIT),
+        label="import paper-group reconcile",
+    )
 
 
 def _record_import_outcome(
@@ -2286,7 +2308,9 @@ def _trigger_background_enrichment(
 
         job_id = f"import_postprocess_{uuid.uuid4().hex[:10]}"
         refs = imported_refs or []
-        pipeline_total = 5 if refs else 4
+        # Targeted plan: enrich → paper_groups → author_linking → resolve_ids →
+        # dedup (+ embeddings). Full plan drops author_linking.
+        pipeline_total = 6 if refs else 5
         set_job_status(
             job_id,
             status="running",
@@ -2301,7 +2325,8 @@ def _trigger_background_enrichment(
             job_id,
             (
                 f"Post-import pipeline started for {result.imported} imported items "
-                "(stages: enrichment -> author linking -> author ID resolution -> dedup -> embeddings)"
+                "(stages: enrichment -> paper groups -> author linking -> author ID resolution "
+                "-> dedup -> embeddings)"
             ),
             step="start",
         )
@@ -2563,6 +2588,11 @@ def _trigger_background_enrichment(
                             lambda sid: _run_targeted_enrichment_stage(conn, valid_refs, sid),
                         ),
                         (
+                            "paper_groups",
+                            "Reconcile paper groups",
+                            lambda sid: run_import_group_reconcile(conn),
+                        ),
+                        (
                             "author_linking",
                             "Author linking to tracked profiles",
                             lambda sid: run_write_unit(
@@ -2607,6 +2637,7 @@ def _trigger_background_enrichment(
                         "enrichment": enrich_summary,
                         "resolved_authors": stage_results.get("author_linking", {}),
                         "resolved_author_ids": stage_results.get("resolve_ids", {}),
+                        "paper_groups": stage_results.get("paper_groups", {}),
                         "dedup": stage_results.get("dedup", {}),
                         "targeted_enrichment_total": int(enrich_summary.get("total") or 0),
                         "targeted_enriched": int(enrich_summary.get("enriched") or 0),
@@ -2623,6 +2654,11 @@ def _trigger_background_enrichment(
                         "enrich",
                         "Full OpenAlex enrichment",
                         lambda sid: enrich_all_unenriched(conn, job_id=sid),
+                    ),
+                    (
+                        "paper_groups",
+                        "Reconcile paper groups",
+                        lambda sid: run_import_group_reconcile(conn),
                     ),
                     (
                         "resolve_ids",
@@ -2658,6 +2694,7 @@ def _trigger_background_enrichment(
                 return {
                     "enrichment": stage_results.get("enrich", {}),
                     "resolved_author_ids": stage_results.get("resolve_ids", {}),
+                    "paper_groups": stage_results.get("paper_groups", {}),
                     "dedup": stage_results.get("dedup", {}),
                     "embeddings": stage_results.get("embeddings", {}),
                     "subtasks": subtask_jobs,

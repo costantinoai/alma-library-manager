@@ -16,15 +16,12 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, TypeVar
 
-from alma.core.components import link_orphan_components, resolve_component
+from alma.core.components import resolve_component
 from alma.core.db_write import write_section
 from alma.core.paper_groups import (
-    absorb_paper_group,
     classify_preprint_source,
     is_component_row,
-    promote_matching_preprints,
-    purge_orphan_subordinate_state,
-    resolve_paper_root_id,
+    settle_new_paper_group,
 )
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.utils import (
@@ -995,23 +992,20 @@ def _upsert_single_paper(conn: sqlite3.Connection, w: dict) -> str | None:
         "parent_paper_id FROM papers WHERE id = ?",
         (paper_id,),
     ).fetchone()
+    # One settle step for every writer (see `settle_new_paper_group`): absorb or
+    # purge a component, else promote over a preprint twin and adopt orphan
+    # components against the surviving root.
     if persisted is not None and is_component_row(persisted):
-        parent_id = str(persisted["parent_paper_id"] or "").strip()
-        if parent_id:
-            absorb_paper_group(
-                conn, str(paper_id), parent_id, reason="openalex_component_ingest"
-            )
-        else:
-            purge_orphan_subordinate_state(conn, str(paper_id))
-        return str(paper_id)
+        return settle_new_paper_group(
+            conn,
+            str(paper_id),
+            component_type=str(persisted["component_type"] or "component"),
+            parent_paper_id=str(persisted["parent_paper_id"] or "").strip() or None,
+            reason="openalex_component_ingest",
+        )
 
-    promote_matching_preprints(conn, str(paper_id))
-    paper_id = resolve_paper_root_id(conn, str(paper_id), strict=False)
-    root_doi_row = conn.execute("SELECT doi FROM papers WHERE id = ?", (paper_id,)).fetchone()
-    link_orphan_components(
-        conn,
-        parent_paper_id=str(paper_id),
-        parent_doi=str(root_doi_row["doi"] or "") if root_doi_row else None,
+    paper_id = settle_new_paper_group(
+        conn, str(paper_id), doi=None, reason="openalex_ingest"
     )
     upsert_work_sidecars(
         conn,

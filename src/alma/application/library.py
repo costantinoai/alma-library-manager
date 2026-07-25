@@ -11,13 +11,12 @@ import sqlite3
 import uuid
 from datetime import datetime
 
-from alma.core.components import link_orphan_components, resolve_component
+from alma.core.components import resolve_component
 from alma.core.paper_groups import (
     absorb_paper_group,
-    promote_matching_preprints,
-    purge_orphan_subordinate_state,
     resolve_action_paper_id,
     resolve_paper_root_id,
+    settle_new_paper_group,
 )
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
@@ -491,19 +490,14 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
     values = [paper_id] + list(kwargs.values())
 
     db.execute(f"INSERT INTO papers ({col_str}) VALUES ({placeholders})", values)
-    if component_type:
-        if parent_paper_id:
-            absorb_paper_group(
-                db, paper_id, str(parent_paper_id), reason="paper_create_component"
-            )
-        else:
-            purge_orphan_subordinate_state(db, paper_id)
-    else:
-        promote_matching_preprints(db, paper_id)
-        if kwargs.get("doi"):
-            link_orphan_components(
-                db, parent_paper_id=paper_id, parent_doi=kwargs.get("doi")
-            )
+    settle_new_paper_group(
+        db,
+        paper_id,
+        component_type=component_type,
+        parent_paper_id=str(parent_paper_id) if parent_paper_id else None,
+        doi=kwargs.get("doi"),
+        reason="paper_create_component",
+    )
     return paper_id
 
 
@@ -603,17 +597,16 @@ def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True
                 f"UPDATE papers SET {set_clause} WHERE id = ?",
                 list(updates.values()) + [paper_id],
             )
+        root_id = settle_new_paper_group(
+            db,
+            paper_id,
+            component_type=component_type,
+            parent_paper_id=str(parent_paper_id) if parent_paper_id else None,
+            doi=kwargs.get("doi"),
+            reason="paper_upsert_component",
+        )
         if component_type:
-            if parent_paper_id:
-                absorb_paper_group(
-                    db, paper_id, str(parent_paper_id), reason="paper_upsert_component"
-                )
-            else:
-                purge_orphan_subordinate_state(db, paper_id)
-            return paper_id
-        root_id = resolve_paper_root_id(db, paper_id, strict=False)
-        promote_matching_preprints(db, root_id)
-        root_id = resolve_paper_root_id(db, root_id, strict=False)
+            return root_id
         _schedule_pending_hydration(
             db, root_id, auto_schedule=auto_schedule_hydration
         )

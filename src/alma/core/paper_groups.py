@@ -638,6 +638,71 @@ def absorb_paper_group(
     }
 
 
+def settle_new_paper_group(
+    conn: sqlite3.Connection,
+    paper_id: str,
+    *,
+    component_type: str | None = None,
+    parent_paper_id: str | None = None,
+    doi: str | None = None,
+    reason: str,
+) -> str:
+    """Place a freshly-written paper row into its group. Returns the ROOT id.
+
+    The ONE ingest-time settle step, shared by every writer that puts a paper in
+    the corpus — Library create, Feed ingest, the importer, and the OpenAlex
+    upsert. It was copy-pasted (and drifted) across those four: the importer
+    handled only the component half, so importing a published paper never
+    promoted the preprint already in the corpus, and importing a parent never
+    adopted the orphan figure/SI rows that arrived before it. Both leave exactly
+    the defects Health's "Paper group integrity" dimension then reports.
+
+    Two mutually exclusive cases:
+
+    - **Component row** (chapter / figure / dataset / erratum): absorb into its
+      parent when known, else purge the orphan's sidecar state so an unattached
+      fragment can't carry vectors, graph rows or preferences.
+    - **Root-capable row**: promote it over any preprint twin already present
+      (published wins), then adopt orphan components whose DOI re-derives to
+      THIS paper. Both use the resolved root, not the incoming id, so a row that
+      just got absorbed adopts on behalf of the surviving paper.
+
+    Caller owns the write transaction — this composes primitives, it never
+    commits.
+    """
+    # Local import: `core.components` imports THIS module (component classification
+    # builds on the group primitives), so the dependency only goes one way at
+    # module level.
+    from alma.core.components import link_orphan_components
+
+    pid = str(paper_id or "").strip()
+    if not pid:
+        return pid
+    if str(component_type or "").strip():
+        parent = str(parent_paper_id or "").strip()
+        if parent:
+            absorb_paper_group(conn, pid, parent, reason=reason)
+            return resolve_paper_root_id(conn, pid, strict=False)
+        purge_orphan_subordinate_state(conn, pid)
+        return pid
+
+    # Promote on the ROOT, not on whatever id we were handed: a row that is
+    # already subordinate must not become a second root of its own group.
+    root_id = resolve_paper_root_id(conn, pid, strict=False)
+    promote_matching_preprints(conn, root_id)
+    root_id = resolve_paper_root_id(conn, root_id, strict=False)
+    # Adopt against the ROOT's own DOI: after a promotion the surviving row may
+    # not be the one we were handed, and its DOI is what the orphans' suffixes
+    # derive from.
+    root_doi = str(doi or "").strip()
+    if root_id != pid or not root_doi:
+        row = conn.execute("SELECT doi FROM papers WHERE id = ?", (root_id,)).fetchone()
+        root_doi = str((_value(row, "doi") if row is not None else "") or "").strip()
+    if root_doi:
+        link_orphan_components(conn, parent_paper_id=root_id, parent_doi=root_doi)
+    return root_id
+
+
 # The relationship defect vocabulary, in the order Health explains it. Health
 # owns the user-facing labels/explanations; this module owns the DETECTION and
 # the key names, so the ledger and the counts can never drift apart.
