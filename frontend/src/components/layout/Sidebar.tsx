@@ -8,6 +8,7 @@ import {
   Library,
   X,
   Sparkles,
+  Map as MapIcon,
   HeartPulse,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,6 +24,7 @@ export type Page =
   | 'home'
   | 'feed'
   | 'discovery'
+  | 'map'
   | 'authors'
   | 'library'
   | 'insights'
@@ -49,6 +51,8 @@ const navGroups: NavGroup[] = [
       { id: 'home', label: 'Home', icon: House },
       { id: 'feed', label: 'Feed', icon: Newspaper },
       { id: 'discovery', label: 'Discovery', icon: Sparkles },
+      // Task 50 M3 (50-A): the corpus map is a first-class Explore surface.
+      { id: 'map', label: 'Map', icon: MapIcon },
     ],
   },
   {

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { InsightsGraphTab } from '@/components/insights/InsightsGraphTab'
 import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
 import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -20,10 +19,11 @@ import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 
 // Library › Analytics — the "understand your data" surface, absorbed from the
 // retired Insights page (task 47 Phase 4, decision 47-C). Sections: Overview
-// (corpus stats), Map (paper map, scope toggle inside GraphPanel), Activity
-// (subsystem trends — re-homes to Health in Phase 5), Reports. Driven by the
-// `?section=` param so `#/insights?tab=…` redirects land on the right section.
-const SECTIONS = ['overview', 'map', 'activity', 'reports'] as const
+// (corpus stats) + Reports. The Map section moved to the top-level Map page
+// (task 50 M3, 50-A) — a `?section=map` deep link redirects there so old
+// bookmarks keep working. Driven by the `?section=` param so `#/insights?…`
+// redirects land on the right section.
+const SECTIONS = ['overview', 'reports'] as const
 
 export function AnalyticsTab() {
   const route = useHashRoute()
@@ -34,6 +34,12 @@ export function AnalyticsTab() {
   const [activeReport, setActiveReport] = useState<string | null>(null)
 
   useEffect(() => {
+    // Task 50 M3: the Map section left this tab — send its deep links to the
+    // top-level Map page instead of silently landing on Overview.
+    if (routeSection === 'map') {
+      window.location.hash = buildHashRoute('map')
+      return
+    }
     setSection((SECTIONS as readonly string[]).includes(routeSection) ? routeSection : 'overview')
   }, [routeSection])
 
@@ -85,7 +91,6 @@ export function AnalyticsTab() {
         <div className="flex items-center justify-between gap-4">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="map">Map</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
           </TabsList>
           {isRefreshing ? (
@@ -106,9 +111,6 @@ export function AnalyticsTab() {
           ) : data ? (
             <InsightsOverviewTab data={data} aiStatus={aiStatus} colors={COLORS} tooltipStyle={TOOLTIP_STYLE} />
           ) : null}
-        </TabsContent>
-        <TabsContent value="map" className="mt-4">
-          <InsightsGraphTab embeddingsReady={!!aiStatus?.capability_tiers?.tier1_embeddings?.ready} />
         </TabsContent>
         <TabsContent value="reports" className="mt-4">
           <InsightsReportsTab

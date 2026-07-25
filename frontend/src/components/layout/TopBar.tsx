@@ -8,6 +8,7 @@ const pageTitles: Record<Page, string> = {
   home: 'Home',
   feed: 'Feed',
   discovery: 'Discovery',
+  map: 'Map',
   authors: 'Authors',
   library: 'Library',
   insights: 'Insights',

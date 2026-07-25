@@ -8,7 +8,6 @@ import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 // bookmarks) landing where the content actually lives now.
 const SECTION_MAP: Record<string, string> = {
   stats: 'overview',
-  graph: 'map',
   reports: 'reports',
 }
 
@@ -22,6 +21,11 @@ export function InsightsRedirect() {
       const params: Record<string, string> = { tab: 'activity' }
       if (focus) params.focus = focus
       navigateTo('health', params)
+      return
+    }
+    // Task 50 M3 (50-A): the graph moved again — to the top-level Map page.
+    if (tab === 'graph') {
+      navigateTo('map')
       return
     }
     const params: Record<string, string> = {

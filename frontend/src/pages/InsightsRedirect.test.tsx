@@ -21,7 +21,8 @@ describe('InsightsRedirect', () => {
 
   it.each([
     ['#/insights?tab=stats', '#/library?tab=analytics&section=overview'],
-    ['#/insights?tab=graph', '#/library?tab=analytics&section=map'],
+    // The graph moved twice: Insights → Analytics Map → the Map page (task 50).
+    ['#/insights?tab=graph', '#/map'],
     ['#/insights?tab=reports', '#/library?tab=analytics&section=reports'],
     // No tab at all → the default analytics section, never a dead end.
     ['#/insights', '#/library?tab=analytics&section=overview'],
