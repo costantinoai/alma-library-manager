@@ -185,8 +185,11 @@ export function MapPage() {
           toponymScale={wordScale}
           toponymWordCount={wordCount}
           // 50-M: click SELECTS (accent ring + cluster focus + inspector);
-          // the paper panel opens from the inspector, deliberately.
+          // the paper panel opens from the inspector, deliberately. A click
+          // on the background deselects — cluster focus clears, inspector
+          // returns to the overview.
           onOpenNode={(n) => setSelected((cur) => (cur?.id === n.id ? null : n))}
+          onBackgroundClick={() => setSelected(null)}
           hoverCard={(n) => (
             <>
               <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
@@ -201,6 +204,9 @@ export function MapPage() {
                   ? ` · ${n.metadata.cited_by_count} citations`
                   : ''}
               </p>
+              {typeof n.metadata?.score === 'number' && (
+                <p className="mt-0.5 font-medium text-alma-800">Score {Math.round(Number(n.metadata.score))}/100</p>
+              )}
               {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
                 <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
               )}

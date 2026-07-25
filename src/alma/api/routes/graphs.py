@@ -909,6 +909,30 @@ def _build_author_network_payload(
         if entry and entry.get("label"):
             cluster_label_override[cid] = str(entry["label"]).strip()
 
+    # Author-level internal score: the mean of each author's papers' LATEST
+    # recommendation scores (same engine criteria as Discovery; user call
+    # 2026-07-25). Authors whose papers were never scored have no entry —
+    # the map renders them recessive, never a fake neutral.
+    author_scores: dict[str, float] = {}
+    try:
+        for row in conn.execute(
+            """
+            SELECT pa.openalex_id, AVG(latest.score)
+            FROM publication_authors pa
+            JOIN (
+                SELECT paper_id, score, MAX(created_at)
+                FROM recommendations
+                GROUP BY paper_id
+            ) latest ON latest.paper_id = pa.paper_id
+            WHERE pa.openalex_id <> ''
+            GROUP BY pa.openalex_id
+            """
+        ).fetchall():
+            if row[1] is not None:
+                author_scores[str(row[0])] = round(float(row[1]), 1)
+    except sqlite3.OperationalError:
+        pass
+
     nodes = [
         GraphNode(
             id=n["id"],
@@ -924,6 +948,7 @@ def _build_author_network_payload(
             metadata={
                 "pub_count": n.get("pub_count", 0),
                 "citation_count": n.get("citation_count", 0),
+                "score": author_scores.get(str(n["id"])),
                 "h_index": n.get("h_index", 0),
                 "works_count": n.get("works_count", 0),
                 "author_citedby": n.get("author_citedby", 0),
@@ -2437,6 +2462,42 @@ def _load_embeddings(
     return embeddings
 
 
+def _latest_recommendation_scores(
+    conn: sqlite3.Connection,
+    paper_ids: list[str],
+) -> dict[str, float]:
+    """Latest internal recommendation score per paper (0-100), chunked.
+
+    The map's Score colour mode shows the ENGINE's relevance, not the user's
+    star rating (user call 2026-07-25). SQLite's bare-column-with-MAX rule
+    picks ``score`` from the row holding ``MAX(created_at)`` — the newest
+    suggestion wins. Papers never recommended simply have no entry.
+    """
+    scores: dict[str, float] = {}
+    ids = list(dict.fromkeys(paper_ids))
+    for start in range(0, len(ids), 400):
+        chunk = ids[start : start + 400]
+        placeholders = ",".join("?" for _ in chunk)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT paper_id, score, MAX(created_at)
+                FROM recommendations
+                WHERE paper_id IN ({placeholders})
+                GROUP BY paper_id
+                """,
+                chunk,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return scores
+        for row in rows:
+            paper_id = row["paper_id"] if isinstance(row, sqlite3.Row) else row[0]
+            score = row["score"] if isinstance(row, sqlite3.Row) else row[1]
+            if score is not None:
+                scores[str(paper_id)] = float(score)
+    return scores
+
+
 def _load_paper_map_metadata(
     conn: sqlite3.Connection,
     paper_ids: list[str],
@@ -2449,12 +2510,14 @@ def _load_paper_map_metadata(
     """
     ids = list(dict.fromkeys(paper_ids))
     texts = {paper_id: "" for paper_id in ids}
+    rec_scores = _latest_recommendation_scores(conn, ids)
     paper_meta = {
         paper_id: {
             "title": "",
             "cited_by_count": 0,
             "year": None,
             "rating": 0,
+            "score": rec_scores.get(paper_id),
             "journal": "",
             "authors": "",
             "publication_date": None,
@@ -2491,6 +2554,7 @@ def _load_paper_map_metadata(
                 "cited_by_count": int(cited_by_count or 0),
                 "year": year,
                 "rating": int(rating or 0),
+                "score": rec_scores.get(paper_id),
                 "journal": journal or "",
                 "authors": authors or "",
                 "publication_date": publication_date,
@@ -2959,6 +3023,7 @@ def _build_embedding_paper_map(
                     "year": meta.get("year"),
                     "publication_date": meta.get("publication_date"),
                     "rating": meta.get("rating", 0),
+                    "score": meta.get("score"),
                     "journal": meta.get("journal"),
                     "authors": meta.get("authors"),
                     "cluster_label": display_label,

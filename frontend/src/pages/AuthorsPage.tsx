@@ -25,6 +25,7 @@ import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { GraphMapView } from '@/components/map/GraphMapView'
+import { MapModeSwitch } from '@/components/map/MapChrome'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
 import {
@@ -37,12 +38,17 @@ import { cn } from '@/lib/utils'
 import { useToast, errorToast } from '@/hooks/useToast'
 
 /**
- * Authors page — three-section product model (2026-04-23):
+ * Authors page — map-first product model (2026-07-25; sections 2026-04-23):
  *
- *   1. Suggested (top)   — 5-card rail with enter/exit animations. Reject
+ *   0. Network map (top) — the co-authorship map is a FIRST-CLASS citizen,
+ *                          like the Discovery frontier: always visible,
+ *                          never behind a collapse. Every dot opens the
+ *                          same detail drawer the sections below use;
+ *                          dashed halo = followed.
+ *   1. Suggested         — 5-card rail with enter/exit animations. Reject
  *                          writes a negative signal so the author is never
  *                          re-suggested; Follow promotes into section 2.
- *   2. Followed (middle) — grid of followed-author cards with monitor
+ *   2. Followed          — grid of followed-author cards with monitor
  *                          health and the shared AuthorSignalBar.
  *   3. Corpus (bottom)   — compact table of every author in the DB. Row
  *                          click opens the same detail dialog.
@@ -59,10 +65,9 @@ export function AuthorsPage() {
   const [selectedSuggestion, setSelectedSuggestion] = useState<AuthorSuggestion | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [addAuthorOpen, setAddAuthorOpen] = useState(false)
-  // Task 50 M5: co-authorship network section — lazy, persisted open state.
-  const [networkOpen, setNetworkOpen] = useState(
-    () => localStorage.getItem('alma.authors.networkOpen') === 'true',
-  )
+  // Network map scope: your library's authors, or the full tracked corpus
+  // (which includes the authors of suggested papers).
+  const [networkScope, setNetworkScope] = useState<'library' | 'corpus'>('library')
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -93,6 +98,7 @@ export function AuthorsPage() {
   // loaded (so the layout is settled), scroll it into view and flash an accent
   // ring. Guarded to fire once per arrival so a manual scroll-up never re-snaps.
   const route = useHashRoute()
+  const routeAction = route.params.get('action')?.trim() ?? ''
   const focusNeedsAttention = route.params.get('focus') === 'needs-attention'
   const needsAttentionRef = useRef<HTMLDivElement>(null)
   const [highlightAttention, setHighlightAttention] = useState(false)
@@ -107,6 +113,18 @@ export function AuthorsPage() {
     const timer = setTimeout(() => setHighlightAttention(false), 2200)
     return () => clearTimeout(timer)
   }, [focusNeedsAttention, needsAttentionQuery.isLoading])
+
+  useEffect(() => {
+    if (routeAction !== 'follow') return
+    setAddAuthorOpen(true)
+    const nextParams = new URLSearchParams(route.params)
+    nextParams.delete('action')
+    window.history.replaceState(
+      null,
+      '',
+      buildHashRoute('authors', Object.fromEntries(nextParams)),
+    )
+  }, [route.params, routeAction])
 
   const addAuthorMutation = useMutation({
     mutationFn: (payload: AddAuthorPayload) => api.post<Author>('/authors', payload),
@@ -298,6 +316,69 @@ export function AuthorsPage() {
         </Alert>
       ) : null}
 
+      {/* Task 50 (user call 2026-07-25): the co-authorship map is a
+          FIRST-CLASS citizen — top of the page, always visible, like the
+          Discovery frontier map. Every dot opens the same author drawer the
+          sections below use; dashed halo = followed. */}
+      <section className="space-y-3" data-tour="authors-network">
+        <header className="flex items-center gap-2">
+          <Share2 className="h-4 w-4 text-alma-600" />
+          <h2 className="text-sm font-semibold text-alma-800">Author network</h2>
+          <span className="text-xs text-slate-500">
+            co-authorship structure across your corpus — click an author to open them
+          </span>
+        </header>
+        <GraphMapView
+          endpoint="author-network"
+          params={{ scope: networkScope }}
+          // Year is meaningless for an author; Score/Heat reflect the mean
+          // internal score of the author's papers (same criteria as
+          // Discovery) — user call 2026-07-25.
+          colourModes={['clusters', 'score', 'heat']}
+          toolbarExtras={
+            <MapModeSwitch
+              value={networkScope}
+              onChange={setNetworkScope}
+              options={[
+                { value: 'library', label: 'Library', title: 'Authors of papers you saved' },
+                { value: 'corpus', label: 'Corpus', title: 'Authors across every tracked paper — including suggestions' },
+              ]}
+            />
+          }
+          nodeKind={() => 'author'}
+          // 50-F deep integration: a node opens the SAME author drawer the
+          // rest of the page uses.
+          onOpenNode={(n) => {
+            const match = authors.find((a) => a.id === n.id)
+            if (match) openDetail(match)
+          }}
+          // Dashed halo = an author you follow (host-documented meaning).
+          haloIds={followedIds}
+          hoverCard={(n) => (
+            <>
+              <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
+              <p className="mt-0.5 text-slate-500">
+                {typeof n.metadata?.pub_count === 'number' ? `${n.metadata.pub_count} papers` : ''}
+                {typeof n.metadata?.h_index === 'number' ? ` · h-index ${n.metadata.h_index}` : ''}
+                {followedIds.has(n.id) ? ' · followed' : ''}
+              </p>
+              {typeof n.metadata?.score === 'number' && (
+                <p className="mt-0.5 font-medium text-alma-800">
+                  Score {Math.round(Number(n.metadata.score))}/100 · mean of their papers
+                </p>
+              )}
+            </>
+          )}
+          legendExtras={
+            <span className="inline-flex items-center gap-1.5 text-slate-400">
+              <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-slate-500" />
+              dashed ring = followed
+            </span>
+          }
+          height={480}
+        />
+      </section>
+
       <div data-tour="authors-suggestions">
         <SuggestedAuthorsRail onOpenDetail={openSuggestionDetail} />
       </div>
@@ -345,64 +426,6 @@ export function AuthorsPage() {
               </RevealItem>
             ))}
           </RevealList>
-        )}
-      </section>
-
-      {/* Task 50 M5 (50-C): the co-authorship network lives WITH the authors it
-          describes — moved here from Library › Analytics. Collapsed by default
-          and lazy-mounted: the graph payload is heavy, so it only fetches when
-          opened. The open state persists per user. */}
-      <section className="space-y-3" data-tour="authors-network">
-        <header className="flex items-center gap-2">
-          <Share2 className="h-4 w-4 text-alma-600" />
-          <h2 className="text-sm font-semibold text-alma-800">Author network</h2>
-          <span className="text-xs text-slate-500">
-            co-authorship structure across your corpus
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              setNetworkOpen((open) => {
-                localStorage.setItem('alma.authors.networkOpen', String(!open))
-                return !open
-              })
-            }
-            className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-          >
-            {networkOpen ? 'Hide network' : 'Show network'}
-          </button>
-        </header>
-        {networkOpen && (
-          <GraphMapView
-            endpoint="author-network"
-            params={{ scope: 'library' }}
-            nodeKind={() => 'author'}
-            // 50-F deep integration: a node opens the SAME author drawer the
-            // rest of the page uses.
-            onOpenNode={(n) => {
-              const match = authors.find((a) => a.id === n.id)
-              if (match) openDetail(match)
-            }}
-            // Dashed halo = an author you follow (host-documented meaning).
-            haloIds={followedIds}
-            hoverCard={(n) => (
-              <>
-                <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
-                <p className="mt-0.5 text-slate-500">
-                  {typeof n.metadata?.pub_count === 'number' ? `${n.metadata.pub_count} papers` : ''}
-                  {typeof n.metadata?.h_index === 'number' ? ` · h-index ${n.metadata.h_index}` : ''}
-                  {followedIds.has(n.id) ? ' · followed' : ''}
-                </p>
-              </>
-            )}
-            legendExtras={
-              <span className="inline-flex items-center gap-1.5 text-slate-400">
-                <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-slate-500" />
-                dashed ring = followed
-              </span>
-            }
-            height={480}
-          />
         )}
       </section>
 

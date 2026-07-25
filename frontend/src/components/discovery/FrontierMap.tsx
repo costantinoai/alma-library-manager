@@ -104,6 +104,9 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
   const [region, setRegion] = useState<RegionSelection | null>(null)
+  // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
+  // clicking the background clears it (user call 2026-07-25, all maps).
+  const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
 
   const query = useQuery({
     queryKey: ['frontier', lensId, showSeen, showEdges],
@@ -217,11 +220,13 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
             n.branch_id !== highlightBranch) ||
           (groupBy === 'clusters' &&
             typeof n.cluster_id === 'number' &&
-            dimmedClusters.has(n.cluster_id)),
+            dimmedClusters.has(n.cluster_id)) ||
+          // Cluster focus from a paper click: outside recedes, never hides.
+          (focusClusterId != null && n.cluster_id !== focusClusterId),
         halo: newRecIds.has(n.paper_id),
       }
     })
-  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters, yearRange])
+  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters, yearRange, focusClusterId])
 
   const mapEdges = useMemo(
     () =>
@@ -384,8 +389,18 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           describeMutation.mutate(ids.slice(0, 300))
         }}
         onClickNode={(id) => {
+          if (id == null) {
+            setFocusClusterId(null)
+            return
+          }
           const n = nodesById.get(id)
-          if (n?.layer === 'rec' && onSelectRec) onSelectRec(id)
+          if (!n) return
+          // A paper click highlights its cluster (dim the rest) AND does its
+          // host action (rec → jump to the list row; else open the paper).
+          setFocusClusterId(
+            typeof n.cluster_id === 'number' && n.cluster_id >= 0 ? n.cluster_id : null,
+          )
+          if (n.layer === 'rec' && onSelectRec) onSelectRec(id)
           else onSelectPaper(id)
         }}
         renderHover={(id) => {

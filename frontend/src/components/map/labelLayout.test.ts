@@ -4,7 +4,12 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { placeLabels, toponymTerms, type LabelInput } from './labelLayout'
+import {
+  placeLabels,
+  suppressNearbyDuplicateWords,
+  toponymTerms,
+  type LabelInput,
+} from './labelLayout'
 
 const box = (id: string, x: number, y: number, priority: number, w = 100, h = 14): LabelInput => ({
   id,
@@ -91,5 +96,48 @@ describe('toponymTerms', () => {
     const [t] = toponymTerms('anterior temporal lobe semantics, x')
     expect(t.length).toBeLessThanOrEqual(17)
     expect(t).toBe('anterior')
+  })
+})
+
+describe('suppressNearbyDuplicateWords', () => {
+  const w = (id: string, word: string, x: number, y: number, priority: number) => ({
+    id,
+    word,
+    x,
+    y,
+    width: 60,
+    height: 14,
+    priority,
+  })
+
+  it('drops a repeated word near a stronger instance ("face face face")', () => {
+    const kept = suppressNearbyDuplicateWords(
+      [w('a', 'face', 100, 100, 10), w('b', 'face', 140, 110, 5), w('c', 'face', 120, 90, 3)],
+      150,
+    )
+    expect(kept.map((k) => k.id)).toEqual(['a'])
+  })
+
+  it('keeps the same word when instances are far apart', () => {
+    const kept = suppressNearbyDuplicateWords(
+      [w('a', 'face', 100, 100, 10), w('b', 'face', 600, 500, 5)],
+      150,
+    )
+    expect(kept.map((k) => k.id).sort()).toEqual(['a', 'b'])
+  })
+
+  it('never touches different words and matches case-insensitively', () => {
+    const kept = suppressNearbyDuplicateWords(
+      [w('a', 'Face', 100, 100, 10), w('b', 'face', 120, 100, 5), w('c', 'stream', 110, 105, 1)],
+      150,
+    )
+    expect(kept.map((k) => k.id).sort()).toEqual(['a', 'c'])
+  })
+
+  it('is deterministic regardless of input order', () => {
+    const inputs = [w('b', 'face', 140, 110, 5), w('a', 'face', 100, 100, 10)]
+    const one = suppressNearbyDuplicateWords(inputs, 150).map((k) => k.id)
+    const two = suppressNearbyDuplicateWords([...inputs].reverse(), 150).map((k) => k.id)
+    expect(one).toEqual(two)
   })
 })

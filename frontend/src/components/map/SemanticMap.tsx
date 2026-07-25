@@ -25,7 +25,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
-import { placeLabels, toponymTerms, type LabelInput } from './labelLayout'
+import {
+  placeLabels,
+  suppressNearbyDuplicateWords,
+  toponymTerms,
+  type LabelInput,
+} from './labelLayout'
 import {
   DIMMED_OPACITY,
   HOLLOW_FILL_ALPHA,
@@ -79,7 +84,9 @@ export interface SemanticMapProps {
   height?: number
   selectedIds?: ReadonlySet<string>
   onHover?: (id: string | null, anchor: { x: number; y: number } | null) => void
-  onClickNode?: (id: string) => void
+  /** Click on a dot fires its id; click on the BACKGROUND fires null — the
+   *  host's deselect (clear cluster focus / inspector back to overview). */
+  onClickNode?: (id: string | null) => void
   /** Hover card content for a node. Rendered BY the plate at the hover
    *  point (edge-flipped, pointer-transparent) so every host gets the same
    *  at-cursor behaviour — hosts supply only the words. */
@@ -237,7 +244,7 @@ export function SemanticMap({
       else clusters.set(n.clusterId, { label: n.clusterLabel, pts: [p] })
     }
     const maxCount = Math.max(1, ...[...clusters.values()].map((c) => c.pts.length))
-    const inputs: LabelInput[] = []
+    const inputs: Array<LabelInput & { word: string }> = []
     const texts = new Map<string, { text: string; fontPx: number }>()
     for (const [cid, c] of clusters) {
       const terms = toponymTerms(c.label, toponymWordCount)
@@ -274,11 +281,23 @@ export function SemanticMap({
         const text = terms[i].toUpperCase()
         const w = text.length * fontPx * 0.68 + text.length * 1.5
         const id = `c${cid}:t${i}`
-        inputs.push({ id, x: cx, y: cy, width: w, height: fontPx + 4, priority: n * (1 - 0.2 * i) })
+        inputs.push({
+          id,
+          x: cx,
+          y: cy,
+          width: w,
+          height: fontPx + 4,
+          priority: n * (1 - 0.2 * i),
+          word: terms[i],
+        })
         texts.set(id, { text, fontPx })
       }
     }
-    const placed = placeLabels(inputs, width, height)
+    // Same word repeated by neighbouring clusters ("face face face") says
+    // nothing new — within a quarter-plate radius only the strongest
+    // instance keeps its ground; far apart, both survive.
+    const deduped = suppressNearbyDuplicateWords(inputs, Math.min(width, height) * 0.25)
+    const placed = placeLabels(deduped, width, height)
     return placed.map((p) => ({ ...p, ...texts.get(p.id)! }))
   }, [nodes, screenPos, showToponyms, toponymScale, toponymWordCount, width, height])
 
@@ -582,8 +601,8 @@ export function SemanticMap({
     }
     panEnd()
     if (!movedRef.current) {
-      const id = hitTest(sx, sy)
-      if (id) onClickNode?.(id)
+      // null = background click — hosts treat it as deselect.
+      onClickNode?.(hitTest(sx, sy))
     }
   }
 

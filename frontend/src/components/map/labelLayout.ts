@@ -132,3 +132,33 @@ export function toponymTerms(label: string, maxTerms = 3, maxChars = 16): string
   }
   return kept
 }
+
+/**
+ * Drop repeated words that would land near each other (user call
+ * 2026-07-25: neighbouring clusters often share a top term, so the plate
+ * grew "face face face" zones). For each distinct word, the
+ * highest-priority instance keeps its ground; any other instance of the
+ * SAME word within `minDist` px of a kept one is dropped. Instances far
+ * apart both survive \u2014 the same word CAN name two distant territories.
+ * Deterministic: priority desc, id asc, like `placeLabels`.
+ */
+export function suppressNearbyDuplicateWords<T extends LabelInput & { word: string }>(
+  inputs: T[],
+  minDist: number,
+): T[] {
+  const ordered = [...inputs].sort(
+    (a, b) => b.priority - a.priority || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  )
+  const keptSpots = new Map<string, Array<[number, number]>>()
+  const keep = new Set<string>()
+  const d2 = minDist * minDist
+  for (const input of ordered) {
+    const word = input.word.trim().toLowerCase()
+    const spots = keptSpots.get(word)
+    if (spots?.some(([x, y]) => (x - input.x) ** 2 + (y - input.y) ** 2 < d2)) continue
+    keep.add(input.id)
+    if (spots) spots.push([input.x, input.y])
+    else keptSpots.set(word, [[input.x, input.y]])
+  }
+  return inputs.filter((i) => keep.has(i.id))
+}

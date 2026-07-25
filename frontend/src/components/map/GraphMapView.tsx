@@ -47,6 +47,8 @@ export interface GraphMapViewProps {
   nodeKind: (node: GraphNode) => MapNodeKind
   /** Open the node in the host's own surface (paper panel / author drawer). */
   onOpenNode?: (node: GraphNode) => void
+  /** Background click — the host's deselect (clear selection + cluster focus). */
+  onBackgroundClick?: () => void
   /** Hover-card body for a node — host vocabulary, shared shell. */
   hoverCard: (node: GraphNode) => React.ReactNode
   /** Dashed-halo marker (e.g. followed authors). Meaning documented by host. */
@@ -64,6 +66,9 @@ export interface GraphMapViewProps {
   sizeScale?: number
   toponymScale?: number
   toponymWordCount?: number
+  /** Colour modes this host offers (default: all). Authors drop Year —
+   *  an author has no single publication year (user call 2026-07-25). */
+  colourModes?: ReadonlyArray<'clusters' | 'year' | 'score' | 'heat'>
 }
 
 export function GraphMapView({
@@ -71,6 +76,7 @@ export function GraphMapView({
   params,
   nodeKind,
   onOpenNode,
+  onBackgroundClick,
   hoverCard,
   haloIds,
   toolbarExtras,
@@ -82,13 +88,16 @@ export function GraphMapView({
   sizeScale = 1,
   toponymScale = 1,
   toponymWordCount = 3,
+  colourModes = ['clusters', 'year', 'score', 'heat'],
 }: GraphMapViewProps) {
   const [showEdges, setShowEdges] = useState(false)
   const [showToponyms, setShowToponyms] = useState(true)
   // Colour restores the old color-by knob on the shared stack: cluster hues,
-  // a year ramp, a rating ramp, or the 50-J heat wash. DATA ramps (year /
-  // rating / heat) are deliberate exceptions to the chip valence contract.
-  const [colourMode, setColourMode] = useState<'clusters' | 'year' | 'rating' | 'heat'>('clusters')
+  // a year ramp, a score ramp, or the 50-J heat wash. DATA ramps (year /
+  // score / heat) are deliberate exceptions to the chip valence contract.
+  // Score = the engine's INTERNAL relevance score (latest recommendation,
+  // 0–100), NOT the user's star rating (user call 2026-07-25).
+  const [colourMode, setColourMode] = useState<'clusters' | 'year' | 'score' | 'heat'>('clusters')
   // Per-layer link chips (the old typed-edge toggles): view-only filters.
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
@@ -138,10 +147,13 @@ export function GraphMapView({
       // Older = receding slate, newer = folio — recency reads as presence.
       return yearRampColor(y, yearRange.lo, yearRange.hi)
     }
-    if (colourMode === 'rating') {
-      const r = Number(n.metadata?.rating)
-      if (!Number.isFinite(r) || r <= 0) return MAP_INK.ambientSoft
-      const t = Math.max(-1, Math.min(1, (r - 3) / 2))
+    if (colourMode === 'score') {
+      // Internal relevance score (0–100), divergent about the neutral 50:
+      // red = the engine scored it weak, green = strong. Never-scored
+      // papers (no recommendation yet) stay recessive.
+      const s = Number(n.metadata?.score)
+      if (!Number.isFinite(s)) return MAP_INK.ambientSoft
+      const t = Math.max(-1, Math.min(1, (s - 50) / 50))
       const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
       return t < 0
         ? `rgb(${mix(220, 233, 1 + t)}, ${mix(68, 196, 1 + t)}, ${mix(61, 76, 1 + t)})`
@@ -150,14 +162,17 @@ export function GraphMapView({
     return undefined
   }
 
-  // 50-J heat: valence per node — your own signals where present (rating),
-  // membership as a mild positive, tracked-neutral otherwise. View-only.
+  // 50-J heat: valence per node — your own feedback first (rating, the
+  // strongest signal), then the engine's relevance score, then membership
+  // as a mild positive. View-only.
   const heatValues = useMemo(() => {
     if (colourMode !== 'heat') return undefined
     const m = new Map<string, number>()
     for (const n of nodes) {
       const r = Number(n.metadata?.rating)
+      const s = Number(n.metadata?.score)
       if (Number.isFinite(r) && r > 0) m.set(n.id, Math.max(-1, Math.min(1, (r - 3) / 2)))
+      else if (Number.isFinite(s)) m.set(n.id, Math.max(-1, Math.min(1, (s - 50) / 50)))
       else if (n.in_library !== false) m.set(n.id, 0.35)
       else m.set(n.id, 0)
     }
@@ -169,8 +184,8 @@ export function GraphMapView({
     () => summarizeValues(nodes.map((n) => Number(n.metadata?.year)).filter((y) => y > 1800)),
     [nodes],
   )
-  const ratingStats = useMemo(
-    () => summarizeValues(nodes.map((n) => Number(n.metadata?.rating)).filter((r) => r > 0)),
+  const scoreStats = useMemo(
+    () => summarizeValues(nodes.map((n) => Number(n.metadata?.score))),
     [nodes],
   )
   const heatStats = useMemo(
@@ -191,7 +206,7 @@ export function GraphMapView({
           y: 1 - n.y,
           kind: nodeKind(n),
           color:
-            colourMode === 'year' || colourMode === 'rating'
+            colourMode === 'year' || colourMode === 'score'
               ? dataColour(n)
               : cid != null && cid >= 0
                 ? clusterColors.get(cid)?.color
@@ -265,12 +280,14 @@ export function GraphMapView({
         <MapModeSwitch
           value={colourMode}
           onChange={setColourMode}
-          options={[
-            { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
-            { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
-            { value: 'rating', label: 'Rating', title: 'Your ratings — red to green, unrated grey' },
-            { value: 'heat', label: 'Heat', title: 'Local signal wash — red negative, green positive (view-only)' },
-          ]}
+          options={(
+            [
+              { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
+              { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
+              { value: 'score', label: 'Score', title: 'Engine relevance (latest suggestion score, 0–100) — red weak, green strong; never-scored grey' },
+              { value: 'heat', label: 'Heat', title: 'Local signal wash — red negative, green positive (view-only)' },
+            ] as const
+          ).filter((o) => colourModes.includes(o.value))}
         />
         <span className="relative ml-auto">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
@@ -302,6 +319,10 @@ export function GraphMapView({
           return n ? hoverCard(n) : null
         }}
         onClickNode={(id) => {
+          if (id == null) {
+            onBackgroundClick?.()
+            return
+          }
           const n = nodesById.get(id)
           if (n) onOpenNode?.(n)
         }}
@@ -324,15 +345,15 @@ export function GraphMapView({
               mean={String(Math.round(yearStats.mean))}
             />
           )}
-          {colourMode === 'rating' && (
-            // Absolute, centred on the neutral 3★ — ratings have a fixed
-            // domain, so the scale never restretches per view.
+          {colourMode === 'score' && (
+            // Absolute, centred on the neutral 50 — the internal score has a
+            // fixed 0–100 domain, so the scale never restretches per view.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.divergent}
-              min="1★"
-              mid="3★"
-              max="5★"
-              mean={ratingStats ? ratingStats.mean.toFixed(1) + '★' : undefined}
+              min="0"
+              mid="50"
+              max="100"
+              mean={scoreStats ? String(Math.round(scoreStats.mean)) : undefined}
             />
           )}
           {colourMode === 'heat' && heatStats && (
