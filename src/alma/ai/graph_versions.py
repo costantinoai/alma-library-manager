@@ -73,7 +73,15 @@ from __future__ import annotations
 #            mega-consortium caps) and every coupling layer keeps only each
 #            node's ~10 strongest ties. The corpus map shipped 1.43M edges
 #            (200 MB JSON) before; the edge set changes, cached maps rebuild.
-PROJECTION_ALGO_VERSION = "2026.07-9"
+# 2026.07-10: author map placement + payload. Authors with no embedded paper are
+#            OMITTED (and counted in metadata.omitted_unplaced) instead of being
+#            scattered on an invented radius-0.48 ring about the centre — a fake
+#            geometry that read as real structure. The author payload also ships
+#            no edges (coupling still shapes the layout; the map draws no link
+#            layer). Node set, coordinates and payload shape all change, so the
+#            cached author networks MUST rebuild. Paper-map layout is untouched —
+#            the shared version costs it one idempotent rebuild.
+PROJECTION_ALGO_VERSION = "2026.07-10"
 
 # Clustering algorithm + parameters (ai/clustering.py): HDBSCAN/k-means choice,
 # outlier handling, forced-K removal, etc. Bump on any clustering behavior change.

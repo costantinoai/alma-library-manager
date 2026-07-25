@@ -2,7 +2,6 @@
 
 import json
 import logging
-import math
 import sqlite3
 from collections import defaultdict
 from typing import Any
@@ -562,25 +561,22 @@ def build_coauthor_network(
             emb_map, coupling_specs=coupling_specs, semantic_k=6, semantic_min_similarity=0.5
         )
 
-    unplaced_indices = [
-        i for i, aid in enumerate(author_ids) if aid not in author_embeddings
-    ]
-
-    # Ensure coords exist for every author. Authors without embeddings are
-    # scattered around the edge so they don't pile on top of each other.
-    n_unplaced = len(unplaced_indices)
-    for offset, idx in enumerate(unplaced_indices):
-        angle = 2 * math.pi * offset / max(1, n_unplaced)
-        coords_by_author[author_ids[idx]] = (
-            0.5 + 0.48 * math.cos(angle),
-            0.5 + 0.48 * math.sin(angle),
-        )
-    for aid in author_ids:
-        coords_by_author.setdefault(aid, (0.5, 0.5))
+    # Authors with no mean embedding have NO semantic position. They used to be
+    # scattered on a radius-0.48 ring about the centre (and any residual piled
+    # exactly at 0.5/0.5) — invented geometry that read as real structure: a
+    # halo of unplaceable authors framing the corpus view, in the one region a
+    # semantic map claims nothing lives (user call 2026-07-26). A semantic map
+    # places by meaning or not at all, so they are OMITTED here and COUNTED, and
+    # the count rides the payload so the UI can say how many are missing instead
+    # of dropping them silently.
+    omitted_unplaced = sum(1 for aid in author_ids if aid not in coords_by_author)
 
     nodes = []
     for idx, aid in enumerate(author_ids):
-        x_raw, y_raw = coords_by_author[aid]
+        placed = coords_by_author.get(aid)
+        if placed is None:
+            continue
+        x_raw, y_raw = placed
         x = float(min(0.98, max(0.02, x_raw)))
         y = float(min(0.98, max(0.02, y_raw)))
         raw_cid = int(cluster_ids[idx])
@@ -609,6 +605,12 @@ def build_coauthor_network(
             }
         )
 
+    # An edge may only join two rendered nodes. Dropping unplaced authors above
+    # can orphan an endpoint (the degenerate <3-embeddings path builds structural
+    # edges with no layout at all), and a dangling edge is a link to nowhere.
+    placed_ids = {n["id"] for n in nodes}
+    edges = [e for e in edges if e["source"] in placed_ids and e["target"] in placed_ids]
+
     clusters = [
         {
             "id": int(cid),
@@ -627,6 +629,9 @@ def build_coauthor_network(
         "method": clustering_method,
         "edge_layers": edge_layers,
         "clustering": clustering_panel,
+        # How many in-scope authors could not be placed (no embedded paper).
+        # Surfaced in the map legend — an omission the reader can see.
+        "omitted_unplaced": omitted_unplaced,
     }
 
 
