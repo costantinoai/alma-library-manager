@@ -21,6 +21,7 @@ import {
   Loader2,
   Share2,
   Sparkles,
+  Type,
   X,
 } from 'lucide-react'
 
@@ -87,6 +88,8 @@ function useBranchColors(nodes: FrontierNode[]) {
 export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onFilterList, onSelectRec }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
+  // Words on/off is the user's call, not the grouping's side effect.
+  const [showNames, setShowNames] = useState(true)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
   // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
   // (the recs are its hero layer); corpus clusters are the alternative lens on
@@ -262,6 +265,20 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           <Share2 className="h-3.5 w-3.5" />
           Citation links{showEdges && counts?.edges ? ` · ${counts.edges}` : ''}
         </button>
+        <button
+          type="button"
+          onClick={() => setShowNames((s) => !s)}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+            showNames && groupBy === 'clusters'
+              ? 'border-accent-edge bg-accent-soft text-alma-folio'
+              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
+          )}
+          title={groupBy === 'clusters' ? 'Cluster names on the map' : 'Names show in the Clusters grouping'}
+        >
+          <Type className="h-3.5 w-3.5" />
+          Names
+        </button>
         {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
         {clusterColors.size > 0 && (
           <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
@@ -316,9 +333,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         nodes={mapNodes}
         edges={mapEdges}
         showEdges={showEdges}
-        // Toponyms belong to the clusters lens — branch mode keeps the field
-        // calm (branch identity already lives in the legend chips).
-        showToponyms={groupBy === 'clusters'}
+        showToponyms={showNames && groupBy === 'clusters'}
         height={520}
         lassoMode={selectMode}
         onLasso={(ids, anchor) => {

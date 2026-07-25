@@ -94,6 +94,8 @@ export function MapPage() {
   const [scope, setScope] = useState<'library' | 'corpus'>('corpus')
   const [resolution, setResolution] = useState(1.5)
   const [sizeScale, setSizeScale] = useState(1)
+  const [wordScale, setWordScale] = useState(1)
+  const [wordCount, setWordCount] = useState(3)
   // Layout blend (the old "physics") — library scope only; the corpus stays
   // on the cached pure-semantic substrate path.
   const [blend, setBlend] = useState({ sem: 1, coauth: 0, refs: 0, cocite: 0 })
@@ -180,6 +182,8 @@ export function MapPage() {
               : null
           }
           sizeScale={sizeScale}
+          toponymScale={wordScale}
+          toponymWordCount={wordCount}
           // 50-M: click SELECTS (accent ring + cluster focus + inspector);
           // the paper panel opens from the inspector, deliberately.
           onOpenNode={(n) => setSelected((cur) => (cur?.id === n.id ? null : n))}
@@ -246,6 +250,24 @@ export function MapPage() {
                     step={0.1}
                     format={(v) => `${v.toFixed(1)}×`}
                     onCommit={setSizeScale}
+                  />
+                  <SliderRow
+                    label="Word size"
+                    value={wordScale}
+                    min={0.6}
+                    max={2}
+                    step={0.1}
+                    format={(v) => `${v.toFixed(1)}×`}
+                    onCommit={setWordScale}
+                  />
+                  <SliderRow
+                    label="Words per cluster"
+                    value={wordCount}
+                    min={1}
+                    max={3}
+                    step={1}
+                    format={(v) => String(v)}
+                    onCommit={setWordCount}
                   />
                   {scope === 'library' ? (
                     <div className="space-y-3 border-t border-[var(--color-border)] pt-3">

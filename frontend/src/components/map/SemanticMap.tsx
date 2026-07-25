@@ -72,6 +72,10 @@ export interface SemanticMapProps {
   showEdges?: boolean
   /** Cluster toponyms on/off (50-H pass). */
   showToponyms?: boolean
+  /** Word-size multiplier for toponyms (host knob). */
+  toponymScale?: number
+  /** Words per cluster (density knob, 1–3). */
+  toponymWordCount?: number
   height?: number
   selectedIds?: ReadonlySet<string>
   onHover?: (id: string | null, anchor: { x: number; y: number } | null) => void
@@ -82,6 +86,12 @@ export interface SemanticMapProps {
   renderHover?: (id: string) => React.ReactNode
   /** Dot-size multiplier (host knob; 1 = registry default). */
   sizeScale?: number
+  /** 50-J score heatmap: per-node valence in [-1, +1]. When present, a
+   *  smoothed divergent wash (red → yellow → green) renders UNDER the dots —
+   *  the local average of the values around each point. View-only; a DATA
+   *  ramp (like Meter tones), deliberately outside the chip valence
+   *  contract. */
+  heatValues?: ReadonlyMap<string, number>
   /** Rectangle-select mode: drag selects instead of panning. */
   lassoMode?: boolean
   onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
@@ -112,9 +122,12 @@ export function SemanticMap({
   edges = [],
   showEdges = false,
   showToponyms = true,
+  toponymScale = 1,
+  toponymWordCount = 3,
   height = 560,
   selectedIds,
   sizeScale = 1,
+  heatValues,
   onHover,
   onClickNode,
   renderHover,
@@ -227,7 +240,7 @@ export function SemanticMap({
     const inputs: LabelInput[] = []
     const texts = new Map<string, { text: string; fontPx: number }>()
     for (const [cid, c] of clusters) {
-      const terms = toponymTerms(c.label)
+      const terms = toponymTerms(c.label, toponymWordCount)
       if (terms.length === 0) continue
       // Principal axis of the cluster's screen points (2-D PCA angle).
       const n = c.pts.length
@@ -251,7 +264,7 @@ export function SemanticMap({
       // only as many terms as they have points to anchor.
       const termCount = Math.min(terms.length, Math.max(1, Math.floor(n / 2)))
       const chunk = Math.ceil(ordered.length / termCount)
-      const basePx = toponymFontPx(n, maxCount)
+      const basePx = Math.round(toponymFontPx(n, maxCount) * toponymScale)
       for (let i = 0; i < termCount; i++) {
         const part = ordered.slice(i * chunk, (i + 1) * chunk)
         if (part.length === 0) continue
@@ -267,7 +280,7 @@ export function SemanticMap({
     }
     const placed = placeLabels(inputs, width, height)
     return placed.map((p) => ({ ...p, ...texts.get(p.id)! }))
-  }, [nodes, screenPos, showToponyms, width, height])
+  }, [nodes, screenPos, showToponyms, toponymScale, toponymWordCount, width, height])
 
   // ── Draw ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -286,6 +299,68 @@ export function SemanticMap({
 
     const visible = (sx: number, sy: number) =>
       sx >= -20 && sy >= -20 && sx <= width + 20 && sy <= height + 20
+
+    // 50-J heatmap — gaussian splats on a coarse offscreen grid, colorized
+    // through a divergent red→yellow→green ramp, composited UNDER everything.
+    // Cheap: grid is 1/8 resolution; weights and values accumulate per cell,
+    // colour = local MEAN valence, alpha = local density (so empty sea stays
+    // paper, dense strong regions read loudest).
+    if (heatValues && heatValues.size > 0) {
+      const cell = 8
+      const gw = Math.max(1, Math.ceil(width / cell))
+      const gh = Math.max(1, Math.ceil(height / cell))
+      const wsum = new Float32Array(gw * gh)
+      const vsum = new Float32Array(gw * gh)
+      const radius = 5 // grid cells (~40 px)
+      for (const [id, value] of heatValues) {
+        const p = screenPos.get(id)
+        if (!p || !visible(p[0], p[1])) continue
+        const gx = p[0] / cell
+        const gy = p[1] / cell
+        const x0 = Math.max(0, Math.floor(gx - radius))
+        const x1 = Math.min(gw - 1, Math.ceil(gx + radius))
+        const y0 = Math.max(0, Math.floor(gy - radius))
+        const y1 = Math.min(gh - 1, Math.ceil(gy + radius))
+        for (let yy = y0; yy <= y1; yy++) {
+          for (let xx = x0; xx <= x1; xx++) {
+            const d2 = (xx - gx) ** 2 + (yy - gy) ** 2
+            const wgt = Math.exp(-d2 / (2 * (radius / 2) ** 2))
+            if (wgt < 0.01) continue
+            const idx = yy * gw + xx
+            wsum[idx] += wgt
+            vsum[idx] += wgt * value
+          }
+        }
+      }
+      const heatCanvas = document.createElement('canvas')
+      heatCanvas.width = gw
+      heatCanvas.height = gh
+      const hctx = heatCanvas.getContext('2d')
+      if (hctx) {
+        const img = hctx.createImageData(gw, gh)
+        let maxW = 0
+        for (let i = 0; i < wsum.length; i++) if (wsum[i] > maxW) maxW = wsum[i]
+        for (let i = 0; i < wsum.length; i++) {
+          if (wsum[i] <= 0.02) continue
+          const mean = vsum[i] / wsum[i] // -1..+1
+          // Divergent ramp: -1 red (220,68,61) → 0 yellow (233,196,76) → +1 green (64,160,92)
+          const t = Math.max(-1, Math.min(1, mean))
+          const [r, g, b] =
+            t < 0
+              ? [220 + (233 - 220) * (1 + t), 68 + (196 - 68) * (1 + t), 61 + (76 - 61) * (1 + t)]
+              : [233 + (64 - 233) * t, 196 + (160 - 196) * t, 76 + (92 - 76) * t]
+          const alpha = Math.min(0.4, 0.12 + 0.5 * (wsum[i] / maxW)) * 255
+          const o = i * 4
+          img.data[o] = r
+          img.data[o + 1] = g
+          img.data[o + 2] = b
+          img.data[o + 3] = alpha
+        }
+        hctx.putImageData(img, 0, 0)
+        ctx.imageSmoothingEnabled = true
+        ctx.drawImage(heatCanvas, 0, 0, gw, gh, 0, 0, width, height)
+      }
+    }
 
     // Edges first, under everything — BUDGETED (never more than
     // MAX_DRAWN_EDGES). Draw when the graph is small, a sub-selection is
@@ -429,6 +504,7 @@ export function SemanticMap({
     selectedIds,
     lassoRect,
     viewport,
+    heatValues,
     width,
     height,
     maxSizeValue,

@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 import {
   ClusterLegendChips,
   MapLegend,
+  MapModeSwitch,
   MapToggle,
   MapToolbar,
   type ClusterChipEntry,
@@ -27,6 +28,7 @@ import { SemanticMap, type SemanticMapNode } from './SemanticMap'
 import {
   EDGE_LAYER_COLORS,
   EDGE_LAYER_FALLBACK_COLOR,
+  EDGE_LAYER_LABELS,
   MAP_INK,
   type MapNodeKind,
 } from './mapNodeStyle'
@@ -55,6 +57,8 @@ export interface GraphMapViewProps {
   selectedNodeId?: string | null
   focusClusterId?: number | null
   sizeScale?: number
+  toponymScale?: number
+  toponymWordCount?: number
 }
 
 export function GraphMapView({
@@ -71,9 +75,17 @@ export function GraphMapView({
   selectedNodeId,
   focusClusterId,
   sizeScale = 1,
+  toponymScale = 1,
+  toponymWordCount = 3,
 }: GraphMapViewProps) {
   const [showEdges, setShowEdges] = useState(false)
   const [showToponyms, setShowToponyms] = useState(true)
+  // Colour restores the old color-by knob on the shared stack: cluster hues,
+  // a year ramp, a rating ramp, or the 50-J heat wash. DATA ramps (year /
+  // rating / heat) are deliberate exceptions to the chip valence contract.
+  const [colourMode, setColourMode] = useState<'clusters' | 'year' | 'rating' | 'heat'>('clusters')
+  // Per-layer link chips (the old typed-edge toggles): view-only filters.
+  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
   const [search, setSearch] = useState('')
 
@@ -109,6 +121,54 @@ export function GraphMapView({
     return new Map(ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i) }]))
   }, [nodes])
 
+  const yearRange = useMemo(() => {
+    let lo = Infinity
+    let hi = -Infinity
+    for (const n of nodes) {
+      const y = Number(n.metadata?.year)
+      if (Number.isFinite(y) && y > 1800) {
+        lo = Math.min(lo, y)
+        hi = Math.max(hi, y)
+      }
+    }
+    return lo <= hi ? { lo, hi } : null
+  }, [nodes])
+
+  const dataColour = (n: GraphNode): string | undefined => {
+    if (colourMode === 'year' && yearRange) {
+      const y = Number(n.metadata?.year)
+      if (!Number.isFinite(y) || y < 1800) return MAP_INK.ambientSoft
+      const t = (y - yearRange.lo) / Math.max(1, yearRange.hi - yearRange.lo)
+      // Older = receding slate, newer = folio — recency reads as presence.
+      const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
+      return `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
+    }
+    if (colourMode === 'rating') {
+      const r = Number(n.metadata?.rating)
+      if (!Number.isFinite(r) || r <= 0) return MAP_INK.ambientSoft
+      const t = Math.max(-1, Math.min(1, (r - 3) / 2))
+      const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
+      return t < 0
+        ? `rgb(${mix(220, 233, 1 + t)}, ${mix(68, 196, 1 + t)}, ${mix(61, 76, 1 + t)})`
+        : `rgb(${mix(233, 64, t)}, ${mix(196, 160, t)}, ${mix(76, 92, t)})`
+    }
+    return undefined
+  }
+
+  // 50-J heat: valence per node — your own signals where present (rating),
+  // membership as a mild positive, tracked-neutral otherwise. View-only.
+  const heatValues = useMemo(() => {
+    if (colourMode !== 'heat') return undefined
+    const m = new Map<string, number>()
+    for (const n of nodes) {
+      const r = Number(n.metadata?.rating)
+      if (Number.isFinite(r) && r > 0) m.set(n.id, Math.max(-1, Math.min(1, (r - 3) / 2)))
+      else if (n.in_library !== false) m.set(n.id, 0.35)
+      else m.set(n.id, 0)
+    }
+    return m
+  }, [colourMode, nodes])
+
   const query = search.trim().toLowerCase()
   const mapNodes = useMemo<SemanticMapNode[]>(
     () =>
@@ -121,7 +181,12 @@ export function GraphMapView({
           // Same Y convention as every other host (higher-y at the top).
           y: 1 - n.y,
           kind: nodeKind(n),
-          color: cid != null && cid >= 0 ? clusterColors.get(cid)?.color : undefined,
+          color:
+            colourMode === 'year' || colourMode === 'rating'
+              ? dataColour(n)
+              : cid != null && cid >= 0
+                ? clusterColors.get(cid)?.color
+                : undefined,
           sizeValue: typeof n.size === 'number' ? n.size : null,
           clusterId: cid,
           clusterLabel: label,
@@ -134,18 +199,20 @@ export function GraphMapView({
           halo: haloIds?.has(n.id) ?? false,
         }
       }),
-    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds, focusClusterId],
+    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds, focusClusterId, colourMode, yearRange],
   )
 
   const mapEdges = useMemo(
     () =>
-      (data?.edges ?? []).map((e) => ({
+      (data?.edges ?? [])
+        .filter((e) => !hiddenEdgeTypes.has(String(e.edge_type ?? '')))
+        .map((e) => ({
         source: String(e.source),
         target: String(e.target),
         weight: e.weight,
         color: EDGE_LAYER_COLORS[String(e.edge_type ?? '')] ?? EDGE_LAYER_FALLBACK_COLOR,
       })),
-    [data],
+    [data, hiddenEdgeTypes],
   )
 
   const chipEntries: ClusterChipEntry[] = useMemo(
@@ -186,6 +253,16 @@ export function GraphMapView({
           <Type className="h-3.5 w-3.5" />
           Names
         </MapToggle>
+        <MapModeSwitch
+          value={colourMode}
+          onChange={setColourMode}
+          options={[
+            { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
+            { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
+            { value: 'rating', label: 'Rating', title: 'Your ratings — red to green, unrated grey' },
+            { value: 'heat', label: 'Heat', title: 'Local signal wash — red negative, green positive (view-only)' },
+          ]}
+        />
         <span className="relative ml-auto">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
           <input
@@ -207,6 +284,9 @@ export function GraphMapView({
         showToponyms={showToponyms}
         height={height}
         sizeScale={sizeScale}
+        toponymScale={toponymScale}
+        toponymWordCount={toponymWordCount}
+        heatValues={heatValues}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
         renderHover={(id) => {
           const n = nodesById.get(id)
@@ -237,6 +317,45 @@ export function GraphMapView({
           )}
           {legendExtras}
         </div>
+        {showEdges && data && data.edges.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+            {Object.entries(
+              (data.edges as Array<{ edge_type?: string }>).reduce<Record<string, number>>((acc, e) => {
+                const t = String(e.edge_type ?? 'link')
+                acc[t] = (acc[t] ?? 0) + 1
+                return acc
+              }, {}),
+            ).map(([type, count]) => {
+              const off = hiddenEdgeTypes.has(type)
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  aria-pressed={!off}
+                  onClick={() =>
+                    setHiddenEdgeTypes((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(type)) next.delete(type)
+                      else next.add(type)
+                      return next
+                    })
+                  }
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600 transition-opacity hover:bg-control-quiet-hover',
+                    off && 'opacity-40 line-through',
+                  )}
+                  title={off ? `Show ${type} links` : `Hide ${type} links`}
+                >
+                  <span
+                    className="inline-block h-1.5 w-3 rounded-full"
+                    style={{ background: EDGE_LAYER_COLORS[type] ?? EDGE_LAYER_FALLBACK_COLOR }}
+                  />
+                  {EDGE_LAYER_LABELS[type] ?? type} · {count}
+                </button>
+              )
+            })}
+          </div>
+        )}
         <ClusterLegendChips
           clusters={chipEntries}
           dimmed={dimmedClusters}
