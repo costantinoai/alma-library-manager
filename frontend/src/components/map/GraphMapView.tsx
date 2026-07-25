@@ -1,0 +1,240 @@
+/**
+ * GraphMapView — the ONE host for GraphData-shaped maps (task 50-K).
+ *
+ * The Map page (corpus/library paper map) and the Authors network render
+ * through THIS component: same `<SemanticMap>` plate, same `MapToolbar`
+ * idioms, same legend, same cluster dim-toggles, same search behaviour.
+ * Hosts contribute meaning only — which endpoint, what a node opens, extra
+ * toolbar/legend slots. The old per-surface stack (ForceGraph + the
+ * "cluster studio" + live physics) is retired: substrate coordinates are
+ * the one physics everywhere.
+ */
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Loader2, Search, Share2, Type } from 'lucide-react'
+
+import { api, type GraphData, type GraphNode } from '@/api/client'
+import { branchMapColor } from '@/lib/palette'
+import { cn } from '@/lib/utils'
+import {
+  ClusterLegendChips,
+  MapLegend,
+  MapToggle,
+  MapToolbar,
+  type ClusterChipEntry,
+} from './MapChrome'
+import { SemanticMap, type SemanticMapNode } from './SemanticMap'
+import {
+  EDGE_LAYER_COLORS,
+  EDGE_LAYER_FALLBACK_COLOR,
+  MAP_INK,
+  type MapNodeKind,
+} from './mapNodeStyle'
+
+export interface GraphMapViewProps {
+  /** `/graphs/<endpoint>` — paper-map or author-network. */
+  endpoint: 'paper-map' | 'author-network'
+  /** Query params (scope, resolution, …). Changing them refetches. */
+  params: Record<string, string>
+  /** Node meaning: which registry kind each payload node renders as. */
+  nodeKind: (node: GraphNode) => MapNodeKind
+  /** Open the node in the host's own surface (paper panel / author drawer). */
+  onOpenNode?: (node: GraphNode) => void
+  /** Hover-card body for a node — host vocabulary, shared shell. */
+  hoverCard: (node: GraphNode) => React.ReactNode
+  /** Dashed-halo marker (e.g. followed authors). Meaning documented by host. */
+  haloIds?: ReadonlySet<string>
+  /** Host slots — extra toolbar controls / legend rows. */
+  toolbarExtras?: React.ReactNode
+  legendExtras?: React.ReactNode
+  height?: number
+}
+
+export function GraphMapView({
+  endpoint,
+  params,
+  nodeKind,
+  onOpenNode,
+  hoverCard,
+  haloIds,
+  toolbarExtras,
+  legendExtras,
+  height = 560,
+}: GraphMapViewProps) {
+  const [showEdges, setShowEdges] = useState(false)
+  const [showToponyms, setShowToponyms] = useState(true)
+  const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
+  const [search, setSearch] = useState('')
+  const [hoverId, setHoverId] = useState<string | null>(null)
+
+  const qs = new URLSearchParams(params).toString()
+  const { data: raw, isLoading } = useQuery<GraphData & { status?: string }>({
+    queryKey: ['graph', endpoint, params],
+    queryFn: () => api.get<GraphData & { status?: string }>(`/graphs/${endpoint}?${qs}`),
+    staleTime: 60_000,
+    // /graphs/* never computes in-request: poll while a background build runs.
+    refetchInterval: (q) => (q.state.data?.status === 'building' ? 2500 : false),
+  })
+  const building = raw?.status === 'building'
+  const data = building ? undefined : raw
+
+  const nodes = useMemo(() => data?.nodes ?? [], [data])
+  const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+
+  // Cluster hue map — largest first on the SAME ramp every host uses, so the
+  // biggest cluster is always hue #0 wherever you meet it.
+  const clusterColors = useMemo(() => {
+    const tally = new Map<number, { label: string; count: number }>()
+    for (const n of nodes) {
+      if (typeof n.cluster_id !== 'number' || n.cluster_id < 0) continue
+      const label = String(n.metadata?.cluster_label ?? '') || `Cluster ${n.cluster_id}`
+      const row = tally.get(n.cluster_id)
+      if (row) row.count += 1
+      else tally.set(n.cluster_id, { label, count: 1 })
+    }
+    const ordered = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)
+    return new Map(ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i) }]))
+  }, [nodes])
+
+  const query = search.trim().toLowerCase()
+  const mapNodes = useMemo<SemanticMapNode[]>(
+    () =>
+      nodes.map((n): SemanticMapNode => {
+        const cid = typeof n.cluster_id === 'number' ? n.cluster_id : undefined
+        const label = cid != null && cid >= 0 ? clusterColors.get(cid)?.label : undefined
+        return {
+          id: n.id,
+          x: n.x,
+          // Same Y convention as every other host (higher-y at the top).
+          y: 1 - n.y,
+          kind: nodeKind(n),
+          color: cid != null && cid >= 0 ? clusterColors.get(cid)?.color : undefined,
+          sizeValue: typeof n.size === 'number' ? n.size : null,
+          clusterId: cid,
+          clusterLabel: label,
+          dimmed:
+            (cid != null && dimmedClusters.has(cid)) ||
+            (query.length > 1 && !n.name.toLowerCase().includes(query)),
+          halo: haloIds?.has(n.id) ?? false,
+        }
+      }),
+    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds],
+  )
+
+  const mapEdges = useMemo(
+    () =>
+      (data?.edges ?? []).map((e) => ({
+        source: String(e.source),
+        target: String(e.target),
+        weight: e.weight,
+        color: EDGE_LAYER_COLORS[String(e.edge_type ?? '')] ?? EDGE_LAYER_FALLBACK_COLOR,
+      })),
+    [data],
+  )
+
+  const chipEntries: ClusterChipEntry[] = useMemo(
+    () => [...clusterColors.entries()].map(([id, c]) => ({ id, ...c })),
+    [clusterColors],
+  )
+
+  const hoverNode = hoverId ? nodesById.get(hoverId) : null
+  const layout = (data?.metadata as Record<string, unknown> | undefined)?.layout as
+    | { computed_at?: string; new_vectors_since_build?: number }
+    | undefined
+
+  if (isLoading || building) {
+    return (
+      <div className="flex h-[420px] flex-col items-center justify-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
+        <Loader2 className="h-5 w-5 animate-spin text-alma-folio" />
+        {building ? 'Building this view in the background — it appears when ready…' : 'Loading the map…'}
+      </div>
+    )
+  }
+
+  return (
+    <div className="overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1">
+      <MapToolbar>
+        {toolbarExtras}
+        <MapToggle
+          active={showEdges}
+          onClick={() => setShowEdges((s) => !s)}
+          title="Draw the typed links (semantic, shared references, shared authors, cited together)"
+        >
+          <Share2 className="h-3.5 w-3.5" />
+          Links{showEdges && data ? ` · ${data.edges.length}` : ''}
+        </MapToggle>
+        <MapToggle
+          active={showToponyms}
+          onClick={() => setShowToponyms((s) => !s)}
+          title="Cluster names on the map"
+        >
+          <Type className="h-3.5 w-3.5" />
+          Names
+        </MapToggle>
+        <span className="relative ml-auto">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Find on map…"
+            className={cn(
+              'h-7 w-44 rounded-sm border border-control-edge bg-control-well pl-7 pr-2 text-xs text-alma-800',
+              'placeholder:text-slate-400 focus:border-control-edge-strong focus:outline-none',
+            )}
+          />
+        </span>
+      </MapToolbar>
+
+      <SemanticMap
+        nodes={mapNodes}
+        edges={mapEdges}
+        showEdges={showEdges}
+        showToponyms={showToponyms}
+        height={height}
+        onHover={(id) => setHoverId(id)}
+        onClickNode={(id) => {
+          const n = nodesById.get(id)
+          if (n) onOpenNode?.(n)
+        }}
+        className="rounded-none border-0"
+      >
+        {hoverNode && (
+          <div className="pointer-events-none absolute bottom-3 right-12 z-10 max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
+            {hoverCard(hoverNode)}
+          </div>
+        )}
+      </SemanticMap>
+
+      <MapLegend>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-slate-600">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: MAP_INK.library }} />
+            In your library — filled
+          </span>
+          <span className="text-slate-400">{nodes.length} on the map</span>
+          {layout?.computed_at && (
+            <span className="text-slate-400">
+              layout {String(layout.computed_at).slice(0, 10)}
+              {layout.new_vectors_since_build
+                ? ` · ${layout.new_vectors_since_build} new since (placed live, folded in on the next refresh)`
+                : ''}
+            </span>
+          )}
+          {legendExtras}
+        </div>
+        <ClusterLegendChips
+          clusters={chipEntries}
+          dimmed={dimmedClusters}
+          onToggle={(id) =>
+            setDimmedClusters((prev) => {
+              const next = new Set(prev)
+              if (next.has(id)) next.delete(id)
+              else next.add(id)
+              return next
+            })
+          }
+        />
+      </MapLegend>
+    </div>
+  )
+}

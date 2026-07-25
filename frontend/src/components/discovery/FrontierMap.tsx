@@ -26,9 +26,8 @@ import {
 
 import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
 import { useBranchControls } from '@/hooks/useBranchControls'
-import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { MAP_INK } from '@/components/map/mapNodeStyle'
+import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK } from '@/components/map/mapNodeStyle'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -187,7 +186,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
       edges.map((e) => ({
         source: e.source,
         target: e.target,
-        color: LAYER_COLORS[e.edge_type] ?? LAYER_FALLBACK_COLOR,
+        color: EDGE_LAYER_COLORS[e.edge_type] ?? EDGE_LAYER_FALLBACK_COLOR,
       })),
     [edges],
   )

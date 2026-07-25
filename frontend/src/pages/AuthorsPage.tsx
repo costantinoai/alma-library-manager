@@ -24,7 +24,7 @@ import { AuthorDetailPanel } from '@/components/AuthorDetailPanel'
 import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
-import { GraphPanel } from '@/components/graphs/GraphPanel'
+import { GraphMapView } from '@/components/map/GraphMapView'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
 import {
@@ -372,7 +372,38 @@ export function AuthorsPage() {
             {networkOpen ? 'Hide network' : 'Show network'}
           </button>
         </header>
-        {networkOpen && <GraphPanel initialView="author-network" lockedView />}
+        {networkOpen && (
+          <GraphMapView
+            endpoint="author-network"
+            params={{ scope: 'library' }}
+            nodeKind={() => 'author'}
+            // 50-F deep integration: a node opens the SAME author drawer the
+            // rest of the page uses.
+            onOpenNode={(n) => {
+              const match = authors.find((a) => a.id === n.id)
+              if (match) openDetail(match)
+            }}
+            // Dashed halo = an author you follow (host-documented meaning).
+            haloIds={followedIds}
+            hoverCard={(n) => (
+              <>
+                <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
+                <p className="mt-0.5 text-slate-500">
+                  {typeof n.metadata?.pub_count === 'number' ? `${n.metadata.pub_count} papers` : ''}
+                  {typeof n.metadata?.h_index === 'number' ? ` · h-index ${n.metadata.h_index}` : ''}
+                  {followedIds.has(n.id) ? ' · followed' : ''}
+                </p>
+              </>
+            )}
+            legendExtras={
+              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-slate-500" />
+                dashed ring = followed
+              </span>
+            }
+            height={480}
+          />
+        )}
       </section>
 
       <CorpusAuthorsTable authors={authors} followedIds={followedIds} onSelect={openDetail} />

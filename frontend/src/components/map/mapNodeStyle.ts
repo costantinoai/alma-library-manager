@@ -126,6 +126,25 @@ export const MAP_FIELD = {
   edgeLine: 'rgba(120, 108, 84, 0.30)', // warm ink hairline, not slate
 } as const
 
+/** Edge-layer palette — one owner for every map's citation/coupling lines
+ *  (moved from graphs/graphConfig at 50-K retirement; the legacy stack is
+ *  gone, this registry is the only place an edge picks a colour). */
+export const EDGE_LAYER_COLORS: Record<string, string> = {
+  semantic: 'rgba(59,130,246,0.45)',
+  bibliographic_coupling: 'rgba(139,92,246,0.38)',
+  co_authorship: 'rgba(16,185,129,0.38)',
+  co_citation: 'rgba(236,72,153,0.38)',
+  topic: 'rgba(245,158,11,0.35)',
+}
+export const EDGE_LAYER_FALLBACK_COLOR = 'rgba(203,213,225,0.30)'
+export const EDGE_LAYER_LABELS: Record<string, string> = {
+  semantic: 'Semantic (nearest work)',
+  bibliographic_coupling: 'Shared references',
+  co_authorship: 'Shared authors',
+  co_citation: 'Cited together',
+  topic: 'Shared topic',
+}
+
 /** Size-by policies — exactly one magnitude channel at a time (50-E). */
 export function radiusFor(kind: MapNodeKind, sizeValue: number | null, maxValue: number): number {
   const base = MAP_NODE_STYLES[kind].radius
