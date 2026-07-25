@@ -62,6 +62,10 @@ _ACTIVITY_STATUS_LIMIT = 2000
 _ACTIVE_STATUSES = {"queued", "scheduled", "running", "cancelling"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 _ORPHAN_REAP_MESSAGE = "Orphaned across process restart; auto-cancelled"
+# How often the reap sweep re-runs after startup. Short enough that a ghost row
+# clears while the user is still looking at it, long enough to stay clear of the
+# 300 s staleness threshold that protects a genuinely in-flight job.
+_ORPHAN_REAP_INTERVAL_MINUTES = 5
 _ORPHAN_REAP_ERROR = (
     "Backend process restarted or exited while this job was running; "
     "ALMa marked the abandoned worker as cancelled on the next startup. "
@@ -92,6 +96,22 @@ def _unregister_running_thread(job_id: str) -> None:
         return
     with _job_lock:
         _job_threads.pop(job_id, None)
+
+
+def has_running_thread(job_id: str) -> bool:
+    """True when a worker thread in THIS process is executing ``job_id``.
+
+    `schedule_immediate` is in-process only, so a job with no entry here has
+    no code advancing it: either its worker already exited without writing a
+    terminal status, or the process that owned it died (uvicorn ``--reload``
+    restart, crash, container stop). Cancel/stop use this to finalize such a
+    row instead of parking it at ``cancelling`` forever — see
+    `routes/activity.py`.
+    """
+    if not job_id:
+        return False
+    with _job_lock:
+        return job_id in _job_threads
 
 
 def kill_job_thread(job_id: str) -> bool:
@@ -714,6 +734,55 @@ def active_job_namespaces(
     return namespaces, total
 
 
+def active_user_facing_jobs(
+    conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
+) -> int:
+    """Count of currently-active jobs a USER is waiting on (read-only).
+
+    The live input to `job_policy.admit_maintenance_continue`: a running
+    background sweep must yield to the user, but not to its own background
+    siblings. "User-facing" is `is_user_facing_trigger` — a manual click
+    (``trigger_source='user'``) or the onboarding kick — matching the same
+    predicate the runners use to decide whether they may yield at all.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT operation_key, trigger_source FROM operation_status "
+            "WHERE status IN ('queued', 'scheduled', 'running', 'cancelling')"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+    exclude = str(exclude_operation_key or "")
+    total = 0
+    for row in rows:
+        key = str(row["operation_key"] or "")
+        if not key or (exclude and key == exclude):
+            continue
+        if is_user_facing_trigger(row["trigger_source"]):
+            total += 1
+    return total
+
+
+def may_background_continue(
+    conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
+) -> tuple[bool, str]:
+    """The live gate for "may an ALREADY-RUNNING background sweep keep going?"
+
+    Deliberately weaker than `may_background_run` (the START gate): a sweep in
+    flight yields to the USER — a user-facing op or a real request landing
+    mid-run — not to the background siblings the same drain tick scheduled
+    alongside it. See `job_policy.admit_maintenance_continue` for the why.
+    """
+    from alma.core.job_policy import admit_maintenance_continue
+    from alma.core.user_activity import app_is_idle
+    from alma.services.background_settings import get_idle_wait_seconds
+
+    return admit_maintenance_continue(
+        active_user_facing_jobs(conn, exclude_operation_key=exclude_operation_key),
+        app_idle=app_is_idle(get_idle_wait_seconds(conn)),
+    )
+
+
 def may_background_run(
     conn: sqlite3.Connection, *, exclude_operation_key: str | None = None
 ) -> tuple[bool, str]:
@@ -783,23 +852,29 @@ def background_yield_reason(
     *,
     trigger_source: str | None,
     budget_source: str = "openalex",
+    phase: str = "continue",
 ) -> tuple[str, str] | None:
     """Should a running BACKGROUND sweep stop NOW, and why? (task 37 A pause + C abort).
 
     Returns ``None`` to keep going, else ``(reason_code, human_message)``:
-    - ``BG_PAUSED_FOR_USER`` — another operation is active or the user is active
-      (app not idle): the sweep yields so it never competes with the user.
+    - ``BG_PAUSED_FOR_USER`` — the user needs the machine (a user-facing op is
+      active, or a real request landed): the sweep yields rather than compete.
     - ``BG_CREDIT_LIMIT`` — the provider's live remaining quota is at/below the
       user reserve: the sweep stops before eating into the user's headroom.
 
     Both leave pending work retryable. A user-initiated run (``trigger_source ==
-    'user'``) never yields — checked first, so this is a cheap no-op there. The
-    single tripwire a sweep feeds into its ``is_cancelled`` callback (so "start"
-    via `may_background_run` and "keep going" use identical rules).
+    'user'``) never yields — checked first, so this is a cheap no-op there.
+
+    ``phase`` picks WHICH gate: ``"start"`` is the strict admission gate (never
+    add load while anything else runs), ``"continue"`` (the default, used by
+    `make_background_cancel_check`) is the weaker keep-going gate that ignores
+    background siblings. Asking the START question of a RUNNING sweep is what
+    made the drain tick's own jobs abort each other every cycle.
     """
     if not is_background_trigger(trigger_source):
         return None
-    ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+    gate = may_background_run if phase == "start" else may_background_continue
+    ok, reason = gate(conn, exclude_operation_key=operation_key)
     if not ok:
         return (BG_PAUSED_FOR_USER, f"Paused for user activity ({reason}); will resume when idle")
     from alma.core.http_sources import provider_budget_ok
@@ -831,7 +906,9 @@ def make_background_cancel_check(
     corpus-rehydrate runners use, so the pause/credit-limit behaviour is DRY.
 
     Combines the user-cancel probe (``original`` — checked EVERY call, immediate)
-    with the background-yield tripwire (`background_yield_reason`), the latter
+    with the background-yield tripwire (`background_yield_reason`, asked in its
+    ``continue`` phase — a running sweep yields to the USER, not to the
+    background siblings its own drain tick scheduled), the latter
     THROTTLED to at most once per ``min_interval_s`` because it touches the DB
     (a small `operation_status` read) + the provider budget, and a pipeline probes
     is_cancelled on a tight loop. On a yield it records ``(reason, message)`` into
@@ -906,6 +983,29 @@ def get_scheduler() -> BackgroundScheduler:
     return _scheduler
 
 
+_USER_CANCEL_REAP_MESSAGE = "Operation cancelled"
+_USER_CANCEL_REAP_ERROR = (
+    "You asked to stop this operation and its worker did not survive to write "
+    "the final status (backend restart, reload, or crash). ALMa closed the row "
+    "as cancelled. Work committed before the stop is kept."
+)
+
+
+def _reap_closure(job: dict) -> tuple[str, str, int]:
+    """Closing ``(message, error, cancel_requested)`` for one reaped row.
+
+    A row the user already asked to stop must NOT be closed with the orphan
+    marker: `maintenance.resume_orphaned_sweeps` keys its auto-resume on that
+    exact message, so laundering a user cancel into an orphan relaunches the
+    very job the user just killed (observed live 2026-07-25 — a cancelled
+    title-resolution sweep came back twice across `--reload` restarts). Keep
+    `cancel_requested` set so the row still reads as "you stopped this".
+    """
+    if job.get("cancel_requested"):
+        return (_USER_CANCEL_REAP_MESSAGE, _USER_CANCEL_REAP_ERROR, 1)
+    return (_ORPHAN_REAP_MESSAGE, _ORPHAN_REAP_ERROR, 0)
+
+
 def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
     """Mark jobs abandoned across a process restart as ``cancelled``.
 
@@ -946,11 +1046,16 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
                         updated_at = ?,
                         message = ?,
                         error = COALESCE(error, ?),
-                        cancel_requested = 0
+                        cancel_requested = ?
                     WHERE job_id = ?
                     """,
                     [
-                        (now, now, _ORPHAN_REAP_MESSAGE, _ORPHAN_REAP_ERROR, str(job["job_id"]))
+                        (
+                            now,
+                            now,
+                            *_reap_closure(job),
+                            str(job["job_id"]),
+                        )
                         for job in stale_jobs
                     ],
                 )
@@ -965,12 +1070,16 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
                             now,
                             "ERROR",
                             "orphan_reaped",
-                            _ORPHAN_REAP_ERROR,
+                            _reap_closure(job)[1],
                             _json_dumps_safe(
                                 {
                                     "status": "cancelled",
-                                    "reason": "process_restart_or_exit",
-                                    "message": _ORPHAN_REAP_MESSAGE,
+                                    "reason": (
+                                        "user_cancelled"
+                                        if job.get("cancel_requested")
+                                        else "process_restart_or_exit"
+                                    ),
+                                    "message": _reap_closure(job)[0],
                                     "previous_status": job.get("status"),
                                     "previous_updated_at": job.get("updated_at"),
                                     "operation_key": job.get("operation_key"),
@@ -985,6 +1094,26 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
             reaped = len(stale_jobs)
             conn.commit()
             if reaped > 0:
+                # Mirror the closure into the in-memory cache. `get_job_status`
+                # and the Activity list read `_job_status` FIRST, so a DB-only
+                # reap leaves the ghost row on screen — invisible at startup
+                # (the cache is empty) but not for the periodic sweep, which
+                # runs against a warm process.
+                with _job_lock:
+                    for job in stale_jobs:
+                        job_id = str(job["job_id"])
+                        cached = _job_status.get(job_id)
+                        if cached is None:
+                            continue
+                        message, error, cancel_flag = _reap_closure(job)
+                        cached.update(
+                            status="cancelled",
+                            finished_at=cached.get("finished_at") or now,
+                            updated_at=now,
+                            message=message,
+                            error=cached.get("error") or error,
+                            cancel_requested=bool(cancel_flag),
+                        )
                 logger.warning(
                     "Reaped %d orphaned activity job(s) from a previous process",
                     reaped,
@@ -1016,6 +1145,29 @@ def setup_scheduler() -> None:
         logger.warning("Orphan job reap skipped: %s", exc)
 
     sched = get_scheduler()
+
+    # -- Orphan reap sweep (interval) ---------------------------------------
+    # The startup reap above only sees rows that were ALREADY 300 s stale when
+    # the process came up. A job orphaned seconds before a restart (common with
+    # uvicorn --reload) slips through it and, with no later sweep, sits in
+    # Activity as "running"/"cancelling" forever. Re-run the reap on a short
+    # interval so every ghost row converges to `cancelled` on its own.
+    sched.add_job(
+        reap_orphan_jobs,
+        trigger=IntervalTrigger(minutes=_ORPHAN_REAP_INTERVAL_MINUTES),
+        id="reap_orphan_jobs",
+        name="Reap orphaned operations",
+        replace_existing=True,
+    )
+    with _job_lock:
+        _job_meta["reap_orphan_jobs"] = {
+            "action": "reap_orphan_jobs",
+            "name": "Reap orphaned operations",
+            "description": (
+                "Closes Activity rows whose worker died with the process, every "
+                f"{_ORPHAN_REAP_INTERVAL_MINUTES} min"
+            ),
+        }
 
     # -- Alert evaluation sweep (interval) ----------------------------------
     interval_hours = _alert_check_interval_hours()
@@ -1378,7 +1530,13 @@ def refresh_authors_periodic() -> None:
 
         conn = open_db_connection()
         try:
-            result = do_refresh_cache_all(conn)
+            # Pass the job_id so Activity gets live processed/total + the current
+            # author name. This sweep walks EVERY tracked author with a network
+            # call each, so it can run for hours (the ~980 authors with no
+            # OpenAlex id now actually resolve, instead of the run dying in
+            # 0.8s) — without progress it just looks hung, and it becomes
+            # cancellable from Activity, which the no-job_id call never was.
+            result = do_refresh_cache_all(conn, job_id=job_id)
             logger.info("Periodic author refresh complete: %s", result)
 
             # Score new feed items by relevance after refresh
@@ -1390,23 +1548,29 @@ def refresh_authors_periodic() -> None:
             except Exception as score_exc:
                 logger.debug("Feed scoring after refresh failed: %s", score_exc)
 
-            # A sweep that skipped authors still finished, but Activity must say
-            # so — do_refresh_cache_all keeps going past a per-author failure and
-            # reports the count (the stack traces are in the log).
-            failed = int(result.get("failed") or 0)
-            set_job_status(
-                job_id,
-                status="completed",
-                trigger_source="scheduler",
-                operation_key=operation_key,
-                finished_at=datetime.utcnow().isoformat(),
-                message=(
-                    f"Periodic author refresh complete — {failed} author(s) failed, see log"
-                    if failed
-                    else "Periodic author refresh complete"
-                ),
-                result=result,
-            )
+            # Now that the sweep is cancellable (job_id above), a user cancel
+            # already stamped `cancelled` — never overwrite that with a
+            # "completed" the run didn't earn.
+            if result.get("cancelled"):
+                logger.info("Periodic author refresh cancelled by user")
+            else:
+                # A sweep that skipped authors still finished, but Activity must
+                # say so — do_refresh_cache_all keeps going past a per-author
+                # failure and reports the count (stack traces are in the log).
+                failed = int(result.get("failed") or 0)
+                set_job_status(
+                    job_id,
+                    status="completed",
+                    trigger_source="scheduler",
+                    operation_key=operation_key,
+                    finished_at=datetime.utcnow().isoformat(),
+                    message=(
+                        f"Periodic author refresh complete — {failed} author(s) failed, see log"
+                        if failed
+                        else "Periodic author refresh complete"
+                    ),
+                    result=result,
+                )
         finally:
             conn.close()
 

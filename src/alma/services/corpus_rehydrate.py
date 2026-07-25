@@ -1800,19 +1800,28 @@ def run_corpus_metadata_rehydration(
             if is_cancellation_requested(job_id):
                 # Nothing pending on `conn`: the previous batch's write_section
                 # already committed. Just report cancellation and return.
+                #
+                # Name WHY. This early return bypasses the tail that stamps
+                # `abort_reason` from `_yield_sink`, so a background yield used to
+                # surface in Activity as a bare "Operation cancelled" — reading
+                # like the user cancelled it, with no clue that the sweep paused
+                # for user activity or the API credit reserve.
+                stop_message = _yield_sink.get("message") or "Corpus metadata rehydration cancelled"
                 set_job_status(
                     job_id,
                     status="cancelled",
                     processed=processed,
                     total=total,
-                    message="Corpus metadata rehydration cancelled",
+                    message=stop_message,
                     finished_at=_utcnow_iso(),
                 )
+                add_job_log(job_id, stop_message, step="yielded" if _yield_sink else "cancelled")
                 return {
                     **dict(summary),
                     "field_counts": dict(field_counts),
                     "cancelled": True,
-                    "message": "Corpus metadata rehydration cancelled",
+                    "abort_reason": _yield_sink.get("reason", ""),
+                    "message": stop_message,
                 }
 
             batch_rows = rows[start:start + batch_size]

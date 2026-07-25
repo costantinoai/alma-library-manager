@@ -224,6 +224,38 @@ def admit_maintenance(active_total: int, *, app_idle: bool) -> tuple[bool, str]:
     if not app_idle:
         return (False, "app not idle yet")
     return (True, "admitted")
+
+
+def admit_maintenance_continue(
+    user_facing_active: int, *, app_idle: bool
+) -> tuple[bool, str]:
+    """Whether an ALREADY-RUNNING background sweep may KEEP GOING (2026-07-25).
+
+    Starting and continuing are different questions, and conflating them was a
+    live bug: `admit_maintenance`'s rule 1 ("never run while ANY operation is
+    active") is a decision about whether to ADD load. Re-asked by a sweep that is
+    already running, it means the drain tick's own siblings — scheduled within
+    the same second — abort each other. The corpus metadata sweep yielded ~2s in
+    on every 15-minute tick for weeks, processing zero of its 96 candidates,
+    while the health-MV rebuild it collided with completed happily.
+
+    So a running sweep yields only for the reasons it exists to yield for:
+
+    1. **A user-facing operation is active** — the user is waiting on something;
+       don't compete for the single writer or the API budget. Background siblings
+       do NOT count: they were admitted under the same policy, and the writer gate
+       already serialises them.
+    2. **The app stopped being idle** — a real user request landed mid-sweep.
+
+    Pure + testable; the live counts come from `scheduler.may_background_continue`.
+    """
+    if int(user_facing_active) > 0:
+        return (False, "a user-facing operation is active")
+    if not app_idle:
+        return (False, "app not idle yet")
+    return (True, "continue")
+
+
 DESTRUCTIVE_NAMESPACES: frozenset[str] = frozenset(
     ns for ns, p in JOB_POLICIES.items() if p.destructive
 )
