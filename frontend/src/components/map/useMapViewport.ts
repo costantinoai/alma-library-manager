@@ -7,7 +7,9 @@
  * drift.
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+
+import { useMapSessionState } from './mapSessionState'
 
 export interface Viewport {
   /** Screen px per world unit. */
@@ -15,6 +17,21 @@ export interface Viewport {
   /** Screen-px translation applied AFTER scaling. */
   tx: number
   ty: number
+}
+
+/** Resolution-independent camera stored across page unmounts. */
+export interface MapCamera {
+  /** World coordinate at the centre of the plate. */
+  centerX: number
+  centerY: number
+  /** Multiplier over the fitted unit-square scale. */
+  zoom: number
+}
+
+export const FITTED_CAMERA: MapCamera = {
+  centerX: 0.5,
+  centerY: 0.5,
+  zoom: 1,
 }
 
 export const MIN_ZOOM_FACTOR = 0.5
@@ -34,41 +51,144 @@ export function fitViewport(w: number, h: number, pad = 32): Viewport {
   return { scale, tx: (w - scale) / 2, ty: (h - scale) / 2 }
 }
 
-export function useMapViewport(width: number, height: number) {
-  const fitted = fitViewport(width, height)
-  const [viewport, setViewport] = useState<Viewport>(fitted)
-  // Pan bookkeeping lives in a ref: dragging must not re-render per event —
-  // the canvas redraws from the viewport state set at rAF pace by the host.
-  const panRef = useRef<{ sx: number; sy: number; tx0: number; ty0: number } | null>(null)
+export function cameraToViewport(
+  camera: MapCamera,
+  width: number,
+  height: number,
+): Viewport {
+  const scale = fitViewport(width, height).scale * camera.zoom
+  return {
+    scale,
+    tx: width / 2 - camera.centerX * scale,
+    ty: height / 2 - camera.centerY * scale,
+  }
+}
 
-  const fit = useCallback(() => setViewport(fitViewport(width, height)), [width, height])
+export function viewportToCamera(
+  viewport: Viewport,
+  width: number,
+  height: number,
+): MapCamera {
+  const baseScale = fitViewport(width, height).scale
+  return {
+    centerX: (width / 2 - viewport.tx) / viewport.scale,
+    centerY: (height / 2 - viewport.ty) / viewport.scale,
+    zoom: viewport.scale / baseScale,
+  }
+}
+
+export function useMapViewport(
+  width: number,
+  height: number,
+  storageKey?: string,
+) {
+  const [camera, setCamera] = useMapSessionState<MapCamera>(
+    storageKey ?? 'volatile',
+    'camera',
+    FITTED_CAMERA,
+    { persist: !!storageKey, writeDelayMs: 150 },
+  )
+  const viewport = useMemo(
+    () => cameraToViewport(camera, width, height),
+    [camera, height, width],
+  )
+  // Pan bookkeeping is stable for the full gesture. Pointer events are
+  // coalesced to one camera update per animation frame.
+  const panRef = useRef<{
+    sx: number
+    sy: number
+    camera: MapCamera
+    scale: number
+  } | null>(null)
+  const pendingPanRef = useRef<{ sx: number; sy: number } | null>(null)
+  const panFrameRef = useRef<number | null>(null)
+
+  const fit = useCallback(() => setCamera(FITTED_CAMERA), [setCamera])
 
   const zoomAt = useCallback(
     (sx: number, sy: number, factor: number) => {
-      setViewport((v) => {
-        const base = fitViewport(width, height).scale
-        const next = Math.min(base * MAX_ZOOM_FACTOR, Math.max(base * MIN_ZOOM_FACTOR, v.scale * factor))
-        const k = next / v.scale
+      setCamera((current) => {
+        const currentViewport = cameraToViewport(current, width, height)
+        const [worldX, worldY] = screenToWorld(currentViewport, sx, sy)
+        const zoom = Math.min(
+          MAX_ZOOM_FACTOR,
+          Math.max(MIN_ZOOM_FACTOR, current.zoom * factor),
+        )
+        const nextScale = fitViewport(width, height).scale * zoom
         // Keep the world point under the cursor stationary.
-        return { scale: next, tx: sx - (sx - v.tx) * k, ty: sy - (sy - v.ty) * k }
+        return {
+          centerX: worldX - (sx - width / 2) / nextScale,
+          centerY: worldY - (sy - height / 2) / nextScale,
+          zoom,
+        }
       })
     },
-    [width, height],
+    [height, setCamera, width],
   )
 
-  const panStart = useCallback((sx: number, sy: number, v: Viewport) => {
-    panRef.current = { sx, sy, tx0: v.tx, ty0: v.ty }
-  }, [])
+  const panStart = useCallback(
+    (sx: number, sy: number, currentViewport: Viewport) => {
+      panRef.current = {
+        sx,
+        sy,
+        camera: viewportToCamera(currentViewport, width, height),
+        scale: currentViewport.scale,
+      }
+    },
+    [height, width],
+  )
 
   const panMove = useCallback((sx: number, sy: number) => {
-    const p = panRef.current
-    if (!p) return
-    setViewport((v) => ({ ...v, tx: p.tx0 + (sx - p.sx), ty: p.ty0 + (sy - p.sy) }))
-  }, [])
+    if (!panRef.current) return
+    pendingPanRef.current = { sx, sy }
+    if (panFrameRef.current != null) return
+    panFrameRef.current = window.requestAnimationFrame(() => {
+      panFrameRef.current = null
+      const start = panRef.current
+      const pending = pendingPanRef.current
+      if (!start || !pending) return
+      setCamera({
+        centerX: start.camera.centerX - (pending.sx - start.sx) / start.scale,
+        centerY: start.camera.centerY - (pending.sy - start.sy) / start.scale,
+        zoom: start.camera.zoom,
+      })
+    })
+  }, [setCamera])
 
   const panEnd = useCallback(() => {
+    if (panFrameRef.current != null) {
+      window.cancelAnimationFrame(panFrameRef.current)
+      panFrameRef.current = null
+      const start = panRef.current
+      const pending = pendingPanRef.current
+      if (start && pending) {
+        setCamera({
+          centerX: start.camera.centerX - (pending.sx - start.sx) / start.scale,
+          centerY: start.camera.centerY - (pending.sy - start.sy) / start.scale,
+          zoom: start.camera.zoom,
+        })
+      }
+    }
     panRef.current = null
-  }, [])
+    pendingPanRef.current = null
+  }, [setCamera])
 
-  return { viewport, setViewport, fit, zoomAt, panStart, panMove, panEnd, isPanning: () => panRef.current != null }
+  useEffect(
+    () => () => {
+      if (panFrameRef.current != null) {
+        window.cancelAnimationFrame(panFrameRef.current)
+      }
+    },
+    [],
+  )
+
+  return {
+    viewport,
+    fit,
+    zoomAt,
+    panStart,
+    panMove,
+    panEnd,
+    isPanning: () => panRef.current != null,
+  }
 }

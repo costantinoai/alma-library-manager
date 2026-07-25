@@ -37,7 +37,10 @@ import {
   type HealthDimension,
   type HealthDimensionItem,
 } from '@/api/client'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
 import { dimensionBadgeTone, severityLabel } from './healthFormat'
 
@@ -197,7 +200,10 @@ export function HealthDimensionDrilldown({
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeFromLibrary(id),
     onSuccess: async () => {
-      await refreshHealth()
+      await Promise.all([
+        refreshHealth(),
+        invalidateAfterPaperMutation(queryClient),
+      ])
       toast({ title: 'Removed from Library', description: 'The paper was soft-removed.' })
     },
     onError: (err) => errorToast('Could not remove', String(err)),

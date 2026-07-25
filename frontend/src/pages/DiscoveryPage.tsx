@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+  type QueryKey,
+} from '@tanstack/react-query'
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -27,6 +33,7 @@ import {
   dislikeRecommendation,
   dismissRecommendation,
   explainRecommendation,
+  getApiErrorMessage,
   getDiscoveryStatus,
   getDiscoverySettings,
   updateDiscoverySettings,
@@ -55,6 +62,7 @@ import {
   PaperDetailPanel,
 } from '@/components/discovery'
 import { FrontierMap } from '@/components/discovery/FrontierMap'
+import { MapPaperPopup } from '@/components/map/MapPaperPopup'
 import { RecommendationEngagement } from '@/components/discovery/RecommendationEngagement'
 import { OnlineSearchTab } from '@/components/OnlineSearchTab'
 import { PageTour, DISCOVERY_TOUR } from '@/components/onboarding'
@@ -75,6 +83,7 @@ import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
+  invalidatePaperSignalFields,
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
@@ -102,6 +111,51 @@ function deriveDiscoveryReaction(rec: LensRecommendation): PaperReaction {
   if (rating >= 4) return 'like'
   if (rating > 0 && rating <= 2) return 'dislike'
   return null
+}
+
+type RecommendationCacheSnapshot = Array<
+  [QueryKey, LensRecommendation[] | undefined]
+>
+
+/**
+ * Optimistically patch every cached density/filter variant of the current
+ * lens. Both the list card and map popup read this same cache, so one click
+ * changes both surfaces immediately instead of waiting for a refetch.
+ */
+function patchRecommendationCaches(
+  queryClient: QueryClient,
+  lensId: string | null,
+  recId: string,
+  patch: (rec: LensRecommendation) => LensRecommendation,
+): RecommendationCacheSnapshot {
+  if (!lensId) return []
+  const filters = { queryKey: ['lens-recommendations', lensId] as const }
+  const snapshots = queryClient.getQueriesData<LensRecommendation[]>(filters)
+  queryClient.setQueriesData<LensRecommendation[]>(filters, (current) =>
+    current?.map((rec) => (rec.id === recId ? patch(rec) : rec)),
+  )
+  return snapshots
+}
+
+function restoreRecommendationCaches(
+  queryClient: QueryClient,
+  snapshots: RecommendationCacheSnapshot | undefined,
+) {
+  for (const [key, value] of snapshots ?? []) {
+    queryClient.setQueryData(key, value)
+  }
+}
+
+function patchRecommendationPaper(
+  rec: LensRecommendation,
+  paperPatch: Partial<Publication>,
+  recPatch: Partial<LensRecommendation> = {},
+): LensRecommendation {
+  return {
+    ...rec,
+    ...recPatch,
+    paper: rec.paper ? { ...rec.paper, ...paperPatch } : rec.paper,
+  }
 }
 
 // How many recs are visible by default in the Discovery card list
@@ -468,9 +522,15 @@ export function DiscoveryPage() {
     onSuccess: async (_data, recId) => {
       markDismissed(recId)
       toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
-      await invalidateQueries(queryClient,
-        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId],
-      )
+      await Promise.all([
+        invalidatePaperSignalFields(queryClient),
+        invalidateQueries(
+          queryClient,
+          ['frontier'],
+          ['lens-recommendations', selectedLensId],
+          ['lens-signals', selectedLensId],
+        ),
+      ])
     },
   })
 
@@ -478,9 +538,14 @@ export function DiscoveryPage() {
     mutationFn: (recId: string) => likeRecommendation(recId, 4),
     onSuccess: async () => {
       toast({ title: 'Rated', description: 'Paper rated 4 stars.' })
-      await invalidateQueries(queryClient,
-        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
-      )
+      await Promise.all([
+        invalidatePaperSignalFields(queryClient),
+        invalidateQueries(
+          queryClient,
+          ['lens-recommendations', selectedLensId],
+          ['lens-signals', selectedLensId],
+        ),
+      ])
     },
   })
 
@@ -527,9 +592,14 @@ export function DiscoveryPage() {
     mutationFn: (recId: string) => likeRecommendation(recId, 5),
     onSuccess: async () => {
       toast({ title: 'Rated', description: 'Paper rated 5 stars.' })
-      await invalidateQueries(queryClient,
-        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
-      )
+      await Promise.all([
+        invalidatePaperSignalFields(queryClient),
+        invalidateQueries(
+          queryClient,
+          ['lens-recommendations', selectedLensId],
+          ['lens-signals', selectedLensId],
+        ),
+      ])
     },
   })
 
@@ -539,9 +609,14 @@ export function DiscoveryPage() {
     mutationFn: dislikeRecommendation,
     onSuccess: async () => {
       toast({ title: 'Rated', description: 'Paper rated 1 star.' })
-      await invalidateQueries(queryClient,
-        ['lens-recommendations', selectedLensId], ['lens-signals', selectedLensId], ['papers'],
-      )
+      await Promise.all([
+        invalidatePaperSignalFields(queryClient),
+        invalidateQueries(
+          queryClient,
+          ['lens-recommendations', selectedLensId],
+          ['lens-signals', selectedLensId],
+        ),
+      ])
     },
   })
 
@@ -668,6 +743,35 @@ export function DiscoveryPage() {
     (queueMutation.isPending && (queueMutation.variables as string)) ||
     (addToCollectionsMutation.isPending && addToCollectionsMutation.variables?.recId) ||
     null
+
+  const openPaperDetails = async (paperId: string) => {
+    try {
+      const paper = await getPaperById(paperId)
+      setSelectedPaper(paper)
+      setDetailOpen(true)
+    } catch {
+      /* A stale map id will disappear on the next frontier refresh. */
+    }
+  }
+
+  const goToRecommendation = (paperId: string) => {
+    // Make sure the row can be on screen: unhide the long tail and drop a
+    // region filter that would exclude it.
+    setShowAllRecs(true)
+    setMapFilterIds((filter) => (filter && !filter.has(paperId) ? null : filter))
+    const rec = recommendations.find((item) => item.paper_id === paperId)
+    if (rec) {
+      setSelectedRecIds((previous) => new Set(previous).add(rec.id))
+    }
+    setPulsePaperId(paperId)
+    window.setTimeout(() => setPulsePaperId(null), 2200)
+    window.setTimeout(() => {
+      document
+        .getElementById(`rec-card-${paperId}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 80)
+  }
+
   const selectedLensSummary = (selectedLens?.last_retrieval_summary as Record<string, unknown> | null) ?? null
 
   /** Pull `[{label, value}]` out of one taste/negative-profile bucket. */
@@ -1360,8 +1464,9 @@ export function DiscoveryPage() {
                   so a red valley stays red even when its dots are hidden.
                 </p>
                 <p className="mt-2">
-                  <strong>Do with it:</strong> click a suggestion to jump to its row below; click
-                  any paper to spotlight its cluster (background click clears); drag with{' '}
+                  <strong>Do with it:</strong> click any dot for its action card and to spotlight
+                  its cluster. A suggestion moves to its row below only when you choose{' '}
+                  <em>Go to paper</em> in that card (background click clears); drag with{' '}
                   <em>Select a direction</em> to name a region and explore it as a Direction.
                 </p>
               </ConceptCallout>
@@ -1370,35 +1475,71 @@ export function DiscoveryPage() {
               <FrontierMap
                 lensId={selectedLensId}
                 lens={selectedLens as Lens | null}
-                onSelectPaper={async (paperId) => {
-                  try {
-                    const paper = await getPaperById(paperId)
-                    setSelectedPaper(paper)
-                    setDetailOpen(true)
-                  } catch {
-                    /* deep-link 404s are handled elsewhere; ignore here */
-                  }
+                onSelectPaper={(paperId) => void openPaperDetails(paperId)}
+                renderRecommendationPopup={(node, close, neighbours) => {
+                  const rec = allRecommendations.find((item) => item.paper_id === node.paper_id)
+                  if (!rec) return null
+                  const paper = rec.paper
+                  const isSaved = selectedLensCollectionId
+                    ? !!rec.in_library
+                    : paper?.status === 'library'
+                  return (
+                    <MapPaperPopup
+                      paper={{
+                        id: node.paper_id,
+                        title: paper?.title || node.title || node.paper_id,
+                        authors: paper?.authors,
+                        tldr: paper?.tldr,
+                        year: paper?.year ?? node.year,
+                        journal: paper?.journal,
+                        citedByCount: paper?.cited_by_count,
+                        score: rec.score,
+                        statusLabel: 'Suggestion',
+                        branchLabel: node.branch_label || rec.branch_label,
+                        clusterLabel: node.cluster_label,
+                        neighbours,
+                      }}
+                      onClose={close}
+                      onOpenDetails={() => {
+                        close()
+                        void openPaperDetails(node.paper_id)
+                      }}
+                      onGoToPaper={() => {
+                        close()
+                        goToRecommendation(node.paper_id)
+                      }}
+                      onAdd={() => addMutation.mutate(rec.id)}
+                      onLike={() => likeMutation.mutate(rec.id)}
+                      onLove={() => loveMutation.mutate(rec.id)}
+                      onDislike={() => dislikeMutation.mutate(rec.id)}
+                      onQueue={() => queueMutation.mutate(rec.id)}
+                      onUndo={(aspect) =>
+                        undoMutation.mutate({ paperId: rec.paper_id, aspect })
+                      }
+                      onAddToCollections={async (collectionIds) => {
+                        await addToCollectionsMutation.mutateAsync({
+                          recId: rec.id,
+                          collectionIds,
+                        })
+                      }}
+                      defaultCollectionIds={
+                        selectedLensCollectionId ? [selectedLensCollectionId] : undefined
+                      }
+                      reaction={deriveDiscoveryReaction(rec)}
+                      isSaved={isSaved}
+                      isQueued={
+                        paper?.reading_status === 'reading' || rec.user_action === 'read'
+                      }
+                      savedReadOnly={!!selectedLensCollectionId && !!rec.in_library}
+                      savedLabel={
+                        selectedLensCollectionId && rec.in_library ? 'In library' : undefined
+                      }
+                      pending={pendingRecId === rec.id}
+                    />
+                  )
                 }}
                 onAdoptDirection={(dir) => adoptDirectionMutation.mutate(dir)}
                 onFilterList={(ids) => setMapFilterIds(new Set(ids))}
-                onSelectRec={(paperId) => {
-                  // Make sure the row can be on screen: unhide the long tail
-                  // and drop a region filter that would exclude it.
-                  setShowAllRecs(true)
-                  setMapFilterIds((f) => (f && !f.has(paperId) ? null : f))
-                  const rec = recommendations.find((r) => r.paper_id === paperId)
-                  if (rec) {
-                    setSelectedRecIds((prev) => new Set(prev).add(rec.id))
-                  }
-                  setPulsePaperId(paperId)
-                  window.setTimeout(() => setPulsePaperId(null), 2200)
-                  // Scroll after the list re-renders with the row present.
-                  window.setTimeout(() => {
-                    document
-                      .getElementById(`rec-card-${paperId}`)
-                      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                  }, 80)
-                }}
               />
             )}
           </CardContent>

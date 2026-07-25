@@ -65,7 +65,7 @@ INCREMENTAL_MIN_COSINE = 0.10
 _CENTROID_SAMPLE_PER_CLUSTER = 64
 
 
-class SubstrateUnavailable(RuntimeError):
+class SubstrateUnavailableError(RuntimeError):
     """A substrate-only assembly ran with no corpus layout to read.
 
     Raised instead of silently fitting a partial layout: the caller builds the

@@ -59,7 +59,10 @@ import type { PaperReaction } from '@/components/discovery/PaperActionBar'
 import { toast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import {
   fetchAuthorTopCitedWorks,
   followAuthor,
@@ -486,14 +489,10 @@ export function OnlineSearchTab({
               : 'Saved to Library',
           description: resp.title || item.title,
         })
-        await invalidateQueries(
-          queryClient,
-          ['library-papers'],
-          ['library-saved'],
-          ['library-workflow-summary'],
-          ['reading-queue'],
-          ['papers'],
-        )
+        await Promise.all([
+          invalidateAfterPaperMutation(queryClient),
+          invalidateQueries(queryClient, ['library-papers']),
+        ])
         onImportComplete?.()
       } catch {
         setRowStates((prev) => ({

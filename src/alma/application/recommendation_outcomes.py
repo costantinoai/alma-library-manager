@@ -33,8 +33,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from alma.api.helpers import table_exists
-from alma.core.sql_helpers import standalone_paper_sql_for_db
 from alma.application.signal_projection import compute_paper_signal_map
+from alma.core.sql_helpers import standalone_paper_sql_for_db
 
 # Net-signal magnitude under which an outcome is "neutral" rather than having a
 # sign forced onto float noise or a single weak event.

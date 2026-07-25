@@ -5,26 +5,28 @@ import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { PageReveal } from '@/components/ui/reveal'
 import { OnboardingGate } from '@/components/onboarding'
+import { prefetchMapPage } from '@/components/map/mapQueries'
 import { parseHashRoute, navigateTo } from '@/lib/hashRoute'
+import { pageLoaders, preloadPage } from '@/lib/pageLoaders'
 
-const HomePage = lazy(() => import('@/pages/HomePage').then((m) => ({ default: m.HomePage })))
-const FeedPage = lazy(() => import('@/pages/FeedPage').then((m) => ({ default: m.FeedPage })))
-const DiscoveryPage = lazy(() => import('@/pages/DiscoveryPage').then((m) => ({ default: m.DiscoveryPage })))
-const AuthorsPage = lazy(() => import('@/pages/AuthorsPage').then((m) => ({ default: m.AuthorsPage })))
-const MapPage = lazy(() => import('@/pages/MapPage').then((m) => ({ default: m.MapPage })))
-const LibraryPage = lazy(() => import('@/pages/LibraryPage').then((m) => ({ default: m.LibraryPage })))
+const HomePage = lazy(pageLoaders.home)
+const FeedPage = lazy(pageLoaders.feed)
+const DiscoveryPage = lazy(pageLoaders.discovery)
+const AuthorsPage = lazy(pageLoaders.authors)
+const MapPage = lazy(pageLoaders.map)
+const LibraryPage = lazy(pageLoaders.library)
 // Insights retired into Library › Analytics (task 47 Phase 4); the page is now
 // a redirect shim so old #/insights?tab=… deep links still land correctly.
-const InsightsRedirect = lazy(() => import('@/pages/InsightsRedirect').then((m) => ({ default: m.InsightsRedirect })))
-const HealthPage = lazy(() => import('@/pages/HealthPage').then((m) => ({ default: m.HealthPage })))
-const AlertsPage = lazy(() => import('@/pages/AlertsPage').then((m) => ({ default: m.AlertsPage })))
-const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const InsightsRedirect = lazy(pageLoaders.insights)
+const HealthPage = lazy(pageLoaders.health)
+const AlertsPage = lazy(pageLoaders.alerts)
+const SettingsPage = lazy(pageLoaders.settings)
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // Longer default cache to avoid refetches when the user navigates between pages.
-      // Page-specific mutations still invalidate narrowly to keep their data fresh.
+      // General API rows stay fresh for one minute. Durable semantic-map
+      // layouts override this centrally in mapQueries.ts.
       staleTime: 60_000,
       gcTime: 5 * 60_000,
       refetchOnWindowFocus: false,
@@ -69,6 +71,13 @@ function AppContent() {
     queryClient.invalidateQueries({ refetchType: 'active' })
   }, [])
 
+  const prefetch = useCallback((page: Page) => {
+    void preloadPage(page)
+    if (page === 'map' || page === 'authors') {
+      void prefetchMapPage(queryClient, page)
+    }
+  }, [])
+
   const renderPage = () => {
     switch (currentPage) {
       case 'home':
@@ -100,10 +109,16 @@ function AppContent() {
     <AppShell
       currentPage={currentPage}
       onNavigate={navigate}
+      onPrefetch={prefetch}
       onRefresh={handleRefresh}
     >
       <Suspense fallback={<PageLoader />}>
-        <PageReveal key={currentPage}>{renderPage()}</PageReveal>
+        <PageReveal
+          key={currentPage}
+          animate={!['discovery', 'map', 'authors'].includes(currentPage)}
+        >
+          {renderPage()}
+        </PageReveal>
       </Suspense>
       <Toaster />
     </AppShell>

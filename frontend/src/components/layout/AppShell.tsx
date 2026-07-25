@@ -9,6 +9,7 @@ import { useConnectorStatus } from '@/hooks/useConnectorStatus'
 interface AppShellProps {
   currentPage: Page
   onNavigate: (page: Page) => void
+  onPrefetch?: (page: Page) => void
   onRefresh?: () => void
   isRefreshing?: boolean
   children: ReactNode
@@ -28,6 +29,7 @@ function readInitialCollapsed(): boolean {
 export function AppShell({
   currentPage,
   onNavigate,
+  onPrefetch,
   onRefresh,
   isRefreshing,
   children,
@@ -83,6 +85,7 @@ export function AppShell({
       <Sidebar
         currentPage={currentPage}
         onNavigate={onNavigate}
+        onPrefetch={onPrefetch}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         collapsed={sidebarCollapsed}

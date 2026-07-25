@@ -7,6 +7,7 @@ import { SignalChip } from '@/components/shared/SignalChip'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Meter } from '@/components/ui/meter'
 import { truncate } from '@/lib/utils'
+import { authorSuggestionSourceLabel } from './authorSuggestionEvidence'
 
 interface SuggestedAuthorCardProps {
   suggestion: AuthorSuggestion
@@ -32,24 +33,6 @@ interface SuggestedAuthorCardProps {
    *  background request — show a quiet placeholder instead of the
    *  "no titles" empty state. */
   titlesLoading?: boolean
-}
-
-/**
- * Human-readable label for a suggestion's provenance bucket. D12
- * (locked 2026-04-24) added `cited_by_high_signal` and
- * `semantic_similar`; network-backed `openalex_related` and
- * `s2_related` will land with AUTH-SUG-3/4 and are pre-labelled
- * here so the rail doesn't need a second churn.
- */
-function kindLabel(kind: string): string {
-  if (kind === 'library_core') return 'Library-heavy'
-  if (kind === 'collaborator') return 'Coauthor'
-  if (kind === 'cited_by_high_signal') return 'Cited by your ★4+ papers'
-  if (kind === 'semantic_similar') return 'Semantically similar'
-  if (kind === 'openalex_related') return 'OpenAlex related'
-  if (kind === 's2_related') return 'Semantic Scholar related'
-  if (kind === 'online_search') return 'Search result'
-  return 'Adjacent'
 }
 
 /**
@@ -113,9 +96,11 @@ export function SuggestedAuthorCard({
               tone="accent"
               size="sm"
               className="max-w-full uppercase tracking-wide"
-              title={kindLabel(suggestion.suggestion_type)}
+              title={authorSuggestionSourceLabel(suggestion.suggestion_type)}
             >
-              <span className="min-w-0 truncate">{kindLabel(suggestion.suggestion_type)}</span>
+              <span className="min-w-0 truncate">
+                {authorSuggestionSourceLabel(suggestion.suggestion_type)}
+              </span>
             </StatusBadge>
             {/* Consensus chip — only when ≥2 independent buckets agree.
                 The bonus is band-relative (+12 / +17 / +21 / +24 for

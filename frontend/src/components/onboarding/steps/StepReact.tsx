@@ -4,7 +4,10 @@ import { Loader2 } from 'lucide-react'
 import { PaperCard } from '@/components/shared'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import { RevealItem, RevealList } from '@/components/ui/reveal'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { errorToast } from '@/hooks/useToast'
 import {
   listPapers,
@@ -85,6 +88,7 @@ export function StepReact({ next, back }: StepContext) {
     try {
       if (undoAspect) await undoPaperFeedback(paperId, undoAspect)
       else await onboardingPaperFeedback(paperId, kind)
+      void invalidateAfterPaperMutation(qc)
     } catch {
       // Roll back to the pre-click state and tell the user.
       if (kind === 'dismiss') {

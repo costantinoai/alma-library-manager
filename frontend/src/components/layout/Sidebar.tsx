@@ -77,6 +77,8 @@ const navGroups: NavGroup[] = [
 interface SidebarProps {
   currentPage: Page
   onNavigate: (page: Page) => void
+  /** Warm a route chunk/query when navigation intent is visible. */
+  onPrefetch?: (page: Page) => void
   isOpen: boolean
   onClose: () => void
   /** Desktop-only: collapse to icon-rail width (~72px) when true. */
@@ -88,6 +90,7 @@ interface SidebarProps {
 export function Sidebar({
   currentPage,
   onNavigate,
+  onPrefetch,
   isOpen,
   onClose,
   collapsed,
@@ -202,6 +205,8 @@ export function Sidebar({
                   return (
                     <button
                       key={item.id}
+                      onPointerEnter={() => onPrefetch?.(item.id)}
+                      onFocus={() => onPrefetch?.(item.id)}
                       onClick={() => {
                         onNavigate(item.id)
                         onClose()

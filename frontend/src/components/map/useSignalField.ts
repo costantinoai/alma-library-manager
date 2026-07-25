@@ -46,13 +46,14 @@ export function useSignalField(enabled: boolean): {
   stats: SignalFieldStats | null
   /** Live internal score per paper id — the Score colour mode's source. */
   scoresById: ReadonlyMap<string, number>
+  isFetching: boolean
 } {
   const query = useQuery({
     queryKey: ['signal-field'],
     queryFn: () => api.get<SignalFieldResponse>('/graphs/signal-field'),
     enabled,
-    // The field moves with signals (saves, ratings, refreshes), not with
-    // view state — a few minutes of staleness is invisible.
+    // Mutations invalidate this key immediately; staleTime only prevents
+    // navigation/remount refetches between signal changes.
     staleTime: 5 * 60_000,
   })
 
@@ -69,5 +70,10 @@ export function useSignalField(enabled: boolean): {
     return m
   }, [query.data])
 
-  return { points, stats: query.data?.stats ?? null, scoresById }
+  return {
+    points,
+    stats: query.data?.stats ?? null,
+    scoresById,
+    isFetching: query.isFetching,
+  }
 }

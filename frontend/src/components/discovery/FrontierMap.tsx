@@ -11,7 +11,7 @@
  * uses, so visuals and knobs cannot fork per surface (50-E/50-F).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronDown,
   ChevronUp,
@@ -26,16 +26,24 @@ import {
   X,
 } from 'lucide-react'
 
-import { getFrontier, type FrontierNode, type Lens } from '@/api/client'
+import { type FrontierNode, type Lens } from '@/api/client'
 import { useRegionSelection } from '@/components/map/useRegionSelection'
 import { useBranchControls } from '@/hooks/useBranchControls'
+import { CorpusMapPaperPopup } from '@/components/map/CorpusMapPaperPopup'
+import type { MapPaperNeighbour } from '@/components/map/MapPaperPopup'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
 import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
 import {
   ColourBarLegend,
+  MapDataStatus,
   MapDisplayTuningRows,
   MapTuningPopover,
 } from '@/components/map/MapChrome'
+import { frontierQueryOptions } from '@/components/map/mapQueries'
+import {
+  useMapSessionSet,
+  useMapSessionState,
+} from '@/components/map/mapSessionState'
 import { useSignalField } from '@/components/map/useSignalField'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
@@ -57,10 +65,13 @@ interface FrontierMapProps {
   }) => void
   /** 50-B map→list sync: filter the rec list below to a lassoed region. */
   onFilterList?: (paperIds: string[]) => void
-  /** Clicking a SUGGESTION dot jumps to its row in the list below (select +
-   *  transient pulse) instead of opening the popup — the map navigates the
-   *  deck. Library/seen dots (no list row) still open the paper panel. */
-  onSelectRec?: (paperId: string) => void
+  /** Recommendation card supplied by DiscoveryPage so it can reuse the
+   *  already-mounted recommendation mutations rather than duplicating them. */
+  renderRecommendationPopup: (
+    node: FrontierNode,
+    close: () => void,
+    neighbours: MapPaperNeighbour[],
+  ) => React.ReactNode
 }
 
 
@@ -87,25 +98,88 @@ function useBranchColors(nodes: FrontierNode[]) {
   }, [nodes])
 }
 
-export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onFilterList, onSelectRec }: FrontierMapProps) {
-  const [showSeen, setShowSeen] = useState(false)
-  const [showEdges, setShowEdges] = useState(false)
+function frontierNeighbours(
+  node: FrontierNode,
+  nodes: FrontierNode[],
+  edges: ReadonlyArray<{ source: string; target: string; edge_type: string; weight: number }>,
+): MapPaperNeighbour[] {
+  const byId = new Map(nodes.map((item) => [item.paper_id, item]))
+  const connected = edges
+    .filter((edge) => edge.source === node.paper_id || edge.target === node.paper_id)
+    .sort((a, b) => b.weight - a.weight)
+    .slice(0, 4)
+    .flatMap((edge) => {
+      const id = edge.source === node.paper_id ? edge.target : edge.source
+      const other = byId.get(id)
+      if (!other) return []
+      return [{
+        id,
+        title: other.title || id,
+        relation:
+          edge.edge_type === 'bibliographic_coupling'
+            ? 'Shares references'
+            : 'Cited together',
+      }]
+    })
+  if (connected.length > 0) return connected
+
+  // The edge payload is opt-in. When links are off, nearest substrate points
+  // are still honest semantic neighbours: position is the map's meaning.
+  const nearest: Array<{ node: FrontierNode; distance: number }> = []
+  for (const candidate of nodes) {
+    if (candidate.paper_id === node.paper_id) continue
+    const distance = (candidate.x - node.x) ** 2 + (candidate.y - node.y) ** 2
+    const insertAt = nearest.findIndex((item) => distance < item.distance)
+    if (insertAt < 0) nearest.push({ node: candidate, distance })
+    else nearest.splice(insertAt, 0, { node: candidate, distance })
+    if (nearest.length > 4) nearest.pop()
+  }
+  return nearest.map(({ node: candidate }) => ({
+    id: candidate.paper_id,
+    title: candidate.title || candidate.paper_id,
+    relation:
+      candidate.cluster_id === node.cluster_id && node.cluster_id != null
+        ? 'Nearby · same cluster'
+        : 'Nearby in semantic space',
+  }))
+}
+
+export function FrontierMap({
+  lensId,
+  lens,
+  onSelectPaper,
+  onAdoptDirection,
+  onFilterList,
+  renderRecommendationPopup,
+}: FrontierMapProps) {
+  const [showSeen, setShowSeen] = useMapSessionState('frontier', 'showSeen', false)
+  const [showEdges, setShowEdges] = useMapSessionState('frontier', 'showEdges', false)
   // Words on/off is the user's call, not the grouping's side effect.
-  const [showNames, setShowNames] = useState(true)
+  const [showNames, setShowNames] = useMapSessionState('frontier', 'showNames', true)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
   // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
   // (the recs are its hero layer); corpus clusters are the alternative lens on
   // the same points. Never both — two colourings on one scatter is a lie about
   // which structure you're looking at.
-  const [groupBy, setGroupBy] = useState<'branches' | 'clusters' | 'year'>('branches')
+  const [groupBy, setGroupBy] = useMapSessionState<'branches' | 'clusters' | 'year'>(
+    'frontier',
+    'groupBy',
+    'branches',
+  )
   // Terrain (formerly "Heat") is an OVERLAY — the preference field composes
   // with ANY grouping (user call 2026-07-25), it never competes with them.
-  const [showTerrain, setShowTerrain] = useState(false)
+  const [showTerrain, setShowTerrain] = useMapSessionState('frontier', 'showTerrain', false)
   // Legend chips as toggles: a dimmed cluster recedes (never disappears —
   // the territory stays honest), so you can mute the mega-cluster and read
   // the rest. Reset on grouping switch.
-  const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
-  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
+  const [dimmedClusters, setDimmedClusters] = useMapSessionSet<number>(
+    'frontier',
+    'dimmedClusters',
+  )
+  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useMapSessionSet<string>(
+    'frontier',
+    'hiddenEdgeTypes',
+  )
   const [selectMode, setSelectMode] = useState(false)
   // Shared region primitive (same lifecycle as the Map page's Select
   // region): ids + anchor + the /graphs/region/describe characterisation.
@@ -113,22 +187,20 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
   // clicking the background clears it (user call 2026-07-25, all maps).
   const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
-  const [sizeScale, setSizeScale] = useState(1)
-  const [wordScale, setWordScale] = useState(1)
-  const [wordCount, setWordCount] = useState(3)
+  const [sizeScale, setSizeScale] = useMapSessionState('frontier', 'sizeScale', 1)
+  const [dotOpacity, setDotOpacity] = useMapSessionState('frontier', 'dotOpacity', 1)
+  const [wordScale, setWordScale] = useMapSessionState('frontier', 'wordScale', 1)
+  const [wordCount, setWordCount] = useMapSessionState('frontier', 'wordCount', 3)
 
-  const query = useQuery({
-    queryKey: ['frontier', lensId, showSeen, showEdges],
-    queryFn: () => getFrontier(lensId as string, showSeen ? 300 : 0, showEdges),
-    enabled: !!lensId,
-    // Poll while the corpus layout is still building.
-    refetchInterval: (q) => (q.state.data?.status === 'building' ? 2500 : false),
-    staleTime: 30_000,
-  })
-
-  const nodes = useMemo(() => query.data?.nodes ?? [], [query.data])
-  const edges = useMemo(() => query.data?.edges ?? [], [query.data])
-  const counts = query.data?.counts
+  const queryClient = useQueryClient()
+  const query = useQuery(
+    frontierQueryOptions(queryClient, lensId ?? '', showSeen, showEdges),
+  )
+  const data = query.data?.payload
+  const building = query.data?.build
+  const nodes = useMemo(() => data?.nodes ?? [], [data])
+  const edges = useMemo(() => data?.edges ?? [], [data])
+  const counts = data?.counts
   const branchColors = useBranchColors(nodes)
   const branchControls = useBranchControls(lens)
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.paper_id, n])), [nodes])
@@ -156,7 +228,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   const prevRecIds = useRef<Set<string> | null>(null)
   const [newRecIds, setNewRecIds] = useState<Set<string>>(new Set())
   useEffect(() => {
-    if (query.data?.status !== 'ready') return
+    if (data?.status !== 'ready') return
     const current = new Set(nodes.filter((n) => n.layer === 'rec').map((n) => n.paper_id))
     const previous = prevRecIds.current
     if (previous && previous.size > 0) {
@@ -164,7 +236,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
       if (fresh.size > 0) setNewRecIds(fresh)
     }
     prevRecIds.current = current
-  }, [nodes, query.data?.status])
+  }, [nodes, data?.status])
 
   const yearRange = useMemo(
     () => yearRampLimits(nodes.map((n) => Number(n.year))),
@@ -274,13 +346,27 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
       </div>
     )
   }
-  if (query.isLoading || query.data?.status === 'building') {
+  if (query.isError && !data) {
+    return (
+      <div className="flex h-[420px] flex-col items-center justify-center gap-3 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
+        <span>The Suggestions Map could not be loaded.</span>
+        <button
+          type="button"
+          onClick={() => void query.refetch()}
+          className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
+        >
+          Try again
+        </button>
+      </div>
+    )
+  }
+  if (!data) {
     return (
       <div className="flex h-[420px] flex-col items-center justify-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
         <Loader2 className="h-5 w-5 animate-spin text-alma-folio" />
-        {query.data?.status === 'building'
+        {building
           ? 'Building the semantic layout — this runs once, then it’s cached…'
-          : 'Loading the map…'}
+          : 'Loading the cached map…'}
       </div>
     )
   }
@@ -336,6 +422,8 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           <MapDisplayTuningRows
             sizeScale={sizeScale}
             onSizeScale={setSizeScale}
+            dotOpacity={dotOpacity}
+            onDotOpacity={setDotOpacity}
             wordScale={wordScale}
             onWordScale={setWordScale}
             wordCount={wordCount}
@@ -406,6 +494,17 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
             Select a direction
           </button>
         )}
+        <span className="ml-auto">
+          <MapDataStatus
+            phase={
+              building
+                ? 'building'
+                : query.isFetching || (showTerrain && signalField.isFetching)
+                  ? 'refreshing'
+                  : 'idle'
+            }
+          />
+        </span>
       </div>
 
       <SemanticMap
@@ -414,6 +513,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         showEdges={showEdges}
         showToponyms={showNames && groupBy === 'clusters'}
         sizeScale={sizeScale}
+        dotOpacity={dotOpacity}
         toponymScale={wordScale}
         toponymWordCount={wordCount}
         heatField={showTerrain ? signalField.points : undefined}
@@ -427,13 +527,38 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           }
           const n = nodesById.get(id)
           if (!n) return
-          // A paper click highlights its cluster (dim the rest) AND does its
-          // host action (rec → jump to the list row; else open the paper).
+          // Popup is owned by SemanticMap. The ONLY click side effect is
+          // cluster focus. Navigating to a recommendation's list row requires
+          // the explicit "Go to paper" action inside its popup.
           setFocusClusterId(
             typeof n.cluster_id === 'number' && n.cluster_id >= 0 ? n.cluster_id : null,
           )
-          if (n.layer === 'rec' && onSelectRec) onSelectRec(id)
-          else onSelectPaper(id)
+        }}
+        renderClick={(id, close) => {
+          const n = nodesById.get(id)
+          if (!n) return null
+          const neighbours = frontierNeighbours(n, nodes, edges)
+          if (n.layer === 'rec') return renderRecommendationPopup(n, close, neighbours)
+          return (
+            <CorpusMapPaperPopup
+              paperId={n.paper_id}
+              onClose={close}
+              onOpenDetails={() => {
+                close()
+                onSelectPaper(n.paper_id)
+              }}
+              fallback={{
+                id: n.paper_id,
+                title: n.title || n.paper_id,
+                year: n.year,
+                score: n.score,
+                statusLabel: n.layer === 'library' ? 'In your library' : 'Seen',
+                branchLabel: n.branch_label,
+                clusterLabel: n.cluster_label,
+                neighbours,
+              }}
+            />
+          )
         }}
         renderHover={(id) => {
           const n = nodesById.get(id)
@@ -467,6 +592,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
             </>
           )
         }}
+        viewStateKey="frontier"
         className="rounded-none border-0"
       >
         {/* Region popover — the describe payload + adopt action. Meaning
@@ -610,7 +736,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 />
                 {counts
                   ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
-                    (query.data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
+                    (data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
                   : 'seen'}
               </span>
             )}

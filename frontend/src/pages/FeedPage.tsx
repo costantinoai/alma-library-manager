@@ -64,7 +64,11 @@ import { usePaperAuthorFollow } from '@/hooks/usePaperAuthorFollow'
 import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
-import { invalidateAfterFeedRefresh, invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterFeedRefresh,
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { cn, formatDate, formatMonitorTypeLabel, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import { MONITOR_TYPE_CHIP, MONITOR_TYPE_CHIP_FALLBACK } from '@/lib/palette'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -411,16 +415,22 @@ export function FeedPage() {
     // Sidebar's 5-min interval and after explicit feed-refresh
     // (invalidateAfterFeedRefresh), which is plenty for a personal
     // tool. Tradeoff: badge can lag up to 5 min after a feed action.
-    await invalidateQueries(queryClient,
+    await Promise.all([
+      invalidateAfterPaperMutation(queryClient),
+      invalidateQueries(queryClient, ['feed-status'], ['feed-monitors']),
+    ])
+  }
+
+  const invalidateFeedWorkflowAction = () =>
+    invalidateQueries(
+      queryClient,
       ['feed-inbox'],
       ['feed-status'],
-      ['feed-monitors'],
       ['papers'],
       ['library-saved'],
       ['library-workflow-summary'],
       ['reading-queue'],
     )
-  }
 
   // Reverses a single dismiss (restores the card + drops the negative
   // signal). Wired to the transient "Undo" button on the dismiss toast.
@@ -469,7 +479,7 @@ export function FeedPage() {
     mutationFn: ({ paperId, nextQueued }: { paperId: string; nextQueued: boolean }) =>
       updateReadingStatus(paperId, nextQueued ? 'reading' : null),
     onSuccess: async (_data, vars) => {
-      await invalidateFeedAction()
+      await invalidateFeedWorkflowAction()
       toast({
         title: vars.nextQueued ? 'Added to reading list' : 'Removed from reading list',
         description: vars.nextQueued

@@ -11,7 +11,7 @@
  *     (dimmed = 15% opacity, never hidden, never a discovery signal)
  */
 import { useEffect, useState } from 'react'
-import { Settings2 } from 'lucide-react'
+import { Loader2, Settings2 } from 'lucide-react'
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Slider } from '@/components/ui/slider'
@@ -22,6 +22,26 @@ export function MapToolbar({ children }: { children: React.ReactNode }) {
     <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-surface-2 px-3 py-2">
       {children}
     </div>
+  )
+}
+
+/** Honest transient transport state: a refresh keeps the current plate,
+ * while a build means the server is computing a durable layout artifact. */
+export function MapDataStatus({
+  phase,
+}: {
+  phase: 'idle' | 'refreshing' | 'building'
+}) {
+  if (phase === 'idle') return null
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-quiet px-2 py-1 text-[11px] text-slate-500"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="h-3 w-3 animate-spin text-alma-folio" />
+      {phase === 'building' ? 'Building layout' : 'Refreshing data'}
+    </span>
   )
 }
 
@@ -192,7 +212,7 @@ export function SliderRow({
  */
 export function MapTuningPopover({
   children,
-  title = 'Fine tuning — dot size, word size, words per cluster',
+  title = 'Fine tuning — dot size, dot opacity, word size, words per cluster',
 }: {
   children: React.ReactNode
   title?: string
@@ -216,11 +236,13 @@ export function MapTuningPopover({
   )
 }
 
-/** The display-knob trio every map shares: dot size, word size, words per
+/** The display knobs every map shares: dot size/opacity, word size, words per
  *  cluster. One component so the ranges/labels can never drift per host. */
 export function MapDisplayTuningRows({
   sizeScale,
   onSizeScale,
+  dotOpacity,
+  onDotOpacity,
   wordScale,
   onWordScale,
   wordCount,
@@ -228,6 +250,8 @@ export function MapDisplayTuningRows({
 }: {
   sizeScale: number
   onSizeScale: (v: number) => void
+  dotOpacity: number
+  onDotOpacity: (v: number) => void
   wordScale: number
   onWordScale: (v: number) => void
   wordCount: number
@@ -243,6 +267,15 @@ export function MapDisplayTuningRows({
         step={0.1}
         format={(v) => `${v.toFixed(1)}×`}
         onCommit={onSizeScale}
+      />
+      <SliderRow
+        label="Dot opacity"
+        value={dotOpacity}
+        min={0.2}
+        max={1}
+        step={0.05}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onCommit={onDotOpacity}
       />
       <SliderRow
         label="Word size"

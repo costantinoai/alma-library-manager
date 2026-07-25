@@ -29,10 +29,10 @@ _DIRECTION_BLEND_WEIGHT = {"pin": 0.5, "boost": 0.3}
 def _blend_custom_directions(
     db: sqlite3.Connection,
     lens: dict,
-    centroid: "np.ndarray",
+    centroid: np.ndarray,
     active_model: str,
     decode_vector,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Return the seed centroid pulled toward each adopted custom direction.
 
     Recomputes every direction's centroid from its members' LIVE embeddings

@@ -59,7 +59,11 @@ import { useToast, errorToast} from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
 import { SOURCE_COLORS, SOURCE_FALLBACK_COLOR } from '@/lib/palette'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterPaperMutation,
+  invalidatePaperSignalFields,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn, formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
@@ -288,7 +292,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const unlikeMutation = useMutation({
     mutationFn: (pubKey: string) => removeFromLibrary(pubKey),
     onSuccess: () => {
-      void invalidateQueries(queryClient, ['library-saved'])
+      void invalidateAfterPaperMutation(queryClient)
       setDeleteKey(null)
       toast({ title: 'Removed', description: 'Publication removed from the saved library.' })
     },
@@ -302,8 +306,15 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const updateLikeMutation = useMutation({
     mutationFn: ({ pubKey, notes, rating }: { pubKey: string; notes?: string; rating?: number }) =>
       updateSavedPaper(pubKey, { notes, rating }),
-    onSuccess: () => {
-      void invalidateQueries(queryClient, ['library-saved'])
+    onSuccess: (_data, variables) => {
+      void (
+        variables.rating === undefined
+          ? invalidateQueries(queryClient, ['library-saved'])
+          : Promise.all([
+              invalidateQueries(queryClient, ['library-saved']),
+              invalidatePaperSignalFields(queryClient),
+            ])
+      )
       setEditingLike(null)
       toast({ title: 'Updated', description: 'Saved paper updated successfully.' })
     },
@@ -329,7 +340,10 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const bulkClearRatingMutation = useMutation({
     mutationFn: (ids: string[]) => bulkClearRating(ids),
     onSuccess: (data) => {
-      void invalidateQueries(queryClient, ['library-saved'])
+      void Promise.all([
+        invalidateQueries(queryClient, ['library-saved']),
+        invalidatePaperSignalFields(queryClient),
+      ])
       clearSelection()
       toast({ title: 'Rating cleared', description: `${data.affected} paper(s) set to no rating.` })
     },
@@ -339,7 +353,7 @@ export function SavedTab({ onOpenDetails }: SavedTabProps = {}) {
   const bulkRemoveMutation = useMutation({
     mutationFn: (ids: string[]) => bulkRemoveFromLibrary(ids),
     onSuccess: (data) => {
-      void invalidateQueries(queryClient, ['library-saved'], ['papers'])
+      void invalidateAfterPaperMutation(queryClient)
       clearSelection()
       setBulkDeleteOpen(false)
       toast({ title: 'Removed', description: `${data.affected} paper(s) removed from library.` })

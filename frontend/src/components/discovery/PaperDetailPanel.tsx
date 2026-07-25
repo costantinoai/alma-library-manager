@@ -67,7 +67,10 @@ import { AuthorHoverCard } from '@/components/authors/AuthorHoverCard'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
 import { navigateTo } from '@/lib/hashRoute'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import {
+  invalidateAfterPaperMutation,
+  invalidateQueries,
+} from '@/lib/queryHelpers'
 import { cn, formatPublicationDate } from '@/lib/utils'
 
 interface PaperTopic {
@@ -253,10 +256,9 @@ export function PaperDetailPanel({ paper, open, onOpenChange }: PaperDetailPanel
   const removeMutation = useMutation({
     mutationFn: () => removeFromLibrary(p!.id),
     onSuccess: () => {
+      void invalidateAfterPaperMutation(queryClient)
       invalidateQueries(
         queryClient,
-        ['papers'],
-        ['library-saved'],
         ['library-workflow'],
         ['library-info'],
       )
@@ -1076,10 +1078,9 @@ function RelatedWorkRow({
     onSuccess: (resp, action) => {
       setIsSaved(resp.status === 'library')
       setReaction(action === 'add' ? null : action)
+      void invalidateAfterPaperMutation(queryClient)
       invalidateQueries(
         queryClient,
-        ['papers'],
-        ['library-saved'],
         ['library-workflow'],
         ['paper-prior-works'],
         ['paper-derivative-works'],

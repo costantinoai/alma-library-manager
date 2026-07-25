@@ -101,6 +101,7 @@ function rootsForOperation(operationKey?: string): string[] {
       'discovery-status',
       'discovery-seeded-similar',
       'discovery-explain',
+      'frontier',
       'insights-diagnostics',
     ]
   }
@@ -108,6 +109,7 @@ function rootsForOperation(operationKey?: string): string[] {
   if (key.startsWith('graphs.')) {
     return [
       'graph',
+      'frontier',
       'authors',
       'insights-diagnostics',
     ]
@@ -151,7 +153,10 @@ function rootsForOperation(operationKey?: string): string[] {
     return ['insights']
   }
   if (key.startsWith('materialize.graph.')) {
-    return ['graph', 'paper-map', 'author-network']
+    return ['graph', 'frontier', 'paper-map', 'author-network']
+  }
+  if (key.startsWith('materialize.variant:')) {
+    return ['graph']
   }
 
   return []

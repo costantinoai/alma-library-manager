@@ -71,11 +71,28 @@ export function invalidateAfterPaperMutation(
     ['feed-inbox'],
     ['library-workflow-summary'],
     ['reading-queue'],
+    // Layout coordinates are durable, but membership and the live preference
+    // fields are not. Active map hosts refetch these immediately after any
+    // save/rating/dismiss/remove/undo, so Terrain and Score change without a
+    // layout rebuild.
+    ['graph'],
+    ['frontier'],
+    ['signal-field'],
+    ['author-field'],
   ]
   if (lensId) {
     return invalidateQueries(qc, ...keys, ['lens-signals', lensId])
   }
   return invalidateQueries(qc, ...keys)
+}
+
+/**
+ * A paper reaction changed, but its layout/membership did not. Refetch only
+ * the live fields laid over the durable coordinates. Keeping this separate
+ * prevents a Like from retransferring the full graph payload.
+ */
+export function invalidatePaperSignalFields(qc: QueryClient): Promise<void[]> {
+  return invalidateQueries(qc, ['signal-field'], ['author-field'])
 }
 
 /**
