@@ -20,7 +20,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Map as MapIcon, X } from 'lucide-react'
+import { BookOpen, LassoSelect, Map as MapIcon, X } from 'lucide-react'
 
 import {
   api,
@@ -32,6 +32,8 @@ import {
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
 import { GraphMapView } from '@/components/map/GraphMapView'
+import { useRegionSelection } from '@/components/map/useRegionSelection'
+import { useSignalField } from '@/components/map/useSignalField'
 import {
   MapDisplayTuningRows,
   MapModeSwitch,
@@ -69,6 +71,9 @@ export function MapPage() {
   const [blend, setBlend] = useState({ sem: 1, coauth: 0, refs: 0, cocite: 0 })
   const [payload, setPayload] = useState<GraphData | null>(null)
   const [selected, setSelected] = useState<GraphNode | null>(null)
+  // Region selection (lasso): the inspector characterises the selected
+  // patch — vocabulary, area score, strongest/weakest papers, top authors.
+  const [selectMode, setSelectMode] = useState(false)
   const [panelPaper, setPanelPaper] = useState<Publication | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const queryClient = useQueryClient()
@@ -95,6 +100,67 @@ export function MapPage() {
       toast({ title: 'Cluster relabelling queued', description: 'Watch Activity for progress.' })
     },
   })
+  // Shared region primitive — the SAME select→describe lifecycle as
+  // Discovery's "Select a direction" (useRegionSelection).
+  const regionSel = useRegionSelection()
+  const regionIds = regionSel.ids
+  const regionDesc = regionSel.description
+
+  // Live internal scores (same space-owned endpoint the terrain uses):
+  // hover Score, region area score, and cluster "area scores" all read
+  // from HERE, never from the cached layout payload.
+  const signalField = useSignalField(true)
+  const scoresById = signalField.scoresById
+  // Area score per cluster: mean live score of its scored papers.
+  const clusterAreaScores = useMemo(() => {
+    const acc = new Map<number, { sum: number; n: number }>()
+    for (const n of payload?.nodes ?? []) {
+      const cid = typeof n.cluster_id === 'number' ? n.cluster_id : -1
+      if (cid < 0) continue
+      const s = scoresById.get(n.id)
+      if (s == null) continue
+      const row = acc.get(cid)
+      if (row) {
+        row.sum += s
+        row.n += 1
+      } else acc.set(cid, { sum: s, n: 1 })
+    }
+    return new Map([...acc.entries()].map(([cid, { sum, n }]) => [cid, sum / n]))
+  }, [payload, scoresById])
+
+  // Region digest: everything the inspector says about a lassoed patch.
+  const region = useMemo(() => {
+    if (!regionIds || !payload) return null
+    const inRegion = payload.nodes.filter((n) => regionIds.includes(n.id))
+    const scored = inRegion
+      .map((n) => ({ node: n, score: scoresById.get(n.id) }))
+      .filter((r): r is { node: GraphNode; score: number } => r.score != null)
+      .sort((a, b) => b.score - a.score)
+    const areaScore = scored.length
+      ? scored.reduce((a, r) => a + r.score, 0) / scored.length
+      : null
+    const authorTally = new Map<string, number>()
+    for (const n of inRegion) {
+      const raw = typeof n.metadata?.authors === 'string' ? n.metadata.authors : ''
+      for (const a of raw.split(/[;,]/)) {
+        const name = a.trim()
+        if (name) authorTally.set(name, (authorTally.get(name) ?? 0) + 1)
+      }
+    }
+    const topAuthors = [...authorTally.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+    return {
+      papers: inRegion,
+      inLibrary: inRegion.filter((n) => n.in_library !== false).length,
+      scored,
+      areaScore,
+      highest: scored.slice(0, 3),
+      lowest: scored.length > 3 ? scored.slice(-3).reverse() : [],
+      topAuthors,
+    }
+  }, [regionIds, payload, scoresById])
+
 
   const params = useMemo(() => {
     const p: Record<string, string> = { scope, cluster_resolution: resolution.toFixed(1) }
@@ -187,34 +253,56 @@ export function MapPage() {
           // the paper panel opens from the inspector, deliberately. A click
           // on the background deselects — cluster focus clears, inspector
           // returns to the overview.
-          onOpenNode={(n) => setSelected((cur) => (cur?.id === n.id ? null : n))}
-          onBackgroundClick={() => setSelected(null)}
-          hoverCard={(n) => (
-            <>
-              <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
-              {typeof n.metadata?.authors === 'string' && n.metadata.authors && (
-                <p className="mt-0.5 line-clamp-1 text-slate-500">{String(n.metadata.authors)}</p>
-              )}
-              <p className="mt-0.5 text-slate-500">
-                {n.in_library === false ? 'Tracked' : 'In your library'}
-                {n.metadata?.year ? ` · ${n.metadata.year}` : ''}
-                {n.metadata?.journal ? ` · ${String(n.metadata.journal)}` : ''}
-                {typeof n.metadata?.cited_by_count === 'number'
-                  ? ` · ${n.metadata.cited_by_count} citations`
-                  : ''}
-              </p>
-              {typeof n.metadata?.score === 'number' && (
-                <p className="mt-0.5 font-medium text-alma-800">Score {Math.round(Number(n.metadata.score))}/100</p>
-              )}
-              {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
-                <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
-              )}
-              {typeof n.metadata?.cluster_label === 'string' &&
-                n.metadata.cluster_label !== 'Unclustered' && (
-                  <p className="mt-0.5 text-slate-400">cluster: {String(n.metadata.cluster_label)}</p>
+          onOpenNode={(n) => {
+            regionSel.clear()
+            setSelected((cur) => (cur?.id === n.id ? null : n))
+          }}
+          onBackgroundClick={() => {
+            setSelected(null)
+            regionSel.clear()
+          }}
+          lassoMode={selectMode}
+          onLasso={(ids) => {
+            setSelected(null)
+            setSelectMode(false)
+            regionSel.select(ids)
+          }}
+          hoverCard={(n) => {
+            const score = scoresById.get(n.id)
+            const areaScore =
+              typeof n.cluster_id === 'number' && n.cluster_id >= 0
+                ? clusterAreaScores.get(n.cluster_id)
+                : undefined
+            return (
+              <>
+                <p className="line-clamp-2 font-medium text-alma-800">{n.name}</p>
+                {typeof n.metadata?.authors === 'string' && n.metadata.authors && (
+                  <p className="mt-0.5 line-clamp-1 text-slate-500">{String(n.metadata.authors)}</p>
                 )}
-            </>
-          )}
+                <p className="mt-0.5 text-slate-500">
+                  {n.in_library === false ? 'Tracked' : 'In your library'}
+                  {n.metadata?.year ? ` · ${n.metadata.year}` : ''}
+                  {n.metadata?.journal ? ` · ${String(n.metadata.journal)}` : ''}
+                  {typeof n.metadata?.cited_by_count === 'number'
+                    ? ` · ${n.metadata.cited_by_count} citations`
+                    : ''}
+                </p>
+                {(score != null || areaScore != null) && (
+                  <p className="mt-0.5 font-medium text-alma-800">
+                    {score != null ? `Score ${Math.round(score)}/100` : 'Never scored'}
+                    {areaScore != null ? ` · area ${Math.round(areaScore)}/100` : ''}
+                  </p>
+                )}
+                {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
+                  <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
+                )}
+                {typeof n.metadata?.cluster_label === 'string' &&
+                  n.metadata.cluster_label !== 'Unclustered' && (
+                    <p className="mt-0.5 text-slate-400">cluster: {String(n.metadata.cluster_label)}</p>
+                  )}
+              </>
+            )
+          }}
           height={620}
           toolbarExtras={
             <>
@@ -229,6 +317,22 @@ export function MapPage() {
                   { value: 'library', label: 'Library', title: 'Only papers you saved' },
                 ]}
               />
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectMode((s) => !s)
+                  regionSel.clear()
+                }}
+                className={
+                  selectMode
+                    ? 'inline-flex items-center gap-1.5 rounded-sm border border-accent-edge bg-accent-soft px-2.5 py-1 text-xs font-medium text-alma-folio'
+                    : 'inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet'
+                }
+                title="Drag a box around a patch of papers — the inspector characterises the region (vocabulary, area score, strongest papers, top authors)"
+              >
+                <LassoSelect className="h-3.5 w-3.5" />
+                Select region
+              </button>
               <MapTuningPopover title="Fine tuning — cluster detail, dot size, words, layout blend, rebuilds">
                 <SliderRow
                   label="Cluster detail"
@@ -281,7 +385,102 @@ export function MapPage() {
         {/* ── Inspector column (50-M) ─────────────────────────────────── */}
         <Card className="self-start">
           <CardContent className="space-y-4 p-4 text-xs">
-            {!selected ? (
+            {region ? (
+              <>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-alma-800">
+                    Region — {region.papers.length} papers
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => regionSel.clear()}
+                    className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
+                    aria-label="Clear region"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {regionSel.describing && <p className="text-slate-400">Characterising…</p>}
+                {regionDesc?.sufficient && regionDesc.label && (
+                  <p className="font-medium text-alma-800">“{regionDesc.label}”</p>
+                )}
+                {regionDesc && !regionDesc.sufficient && (
+                  <p className="text-slate-400">Too few papers to characterise the vocabulary.</p>
+                )}
+                {(regionDesc?.top_terms ?? []).length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {(regionDesc?.top_terms ?? []).slice(0, 8).map((t) => (
+                      <StatusBadge key={t} tone="neutral" size="sm">
+                        {t}
+                      </StatusBadge>
+                    ))}
+                  </div>
+                )}
+                <p className="text-slate-500">
+                  {region.inLibrary} in your library · {region.papers.length - region.inLibrary} tracked
+                  {region.areaScore != null
+                    ? ` · area score ${Math.round(region.areaScore)}/100 (${region.scored.length} scored)`
+                    : ' · no scored papers here yet'}
+                </p>
+                {region.highest.length > 0 && (
+                  <div className="border-t border-[var(--color-border)] pt-3">
+                    <p className="mb-1 font-medium text-alma-800">Strongest here</p>
+                    <ul className="space-y-1">
+                      {region.highest.map(({ node, score }) => (
+                        <li key={node.id} className="flex items-baseline justify-between gap-2">
+                          <button
+                            type="button"
+                            className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
+                            onClick={() => {
+                              regionSel.clear()
+                              setSelected(node)
+                            }}
+                          >
+                            {node.name}
+                          </button>
+                          <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {region.lowest.length > 0 && (
+                  <div className="border-t border-[var(--color-border)] pt-3">
+                    <p className="mb-1 font-medium text-alma-800">Weakest here</p>
+                    <ul className="space-y-1">
+                      {region.lowest.map(({ node, score }) => (
+                        <li key={node.id} className="flex items-baseline justify-between gap-2">
+                          <button
+                            type="button"
+                            className="line-clamp-1 text-left text-slate-600 hover:text-alma-800 hover:underline"
+                            onClick={() => {
+                              regionSel.clear()
+                              setSelected(node)
+                            }}
+                          >
+                            {node.name}
+                          </button>
+                          <span className="shrink-0 tabular-nums text-slate-400">{Math.round(score)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {region.topAuthors.length > 0 && (
+                  <div className="border-t border-[var(--color-border)] pt-3">
+                    <p className="mb-1 font-medium text-alma-800">Most present authors</p>
+                    <ul className="space-y-1">
+                      {region.topAuthors.map(([name, count]) => (
+                        <li key={name} className="flex items-baseline justify-between gap-2">
+                          <span className="truncate text-slate-600">{name}</span>
+                          <span className="shrink-0 tabular-nums text-slate-400">{count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </>
+            ) : !selected ? (
               <>
                 <p className="text-sm font-semibold text-alma-800">Map overview</p>
                 <div className="grid grid-cols-2 gap-2">

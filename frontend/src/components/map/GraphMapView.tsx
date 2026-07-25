@@ -70,6 +70,10 @@ export interface GraphMapViewProps {
   /** Colour modes this host offers (default: all). Authors drop Year —
    *  an author has no single publication year (user call 2026-07-25). */
   colourModes?: ReadonlyArray<'clusters' | 'year' | 'score'>
+  /** Rectangle-select (region) mode — drag selects instead of panning. */
+  lassoMode?: boolean
+  /** Region selection landed: the node ids under the rectangle. */
+  onLasso?: (ids: string[]) => void
 }
 
 export function GraphMapView({
@@ -90,6 +94,8 @@ export function GraphMapView({
   toponymScale = 1,
   toponymWordCount = 3,
   colourModes = ['clusters', 'year', 'score'],
+  lassoMode = false,
+  onLasso,
 }: GraphMapViewProps) {
   const [showEdges, setShowEdges] = useState(false)
   const [showToponyms, setShowToponyms] = useState(true)
@@ -353,6 +359,8 @@ export function GraphMapView({
         toponymWordCount={toponymWordCount}
         heatValues={terrainValues}
         heatField={showTerrain && isPaperMap ? signalField.points : undefined}
+        lassoMode={lassoMode}
+        onLasso={onLasso ? (ids) => onLasso(ids) : undefined}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
         renderHover={(id) => {
           const n = nodesById.get(id)

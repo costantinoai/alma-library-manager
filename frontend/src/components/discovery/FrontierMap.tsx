@@ -11,7 +11,7 @@
  * uses, so visuals and knobs cannot fork per surface (50-E/50-F).
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   ChevronDown,
   ChevronUp,
@@ -26,7 +26,8 @@ import {
   X,
 } from 'lucide-react'
 
-import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
+import { getFrontier, type FrontierNode, type Lens } from '@/api/client'
+import { useRegionSelection } from '@/components/map/useRegionSelection'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
 import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
@@ -62,12 +63,6 @@ interface FrontierMapProps {
   onSelectRec?: (paperId: string) => void
 }
 
-/** A pending region selection: the ids under the lasso + its describe payload. */
-interface RegionSelection {
-  ids: string[]
-  anchor: { x: number; y: number }
-  description?: RegionDescription
-}
 
 /** Map distinct branch ids → {color, label, index} in first-seen order. */
 function useBranchColors(nodes: FrontierNode[]) {
@@ -112,7 +107,9 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
-  const [region, setRegion] = useState<RegionSelection | null>(null)
+  // Shared region primitive (same lifecycle as the Map page's Select
+  // region): ids + anchor + the /graphs/region/describe characterisation.
+  const region = useRegionSelection()
   // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
   // clicking the background clears it (user call 2026-07-25, all maps).
   const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
@@ -242,20 +239,31 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     [edges, hiddenEdgeTypes],
   )
 
-  const describeMutation = useMutation({
-    mutationFn: (ids: string[]) => describeRegion(ids),
-    onSuccess: (desc) => setRegion((r) => (r ? { ...r, description: desc } : r)),
-  })
+  // Area score per cluster — mean suggestion score, for the hover card.
+  const clusterAreaScores = useMemo(() => {
+    const acc = new Map<number, { sum: number; n: number }>()
+    for (const n of nodes) {
+      if (n.layer !== 'rec' || typeof n.score !== 'number') continue
+      const cid = typeof n.cluster_id === 'number' ? n.cluster_id : -1
+      if (cid < 0) continue
+      const row = acc.get(cid)
+      if (row) {
+        row.sum += n.score
+        row.n += 1
+      } else acc.set(cid, { sum: n.score, n: 1 })
+    }
+    return new Map([...acc.entries()].map(([cid, { sum, n }]) => [cid, sum / n]))
+  }, [nodes])
 
-  const cancelRegion = () => setRegion(null)
+  const cancelRegion = () => region.clear()
   const adoptRegion = () => {
-    if (!region?.description || !region.description.sufficient) return
+    if (!region.ids || !region.description?.sufficient) return
     onAdoptDirection?.({
       label: region.description.label,
       terms: region.description.top_terms,
       member_paper_ids: region.ids,
     })
-    setRegion(null)
+    region.clear()
     setSelectMode(false)
   }
 
@@ -411,10 +419,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         heatField={showTerrain ? signalField.points : undefined}
         height={520}
         lassoMode={selectMode}
-        onLasso={(ids, anchor) => {
-          setRegion({ ids, anchor })
-          describeMutation.mutate(ids.slice(0, 300))
-        }}
+        onLasso={(ids, anchor) => region.select(ids, anchor)}
         onClickNode={(id) => {
           if (id == null) {
             setFocusClusterId(null)
@@ -440,9 +445,21 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 {n.layer === 'library' ? 'In your library' : n.layer === 'rec' ? 'Suggestion' : 'Seen'}
                 {n.year ? ` · ${n.year}` : ''}
               </p>
-              {typeof n.score === 'number' && n.layer === 'rec' && (
-                <p className="mt-0.5 font-medium text-alma-800">Score {Math.round(n.score)}/100</p>
-              )}
+              {(() => {
+                const area =
+                  typeof n.cluster_id === 'number' && n.cluster_id >= 0
+                    ? clusterAreaScores.get(n.cluster_id)
+                    : undefined
+                const hasScore = typeof n.score === 'number' && n.layer === 'rec'
+                if (!hasScore && area == null) return null
+                return (
+                  <p className="mt-0.5 font-medium text-alma-800">
+                    {hasScore ? `Score ${Math.round(n.score as number)}/100` : ''}
+                    {hasScore && area != null ? ' · ' : ''}
+                    {area != null ? `area ${Math.round(area)}/100` : ''}
+                  </p>
+                )
+              })()}
               {n.branch_label && <p className="mt-0.5 text-slate-500">branch: {n.branch_label}</p>}
               {n.cluster_label && n.cluster_label !== 'Unclustered' && (
                 <p className="mt-0.5 text-slate-400">cluster: {n.cluster_label}</p>
@@ -454,7 +471,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
       >
         {/* Region popover — the describe payload + adopt action. Meaning
             (label + terms + counts) is shown before the action, per 47 §8. */}
-        {region && (
+        {region.ids && (
           <div className="absolute right-3 top-3 z-20 w-72 rounded-sm border border-[var(--color-border)] bg-surface-2 p-3 shadow-paper-lg">
             <div className="mb-2 flex items-start justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
@@ -470,7 +487,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            {describeMutation.isPending || !region.description ? (
+            {region.describing || !region.description ? (
               <div className="flex items-center gap-2 py-3 text-xs text-slate-500">
                 <Loader2 className="h-4 w-4 animate-spin text-alma-folio" />
                 Characterizing {region.ids.length} papers…
@@ -520,7 +537,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                     <button
                       type="button"
                       onClick={() => {
-                        onFilterList(region.ids)
+                        if (region.ids) onFilterList(region.ids)
                         cancelRegion()
                         setSelectMode(false)
                       }}
