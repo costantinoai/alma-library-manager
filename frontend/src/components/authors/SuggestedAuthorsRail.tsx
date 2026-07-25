@@ -30,8 +30,12 @@ import { useToast, errorToast } from '@/hooks/useToast'
 // Expanded view shows up to this many rows of the measured grid.
 const EXPANDED_ROWS = 5
 // Server route enforces its own ceiling (limit ≤ 30) — fetch right up to it
-// so the expanded view (max 6 columns × 5 rows) is always covered.
-const FETCH_COUNT = 30
+// so the expanded view (max 6 columns × 5 rows) is always covered. Exported so
+// the Authors map can mark the SAME suggestions as hollow dots off ONE cached
+// query — a second limit would make the rail and the map disagree about who is
+// currently suggested.
+export const AUTHOR_SUGGESTION_FETCH_COUNT = 30
+const FETCH_COUNT = AUTHOR_SUGGESTION_FETCH_COUNT
 
 // ── Container-measured grid ──────────────────────────────────────────
 // The card count is DYNAMIC: we measure the rail's container width and fit

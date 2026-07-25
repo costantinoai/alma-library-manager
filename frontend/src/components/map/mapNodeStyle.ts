@@ -9,7 +9,8 @@
  *                     seen slate) — never quality, never state
  *   opacity         = layer weight  (context 1.0 · hero 0.9 · ambient 0.25 ·
  *                     dimmed-by-filter 0.15 — dimmed, never hidden)
- *   outline ring    = transient state (selected = folio accent, hover = ink)
+ *   outline ring    = state/provenance (selected = folio accent, hover = ink,
+ *                     author suggestion = brand gold)
  *   size            = one magnitude at a time (citations log-scale or uniform)
  *
  * Hosts (Discovery frontier, Map page, Authors network) pass a `kind` per
@@ -30,6 +31,8 @@ export const MAP_INK = {
   ambientSoft: '#CBD5E1',
   /** Folio accent — selection ring + lasso ONLY (accent = selected, always). */
   accent: '#2F80C4',
+  /** Brand gold — persistent author-suggestion provenance outline. */
+  suggestionGold: '#C49A45',
   /** Hover ring — ink, weaker than selection. */
   hoverRing: '#475569',
   /** Toponym (cluster label) ink on the cool map field. */
@@ -42,7 +45,15 @@ export type MapNodeKind =
   | 'suggestion' // a candidate the engine surfaced — the hero layer
   | 'seen' // seen-but-unacted — ambient history
   | 'corpus' // tracked corpus paper (Map page base layer)
-  | 'author' // an author node (Authors network host)
+  // Authors map — the SAME three-tier common space as the paper maps, on the
+  // same channels (fill = yours, hollow = suggested, faint = context). One
+  // shared plate: the people you already follow or have saved, the people the
+  // engine is offering you, and the rest of the corpus, all placed by what they
+  // write about. Separate kinds from the paper tiers only so the registry can
+  // own author-accurate legend words (2026-07-26).
+  | 'author_library' // followed, or a co-author of a paper you saved
+  | 'author_suggested' // currently offered in the author suggestions
+  | 'author_corpus' // every other author in scope — context
 
 export interface MapNodeStyle {
   /** FILLED disc (yours) vs HOLLOW ring-dot (not yours yet). */
@@ -88,14 +99,45 @@ export const MAP_NODE_STYLES: Record<MapNodeKind, MapNodeStyle> = {
     defaultColor: MAP_INK.ambient,
     legend: 'Tracked corpus paper',
   },
-  author: {
+  author_library: {
     filled: true,
     opacity: 1.0,
-    radius: 4,
+    radius: 3.6,
     defaultColor: MAP_INK.library,
-    legend: 'Author — sized by publications',
+    legend: 'Yours — followed or in your library',
+  },
+  author_suggested: {
+    filled: false,
+    opacity: 0.9,
+    // Same near-equal radius rule as the paper tiers: ownership is the
+    // fill-vs-hollow channel, so size must not also shout "other species".
+    radius: 3.9,
+    defaultColor: MAP_INK.accent,
+    legend: 'Suggested to follow — hollow',
+  },
+  author_corpus: {
+    filled: true,
+    opacity: 0.4,
+    radius: 3,
+    defaultColor: MAP_INK.ambient,
+    legend: 'Other author in scope — faint',
   },
 }
+
+/**
+ * Draw order = z order: ambient context first, hero layer last. The renderer
+ * paints in this order and the legend LISTS in this order, so the reading
+ * order of the key matches the stacking order on the plate.
+ */
+export const MAP_NODE_DRAW_ORDER: readonly MapNodeKind[] = [
+  'seen',
+  'corpus',
+  'author_corpus',
+  'author_library',
+  'library',
+  'author_suggested',
+  'suggestion',
+]
 
 /** Opacity applied to nodes OUTSIDE the active selection/filter. Dimmed,
  *  never hidden — the territory stays visible while a region is in focus. */
@@ -104,6 +146,7 @@ export const DIMMED_OPACITY = 0.15
 /** Ring widths (px at zoom 1). Selection ring is ALWAYS the folio accent. */
 export const SELECTION_RING = { color: MAP_INK.accent, width: 2.5 }
 export const HOVER_RING = { color: MAP_INK.hoverRing, width: 1.5 }
+export const SUGGESTION_OUTLINE = { color: MAP_INK.suggestionGold, width: 2 }
 
 /** Hollow ring stroke width for suggestion dots. */
 export const HOLLOW_STROKE_WIDTH = 1.4

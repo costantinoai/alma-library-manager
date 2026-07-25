@@ -38,8 +38,10 @@ import {
   HOVER_RING,
   MAP_FIELD,
   MAP_INK,
+  MAP_NODE_DRAW_ORDER,
   MAP_NODE_STYLES,
   SELECTION_RING,
+  SUGGESTION_OUTLINE,
   radiusFor,
   terrainColor,
   type MapNodeKind,
@@ -63,6 +65,9 @@ export interface SemanticMapNode {
   /** New-in-latest-set marker: a dashed halo in the node's own grouping
    *  colour — a temporal fact about the same node, never a colour change. */
   halo?: boolean
+  /** Persistent gold provenance outline. Used for authors currently offered
+   *  by the suggestion engine; independent of cluster/score colour. */
+  suggestionOutline?: boolean
 }
 
 export interface SemanticMapEdge {
@@ -92,8 +97,14 @@ export interface SemanticMapProps {
    *  point (edge-flipped, pointer-transparent) so every host gets the same
    *  at-cursor behaviour — hosts supply only the words. */
   renderHover?: (id: string) => React.ReactNode
+  /** Interactive click card for a node. The plate owns the selected id,
+   *  screen anchor, edge flipping, background-dismiss, and Escape-dismiss;
+   *  hosts supply only the card body and its domain actions. */
+  renderClick?: (id: string, close: () => void) => React.ReactNode
   /** Dot-size multiplier (host knob; 1 = registry default). */
   sizeScale?: number
+  /** Dot-alpha multiplier (host knob; preserves relative layer/dim opacity). */
+  dotOpacity?: number
   /** 50-J score heatmap: per-node valence in [-1, +1]. When present, a
    *  smoothed divergent wash (red → yellow → green) renders UNDER the dots —
    *  the local average of the values around each point. View-only; a DATA
@@ -112,6 +123,9 @@ export interface SemanticMapProps {
   onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
   /** Host HTML overlays (hover card, region popover) — absolutely positioned. */
   children?: React.ReactNode
+  /** Stable host identity used to restore a resolution-independent camera
+   *  after route unmount/remount. Omit for an intentionally ephemeral map. */
+  viewStateKey?: string
   className?: string
 }
 
@@ -142,21 +156,26 @@ export function SemanticMap({
   height = 560,
   selectedIds,
   sizeScale = 1,
+  dotOpacity = 1,
   heatValues,
   heatField,
   onHover,
   onClickNode,
   renderHover,
+  renderClick,
   lassoMode = false,
   onLasso,
   children,
+  viewStateKey,
   className,
 }: SemanticMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [width, setWidth] = useState(800)
-  const { viewport, fit, zoomAt, panStart, panMove, panEnd, isPanning } = useMapViewport(width, height)
+  const { viewport, fit, zoomAt, panStart, panMove, panEnd, isPanning } =
+    useMapViewport(width, height, viewStateKey)
   const [hoverId, setHoverId] = useState<string | null>(null)
+  const [clickedId, setClickedId] = useState<string | null>(null)
   const [lassoRect, setLassoRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const lassoRef = useRef<{ x1: number; y1: number } | null>(null)
   const movedRef = useRef(false)
@@ -173,13 +192,26 @@ export function SemanticMap({
     return () => ro.disconnect()
   }, [])
 
-  // Refit when the node set identity changes materially (first data arrival).
-  const hasNodes = nodes.length > 0
-  useEffect(() => {
-    fit()
-  }, [fit, hasNodes])
-
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  const closeClickCard = useCallback(() => {
+    setClickedId(null)
+    setHoverId(null)
+  }, [])
+
+  // A refetch can remove the selected node (for example after dismissing a
+  // recommendation). Never leave a detached card floating at stale coords.
+  useEffect(() => {
+    if (clickedId && !byId.has(clickedId)) setClickedId(null)
+  }, [byId, clickedId])
+
+  useEffect(() => {
+    if (!clickedId) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeClickCard()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [clickedId, closeClickCard])
   // Strongest-first order, computed once per edge set — the draw loop stops
   // at the budget, so it must meet the best edges first.
   const sortedEdges = useMemo(
@@ -474,9 +506,8 @@ export function SemanticMap({
       )
     }
 
-    // Nodes by layer weight: ambient first, hero last (draw order = z order).
-    const drawOrder: MapNodeKind[] = ['seen', 'corpus', 'author', 'library', 'suggestion']
-    for (const kind of drawOrder) {
+    // Nodes by layer weight: ambient first, hero last (registry owns the order).
+    for (const kind of MAP_NODE_DRAW_ORDER) {
       const style = MAP_NODE_STYLES[kind]
       for (const n of nodes) {
         if (n.kind !== kind) continue
@@ -484,7 +515,9 @@ export function SemanticMap({
         if (!p || !visible(p[0], p[1])) continue
         const r = radiusFor(kind, n.sizeValue ?? null, maxSizeValue) * sizeScale
         const color = n.color ?? style.defaultColor
-        ctx.globalAlpha = n.dimmed ? DIMMED_OPACITY : style.opacity
+        ctx.globalAlpha =
+          (n.dimmed ? DIMMED_OPACITY : style.opacity) *
+          Math.max(0.2, Math.min(1, dotOpacity))
         if (n.halo) {
           // "New this refresh": dashed halo in the grouping colour.
           ctx.beginPath()
@@ -514,6 +547,16 @@ export function SemanticMap({
           ctx.strokeStyle = color
           ctx.stroke()
         }
+        if (n.suggestionOutline) {
+          // Suggestions keep their gold provenance even when the dot itself is
+          // coloured by cluster or score. It is an outer outline, not a fill,
+          // so ownership and grouping retain their existing channels.
+          ctx.beginPath()
+          ctx.arc(p[0], p[1], r + 2, 0, Math.PI * 2)
+          ctx.lineWidth = SUGGESTION_OUTLINE.width
+          ctx.strokeStyle = SUGGESTION_OUTLINE.color
+          ctx.stroke()
+        }
       }
     }
     ctx.globalAlpha = 1
@@ -525,7 +568,9 @@ export function SemanticMap({
       if (!n || !p) return
       const r = radiusFor(n.kind, n.sizeValue ?? null, maxSizeValue) * sizeScale
       ctx.beginPath()
-      ctx.arc(p[0], p[1], r + pad, 0, Math.PI * 2)
+      // Keep transient hover/selection outside the persistent gold suggestion
+      // outline, so selecting a suggested author never erases its provenance.
+      ctx.arc(p[0], p[1], r + pad + (n.suggestionOutline ? 2 : 0), 0, Math.PI * 2)
       ctx.lineWidth = spec.width
       ctx.strokeStyle = spec.color
       ctx.stroke()
@@ -576,6 +621,7 @@ export function SemanticMap({
     height,
     maxSizeValue,
     sizeScale,
+    dotOpacity,
   ])
 
   // ── Pointer interactions ──────────────────────────────────────────────────
@@ -638,7 +684,10 @@ export function SemanticMap({
     panEnd()
     if (!movedRef.current) {
       // null = background click — hosts treat it as deselect.
-      onClickNode?.(hitTest(sx, sy))
+      const id = hitTest(sx, sy)
+      setClickedId(renderClick ? id : null)
+      if (id == null) setHoverId(null)
+      onClickNode?.(id)
     }
   }
 
@@ -679,7 +728,7 @@ export function SemanticMap({
       />
       {/* At-cursor hover card — positioned at the dot, flipped away from the
           nearest edges so it never clips. Hosts only supply the content. */}
-      {renderHover && hoverId && (() => {
+      {renderHover && hoverId && hoverId !== clickedId && (() => {
         const p = screenPos.get(hoverId)
         if (!p) return null
         const flipX = p[0] > width - 300
@@ -694,6 +743,31 @@ export function SemanticMap({
             }}
           >
             {renderHover(hoverId)}
+          </div>
+        )
+      })()}
+
+      {/* Interactive dot card — one anchored shell for every map host.
+          `right`/`bottom` anchoring avoids guessing the card's rendered
+          dimensions and keeps it inside the clipped map plate. */}
+      {renderClick && clickedId && (() => {
+        const p = screenPos.get(clickedId)
+        if (!p) return null
+        const flipX = p[0] > width - 390
+        const flipY = p[1] > height - 280
+        return (
+          <div
+            className="absolute z-30 max-h-[calc(100%-1rem)] w-[22rem] max-w-[calc(100%-1rem)] overflow-y-auto rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-lg"
+            style={{
+              left: flipX ? undefined : p[0] + 14,
+              right: flipX ? width - p[0] + 14 : undefined,
+              top: flipY ? undefined : p[1] + 14,
+              bottom: flipY ? height - p[1] + 14 : undefined,
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {renderClick(clickedId, closeClickCard)}
           </div>
         )
       })()}
