@@ -142,6 +142,27 @@ Every status row is clickable, drilling into the items it affects:
   (`alma.services.author_attention`: identity ladder, degraded monitors,
   corpus-backfill states), so their counts and rows can never disagree.
 
+### Suggested but unplaceable
+
+`authors.unplaceable` counts authors the engine is currently suggesting that
+the corpus holds **fewer than two papers** for. Below two papers an author is
+invisible three times over: no dot on the [author map](analytics.md) (the
+layout needs two papers to place someone), no sample titles on their suggestion
+card (those are read from your local corpus, so "No sample title" is a missing
+*paper*, not missing metadata), and no score. The engine recommends them while
+showing you nothing to judge them on.
+
+**Seed their papers** repairs it: their most-cited first-author works are
+fetched and landed as tracked corpus papers — enough to place them, caption
+them, and score them. Papers save as `tracked`, never to your Library.
+
+Some authors can never clear the bar: OpenAlex genuinely holds fewer than two
+works for them. Those are recorded as **tried and terminal** and reported
+separately as `exhausted`, so the row converges to zero outstanding instead of
+nagging forever with a repair that can't move it. This is the same
+tried-and-terminal treatment papers get when Semantic Scholar has no vector for
+them.
+
 ## Observed — no automatic repair
 
 Data gaps that have no one-click fix are listed read-only at the bottom, so

@@ -18,6 +18,38 @@ page to follow / unfollow people, fix identifier mismatches, and
 review **author suggestions** (the people you don't follow yet that
 ALMa thinks you should).
 
+## The author map
+
+The page opens on a map of everyone in scope, placed by **what they
+write about** — so people working on similar things sit together and
+the map shows the research communities behind your corpus. Clicking a
+dot opens a compact card with their profile and follow controls.
+
+Membership reads on the **same three channels as the paper maps**, one
+shared space:
+
+| | means |
+|---|---|
+| **Filled dot** | Yours — you follow them, or they co-authored a paper you saved. A **dashed ring** marks the followed ones specifically. |
+| **Hollow dot** | Currently suggested to you — the same suggestions as the rail below, shown where they actually sit relative to your people. |
+| **Faint dot** | Everyone else in scope: context, not a claim. |
+
+**Scope** switches between the authors of papers you saved and every
+tracked paper. **Colour** shows communities (clusters) or the engine's
+score; the **Terrain** overlay washes the space by how you actually feel
+about each author's papers — saves, ratings and dismissals first, engine
+score as weaker evidence, on the [same weights](analytics.md) the paper
+map's terrain uses. Authors you have no signal on leave the paper bare
+rather than flattening the whole picture toward neutral.
+
+There are **no link lines**: on an author map adjacency already *is*
+collaboration (co-authorship helps build the layout), so drawing the
+links again would only restate position and bury the dots.
+
+An author with no embedded paper has no semantic position, so they are
+**left off and counted** in the legend rather than parked somewhere
+arbitrary — see [seeding a suggestion's evidence](#seeding-a-suggestions-evidence).
+
 ## Adding an author
 
 You can add by:
@@ -143,6 +175,27 @@ from a cache (`author_suggestion_cache`) that's refreshed
 asynchronously by **Refresh network** (Authors → ⋯ → Refresh
 network buckets) so the rail never makes blocking external API
 calls.
+
+### Seeding a suggestion's evidence
+
+A suggested author is, almost by definition, someone whose work you
+don't have yet — typically 0–1 papers locally. That thinness used to
+show everywhere at once: no dot on the author map (placement needs two
+papers), **"No sample title"** on the card, and no score. The sample
+titles are read from *your* corpus, so a blank card meant a missing
+paper, not missing metadata.
+
+**Refresh network** now also seeds them: for each suggestion under two
+local papers, ALMa fetches their most-cited **first-author** works —
+topped up by citations in any position if they don't have two, so a
+senior author who always publishes last still lands something — and
+saves them as `tracked` corpus papers (never to your Library). One
+bounded fetch per author restores the dot, the titles, and the score
+together.
+
+Authors OpenAlex holds fewer than two works for can't be placed at all.
+That verdict is recorded once and reported as *exhausted* on the
+[Health](health.md) page rather than re-attempted forever.
 
 ### How a candidate's score is built
 
