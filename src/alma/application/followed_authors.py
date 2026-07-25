@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 # An author goes STALE when nothing has pulled them in over ~4 months —
@@ -65,10 +66,10 @@ def _insert_author_row(
         "id": author_id,
         "name": name,
         "author_type": "followed",
-        "added_at": datetime.utcnow().isoformat(),
+        "added_at": utcnow().isoformat(),
         "id_resolution_status": "resolved_manual" if openalex_id else "unresolved",
         "id_resolution_reason": "Created from followed_authors canonicalization",
-        "id_resolution_updated_at": datetime.utcnow().isoformat(),
+        "id_resolution_updated_at": utcnow().isoformat(),
     }
     if openalex_id:
         payload["openalex_id"] = openalex_id
@@ -97,9 +98,17 @@ def resolve_canonical_author_id(
         return None
 
     try:
+        # OpenAlex author ids are case-insensitive identifiers, and the two
+        # tables disagree on case: `authors.id` is stored lower-cased while
+        # `publication_authors.openalex_id` (what the author map's nodes are
+        # keyed by) is upper-cased. A case-SENSITIVE match therefore missed the
+        # existing row and `create_if_missing` minted a duplicate author under
+        # the other casing. Exact match still wins; the case-folded match is the
+        # fallback (2026-07-26).
         row = db.execute(
-            "SELECT id FROM authors WHERE id = ? LIMIT 1",
-            (raw,),
+            "SELECT id FROM authors WHERE id = ? OR lower(id) = lower(?) "
+            "ORDER BY (id = ?) DESC LIMIT 1",
+            (raw, raw, raw),
         ).fetchone()
         if row:
             return str(row["id"] if isinstance(row, sqlite3.Row) else row[0])
@@ -166,7 +175,7 @@ def ensure_followed_author_contract(db: sqlite3.Connection) -> int:
             existing_followed_at = str(existing["followed_at"] if isinstance(existing, sqlite3.Row) else existing[0] or "")
             merged_followed_at = min(
                 [v for v in (followed_at, existing_followed_at) if v],
-                default=datetime.utcnow().isoformat(),
+                default=utcnow().isoformat(),
             )
             merged_notify = max(
                 notify_new,
@@ -232,7 +241,7 @@ def apply_follow_state(
             notify_new_papers INTEGER DEFAULT 1
         )"""
     )
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     if followed:
         db.execute(
             """
@@ -347,7 +356,7 @@ def schedule_followed_author_historical_backfill(
         )
 
     job_id = f"author_deep_refresh_{uuid.uuid4().hex[:10]}"
-    started_at = datetime.utcnow().isoformat()
+    started_at = utcnow().isoformat()
     set_job_status(
         job_id,
         status="queued",
@@ -589,7 +598,7 @@ def _backfill_status_from_inputs(
     success_at = _parse_iso_datetime((latest_success["finished_at"] if latest_success else None) or (latest_success["updated_at"] if latest_success else None))
     age_days: int | None = None
     if success_at is not None:
-        age_days = max(0, int((datetime.utcnow() - success_at).total_seconds() // 86400))
+        age_days = max(0, int((utcnow() - success_at).total_seconds() // 86400))
 
     # "Last pulled" = the newest of ANY successful ingest for this author —
     # full-history backfill or a feed-monitor pull. Staleness is judged on
@@ -598,7 +607,7 @@ def _backfill_status_from_inputs(
     pulled_at = max((d for d in (success_at, monitor_pull) if d is not None), default=None)
     pull_age_days: int | None = None
     if pulled_at is not None:
-        pull_age_days = max(0, int((datetime.utcnow() - pulled_at).total_seconds() // 86400))
+        pull_age_days = max(0, int((utcnow() - pulled_at).total_seconds() // 86400))
 
     thin = bool(expected_floor and background_count < expected_floor)
     stale = bool(
@@ -754,7 +763,7 @@ def get_followed_author_backfill_status_map(
                 """,
                 author_ids,
             ).fetchall():
-                value = str((row["t"] or "")).strip()
+                value = str(row["t"] or "").strip()
                 if value:
                     monitor_pulls[str(row["author_id"] or "").strip()] = value
         except sqlite3.OperationalError:

@@ -7,7 +7,7 @@ import logging
 import re
 import sqlite3
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from alma.application.author_signal import (
     compute_author_signal,
@@ -31,6 +31,7 @@ from alma.core.scoring_math import (
     log_prevalence_weights,
 )
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import _normalize_openalex_author_id as _normalize_oaid
 
@@ -1135,7 +1136,7 @@ def annotate_external_authors_with_local_identity(
     followed_orcids: set[str] = set()
     if _table_exists(db, "followed_authors") and _table_exists(db, "authors"):
         rows = db.execute(
-            f"""
+            """
             SELECT a.openalex_id, a.orcid
             FROM followed_authors fa
             JOIN authors a ON a.id = fa.author_id
@@ -1540,14 +1541,14 @@ def _load_dismissal_signature(
         and _table_exists(db, "publication_authors")
     ):
         return {}, {}, {}, {}
-    cutoff = (datetime.utcnow() - timedelta(days=lookback_days)).isoformat()
+    cutoff = (utcnow() - timedelta(days=lookback_days)).isoformat()
     topics: dict[str, int] = {}
     venues: dict[str, int] = {}
     coauthors: dict[str, int] = {}
     institutions: dict[str, int] = {}
     try:
         rows = db.execute(
-            f"""
+            """
             WITH dismissed AS (
                 SELECT DISTINCT lower(openalex_id) AS oid
                 FROM missing_author_feedback
@@ -2518,7 +2519,7 @@ def list_author_suggestions(
     followed_ids: set[str] = set()
     if _table_exists(db, "followed_authors") and _table_exists(db, "authors"):
         followed_rows = db.execute(
-            f"""
+            """
             SELECT a.openalex_id
             FROM followed_authors fa
             JOIN authors a ON a.id = fa.author_id
@@ -2615,7 +2616,7 @@ def list_author_suggestions(
     dismissal_topic_set = set(dismissal_topic_signature.keys())
     dismissal_venue_set = set(dismissal_venue_signature.keys())
     dismissal_institution_set = set(dismissal_institution_signature.keys())
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
 
     suggestions: list[dict] = []
     seen_candidates: set[str] = set()
@@ -3575,6 +3576,111 @@ def touch_last_fetched(db: sqlite3.Connection, author_id: str) -> bool:
     """Mark an author as fetched now."""
     cursor = db.execute(
         "UPDATE authors SET last_fetched_at = ? WHERE id = ?",
-        (datetime.utcnow().isoformat(), author_id),
+        (utcnow().isoformat(), author_id),
     )
     return cursor.rowcount > 0
+
+
+def seed_thin_suggestion_authors(
+    db_path: str,
+    *,
+    limit: int = 30,
+    ctx: object | None = None,
+) -> dict:
+    """Give every under-covered suggested author enough corpus to be visible.
+
+    The problem this closes (measured 2026-07-26 against the live corpus): an
+    author surfaced by citation or co-author expansion is suggested PRECISELY
+    because you don't have their work yet, so they typically hold 0–1 papers
+    locally. Below two papers they are invisible three times over:
+
+      * no dot on the author map — `projections._MIN_AUTHOR_PUBS` needs two;
+      * no evidence on the suggestion card — `_sample_titles_for_openalex_author`
+        reads titles from the LOCAL corpus, so "No sample title" is not missing
+        metadata, it is a missing paper;
+      * no score — the author field averages over papers we hold, and holds none.
+
+    Seeding their most-cited own papers fixes all three from one fetch. Only the
+    thin ones are touched (7 of 30 on the measured corpus), so the cost is a
+    handful of OpenAlex calls, not one per suggestion.
+
+    Authors added through `POST /authors` do NOT come here: `create_author`
+    already queues `schedule_followed_author_historical_backfill`, which
+    paginates their entire output — strictly more coverage than a seed.
+    """
+    from alma.api.deps import open_db_connection
+    from alma.application.author_backfill import (
+        SEED_TARGET_PAPERS,
+        count_local_papers_for_author,
+        seed_papers_for_author,
+    )
+
+    def _log(step: str, message: str, **progress) -> None:
+        if ctx is not None:
+            try:
+                ctx.log_step(step, message=message, **progress)
+            except Exception:
+                logger.debug("seed_thin_suggestion_authors log failed on %s", step, exc_info=True)
+
+    summary = {
+        "considered": 0,
+        "thin": 0,
+        "seeded": 0,
+        "papers_landed": 0,
+        "vectors_fetched": 0,
+        "failures": 0,
+    }
+    conn = open_db_connection()
+    try:
+        suggestions = list_author_suggestions(conn, limit=limit)
+        summary["considered"] = len(suggestions)
+
+        # Recount locally rather than trusting the payload's `local_paper_count`:
+        # several buckets (e.g. `cited_by_high_signal`) hardcode it to 0 because
+        # they never looked, and seeding an author who already has papers would
+        # spend an OpenAlex call to land nothing.
+        thin: list[tuple[str, str]] = []
+        for suggestion in suggestions:
+            openalex_id = str(suggestion.get("openalex_id") or "").strip()
+            if not openalex_id:
+                continue
+            if count_local_papers_for_author(conn, openalex_id) < SEED_TARGET_PAPERS:
+                thin.append((openalex_id, str(suggestion.get("name") or openalex_id)))
+        summary["thin"] = len(thin)
+        _log("seed_scan", f"{len(thin)} of {len(suggestions)} suggestions are under-covered")
+
+        for index, (openalex_id, name) in enumerate(thin, start=1):
+            try:
+                result = seed_papers_for_author(conn, openalex_id)
+            except Exception as exc:  # noqa: BLE001 — one author must not sink the batch
+                logger.warning("suggestion seed failed for %s (%s): %s", name, openalex_id, exc)
+                summary["failures"] += 1
+                continue
+            landed = int(result.get("papers_landed") or 0)
+            if landed:
+                summary["seeded"] += 1
+                summary["papers_landed"] += landed
+                summary["vectors_fetched"] += int(result.get("vectors_fetched") or 0)
+            _log(
+                "seed_author",
+                f"{name}: {landed} paper(s) landed",
+                processed=index,
+                total=len(thin),
+            )
+
+        # The suggestion cache holds the OLD, evidence-free rows. Drop the
+        # affected source slots so the next read rebuilds with the sample titles
+        # these papers just provided — otherwise the cards stay blank until the
+        # cache expires on its own and the work looks like it did nothing.
+        if summary["papers_landed"]:
+            from alma.core.db_write import write_section
+
+            try:
+                with write_section(conn, label="suggestion cache invalidate after seed"):
+                    conn.execute("DELETE FROM author_suggestion_cache")
+            except sqlite3.OperationalError as exc:
+                logger.debug("suggestion cache invalidation skipped: %s", exc)
+
+        return summary
+    finally:
+        conn.close()

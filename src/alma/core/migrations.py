@@ -47,6 +47,8 @@ import logging
 import sqlite3
 from collections.abc import Callable
 
+from alma.core.time import utcnow
+
 logger = logging.getLogger("alma.core.migrations")
 
 
@@ -688,7 +690,6 @@ def _m_0020_topic_aliases_legacy_shape(conn: sqlite3.Connection) -> None:
     cols = _table_columns(conn, "topic_aliases")
     if "alias_term" not in cols or "topic_id" in cols:
         return
-    from datetime import datetime
 
     from alma.library.topic_deduplication import (
         _topic_id_from_normalized,
@@ -724,13 +725,13 @@ def _m_0020_topic_aliases_legacy_shape(conn: sqlite3.Connection) -> None:
             """INSERT OR IGNORE INTO topics
                (topic_id, canonical_name, normalized_name, source, created_at)
                VALUES (?, ?, ?, 'auto', ?)""",
-            (topic_id, canonical, canonical_normalized, datetime.utcnow().isoformat()),
+            (topic_id, canonical, canonical_normalized, utcnow().isoformat()),
         )
         conn.execute(
             """INSERT OR IGNORE INTO topic_aliases
                (topic_id, raw_term, normalized_term, source, confidence, created_at)
                VALUES (?, ?, ?, 'auto', 1.0, ?)""",
-            (topic_id, raw, normalized, datetime.utcnow().isoformat()),
+            (topic_id, raw, normalized, utcnow().isoformat()),
         )
         migrated += 1
     if migrated:
@@ -1070,6 +1071,41 @@ def _m_0032_single_corpus_substrate(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM publication_clusters WHERE scope != 'corpus'")
 
 
+def _m_0033_author_seed_status(conn: sqlite3.Connection) -> None:
+    """Terminal outcome of a suggested-author paper seed (2026-07-26).
+
+    The `author_seed_thin` repair lands an author's most-cited own papers so
+    they clear `projections._MIN_AUTHOR_PUBS` and gain a map position, sample
+    titles, and a score. Some authors CANNOT clear it: OpenAlex genuinely holds
+    fewer than two works for them (observed live — two suggested authors with
+    exactly one work in the entire index). Without a record of that, the
+    `authors.unplaceable` health row counts them forever and every repair run
+    reports "Seeded 0 of N" — a gap that nags and never converges.
+
+    So we record the attempt, exactly as `publication_embedding_fetch_status`
+    does for papers S2 has no vector for: `status='exhausted'` means tried and
+    terminal, and the health dimension reports it as `exhausted` rather than as
+    outstanding work.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS author_seed_status (
+            author_openalex_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            declared_works INTEGER,
+            local_papers INTEGER,
+            reason TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_author_seed_status_status "
+        "ON author_seed_status(status)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1103,6 +1139,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (30, "reorder_position", _m_0030_reorder_position),
     (31, "ai_provider_local_when_available", _m_0031_ai_provider_local_when_available),
     (32, "single_corpus_substrate", _m_0032_single_corpus_substrate),
+    (33, "author_seed_status", _m_0033_author_seed_status),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

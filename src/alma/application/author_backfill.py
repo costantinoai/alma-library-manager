@@ -757,6 +757,304 @@ def refresh_author_works_and_vectors(
         conn.close()
 
 
+# -- bounded seed ----------------------------------------------------
+
+SEED_TARGET_PAPERS = 2
+"""How many of an author's own papers the corpus needs before they become a
+first-class citizen of the semantic surfaces.
+
+TWO, because that is `alma.ai.projections._MIN_AUTHOR_PUBS` — the author map
+refuses to place anyone below it (one paper is not a research position, it is a
+coincidence). The same threshold also gives `_sample_titles_for_openalex_author`
+something to show and gives the author field two papers to average a score over.
+"""
+
+_SEED_SCAN_PER_PAGE = 50
+"""Candidates pulled per author. Deliberately >> SEED_TARGET_PAPERS: the top
+hits are frequently near-duplicates of each other (OpenAlex lists
+"identification-categorization" and "identification–categorization" as separate
+works), and dedup collapses them on landing, so taking exactly N candidates
+would reliably land fewer than N papers."""
+
+
+def _author_position_in_work(work: dict, openalex_id: str) -> str:
+    """This author's `author_position` on this work ("first"/"middle"/"last")."""
+    oid = str(openalex_id or "").strip().lower()
+    if not oid:
+        return ""
+    for authorship in work.get("authorships") or []:
+        if str(authorship.get("openalex_id") or "").strip().lower() == oid:
+            return str(authorship.get("position") or "").strip().lower()
+    return ""
+
+
+SEED_STATUS_SEEDED = "seeded"
+SEED_STATUS_EXHAUSTED = "exhausted"
+"""Tried and TERMINAL: upstream simply does not hold `SEED_TARGET_PAPERS` works
+for this author, so no repair can ever place them. Mirrors
+`s2_vectors.TERMINAL_FETCH_STATUSES` — the health dimension reports these as
+`exhausted` instead of counting them as outstanding work forever."""
+
+
+def _record_seed_attempt(
+    conn: sqlite3.Connection,
+    openalex_id: str,
+    *,
+    status: str,
+    declared_works: int | None,
+    local_papers: int,
+    reason: str = "",
+) -> None:
+    """Stamp the outcome of one seed attempt (own gated write section)."""
+    try:
+        with write_section(conn, label="author seed status"):
+            conn.execute(
+                """
+                INSERT INTO author_seed_status (
+                    author_openalex_id, status, declared_works, local_papers,
+                    reason, attempts, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(author_openalex_id) DO UPDATE SET
+                    status = excluded.status,
+                    declared_works = excluded.declared_works,
+                    local_papers = excluded.local_papers,
+                    reason = excluded.reason,
+                    attempts = author_seed_status.attempts + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    openalex_id.lower(),
+                    status,
+                    declared_works,
+                    local_papers,
+                    reason[:500],
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+    except sqlite3.OperationalError as exc:
+        # Pre-migration DB: the seed itself still worked, only the bookkeeping
+        # is unavailable. Never let a status stamp lose landed papers.
+        logger.debug("author_seed_status unavailable for %s: %s", openalex_id, exc)
+
+
+def _existing_paper_ids_for_author(conn: sqlite3.Connection, openalex_id: str) -> set[str]:
+    """The corpus paper ids already linked to this author (any status)."""
+    oid = str(openalex_id or "").strip().lower()
+    if not oid:
+        return set()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT paper_id FROM publication_authors WHERE lower(openalex_id) = ?",
+            (oid,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {str(r["paper_id"] if isinstance(r, sqlite3.Row) else r[0]) for r in rows}
+
+
+def count_local_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -> int:
+    """How many first-class corpus papers we hold for this OpenAlex author."""
+    oid = str(openalex_id or "").strip().lower()
+    if not oid:
+        return 0
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT pa.paper_id) AS n
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            WHERE lower(pa.openalex_id) = ?
+              AND {standalone_paper_sql('p')}
+            """,
+            (oid,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
+
+
+def seed_papers_for_author(
+    conn: sqlite3.Connection,
+    author_openalex_id: str,
+    *,
+    target_papers: int = SEED_TARGET_PAPERS,
+    log: Callable[..., None] | None = None,
+) -> dict:
+    """Land an author's most-cited OWN papers so they gain a semantic position.
+
+    The bounded sibling of `refresh_author_works_and_vectors`: that one paginates
+    an author's entire output to make their centroid honest; this one fetches the
+    few papers needed to make them EXIST on the semantic surfaces at all.
+
+    Why it is needed (measured 2026-07-26): an author suggested from citation or
+    co-author expansion typically has 0–1 papers in the corpus — they are
+    suggested precisely because you don't have them yet. Below two papers they
+    have no map dot (`_MIN_AUTHOR_PUBS`), no sample titles (those are read from
+    the local corpus), and no score (nothing to average). The suggestion card was
+    therefore thinnest exactly where the user most needed evidence.
+
+    Selection: their most-cited FIRST-AUTHOR works, topped up with their
+    most-cited works in any position if they don't have enough. The top-up is not
+    a nicety — a senior PI who publishes last-author would otherwise land nothing
+    and stay invisible, which is the failure this function exists to remove.
+
+    Papers land as `status='tracked'` (corpus context, never Library — D2/D4).
+
+    Returns a summary dict; never raises on upstream failure.
+    """
+
+    def _log(step: str, message: str, **progress: Any) -> None:
+        if log is not None:
+            try:
+                log(step, message, **progress)
+            except Exception:
+                logger.debug("seed log failed on %s", step, exc_info=True)
+
+    oid_norm = openalex_client._normalize_openalex_author_id(author_openalex_id)
+    summary: dict[str, Any] = {
+        "author_openalex_id": oid_norm,
+        "existing_local": 0,
+        "papers_landed": 0,
+        "first_author_used": 0,
+        "topped_up": 0,
+        "vectors_fetched": 0,
+        "skipped": False,
+        "reason": "",
+    }
+    if not oid_norm:
+        summary["skipped"] = True
+        summary["reason"] = "no_openalex_id"
+        return summary
+
+    existing = count_local_papers_for_author(conn, oid_norm)
+    summary["existing_local"] = existing
+    if existing >= target_papers:
+        summary["skipped"] = True
+        summary["reason"] = "already_covered"
+        return summary
+
+    # Gather over the network FIRST — never hold a write txn across HTTP.
+    page = openalex_client.fetch_works_page_for_author(
+        oid_norm, per_page=_SEED_SCAN_PER_PAGE, sort="cited_by_count:desc"
+    )
+    candidates = page.get("results") or []
+    # What upstream actually HOLDS for this author. `total` is the OpenAlex
+    # result count; the page length is the floor when the meta count is absent.
+    declared = page.get("total")
+    declared_works = int(declared) if isinstance(declared, int) else len(candidates)
+    summary["declared_works"] = declared_works
+
+    if not candidates:
+        summary["skipped"] = True
+        summary["reason"] = str(page.get("error") or "no_works")
+        # An upstream ERROR is retryable and must NOT be recorded as terminal;
+        # a genuinely empty catalogue is terminal.
+        if not page.get("error"):
+            _record_seed_attempt(
+                conn, oid_norm, status=SEED_STATUS_EXHAUSTED,
+                declared_works=0, local_papers=existing,
+                reason="OpenAlex returned no works for this author",
+            )
+        _log("seed_fetch", f"No works available for {oid_norm}")
+        return summary
+
+    # Already citation-desc from the API, so preserving order preserves rank.
+    first_author = [w for w in candidates if _author_position_in_work(w, oid_norm) == "first"]
+    others = [w for w in candidates if _author_position_in_work(w, oid_norm) != "first"]
+    ordered = first_author + others
+    first_author_ids = {id(w) for w in first_author}
+
+    # Land papers until the author CLEARS the threshold, counting what actually
+    # landed rather than what we tried. Two distinct ways a candidate yields
+    # nothing, both observed on the first live run (2026-07-26):
+    #   * near-duplicate top hits collapse onto one row via the dedup triple
+    #     (OpenAlex lists "identification-categorization" and the en-dash
+    #     variant as separate works);
+    #   * the top-cited candidate is very often the ONE paper we already hold
+    #     for them — `_upsert_work` returns that existing id and the authorship
+    #     INSERT OR IGNORE is a no-op, so it is not new coverage.
+    # Pre-seeding `seen_paper_ids` with what they already own makes both cases
+    # fall out of the same guard. Without it, Shannon and Hoyer each reported
+    # "1 paper landed" and stayed stuck at one paper.
+    needed = target_papers - existing
+    now_iso = datetime.now(timezone.utc).isoformat()
+    landed: list[str] = []
+    seen_paper_ids: set[str] = _existing_paper_ids_for_author(conn, oid_norm)
+    with write_section(conn, label="seed suggestion author papers"):
+        for work in ordered:
+            if len(landed) >= needed:
+                break
+            paper_id, _is_new = _upsert_work(conn, work, now=now_iso)
+            if paper_id is None or paper_id in seen_paper_ids:
+                continue
+            seen_paper_ids.add(paper_id)
+            _ensure_authorship_row(
+                conn,
+                paper_id=paper_id,
+                openalex_id=oid_norm,
+                display_name=str(work.get("authors") or "").split(",")[0].strip(),
+                work=work,
+            )
+            landed.append(paper_id)
+            if id(work) in first_author_ids:
+                summary["first_author_used"] += 1
+            else:
+                summary["topped_up"] += 1
+
+    summary["papers_landed"] = len(landed)
+    final_local = existing + len(landed)
+    _log(
+        "seed_papers",
+        f"Landed {len(landed)} paper(s) for {oid_norm} "
+        f"({summary['first_author_used']} first-author, {summary['topped_up']} topped up)",
+    )
+
+    # Record the outcome so the health gap can CONVERGE. An author still short of
+    # the threshold after we have seen their whole upstream catalogue can never
+    # clear it — OpenAlex simply has fewer than `target_papers` works for them
+    # (observed live: two suggested authors with exactly one work in the entire
+    # index). Marking that terminal is what stops `authors.unplaceable` counting
+    # them forever and every repair reporting "Seeded 0 of N".
+    if final_local >= target_papers:
+        status = SEED_STATUS_SEEDED
+        reason = ""
+    elif declared_works < target_papers:
+        status = SEED_STATUS_EXHAUSTED
+        reason = f"OpenAlex holds only {declared_works} work(s) for this author"
+    else:
+        # Upstream HAS enough works but they didn't land (dedup collapse, or
+        # unusable rows). Retryable, not terminal — a later run may do better.
+        status = SEED_STATUS_SEEDED
+        reason = "target not reached; upstream has more works to try"
+    summary["seed_status"] = status
+    _record_seed_attempt(
+        conn, oid_norm, status=status, declared_works=declared_works,
+        local_papers=final_local, reason=reason,
+    )
+
+    if not landed:
+        summary["reason"] = summary["reason"] or "nothing_landed"
+        return summary
+
+    # Vectors are what actually buy the map position — a paper with no embedding
+    # leaves the author exactly as unplaceable as before.
+    try:
+        vectors = _fetch_missing_s2_vectors_for_author(conn, oid_norm, log=None)
+        summary["vectors_fetched"] = int(vectors.get("vectors_fetched") or 0)
+    except Exception as exc:  # noqa: BLE001 — a vector miss must not lose the papers
+        logger.warning("seed: vector fetch failed for %s: %s", oid_norm, exc)
+
+    with write_section(conn, label="seed author centroid"):
+        try:
+            summary["centroid_updated"] = refresh_author_centroid(
+                conn, oid_norm, model=semantic_scholar.S2_SPECTER2_MODEL
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("seed: centroid refresh failed for %s: %s", oid_norm, exc)
+
+    return summary
+
+
 # -- batch variant ---------------------------------------------------
 
 def backfill_all_resolved_authors(
@@ -952,4 +1250,7 @@ __all__ = [
     "backfill_all_resolved_authors",
     "refresh_author_centroid",
     "refresh_centroids_for_papers",
+    "seed_papers_for_author",
+    "count_local_papers_for_author",
+    "SEED_TARGET_PAPERS",
 ]

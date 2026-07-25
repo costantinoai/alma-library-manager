@@ -536,6 +536,27 @@ def init_db_schema() -> None:
                 )"""
             )
 
+            # Terminal outcome of a suggested-author paper seed (migration 33):
+            # `status='exhausted'` means OpenAlex holds fewer than two works for
+            # them, so no repair can ever place them on the author map. The
+            # `authors.unplaceable` health row reports these as `exhausted`
+            # rather than counting them as outstanding work forever.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS author_seed_status (
+                    author_openalex_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    declared_works INTEGER,
+                    local_papers INTEGER,
+                    reason TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_author_seed_status_status "
+                "ON author_seed_status(status)"
+            )
+
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS author_enrichment_status (
                     author_id TEXT NOT NULL REFERENCES authors(id) ON DELETE CASCADE,

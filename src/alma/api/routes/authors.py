@@ -48,7 +48,6 @@ from alma.core.identifier_resolution import (
     resolve_scholar_candidates_from_sources,
     scholar_url_for_id,
 )
-from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
 from alma.core.resolution import (
@@ -59,6 +58,8 @@ from alma.core.resolution import (
     resolve_paper_openalex_work,
     summarize_author_resolution,
 )
+from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import (
     canonical_lookup_doi,
     derive_source_id,
@@ -118,7 +119,7 @@ def _log_author_action(
     from alma.core.operations.activity import persist_operation_status
     from alma.core.operations.models import OperationContext
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     jid = job_id or f"author_action_{uuid.uuid4().hex[:10]}"
     ctx = OperationContext(
         operation_key=f"authors.action.{action}",
@@ -376,7 +377,7 @@ def _apply_author_resolution_result(
     updates.append("id_resolution_reason = ?")
     params.append(summarize_author_resolution(result))
     updates.append("id_resolution_updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(utcnow().isoformat())
 
     params.append(author_id)
     db.execute(f"UPDATE authors SET {', '.join(updates)} WHERE id = ?", tuple(params))
@@ -850,7 +851,7 @@ def _set_resolution_status(
         SET id_resolution_status = ?, id_resolution_reason = ?, id_resolution_updated_at = ?
         WHERE id = ?
         """,
-        (status_norm, reason[:1000], datetime.utcnow().isoformat(), author_id),
+        (status_norm, reason[:1000], utcnow().isoformat(), author_id),
     )
 
 
@@ -993,7 +994,7 @@ def _refresh_author_cache_impl(
         set_job_status(
             job_id,
             status="cancelled",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Author refresh cancelled before execution",
         )
         add_job_log(job_id, "Cancelled before fetch start", step="cancelled")
@@ -1145,7 +1146,7 @@ def _refresh_author_cache_impl(
                 )
             pubs = []
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     with write_section(db, label="author refresh: last_fetched_at"):
         db.execute("UPDATE authors SET last_fetched_at = ? WHERE id = ?", (now, author_id))
 
@@ -1242,7 +1243,7 @@ def _refresh_author_identity_profile_impl(
         set_job_status(
             job_id,
             status="cancelled",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Author identity/profile refresh cancelled before execution",
         )
         add_job_log(job_id, "Cancelled before identity/profile refresh start", step="cancelled")
@@ -1477,7 +1478,7 @@ def _deep_refresh_all_impl(
         try:
             from alma.openalex.client import batch_get_author_profiles
 
-            t_pre = datetime.utcnow()
+            t_pre = utcnow()
             profile_cache = batch_get_author_profiles(cache_oids, batch_size=50, max_workers=4)
             if job_id:
                 add_job_log(
@@ -1485,7 +1486,7 @@ def _deep_refresh_all_impl(
                     (
                         f"Pre-fetched {len(profile_cache)}/{len(cache_oids)} author profiles "
                         f"in batched pipe-filter calls "
-                        f"({(datetime.utcnow() - t_pre).total_seconds():.1f}s)"
+                        f"({(utcnow() - t_pre).total_seconds():.1f}s)"
                     ),
                     step="profile_prefetch",
                 )
@@ -1656,7 +1657,7 @@ def _deep_refresh_all_impl(
             set_job_status(
                 job_id,
                 status="cancelled",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=processed,
                 total=total,
                 message="Deep refresh all cancelled by user",
@@ -2007,7 +2008,7 @@ def refresh_author_suggestion_network(
             status="queued",
             operation_key=operation_key,
             trigger_source="user",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             processed=0,
             total=0,
             message=queued_msg,
@@ -2038,7 +2039,7 @@ def refresh_author_suggestion_network(
                         status="completed",
                         processed=seeds_total,
                         total=seeds_total,
-                        finished_at=datetime.utcnow().isoformat(),
+                        finished_at=utcnow().isoformat(),
                         message=(
                             f"{src} refresh completed · "
                             f"{int(summary.get('candidates') or 0)} candidates"
@@ -2053,7 +2054,7 @@ def refresh_author_suggestion_network(
                     set_job_status(
                         job_id_local,
                         status="failed",
-                        finished_at=datetime.utcnow().isoformat(),
+                        finished_at=utcnow().isoformat(),
                         message=f"{src} refresh failed: {exc}",
                         error=str(exc),
                     )
@@ -2069,6 +2070,85 @@ def refresh_author_suggestion_network(
             "job_id": job_id,
             "operation_key": operation_key,
             "message": queued_msg,
+        })
+
+    # Third job: give under-covered suggested authors enough corpus to be
+    # VISIBLE. The two jobs above refresh who gets suggested; this one makes the
+    # suggestions legible — an author with fewer than two local papers has no map
+    # dot, no sample titles, and no score, which is why suggestion cards were
+    # thinnest exactly where evidence mattered most (user call 2026-07-26).
+    seed_operation_key = "authors.seed_thin_suggestions"
+    seed_existing = find_active_job(seed_operation_key)
+    if seed_existing:
+        jobs.append({
+            "source": "suggestion_seed",
+            "status": "already_running",
+            "job_id": str(seed_existing.get("job_id") or ""),
+            "operation_key": seed_operation_key,
+            "message": "Already running",
+        })
+    else:
+        seed_job_id = f"author_seed_{uuid.uuid4().hex[:10]}"
+        seed_msg = "Queued paper seeding for under-covered suggestions"
+        set_job_status(
+            seed_job_id,
+            status="queued",
+            operation_key=seed_operation_key,
+            trigger_source="user",
+            started_at=utcnow().isoformat(),
+            message=seed_msg,
+        )
+        add_job_log(seed_job_id, seed_msg, step="queued")
+
+        def _seed_runner(job_id_local: str = seed_job_id):
+            from alma.api.deps import _db_path
+            from alma.application.authors import seed_thin_suggestion_authors
+
+            class _SeedCtx:
+                def log_step(self, step, *, message=None, processed=None, total=None, **_):
+                    set_job_status(
+                        job_id_local,
+                        status="running",
+                        message=message,
+                        processed=processed,
+                        total=total,
+                    )
+
+            try:
+                set_job_status(
+                    job_id_local, status="running", message="Seeding suggestion authors"
+                )
+                summary = seed_thin_suggestion_authors(_db_path(), ctx=_SeedCtx())
+                set_job_status(
+                    job_id_local,
+                    status="completed",
+                    finished_at=utcnow().isoformat(),
+                    message=(
+                        f"Seeded {summary.get('seeded', 0)} of {summary.get('thin', 0)} "
+                        f"under-covered authors · {summary.get('papers_landed', 0)} papers"
+                    ),
+                    result=summary,
+                )
+            except Exception as exc:
+                add_job_log(
+                    job_id_local, f"Suggestion seeding failed: {exc}",
+                    level="ERROR", step="failed",
+                )
+                set_job_status(
+                    job_id_local,
+                    status="failed",
+                    finished_at=utcnow().isoformat(),
+                    message=f"Suggestion seeding failed: {exc}",
+                    error=str(exc),
+                )
+
+        schedule_immediate(seed_job_id, _seed_runner)
+        jobs.append({
+            "source": "suggestion_seed",
+            "status": "queued",
+            "job_id": seed_job_id,
+            "operation_key": seed_operation_key,
+            "message": seed_msg,
         })
 
     return {"jobs": jobs}
@@ -2158,7 +2238,7 @@ def backfill_author_works(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=0,
         message=queued_msg,
@@ -2207,7 +2287,7 @@ def backfill_author_works(
                 status="completed",
                 processed=processed,
                 total=total,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Author backfill completed",
                 result=summary,
             )
@@ -2216,7 +2296,7 @@ def backfill_author_works(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=f"Author backfill failed: {exc}",
                 error=str(exc),
             )
@@ -2388,7 +2468,7 @@ def follow_author_from_paper(
                 detail="Could not resolve a stable author identity from this paper author",
             )
 
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = utcnow().isoformat()
         existing = _find_existing_author_row(
             db,
             author_id=primary_id,
@@ -2611,7 +2691,7 @@ def create_author(
             or (get_author_name_by_id(resolved_openalex) if resolved_openalex else None)
             or primary_id
         )
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = utcnow().isoformat()
         status_value = resolution.status if resolution.status != "no_match" else "resolved_manual"
         reason_value = summarize_author_resolution(resolution) or "Author created"
 
@@ -3195,7 +3275,7 @@ def set_author_identifiers(
     if not updates:
         raise HTTPException(status_code=400, detail="No identifiers supplied")
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     updates.extend([
         "id_resolution_status = ?",
         "id_resolution_method = ?",
@@ -3373,7 +3453,7 @@ def resolve_merge_conflict(
 
     # Decide the outcome up front (pure compute on the already-read row);
     # the field allowlist + 400 are control-flow, kept OUTSIDE the unit.
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     target_field: str | None = None
     new_value: object = None
     if body.choice == "primary":
@@ -4346,7 +4426,7 @@ def resolve_identifiers_bulk(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=total,
         message=f"Queued identifier resolution for {total} authors",
@@ -4859,7 +4939,7 @@ def repair_author(
             status="queued",
             operation_key=operation_key,
             trigger_source="user",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             message=queued_message,
         )
         add_job_log(job_id, queued_message, step="queued", data={"author_id": author_id})
@@ -4880,7 +4960,7 @@ def repair_author(
                 set_job_status(
                     job_id,
                     status=final_status,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=final_message,
                     result=result,
                     operation_key=operation_key,
@@ -4892,7 +4972,7 @@ def repair_author(
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=detail,
                     error=detail,
                     operation_key=operation_key,
@@ -4903,7 +4983,7 @@ def repair_author(
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=f"Author repair failed: {exc}",
                     error=str(exc),
                     operation_key=operation_key,
@@ -4977,7 +5057,7 @@ def refresh_author_cache(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Refreshing author cache: {author_name}",
     )
     add_job_log(job_id, f"Queued incremental refresh for {author_name}", step="queued")
@@ -5080,7 +5160,7 @@ def deep_refresh_all_authors(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Queued deep refresh for all authors (scope={scope_value})",
     )
     add_job_log(
@@ -5160,7 +5240,7 @@ def rehydrate_author_metadata(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=total_hint,
         message=(
@@ -5293,7 +5373,7 @@ def accept_author_unidentified(
     row = db.execute("SELECT name FROM authors WHERE id = ?", (author_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Author not found")
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist():
         db.execute(
@@ -5362,7 +5442,7 @@ def dedup_authors_by_orcid_endpoint(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Queued author ORCID dedup sweep",
     )
     add_job_log(job_id, "Queued author ORCID dedup sweep", step="queued")
@@ -5437,7 +5517,7 @@ def garbage_collect_orphan_authors_endpoint(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Queued author GC sweep ({'dry-run' if dry_run else 'live'})",
     )
     add_job_log(
@@ -5512,7 +5592,7 @@ def identity_profile_refresh_author(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Refreshing author identity/profile: {author_name}",
     )
     add_job_log(job_id, f"Queued identity/profile refresh for {author_name}", step="queued")
@@ -5592,7 +5672,7 @@ def deep_refresh_author(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Deep refreshing author: {author_name}",
     )
     add_job_log(job_id, f"Queued deep refresh for {author_name}", step="queued")
