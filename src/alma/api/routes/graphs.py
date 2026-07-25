@@ -869,6 +869,83 @@ def get_author_network(
     return graph
 
 
+@router.get("/signal-field")
+def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
+    """The SPACE-OWNED preference field over the corpus substrate.
+
+    One valence per signal-carrying paper, at its substrate coordinates —
+    independent of which dots any view renders (user call 2026-07-25: the
+    stats of the space belong to the space; toggling layers must never
+    change the terrain). Every map host splats THIS field for its Heat
+    mode, so Discovery and the Map page show the same landscape.
+
+    The valence hierarchy and every weight live in ONE place:
+    `alma.core.signal_valence` (strongest user signal wins; engine
+    evidence at reduced authority; no-signal papers are EXCLUDED — no
+    information is not a neutral opinion).
+
+    Pure read; the substrate is the durable corpus layout.
+    """
+    from alma.core.signal_valence import NEGATIVE_REC_ACTIONS, paper_valence
+
+    neg_actions_sql = ",".join(f"'{a}'" for a in NEGATIVE_REC_ACTIONS)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT pc.paper_id, pc.x, pc.y, p.status,
+                   COALESCE(p.rating, 0) AS rating,
+                   latest.score AS rec_score,
+                   COALESCE(neg.n_neg, 0) AS n_neg
+            FROM publication_clusters pc
+            JOIN papers p ON p.id = pc.paper_id
+            LEFT JOIN (
+                SELECT paper_id, score, MAX(created_at)
+                FROM recommendations GROUP BY paper_id
+            ) latest ON latest.paper_id = pc.paper_id
+            LEFT JOIN (
+                SELECT paper_id, COUNT(*) AS n_neg
+                FROM recommendations
+                WHERE COALESCE(user_action, '') IN ({neg_actions_sql})
+                GROUP BY paper_id
+            ) neg ON neg.paper_id = pc.paper_id
+            WHERE pc.scope = ?
+            """,
+            (SUBSTRATE_SCOPE,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+
+    points: list[dict] = []
+    vmin = float("inf")
+    vmax = float("-inf")
+    vsum = 0.0
+    for row in rows:
+        v = paper_valence(
+            status=str(row["status"] or ""),
+            rating=int(row["rating"] or 0),
+            n_negative_actions=int(row["n_neg"] or 0),
+            rec_score=row["rec_score"],
+        )
+        if v is None:
+            continue
+        points.append({"x": float(row["x"]), "y": float(row["y"]), "v": round(v, 3)})
+        vmin = min(vmin, v)
+        vmax = max(vmax, v)
+        vsum += v
+
+    stats = (
+        {
+            "min": round(vmin, 3),
+            "max": round(vmax, 3),
+            "mean": round(vsum / len(points), 3),
+            "count": len(points),
+        }
+        if points
+        else None
+    )
+    return {"status": "ready", "points": points, "stats": stats}
+
+
 def _build_author_network_payload(
     conn: sqlite3.Connection,
     *,

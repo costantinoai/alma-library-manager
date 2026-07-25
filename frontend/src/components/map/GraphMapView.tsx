@@ -9,7 +9,7 @@
  * "cluster studio" + live physics) is retired: substrate coordinates are
  * the one physics everywhere.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, Search, Share2, Type } from 'lucide-react'
 
@@ -26,6 +26,7 @@ import {
   type ClusterChipEntry,
 } from './MapChrome'
 import { SemanticMap, type SemanticMapNode } from './SemanticMap'
+import { useSignalField } from './useSignalField'
 import {
   EDGE_LAYER_COLORS,
   EDGE_LAYER_FALLBACK_COLOR,
@@ -140,44 +141,48 @@ export function GraphMapView({
     [nodes],
   )
 
-  const dataColour = (n: GraphNode): string | undefined => {
-    if (colourMode === 'year' && yearRange) {
-      const y = Number(n.metadata?.year)
-      if (!Number.isFinite(y) || y < 1800) return MAP_INK.ambientSoft
-      // Older = receding slate, newer = folio — recency reads as presence.
-      return yearRampColor(y, yearRange.lo, yearRange.hi)
-    }
-    if (colourMode === 'score') {
-      // Internal relevance score (0–100), divergent about the neutral 50:
-      // red = the engine scored it weak, green = strong. Never-scored
-      // papers (no recommendation yet) stay recessive.
-      const s = Number(n.metadata?.score)
-      if (!Number.isFinite(s)) return MAP_INK.ambientSoft
-      const t = Math.max(-1, Math.min(1, (s - 50) / 50))
-      const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
-      return t < 0
-        ? `rgb(${mix(220, 233, 1 + t)}, ${mix(68, 196, 1 + t)}, ${mix(61, 76, 1 + t)})`
-        : `rgb(${mix(233, 64, t)}, ${mix(196, 160, t)}, ${mix(76, 92, t)})`
-    }
-    return undefined
-  }
+  const dataColour = useCallback(
+    (n: GraphNode): string | undefined => {
+      if (colourMode === 'year' && yearRange) {
+        const y = Number(n.metadata?.year)
+        if (!Number.isFinite(y) || y < 1800) return MAP_INK.ambientSoft
+        // Older = receding slate, newer = folio — recency reads as presence.
+        return yearRampColor(y, yearRange.lo, yearRange.hi)
+      }
+      if (colourMode === 'score') {
+        // Internal relevance score (0–100), divergent about the neutral 50:
+        // red = the engine scored it weak, green = strong. Never-scored
+        // papers (no recommendation yet) stay recessive.
+        const s = Number(n.metadata?.score)
+        if (!Number.isFinite(s)) return MAP_INK.ambientSoft
+        const t = Math.max(-1, Math.min(1, (s - 50) / 50))
+        const mix = (a: number, b: number, k: number) => Math.round(a + (b - a) * k)
+        return t < 0
+          ? `rgb(${mix(220, 233, 1 + t)}, ${mix(68, 196, 1 + t)}, ${mix(61, 76, 1 + t)})`
+          : `rgb(${mix(233, 64, t)}, ${mix(196, 160, t)}, ${mix(76, 92, t)})`
+      }
+      return undefined
+    },
+    [colourMode, yearRange],
+  )
 
-  // 50-J heat: valence per node — your own feedback first (rating, the
-  // strongest signal), then the engine's relevance score, then membership
-  // as a mild positive. View-only.
+  // 50-J heat. Paper maps splat the SPACE-OWNED field (/graphs/signal-field):
+  // one valence per signal-carrying corpus paper, independent of which dots
+  // this view renders — the terrain never changes when a layer is toggled
+  // (user call 2026-07-25). The author network has its own layout space, so
+  // it keeps a per-node valence (its payload always carries every author).
+  const isPaperMap = endpoint === 'paper-map'
+  const signalField = useSignalField(colourMode === 'heat' && isPaperMap)
   const heatValues = useMemo(() => {
-    if (colourMode !== 'heat') return undefined
+    if (colourMode !== 'heat' || isPaperMap) return undefined
     const m = new Map<string, number>()
     for (const n of nodes) {
-      const r = Number(n.metadata?.rating)
       const s = Number(n.metadata?.score)
-      if (Number.isFinite(r) && r > 0) m.set(n.id, Math.max(-1, Math.min(1, (r - 3) / 2)))
-      else if (Number.isFinite(s)) m.set(n.id, Math.max(-1, Math.min(1, (s - 50) / 50)))
-      else if (n.in_library !== false) m.set(n.id, 0.35)
+      if (Number.isFinite(s)) m.set(n.id, Math.max(-1, Math.min(1, (s - 50) / 50)))
       else m.set(n.id, 0)
     }
     return m
-  }, [colourMode, nodes])
+  }, [colourMode, isPaperMap, nodes])
 
   // Colourbar stats — the numbers the legend owes the reader.
   const yearStats = useMemo(
@@ -188,10 +193,12 @@ export function GraphMapView({
     () => summarizeValues(nodes.map((n) => Number(n.metadata?.score))),
     [nodes],
   )
-  const heatStats = useMemo(
-    () => (heatValues ? summarizeValues([...heatValues.values()]) : null),
-    [heatValues],
-  )
+  // Heat bar: field stats are the SPACE's stats (stable across view state);
+  // node-derived stats only for the author network's own space.
+  const heatStats = useMemo(() => {
+    if (isPaperMap) return signalField.stats
+    return heatValues ? summarizeValues([...heatValues.values()]) : null
+  }, [isPaperMap, signalField.stats, heatValues])
 
   const query = search.trim().toLowerCase()
   const mapNodes = useMemo<SemanticMapNode[]>(
@@ -223,7 +230,7 @@ export function GraphMapView({
           halo: haloIds?.has(n.id) ?? false,
         }
       }),
-    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds, focusClusterId, colourMode, yearRange],
+    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds, focusClusterId, colourMode, dataColour],
   )
 
   const mapEdges = useMemo(
@@ -285,7 +292,7 @@ export function GraphMapView({
               { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
               { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
               { value: 'score', label: 'Score', title: 'Engine relevance (latest suggestion score, 0–100) — red weak, green strong; never-scored grey' },
-              { value: 'heat', label: 'Heat', title: 'Local signal wash — red negative, green positive (view-only)' },
+              { value: 'heat', label: 'Heat', title: 'Preference terrain — the space-owned signal field (ratings, saves, dismissals + engine scores), the same whatever is shown (view-only)' },
             ] as const
           ).filter((o) => colourModes.includes(o.value))}
         />
@@ -313,6 +320,7 @@ export function GraphMapView({
         toponymScale={toponymScale}
         toponymWordCount={toponymWordCount}
         heatValues={heatValues}
+        heatField={colourMode === 'heat' && isPaperMap ? signalField.points : undefined}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
         renderHover={(id) => {
           const n = nodesById.get(id)

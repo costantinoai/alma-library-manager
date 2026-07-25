@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowDownRight,
@@ -34,6 +34,7 @@ import {
   getPaperById,
   listLensRecommendations,
   listLenses,
+  markLensSeen,
   readRecommendation,
   saveRecommendation,
   refreshLens,
@@ -71,7 +72,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
-import { navigateTo, useHashRoute } from '@/lib/hashRoute'
+import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
   invalidateQueries,
@@ -123,11 +124,14 @@ export function DiscoveryPage() {
   // deep-link (e.g. the "Turn this Collection into a Discovery feed"
   // button in Library). Ignored if the lens doesn't exist.
   const routeLensId = route.params.get('lens')?.trim() ?? ''
+  const routePaperId = route.params.get('paper')?.trim() ?? ''
+  const routeAction = route.params.get('action')?.trim() ?? ''
   const [selectedLensId, setSelectedLensId] = useState<string | null>(null)
   const [selectedPaper, setSelectedPaper] = useState<Publication | null>(null)
   // Find & add is the manual entry point at the top of the page — open by
   // default (but collapsible; state keeps re-renders from fighting the user).
   const [findAddOpen, setFindAddOpen] = useState(true)
+  const findAddRef = useRef<HTMLDetailsElement>(null)
   // Discovery already excludes Library papers when it BUILDS a deck, but keeps
   // a card visible the moment you save it so it doesn't vanish under the
   // cursor. This is the opt-in "clear them out" view; persisted, since it's a
@@ -163,6 +167,46 @@ export function DiscoveryPage() {
   // "Show all" toggle for the rec list. False -> only the first
   // DEFAULT_VISIBLE_RECS are rendered; true -> full list.
   const [showAllRecs, setShowAllRecs] = useState(false)
+
+  const deepLinkPaperQuery = useQuery({
+    queryKey: ['discovery-deeplink-paper', routePaperId],
+    queryFn: () => getPaperById(routePaperId),
+    enabled: Boolean(routePaperId),
+    staleTime: 30_000,
+    retry: 1,
+  })
+  const handledPaperParam = useRef<string | null>(null)
+  useEffect(() => {
+    if (!routePaperId) {
+      handledPaperParam.current = null
+      return
+    }
+    if (handledPaperParam.current === routePaperId) return
+    if (deepLinkPaperQuery.isError) {
+      handledPaperParam.current = routePaperId
+      errorToast('Paper not found', 'The linked Discovery paper could not be loaded.')
+      return
+    }
+    if (!deepLinkPaperQuery.data) return
+    handledPaperParam.current = routePaperId
+    setSelectedPaper(deepLinkPaperQuery.data)
+    setDetailOpen(true)
+  }, [deepLinkPaperQuery.data, deepLinkPaperQuery.isError, routePaperId])
+
+  useEffect(() => {
+    if (routeAction !== 'find') return
+    setFindAddOpen(true)
+    window.setTimeout(() => {
+      findAddRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 50)
+    const next = new URLSearchParams(route.params)
+    next.delete('action')
+    window.history.replaceState(
+      null,
+      '',
+      buildHashRoute('discovery', Object.fromEntries(next)),
+    )
+  }, [route.params, routeAction])
 
   const lensesQuery = useQuery({
     queryKey: ['lenses'],
@@ -207,6 +251,27 @@ export function DiscoveryPage() {
     // + window refocus refetched the full 200-rec list for no new data.
     staleTime: 60_000,
   })
+
+  // Review state belongs to the lens that was actually rendered. Home only
+  // reads these per-lens stamps, so visiting Home can never clear Discovery
+  // carryover and opening one lens cannot silently consume another.
+  const reviewedDecks = useRef<Map<string, string>>(new Map())
+  useEffect(() => {
+    if (!selectedLensId || !lensRecommendationsQuery.data) return
+    const firstRecommendation = lensRecommendationsQuery.data[0]
+    const deckKey =
+      firstRecommendation?.suggestion_set_id
+      ?? `${lensRecommendationsQuery.data.length}:${firstRecommendation?.created_at ?? 'empty'}`
+    if (reviewedDecks.current.get(selectedLensId) === deckKey) return
+    reviewedDecks.current.set(selectedLensId, deckKey)
+    void markLensSeen(selectedLensId)
+      .then(() => invalidateQueries(queryClient, ['home-brief']))
+      .catch(() => {
+        if (reviewedDecks.current.get(selectedLensId) === deckKey) {
+          reviewedDecks.current.delete(selectedLensId)
+        }
+      })
+  }, [lensRecommendationsQuery.data, queryClient, selectedLensId])
 
   const seededSimilarityQuery = useQuery({
     queryKey: ['discovery-seeded-similar', seedPaperId],
@@ -426,7 +491,7 @@ export function DiscoveryPage() {
         undefined,
         selectedLensCollectionId ? [selectedLensCollectionId] : undefined,
       ),
-    onSuccess: async (_data, _recId) => {
+    onSuccess: async () => {
       // Card stays visible (it flips to a checked "Saved" state); only Dismiss
       // removes a card from Discovery. The refetch below re-reads the rec with
       // its now-'library' paper status so the button reflects the save.
@@ -446,7 +511,7 @@ export function DiscoveryPage() {
   const addToCollectionsMutation = useMutation({
     mutationFn: ({ recId, collectionIds }: { recId: string; collectionIds: string[] }) =>
       saveRecommendation(recId, undefined, collectionIds),
-    onSuccess: async (_data, _vars) => {
+    onSuccess: async () => {
       // Card stays visible (flips to a checked "Saved" state); only Dismiss removes.
       toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
       await invalidateAfterPaperMutation(queryClient, selectedLensId)
@@ -487,7 +552,7 @@ export function DiscoveryPage() {
   // from Discovery. The refetch re-reads the rec's reading_status.
   const queueMutation = useMutation({
     mutationFn: (recId: string) => readRecommendation(recId),
-    onSuccess: async (_data, _args) => {
+    onSuccess: async () => {
       toast({ title: 'Added to reading list', description: 'Marked as Reading.' })
       await invalidateQueries(queryClient,
         ['lens-recommendations', selectedLensId], ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
@@ -911,6 +976,7 @@ export function DiscoveryPage() {
           any source and add a paper by hand before (or instead of) drilling
           into a lens. Open by default; collapsible (state-controlled). */}
       <details
+        ref={findAddRef}
         open={findAddOpen}
         onToggle={(e) => setFindAddOpen((e.currentTarget as HTMLDetailsElement).open)}
         className="group rounded-sm border border-[var(--color-border)] bg-surface-1 shadow-paper-sheet"
@@ -1257,6 +1323,34 @@ export function DiscoveryPage() {
                 {mapOpen ? 'Hide map' : 'Show map'}
               </button>
             </header>
+            {mapOpen && (
+              <ConceptCallout
+                eyebrow="How to read this map"
+                summary="Every paper in your corpus, placed by meaning — filled dots are yours, hollow dots are this lens's suggestions."
+              >
+                <p>
+                  Position comes from the shared corpus layout: papers that talk about the same
+                  things sit together, so a suggestion's neighbourhood tells you what it is before
+                  you read it. <strong>Filled dots</strong> are papers in your library,{' '}
+                  <strong>hollow dots</strong> are the lens's current suggestions (coloured by the
+                  branch that found them), and <strong>faint dots</strong> are papers surfaced in
+                  earlier refreshes you never acted on — your unworked frontier.
+                </p>
+                <p className="mt-2">
+                  <strong>Colour modes:</strong> Branches shows who found what; Clusters shows the
+                  corpus topics; Year is a recency ramp; <strong>Heat is the preference
+                  terrain</strong> — a field built from ALL your signals (ratings, saves,
+                  dismissals, engine scores) over the whole space. It belongs to the space, not the
+                  view: hiding a layer never changes the terrain, so a red valley stays red even
+                  when its dots are hidden.
+                </p>
+                <p className="mt-2">
+                  <strong>Do with it:</strong> click a suggestion to jump to its row below; click
+                  any paper to spotlight its cluster (background click clears); drag with{' '}
+                  <em>Select a direction</em> to name a region and explore it as a Direction.
+                </p>
+              </ConceptCallout>
+            )}
             {mapOpen && (
               <FrontierMap
                 lensId={selectedLensId}

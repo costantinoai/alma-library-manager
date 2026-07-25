@@ -97,8 +97,15 @@ export interface SemanticMapProps {
    *  smoothed divergent wash (red → yellow → green) renders UNDER the dots —
    *  the local average of the values around each point. View-only; a DATA
    *  ramp (like Meter tones), deliberately outside the chip valence
-   *  contract. */
+   *  contract. Keyed to RENDERED nodes — use only when the map always shows
+   *  every signal carrier (e.g. the author network). */
   heatValues?: ReadonlyMap<string, number>
+  /** SPACE-OWNED heat field: valence points in WORLD coords, independent of
+   *  which dots the current view renders (user call 2026-07-25: the stats of
+   *  the space belong to the space — toggling layers must never change the
+   *  terrain). Takes precedence over `heatValues`. Paper-map hosts feed this
+   *  from the shared /graphs/signal-field endpoint. */
+  heatField?: ReadonlyArray<{ x: number; y: number; v: number }>
   /** Rectangle-select mode: drag selects instead of panning. */
   lassoMode?: boolean
   onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
@@ -135,6 +142,7 @@ export function SemanticMap({
   selectedIds,
   sizeScale = 1,
   heatValues,
+  heatField,
   onHover,
   onClickNode,
   renderHover,
@@ -165,10 +173,10 @@ export function SemanticMap({
   }, [])
 
   // Refit when the node set identity changes materially (first data arrival).
-  const nodeCount = nodes.length
+  const hasNodes = nodes.length > 0
   useEffect(() => {
     fit()
-  }, [fit, nodeCount > 0])
+  }, [fit, hasNodes])
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
   // Strongest-first order, computed once per edge set — the draw loop stops
@@ -324,18 +332,34 @@ export function SemanticMap({
     // Cheap: grid is 1/8 resolution; weights and values accumulate per cell,
     // colour = local MEAN valence, alpha = local density (so empty sea stays
     // paper, dense strong regions read loudest).
-    if (heatValues && heatValues.size > 0) {
+    //
+    // Source points: a SPACE-OWNED `heatField` (world-coord valences covering
+    // every signal carrier, whether or not its dot is rendered) when the host
+    // supplies one; otherwise per-rendered-node `heatValues`. The field keeps
+    // the terrain invariant across layer toggles — hiding dots never hides
+    // their preferences.
+    const heatPoints: Array<[number, number, number]> = []
+    if (heatField && heatField.length > 0) {
+      for (const p of heatField) {
+        const [sx, sy] = worldToScreen(viewport, p.x, p.y)
+        if (visible(sx, sy)) heatPoints.push([sx, sy, p.v])
+      }
+    } else if (heatValues && heatValues.size > 0) {
+      for (const [id, value] of heatValues) {
+        const p = screenPos.get(id)
+        if (p && visible(p[0], p[1])) heatPoints.push([p[0], p[1], value])
+      }
+    }
+    if (heatPoints.length > 0) {
       const cell = 8
       const gw = Math.max(1, Math.ceil(width / cell))
       const gh = Math.max(1, Math.ceil(height / cell))
       const wsum = new Float32Array(gw * gh)
       const vsum = new Float32Array(gw * gh)
       const radius = 5 // grid cells (~40 px)
-      for (const [id, value] of heatValues) {
-        const p = screenPos.get(id)
-        if (!p || !visible(p[0], p[1])) continue
-        const gx = p[0] / cell
-        const gy = p[1] / cell
+      for (const [px, py, value] of heatPoints) {
+        const gx = px / cell
+        const gy = py / cell
         const x0 = Math.max(0, Math.floor(gx - radius))
         const x1 = Math.min(gw - 1, Math.ceil(gx + radius))
         const y0 = Math.max(0, Math.floor(gy - radius))
@@ -536,6 +560,7 @@ export function SemanticMap({
     lassoRect,
     viewport,
     heatValues,
+    heatField,
     width,
     height,
     maxSizeValue,

@@ -25,7 +25,13 @@ import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { GraphMapView } from '@/components/map/GraphMapView'
-import { MapModeSwitch } from '@/components/map/MapChrome'
+import { ConceptCallout } from '@/components/ui/concept-callout'
+import {
+  MapDisplayTuningRows,
+  MapModeSwitch,
+  MapTuningPopover,
+  SliderRow,
+} from '@/components/map/MapChrome'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
 import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
 import {
@@ -68,6 +74,10 @@ export function AuthorsPage() {
   // Network map scope: your library's authors, or the full tracked corpus
   // (which includes the authors of suggested papers).
   const [networkScope, setNetworkScope] = useState<'library' | 'corpus'>('library')
+  const [networkResolution, setNetworkResolution] = useState(1)
+  const [networkSizeScale, setNetworkSizeScale] = useState(1)
+  const [networkWordScale, setNetworkWordScale] = useState(1)
+  const [networkWordCount, setNetworkWordCount] = useState(3)
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -328,23 +338,73 @@ export function AuthorsPage() {
             co-authorship structure across your corpus — click an author to open them
           </span>
         </header>
+        <ConceptCallout
+          eyebrow="How to read this map"
+          summary="Every author in scope, placed by what they write about — links are shared papers, dashed rings are the authors you follow."
+        >
+          <p>
+            Each dot is one author; authors who publish on similar things (and with each other) sit
+            together, so the map shows the research communities behind your corpus. A{' '}
+            <strong>dashed ring</strong> marks an author you follow. Click any dot to open the same
+            author drawer the sections below use.
+          </p>
+          <p className="mt-2">
+            <strong>Colour modes:</strong> Clusters shows the communities;{' '}
+            <strong>Score and Heat use the engine&apos;s internal criteria</strong> — each author
+            carries the mean of their papers&apos; latest relevance scores (0–100, green strong /
+            red weak), the same scoring Discovery uses, so a green region is a community the
+            engine keeps finding relevant to you.
+          </p>
+          <p className="mt-2">
+            <strong>Scope:</strong> Library shows only authors of papers you saved; Corpus widens
+            to every tracked paper, including the authors behind current suggestions — useful for
+            spotting who anchors an area you haven&apos;t saved into yet.
+          </p>
+        </ConceptCallout>
         <GraphMapView
           endpoint="author-network"
-          params={{ scope: networkScope }}
+          params={{
+            scope: networkScope,
+            cluster_resolution: networkResolution.toFixed(1),
+          }}
           // Year is meaningless for an author; Score/Heat reflect the mean
           // internal score of the author's papers (same criteria as
           // Discovery) — user call 2026-07-25.
           colourModes={['clusters', 'score', 'heat']}
           toolbarExtras={
-            <MapModeSwitch
-              value={networkScope}
-              onChange={setNetworkScope}
-              options={[
-                { value: 'library', label: 'Library', title: 'Authors of papers you saved' },
-                { value: 'corpus', label: 'Corpus', title: 'Authors across every tracked paper — including suggestions' },
-              ]}
-            />
+            <>
+              <MapModeSwitch
+                value={networkScope}
+                onChange={setNetworkScope}
+                options={[
+                  { value: 'library', label: 'Library', title: 'Authors of papers you saved' },
+                  { value: 'corpus', label: 'Corpus', title: 'Authors across every tracked paper — including suggestions' },
+                ]}
+              />
+              <MapTuningPopover title="Fine tuning — cluster detail, dot size, words">
+                <SliderRow
+                  label="Cluster detail"
+                  value={networkResolution}
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  format={(v) => `${v.toFixed(1)}×`}
+                  onCommit={(v) => setNetworkResolution(Number(v.toFixed(1)))}
+                />
+                <MapDisplayTuningRows
+                  sizeScale={networkSizeScale}
+                  onSizeScale={setNetworkSizeScale}
+                  wordScale={networkWordScale}
+                  onWordScale={setNetworkWordScale}
+                  wordCount={networkWordCount}
+                  onWordCount={setNetworkWordCount}
+                />
+              </MapTuningPopover>
+            </>
           }
+          sizeScale={networkSizeScale}
+          toponymScale={networkWordScale}
+          toponymWordCount={networkWordCount}
           nodeKind={() => 'author'}
           // 50-F deep integration: a node opens the SAME author drawer the
           // rest of the page uses.

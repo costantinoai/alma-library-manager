@@ -29,7 +29,12 @@ import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionD
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
 import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
-import { ColourBarLegend } from '@/components/map/MapChrome'
+import {
+  ColourBarLegend,
+  MapDisplayTuningRows,
+  MapTuningPopover,
+} from '@/components/map/MapChrome'
+import { useSignalField } from '@/components/map/useSignalField'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -107,6 +112,9 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
   // clicking the background clears it (user call 2026-07-25, all maps).
   const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
+  const [sizeScale, setSizeScale] = useState(1)
+  const [wordScale, setWordScale] = useState(1)
+  const [wordCount, setWordCount] = useState(3)
 
   const query = useQuery({
     queryKey: ['frontier', lensId, showSeen, showEdges],
@@ -162,29 +170,19 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     [nodes],
   )
 
-  // Heat valence (50-J): what carries signal HERE — a strong suggestion and
-  // your library are positive mass, weak suggestions negative, seen papers
-  // neutral. View-only wash under the dots; never a discovery input.
-  const heatValues = useMemo(() => {
-    if (groupBy !== 'heat') return undefined
-    const m = new Map<string, number>()
-    for (const n of nodes) {
-      if (n.layer === 'rec')
-        m.set(n.paper_id, Math.max(-1, Math.min(1, ((n.score ?? 50) - 50) / 50)))
-      else if (n.layer === 'library') m.set(n.paper_id, 0.35)
-      else m.set(n.paper_id, 0)
-    }
-    return m
-  }, [groupBy, nodes])
+  // Heat (50-J): the SPACE-OWNED preference field — one valence per
+  // signal-carrying corpus paper at its substrate coordinates, fetched from
+  // /graphs/signal-field. NOT derived from the rendered dots: toggling
+  // "show seen" (or any layer) never changes the terrain, and a
+  // library-only view still shows the red of dismissed / weak-scored
+  // territory whose dots are hidden (user call 2026-07-25).
+  const signalField = useSignalField(groupBy === 'heat')
 
   const yearStats = useMemo(
     () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
     [nodes],
   )
-  const heatStats = useMemo(
-    () => (heatValues ? summarizeValues([...heatValues.values()]) : null),
-    [heatValues],
-  )
+  const heatStats = signalField.stats
 
   // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
   const mapNodes = useMemo<SemanticMapNode[]>(() => {
@@ -322,6 +320,16 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           <Type className="h-3.5 w-3.5" />
           Names
         </button>
+        <MapTuningPopover>
+          <MapDisplayTuningRows
+            sizeScale={sizeScale}
+            onSizeScale={setSizeScale}
+            wordScale={wordScale}
+            onWordScale={setWordScale}
+            wordCount={wordCount}
+            onWordCount={setWordCount}
+          />
+        </MapTuningPopover>
         {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
         {clusterColors.size > 0 && (
           <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
@@ -347,7 +355,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                       ? 'Colour every paper by its corpus cluster'
                       : mode === 'year'
                         ? 'Recency ramp — older fades, newer leads'
-                        : 'Local signal wash — green where your saves and strong suggestions sit, red where weak ones do (view only)'
+                        : 'Preference terrain — the space-owned signal field (all your ratings, saves, dismissals + engine scores), the same whatever layers are shown (view only)'
                 }
               >
                 {mode === 'branches' ? 'Branches' : mode === 'clusters' ? 'Clusters' : mode === 'year' ? 'Year' : 'Heat'}
@@ -381,7 +389,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         edges={mapEdges}
         showEdges={showEdges}
         showToponyms={showNames && groupBy === 'clusters'}
-        heatValues={heatValues}
+        sizeScale={sizeScale}
+        toponymScale={wordScale}
+        toponymWordCount={wordCount}
+        heatField={groupBy === 'heat' ? signalField.points : undefined}
         height={520}
         lassoMode={selectMode}
         onLasso={(ids, anchor) => {
