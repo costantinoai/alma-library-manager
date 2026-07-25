@@ -20,6 +20,7 @@ from typing import Any
 
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -367,7 +368,7 @@ def _apply_recommendation_feedback(
     if action:
         conn.execute(
             "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
-            (action, datetime.utcnow().isoformat(), recommendation_id),
+            (action, utcnow().isoformat(), recommendation_id),
         )
 
 
@@ -501,7 +502,7 @@ def _update_preference_profile(
     delta: float,
 ) -> None:
     """Upsert the preference_profiles row with time-decayed weight."""
-    now_str = datetime.utcnow().isoformat()
+    now_str = utcnow().isoformat()
 
     existing = conn.execute(
         "SELECT affinity_weight, confidence, interaction_count, last_updated "
@@ -547,7 +548,7 @@ def _apply_decay(
     """Apply exponential time decay to a weight."""
     try:
         last_updated = datetime.fromisoformat(last_updated_str)
-        age_days = (datetime.utcnow() - last_updated).total_seconds() / 86400.0
+        age_days = (utcnow() - last_updated).total_seconds() / 86400.0
         decay = math.exp(-0.693 * age_days / half_life_days)  # ln(2) ~ 0.693
         return weight * decay
     except (ValueError, TypeError):
@@ -872,7 +873,7 @@ def compute_signal_stats(conn: sqlite3.Connection) -> dict:
 def get_signal_results_summary(conn: sqlite3.Connection, days: int = 14) -> dict:
     """Return a compact, export-friendly summary of Signal Lab outcomes."""
     period_days = max(1, min(int(days), 365))
-    cutoff_dt = datetime.utcnow() - timedelta(days=period_days)
+    cutoff_dt = utcnow() - timedelta(days=period_days)
     cutoff = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
     events = _iter_feedback_events(conn)
     period_events = [ev for ev in events if ev.get("dt") and ev["dt"] >= cutoff_dt]
@@ -1013,7 +1014,7 @@ def _compute_streak(conn: sqlite3.Connection) -> int:
     if not rows:
         return 0
 
-    today = datetime.utcnow().date()
+    today = utcnow().date()
     streak = 0
     for r in rows:
         try:

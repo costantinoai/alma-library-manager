@@ -14,10 +14,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
-from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from alma.core.db_write import write_section
+from alma.core.time import utcnow
 from alma.core.utils import canonical_lookup_doi, normalize_openalex_id, normalize_orcid
 
 logger = logging.getLogger(__name__)
@@ -435,7 +435,7 @@ def deduplicate_papers(conn: sqlite3.Connection) -> dict:
 
 def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> dict:
     """Run full deduplication pass and stable-ID assignment (v3 schema)."""
-    started = datetime.utcnow().isoformat()
+    started = utcnow().isoformat()
 
     if job_id:
         try:
@@ -482,7 +482,7 @@ def run_deduplication(conn: sqlite3.Connection, job_id: str | None = None) -> di
 
     summary = {
         "started_at": started,
-        "finished_at": datetime.utcnow().isoformat(),
+        "finished_at": utcnow().isoformat(),
         "authors": author_summary,
         "papers": paper_summary,
         "stable_ids": id_summary,

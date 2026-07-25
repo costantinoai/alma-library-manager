@@ -21,6 +21,7 @@ from alma.api.models import (
 from alma.application import discovery as discovery_app
 from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +309,6 @@ def refresh_lens(
     auto-invalidates `lens-recommendations` on `discovery.*` completion, so
     no per-call cache wiring is needed.
     """
-    from datetime import datetime as _dt
 
     from alma.api.deps import open_db_connection
     from alma.api.scheduler import (
@@ -343,7 +343,7 @@ def refresh_lens(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=_dt.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Lens refresh ({lens_label}): queued",
         processed=0,
         total=int(limit),
@@ -399,7 +399,7 @@ def refresh_lens(
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=_dt.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=f"Lens {lens_label} not found",
                     error="lens_not_found",
                     result={"lens_id": lens_id, "reason": "lens_not_found"},
@@ -415,7 +415,7 @@ def refresh_lens(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=_dt.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=inserted,
                 total=int(limit),
                 message=terminal_message,
@@ -426,7 +426,7 @@ def refresh_lens(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=_dt.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=f"Lens refresh ({lens_label}) failed",
                 error=str(exc),
             )

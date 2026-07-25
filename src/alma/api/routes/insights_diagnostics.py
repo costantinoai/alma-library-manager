@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import Depends, HTTPException
@@ -72,6 +72,7 @@ from alma.application.recommendation_outcomes import (
     count_outcomes,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 # ── Section keys ----------------------------------------------------------
 
@@ -357,7 +358,7 @@ def _build_diag_discovery(db: sqlite3.Connection) -> dict[str, Any]:
 
     if table_exists(db, "recommendations"):
         recent_publication_cutoff = (
-            datetime.utcnow() - timedelta(days=365)
+            utcnow() - timedelta(days=365)
         ).date().isoformat()
 
         # I-21/D6: positive/negative engagement is sourced from the canonical
@@ -1630,7 +1631,7 @@ def compose_legacy_diagnostics_payload(db: sqlite3.Connection) -> dict[str, Any]
     ]
 
     return {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": utcnow().isoformat(),
         "feed": {
             "summary": feed_payload.get("summary") or {},
             "monitors": feed_payload.get("monitors") or [],

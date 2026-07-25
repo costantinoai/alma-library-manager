@@ -26,6 +26,7 @@ from alma.api.helpers import raise_internal
 from alma.config import get_db_path
 from alma.core.db_write import run_write_unit, write_section
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -597,7 +598,7 @@ def reset_publications(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=3,
         message="Queued library reset",
@@ -609,7 +610,7 @@ def reset_publications(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=3,
                 total=3,
                 message="Library reset completed",
@@ -620,7 +621,7 @@ def reset_publications(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Library reset failed",
                 error=str(exc),
             )
@@ -667,7 +668,7 @@ def deduplicate_database(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Running database deduplication",
     )
 
@@ -684,7 +685,7 @@ def deduplicate_database(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Database deduplication completed",
                 result=summary,
             )
@@ -693,7 +694,7 @@ def deduplicate_database(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Database deduplication failed",
                 error=str(exc),
             )
@@ -744,7 +745,7 @@ def backfill_components_route(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Reconciling paper groups",
     )
 
@@ -762,7 +763,7 @@ def backfill_components_route(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=(
                     "Paper-group reconcile complete: "
                     f"{summary.get('defects_before', 0)} defects before, "
@@ -775,7 +776,7 @@ def backfill_components_route(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Paper-group reconcile failed",
                 error=str(exc),
             )

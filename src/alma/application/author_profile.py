@@ -24,10 +24,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime
 from typing import Any
 
 from alma.core.db_write import commit_unless_gated
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def apply_author_profile_update(
     if not profile:
         db.execute(
             "UPDATE authors SET last_fetched_at = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), author_key),
+            (utcnow().isoformat(), author_key),
         )
         return {"updated": ["last_fetched_at"], "skipped_reason": "empty_profile"}
 
@@ -179,7 +179,7 @@ def apply_author_profile_update(
         changed.append("url_picture")
 
     fields.append("last_fetched_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(utcnow().isoformat())
 
     if not fields:
         return {"updated": [], "skipped_reason": "no_changes"}

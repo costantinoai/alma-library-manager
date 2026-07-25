@@ -14,7 +14,7 @@ import sqlite3
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Literal
 
 from alma.application.author_affiliation import (
@@ -24,6 +24,7 @@ from alma.application.author_affiliation import (
 )
 from alma.application.author_profile import apply_author_profile_update
 from alma.core.db_write import write_section
+from alma.core.time import utcnow
 from alma.core.utils import (
     normalize_id_list,
     normalize_orcid,
@@ -374,7 +375,7 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
                     institution_name=str(aff.get("name") or ""),
                     role="affiliation",
                     start_date=str(latest) if latest else None,
-                    is_current=bool(latest and latest >= datetime.utcnow().year - 2),
+                    is_current=bool(latest and latest >= utcnow().year - 2),
                     confidence=0.78,
                     evidence_url=f"https://openalex.org/{oid}",
                 ):

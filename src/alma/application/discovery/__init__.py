@@ -17,6 +17,7 @@ from alma.core.db_retry import commit_with_retry
 from alma.core.paper_groups import resolve_paper_root_id
 from alma.core.scoring_math import clamp
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 from alma.discovery.scoring import (
     compute_preference_profile,
@@ -364,7 +365,7 @@ def refresh_lens_recommendations(
                 parent_job_id=parent_job_id,
                 stage=f"lane.{lane_name}",
                 stage_label=pretty,
-                started_at=datetime.utcnow().isoformat(),
+                started_at=utcnow().isoformat(),
                 message=f"{pretty} retrieval running",
             )
             _add_job_log(
@@ -382,7 +383,7 @@ def refresh_lens_recommendations(
                 _set_job_status(
                     subtask_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     error=str(exc),
                     message=f"{pretty} retrieval failed: {exc}",
                     parent_job_id=parent_job_id,
@@ -410,7 +411,7 @@ def refresh_lens_recommendations(
             _set_job_status(
                 subtask_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=count,
                 total=count,
                 message=f"{pretty} retrieval completed: {count} candidate(s) in {duration_ms}ms",
@@ -1081,7 +1082,7 @@ def refresh_lens_recommendations(
     )
 
     suggestion_set_id = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     external_lane_counts: dict[str, int] = {}
     for item in external:
         if str(item.get("branch_id") or "").strip():

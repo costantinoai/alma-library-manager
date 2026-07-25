@@ -11,13 +11,13 @@ from __future__ import annotations
 import logging
 import sqlite3
 from concurrent.futures import Future
-from datetime import datetime
 from time import perf_counter
 from typing import Any
 
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.scoring_math import clamp
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery import openalex_related, source_search
 
 from ..lens_crud import (
@@ -89,7 +89,7 @@ def _retrieve_external_channel(
     effective_branch_controls = branch_controls
     temperature = _resolve_branch_temperature(settings, branch_controls.get("temperature"))
     resolution = _resolve_branch_resolution(branch_controls.get("resolution"), settings)
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
     profile = preference_profile or {}
     preferred_topics = _top_profile_terms(
         dict(profile.get("topic_weights") or {}),

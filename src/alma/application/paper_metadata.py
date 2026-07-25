@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
 from typing import Any
 
+from alma.core.time import utcnow
 from alma.core.utils import normalize_doi
 from alma.openalex.client import _normalize_openalex_work_id, upsert_work_sidecars
 
@@ -209,7 +209,7 @@ def merge_openalex_work_metadata(
 
     db_writes = 0
     if updates:
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         updates["fetched_at"] = now
         updates["updated_at"] = now
         assignments = ", ".join(f"{field} = ?" for field in updates)

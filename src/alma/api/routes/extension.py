@@ -32,13 +32,13 @@ reads, ``/save`` is the single mutation.
 
 import logging
 import sqlite3
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from alma.api.deps import get_current_user, get_db
 from alma.core.db_write import run_write_unit
+from alma.core.time import utcnow
 from alma.core.utils import resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -513,7 +513,7 @@ def undo_from_extension(
     if not db.execute("SELECT id FROM papers WHERE id = ?", (paper_id,)).fetchone():
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     prior = req.prior or None
     result = "restored" if prior else "removed_from_library"
 

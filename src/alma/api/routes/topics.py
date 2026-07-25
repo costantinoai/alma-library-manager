@@ -10,7 +10,6 @@ Provides endpoints for:
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -18,6 +17,7 @@ from pydantic import BaseModel
 from alma.api.deps import get_current_user, get_db
 from alma.core.db_write import run_write_unit
 from alma.core.redaction import redact_sensitive_text
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,7 @@ def dedup_dry_run(
                     operation_key="topics.dedup.ai_dry_run",
                     trigger_source="user",
                     message="AI topic dedup dry-run started",
-                    started_at=datetime.utcnow().isoformat(),
+                    started_at=utcnow().isoformat(),
                 )
                 add_job_log(job_id, "Computing AI topic merge candidates", step="ai_dedup_start")
                 ai_candidates = find_ai_merge_candidates(db, threshold=threshold)
@@ -243,7 +243,7 @@ def dedup_dry_run(
                     status="completed",
                     operation_key="topics.dedup.ai_dry_run",
                     message=f"AI topic dedup dry-run completed ({len(ai_candidates)} candidates)",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                 )
             except Exception as e:
                 logger.warning("AI dedup candidates failed: %s", e)

@@ -5,11 +5,11 @@ Exposes the current and recently completed job statuses from the scheduler.
 
 import logging
 import sqlite3
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from alma.api.deps import get_current_user, get_db
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _finalize_ownerless(job_id: str, *, verb: str) -> dict:
         job_id,
         status="cancelled",
         cancel_requested=True,
-        finished_at=datetime.utcnow().isoformat(),
+        finished_at=utcnow().isoformat(),
         message="Operation cancelled (worker no longer running)",
         error=_OWNERLESS_ERROR,
         result={"success": False, "cancelled": True, "ownerless": True},
@@ -276,7 +276,7 @@ def cancel_operation(
             job_id,
             status="cancelled",
             cancel_requested=True,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Operation cancelled",
         )
         add_job_log(job_id, "Cancellation completed before execution", step="cancelled")
@@ -415,7 +415,7 @@ def stop_operation(
             status="cancelled",
             cancel_requested=True,
             cancel_mode="graceful",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Operation cancelled",
         )
         add_job_log(job_id, "Stop completed before execution", step="cancelled")

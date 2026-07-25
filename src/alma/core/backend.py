@@ -19,6 +19,7 @@ from alma.config import (
 )
 from alma.core.database import _init_authors_db, get_authors_json
 from alma.core.resolution import resolve_author_identity, summarize_author_resolution
+from alma.core.time import utcnow
 from alma.openalex.client import fetch_works_for_author, upsert_papers
 
 
@@ -81,7 +82,7 @@ def _resolve_author_openalex_id(
                     resolved_openalex_id,
                     resolution.status,
                     summarize_author_resolution(resolution),
-                    datetime.utcnow().isoformat(),
+                    utcnow().isoformat(),
                     author_id,
                 ),
             )

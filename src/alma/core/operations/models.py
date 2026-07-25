@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Literal
+
+from alma.core.time import utcnow
 
 OperationStatus = Literal[
     "queued",
@@ -22,7 +23,7 @@ TriggerSource = Literal["user", "scheduler", "system"]
 
 def utc_now_iso() -> str:
     """Return current UTC timestamp in ISO-8601 format."""
-    return datetime.utcnow().isoformat()
+    return utcnow().isoformat()
 
 
 @dataclass(slots=True)

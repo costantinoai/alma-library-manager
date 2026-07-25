@@ -35,11 +35,11 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from time import perf_counter
 from typing import Any
 
 from alma.core.db_write import commit_unless_gated, run_write_unit
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ def _write_row(
             view_key,
             fingerprint,
             json.dumps(payload, default=str),
-            datetime.utcnow().isoformat(),
+            utcnow().isoformat(),
             int(compute_ms),
             build_status,
             build_error,
@@ -266,7 +266,7 @@ def get(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
         return _envelope(
             payload=payload,
             fingerprint=current_fp,
-            computed_at=datetime.utcnow().isoformat(),
+            computed_at=utcnow().isoformat(),
             stale=False,
             rebuilding=False,
         )
@@ -295,7 +295,7 @@ def get(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
         return _envelope(
             payload=payload,
             fingerprint=current_fp,
-            computed_at=datetime.utcnow().isoformat(),
+            computed_at=utcnow().isoformat(),
             stale=False,
             rebuilding=False,
         )
@@ -332,6 +332,7 @@ def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None
         computed_at=str(row.get("computed_at") or ""),
         stale=False,
         rebuilding=_has_active_job(view),
+        compute_ms=int(row.get("compute_ms") or 0),
     )
 
 
@@ -508,7 +509,7 @@ def get_or_enqueue_variant(
         status="queued",
         operation_key=operation_key,
         trigger_source="auto:graph_variant",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Building {job_label}",
     )
 
@@ -599,14 +600,18 @@ def _envelope(
     computed_at: str,
     stale: bool,
     rebuilding: bool,
+    compute_ms: int | None = None,
 ) -> dict[str, Any]:
-    return {
+    envelope = {
         "payload": payload,
         "stale": stale,
         "rebuilding": rebuilding,
         "computed_at": computed_at,
         "fingerprint": fingerprint,
     }
+    if compute_ms is not None:
+        envelope["compute_ms"] = compute_ms
+    return envelope
 
 
 def _decode_payload(raw: Any) -> dict | None:
@@ -691,7 +696,7 @@ def _enqueue_rebuild_internal(
         status="queued",
         operation_key=view.operation_key,
         trigger_source="auto",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Rebuilding {view.key}",
     )
     _set_rebuild_job_id(conn, view.key, job_id)

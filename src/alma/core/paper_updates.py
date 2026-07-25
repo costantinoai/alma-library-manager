@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
-from datetime import datetime
 from typing import Any
 
+from alma.core.time import utcnow
 from alma.core.utils import clean_display_text
 
 # Display-text columns on ``papers`` that get HTML-strip + NFC + dotless-ı repair
@@ -168,7 +168,7 @@ def fill_only_update_paper(
     params = [updates[field] for field in changed]
     if touch_updated_at:
         assignments.append("updated_at = ?")
-        params.append(datetime.utcnow().isoformat())
+        params.append(utcnow().isoformat())
     params.append(paper_id)
     conn.execute(
         f"UPDATE papers SET {', '.join(assignments)} WHERE id = ?",

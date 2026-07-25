@@ -25,12 +25,12 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable
-from datetime import datetime
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import (
     canonical_lookup_doi,
     normalize_doi,
@@ -192,7 +192,7 @@ def _upsert_fetch_status(
             reason,
             lookup_key or _lookup_key_for_row(row),
             json.dumps(lookup_ids),
-            datetime.utcnow().isoformat(),
+            utcnow().isoformat(),
         ),
     )
 
@@ -239,7 +239,7 @@ def _apply_s2_metadata(conn: sqlite3.Connection, *, paper_id: str, row: sqlite3.
         },
         fill_null_fields={"year": year},
         max_int_fields={"cited_by_count": citation_count},
-        always_fields={"fetched_at": datetime.utcnow().isoformat()},
+        always_fields={"fetched_at": utcnow().isoformat()},
     )
 
 
@@ -422,7 +422,7 @@ def run_s2_vector_backfill(
                 processed=0,
                 total=0,
                 message="No papers need S2/SPECTER2 vectors",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -514,7 +514,7 @@ def run_s2_vector_backfill(
                         processed=processed,
                         total=total,
                         message=msg,
-                        finished_at=datetime.utcnow().isoformat(),
+                        finished_at=utcnow().isoformat(),
                         result=payload,
                     )
                     add_job_log(job_id, msg, step=reason or "background_yield", data=payload)
@@ -525,7 +525,7 @@ def run_s2_vector_backfill(
                     processed=processed,
                     total=total,
                     message="S2/SPECTER2 vector fetch cancelled",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                 )
                 return
 
@@ -726,7 +726,7 @@ def run_s2_vector_backfill(
                             paper_id,
                             vector,
                             source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                            created_at=datetime.utcnow().isoformat(),
+                            created_at=utcnow().isoformat(),
                         ):
                             stored += 1
                             batch_inserted_paper_ids.append(paper_id)
@@ -831,7 +831,7 @@ def run_s2_vector_backfill(
                 "model": model,
                 "target_paper_ids": target_ids,
             },
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
         add_job_log(
             job_id,
@@ -909,7 +909,7 @@ def run_s2_vector_backfill(
                     f"({remaining_eligible} eligible, "
                     f"depth {continuation_depth + 1})"
                 ),
-                "started_at": datetime.utcnow().isoformat(),
+                "started_at": utcnow().isoformat(),
             }
             if parent_chain_id:
                 status_kwargs["chain_id"] = parent_chain_id
@@ -989,7 +989,7 @@ def run_s2_vector_backfill(
             job_id,
             status="failed",
             message=f"S2/SPECTER2 vector fetch failed: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         conn.close()

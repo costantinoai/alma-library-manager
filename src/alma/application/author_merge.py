@@ -40,7 +40,6 @@ import logging
 import sqlite3
 import uuid
 from collections.abc import Iterable, Mapping
-from datetime import datetime
 
 from alma.core.author_names import (
     affiliations_corroborate,
@@ -48,6 +47,7 @@ from alma.core.author_names import (
     parse_person_name,
 )
 from alma.core.db_write import run_after_gate_release, write_section
+from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 
 logger = logging.getLogger(__name__)
@@ -178,7 +178,7 @@ def record_author_alias(
             alt_openalex_id,
             alt_author_id,
             source,
-            datetime.utcnow().isoformat(),
+            utcnow().isoformat(),
         ),
     )
     return bool(cur.rowcount)
@@ -340,7 +340,7 @@ def _detect_conflicts(
     so the user can later resolve via the needs-attention surface.
     """
     out: list[dict] = []
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     skipped = skip_fields or set()
     for field in _HARD_IDENTIFIER_FIELDS:
         if field in skipped:

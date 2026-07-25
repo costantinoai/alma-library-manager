@@ -22,6 +22,7 @@ from alma.api.models import (
 )
 from alma.application import alerts as alerts_app
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -587,7 +588,6 @@ def evaluate_alert(
     4. Returns the envelope; result lands in ``operation_status.result``.
     """
     import uuid as _uuid
-    from datetime import datetime as _dt
 
     from alma.api.deps import open_db_connection
     from alma.api.scheduler import (
@@ -621,7 +621,7 @@ def evaluate_alert(
         operation_key=operation_key,
         trigger_source="user",
         actor=actor,
-        started_at=_dt.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Evaluating alert '{alert_name}'",
     )
 

@@ -9,7 +9,6 @@ import logging
 import re
 import sqlite3
 import uuid
-from datetime import datetime
 
 from alma.core.components import resolve_component
 from alma.core.paper_groups import (
@@ -19,6 +18,7 @@ from alma.core.paper_groups import (
     settle_new_paper_group,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing_paper_id
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def _schedule_paper_enrichment(paper_id: str) -> None:
         return
 
     job_id = f"library_enrich_{uuid.uuid4().hex[:10]}"
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     try:
         set_job_status(
             job_id,
@@ -154,7 +154,7 @@ def _schedule_paper_enrichment(paper_id: str) -> None:
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=1,
                 total=1,
                 message=(
@@ -170,7 +170,7 @@ def _schedule_paper_enrichment(paper_id: str) -> None:
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message="Library enrichment failed",
                     error=str(exc),
                 )
@@ -421,7 +421,7 @@ def detach_paper_from_parent(db: sqlite3.Connection, paper_id: str) -> dict | No
             updated_at = ?
         WHERE id = ?
         """,
-        (datetime.utcnow().isoformat(), paper_id),
+        (utcnow().isoformat(), paper_id),
     )
     return {
         "detached": True,
@@ -475,8 +475,8 @@ def create_paper(db: sqlite3.Connection, **kwargs) -> str:
             parent_paper_id = kwargs["parent_paper_id"]
     paper_id = kwargs.pop("id", None) or str(uuid.uuid4())
     kwargs.setdefault("status", TRACKED_STATUS)
-    kwargs.setdefault("created_at", datetime.utcnow().isoformat())
-    kwargs.setdefault("updated_at", datetime.utcnow().isoformat())
+    kwargs.setdefault("created_at", utcnow().isoformat())
+    kwargs.setdefault("updated_at", utcnow().isoformat())
 
     # Serialize JSON fields
     for json_field in ("keywords", "sdgs", "counts_by_year"):
@@ -591,7 +591,7 @@ def upsert_paper(db: sqlite3.Connection, *, auto_schedule_hydration: bool = True
         if updates:
             if _should_invalidate_embedding(existing, updates):
                 _invalidate_embedding_artifacts(db, paper_id)
-            updates["updated_at"] = datetime.utcnow().isoformat()
+            updates["updated_at"] = utcnow().isoformat()
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
             db.execute(
                 f"UPDATE papers SET {set_clause} WHERE id = ?",
@@ -643,7 +643,7 @@ def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:
     if _should_invalidate_embedding(existing, kwargs):
         _invalidate_embedding_artifacts(db, paper_id)
 
-    kwargs["updated_at"] = datetime.utcnow().isoformat()
+    kwargs["updated_at"] = utcnow().isoformat()
     set_clause = ", ".join(f"{k} = ?" for k in kwargs.keys())
     cursor = db.execute(
         f"UPDATE papers SET {set_clause} WHERE id = ?",
@@ -754,7 +754,7 @@ def add_to_library(
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     added_from_clause = (
         "added_from = ?"
         if override_added_from
@@ -811,7 +811,7 @@ def dismiss_paper(db: sqlite3.Connection, paper_id: str) -> bool:
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     cursor = db.execute(
         "UPDATE papers SET status = ?, rating = ?, updated_at = ? WHERE id = ?",
         (DISMISSED_STATUS, DISLIKE_RATING, now, paper_id),
@@ -835,7 +835,7 @@ def sink_disliked_paper(db: sqlite3.Connection, paper_id: str) -> bool:
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     cursor = db.execute(
         """
         UPDATE papers
@@ -853,7 +853,7 @@ def soft_remove_from_library(db: sqlite3.Connection, paper_id: str) -> bool:
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     cursor = db.execute(
         """
         UPDATE papers
@@ -886,7 +886,7 @@ def rate_paper(db: sqlite3.Connection, paper_id: str, rating: int) -> bool:
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     cursor = db.execute(
         "UPDATE papers SET rating = ?, updated_at = ? WHERE id = ?",
         (rating, now, paper_id),
@@ -948,7 +948,7 @@ def record_paper_feedback(
         context={
             "surface": source_surface,
             "paper_id": paper_id,
-            "acted_at": datetime.utcnow().isoformat(),
+            "acted_at": utcnow().isoformat(),
         },
     )
 
@@ -969,7 +969,7 @@ def sync_surface_resolution(
     if not paper_id:
         return
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     recommendation_action = {
         "add": "save",
         "save": "save",
@@ -1093,7 +1093,7 @@ def undo_paper_feedback(
     if not paper_id:
         raise ValueError("Paper is subordinate and has no actionable root")
     aspect = aspect if aspect in UNDO_ASPECTS else "all"
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     if aspect in ("membership", "all"):
         db.execute(
@@ -1231,7 +1231,7 @@ def create_collection(
 ) -> str:
     """Create a collection. Returns the collection ID."""
     coll_id = str(uuid.uuid4())
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     db.execute(
         "INSERT INTO collections (id, name, description, color, created_at) VALUES (?, ?, ?, ?, ?)",
         (coll_id, name, description, color, now),
@@ -1322,7 +1322,7 @@ def insert_collection_item(
     409). Every other collection_items insert in the codebase routes here so the
     column list lives in exactly one place.
     """
-    stamp = now or datetime.utcnow().isoformat()
+    stamp = now or utcnow().isoformat()
     verb = "INSERT OR IGNORE INTO" if ignore_existing else "INSERT INTO"
     cursor = db.execute(
         f"{verb} collection_items (collection_id, paper_id, added_at) VALUES (?, ?, ?)",
@@ -1410,7 +1410,7 @@ def add_papers_to_collection(
         f"AND {standalone_paper_sql('papers')}",
         (*ids, LIBRARY_STATUS),
     ).fetchall()
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     added = 0
     for row in library_rows:
         pid = str(row["id"] if isinstance(row, sqlite3.Row) else row[0])

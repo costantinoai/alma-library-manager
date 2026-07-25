@@ -6,8 +6,9 @@ import math
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
+
+from alma.core.time import utcnow
 
 _NAME_RE = re.compile(r"[^a-z0-9]+")
 
@@ -107,7 +108,7 @@ def _score_row(row: sqlite3.Row, *, source_count_by_name: dict[str, set[str]]) -
         score += 0.22
     start_year = _year(row["start_date"])
     if start_year:
-        current_year = datetime.utcnow().year
+        current_year = utcnow().year
         age = max(0, current_year - start_year)
         score += max(0.0, 0.18 * math.exp(-age / 12.0))
     key = _name_key(str(row["institution_name"] or ""))
@@ -221,7 +222,7 @@ def record_manual_affiliation(
     if not author_key or not name:
         raise ValueError("author_id and institution_name are required")
     ensure_author_affiliation_evidence_table(conn)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     conn.execute(
         "DELETE FROM author_affiliation_evidence WHERE author_id = ? AND source = ?",
         (author_key, _MANUAL_SOURCE),

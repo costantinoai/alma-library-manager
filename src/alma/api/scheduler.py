@@ -41,6 +41,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from alma.core.concurrency import enter_job_fanout
 from alma.core.db_retry import commit_with_retry
 from alma.core.redaction import redact_sensitive_data, redact_sensitive_text
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -206,10 +207,10 @@ def _parse_activity_time(value: object) -> datetime | None:
     """Parse an Activity timestamp to naive UTC.
 
     ALMa stores every `operation_status` / `operation_logs` timestamp as
-    naive UTC via `datetime.utcnow().isoformat()`.  This helper accepts
+    naive UTC via `utcnow().isoformat()`.  This helper accepts
     naive-UTC, tz-aware (including trailing `Z`), and legacy
     `YYYY-MM-DD HH:MM:SS` strings, and always returns naive UTC so
-    comparisons against `datetime.utcnow()` are meaningful regardless
+    comparisons against `utcnow()` are meaningful regardless
     of the dev machine's local timezone.  The pre-2026-04-25 code
     stripped `tzinfo` after converting to local time, producing a
     2-hour offset on timezone-aware inputs and a silent mismatch
@@ -243,7 +244,7 @@ def _is_stale_active_status(status: dict, stale_after_seconds: int = 300) -> boo
     # Stored stamps are naive UTC (see `_parse_activity_time`); compare
     # against naive UTC wall-clock so the 300 s stale threshold is
     # meaningful regardless of local timezone.
-    return datetime.utcnow() - stamp > timedelta(seconds=max(1, int(stale_after_seconds)))
+    return utcnow() - stamp > timedelta(seconds=max(1, int(stale_after_seconds)))
 
 
 def _persist_job_status(job_id: str, status: dict) -> None:
@@ -303,7 +304,7 @@ def _persist_job_status(job_id: str, status: dict) -> None:
                     status.get("error"),
                     status.get("started_at"),
                     status.get("finished_at"),
-                    status.get("updated_at") or datetime.utcnow().isoformat(),
+                    status.get("updated_at") or utcnow().isoformat(),
                     status.get("processed"),
                     status.get("total"),
                     status.get("current_author"),
@@ -333,7 +334,7 @@ def _persist_job_log(entry: dict) -> None:
                 """,
                 (
                     entry.get("job_id"),
-                    entry.get("timestamp") or datetime.utcnow().isoformat(),
+                    entry.get("timestamp") or utcnow().isoformat(),
                     entry.get("level") or "INFO",
                     entry.get("step"),
                     entry.get("message") or "",
@@ -1037,7 +1038,7 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
                 if _is_stale_active_status(_row_to_status(row), stale_after_seconds)
             ]
             if stale_jobs:
-                now = datetime.utcnow().isoformat()
+                now = utcnow().isoformat()
                 conn.executemany(
                     """
                     UPDATE operation_status
@@ -1407,7 +1408,7 @@ def evaluate_scheduled_alerts() -> None:
         status="running",
         trigger_source="scheduler",
         operation_key=operation_key,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Evaluating scheduled alerts",
     )
     logger.info("Starting scheduled alert evaluation sweep")
@@ -1426,7 +1427,7 @@ def evaluate_scheduled_alerts() -> None:
             conn.close()
             return
 
-        now = datetime.utcnow()
+        now = utcnow()
         evaluated_count = 0
         sent_total = 0
         failed_total = 0
@@ -1512,7 +1513,7 @@ def evaluate_scheduled_alerts() -> None:
             status="completed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Scheduled alert evaluation complete",
             result={
                 "evaluated": evaluated_count,
@@ -1530,7 +1531,7 @@ def evaluate_scheduled_alerts() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Scheduled alert evaluation failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -1550,7 +1551,7 @@ def refresh_authors_periodic() -> None:
         status="running",
         trigger_source="scheduler",
         operation_key=operation_key,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Refreshing authors (periodic)",
     )
     logger.info("Starting periodic author refresh")
@@ -1593,7 +1594,7 @@ def refresh_authors_periodic() -> None:
                     status="completed",
                     trigger_source="scheduler",
                     operation_key=operation_key,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=(
                         f"Periodic author refresh complete — {failed} author(s) failed, see log"
                         if failed
@@ -1614,7 +1615,7 @@ def refresh_authors_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Periodic author refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -1635,7 +1636,7 @@ def refresh_recommendations_periodic() -> None:
         status="running",
         trigger_source="scheduler",
         operation_key=operation_key,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Refreshing discovery recommendations (periodic)",
     )
     logger.info("Starting periodic recommendation refresh via lens system")
@@ -1677,7 +1678,7 @@ def refresh_recommendations_periodic() -> None:
                     status="completed",
                     trigger_source="scheduler",
                     operation_key=operation_key,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message="Periodic recommendation refresh complete (legacy fallback)",
                     result={
                         "total_inserted": len(legacy_recs or []),
@@ -1739,7 +1740,7 @@ def refresh_recommendations_periodic() -> None:
             status="completed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Periodic recommendation refresh complete",
             result={
                 "total_inserted": total_inserted,
@@ -1754,7 +1755,7 @@ def refresh_recommendations_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Periodic recommendation refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -1778,7 +1779,7 @@ def refresh_feed_inbox_periodic() -> None:
         status="running",
         trigger_source="scheduler",
         operation_key=operation_key,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Refreshing feed inbox (periodic)",
     )
     logger.info("Starting periodic feed inbox refresh")
@@ -1805,7 +1806,7 @@ def refresh_feed_inbox_periodic() -> None:
             status=final_status,
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message=final_message,
             result=result,
         )
@@ -1819,7 +1820,7 @@ def refresh_feed_inbox_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Periodic feed inbox refresh failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -1833,7 +1834,7 @@ def maintain_citation_graph_periodic() -> None:
         job_id,
         status="running",
         trigger_source="scheduler",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         operation_key="graphs.reference_backfill",
         message="Backfilling publication references (periodic)",
     )
@@ -1853,7 +1854,7 @@ def maintain_citation_graph_periodic() -> None:
                 status="completed",
                 trigger_source="scheduler",
                 operation_key="graphs.reference_backfill",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Periodic citation graph maintenance complete",
                 result=result,
             )
@@ -1866,7 +1867,7 @@ def maintain_citation_graph_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key="graphs.reference_backfill",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Periodic citation graph maintenance failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -1906,15 +1907,15 @@ def graph_layout_maintenance_periodic() -> None:
             job_id,
             status="running",
             trigger_source="scheduler",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             operation_key=operation_key,
             message="Graph layout maintenance (placement + freshness)",
         )
 
+        from alma.api.routes.graphs import _paper_scope_gauge
         from alma.application import materialized_views as mv
         from alma.application.discovery.lens_crud import read_settings, upsert_setting
         from alma.application.graph_substrate import place_missing_papers
-        from alma.api.routes.graphs import _paper_scope_gauge
         from alma.core.db_write import write_section
         from alma.core.scope import Scope
 
@@ -1974,7 +1975,7 @@ def graph_layout_maintenance_periodic() -> None:
             status="completed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message=(
                 f"Graph layout maintenance: placed {placement.get('placed', 0)}, "
                 f"rebuilt {len(rebuilt)} view(s)"
@@ -1988,7 +1989,7 @@ def graph_layout_maintenance_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key=operation_key,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Graph layout maintenance failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -2015,7 +2016,7 @@ def _iso_age_days(stamp: str) -> float | None:
         then = datetime.fromisoformat(stamp.replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError:
         return None
-    return max(0.0, (datetime.utcnow() - then).total_seconds() / 86400.0)
+    return max(0.0, (utcnow() - then).total_seconds() / 86400.0)
 
 
 def _operation_log_retention_days() -> int:
@@ -2041,7 +2042,7 @@ def run_db_housekeeping(conn: sqlite3.Connection) -> dict[str, object]:
     # Operation log retention — committed in its own transaction so the VACUUM
     # below has clean ground.
     retention_days = _operation_log_retention_days()
-    cutoff = (datetime.utcnow() - timedelta(days=retention_days)).isoformat()
+    cutoff = (utcnow() - timedelta(days=retention_days)).isoformat()
     try:
         cur = conn.execute("DELETE FROM operation_logs WHERE timestamp < ?", (cutoff,))
         deleted = cur.rowcount
@@ -2086,7 +2087,7 @@ def db_maintenance_periodic() -> None:
         job_id,
         status="running",
         trigger_source="scheduler",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         operation_key="db.maintenance",
         message="Running DB maintenance",
     )
@@ -2104,7 +2105,7 @@ def db_maintenance_periodic() -> None:
             status="completed",
             trigger_source="scheduler",
             operation_key="db.maintenance",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="DB maintenance complete",
             result=summary,
         )
@@ -2115,7 +2116,7 @@ def db_maintenance_periodic() -> None:
             status="failed",
             trigger_source="scheduler",
             operation_key="db.maintenance",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="DB maintenance failed",
             error=f"{type(exc).__name__}: {exc}",
         )
@@ -2436,7 +2437,7 @@ def add_job_log(
     safe_message = redact_sensitive_text(message or "")
     safe_data = redact_sensitive_data(data or {})
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": utcnow().isoformat(),
         "job_id": job_id,
         "level": (level or "INFO").upper(),
         "step": step,
@@ -2538,13 +2539,13 @@ def set_job_status(job_id: str, **kwargs) -> None:
                 kwargs.setdefault("message", "Cancellation requested; stopping at next checkpoint")
             elif incoming_status == "completed":
                 kwargs["status"] = "cancelled"
-                kwargs.setdefault("finished_at", datetime.utcnow().isoformat())
+                kwargs.setdefault("finished_at", utcnow().isoformat())
                 kwargs.setdefault("message", "Operation cancelled")
         prev_status = status.get("status")
         prev_message = status.get("message")
         status.update(kwargs)
         status.setdefault("job_id", job_id)
-        status["updated_at"] = datetime.utcnow().isoformat()
+        status["updated_at"] = utcnow().isoformat()
         _job_status[job_id] = status
         persisted = dict(status)
     _persist_job_status(job_id, persisted)
@@ -2688,7 +2689,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             job_id,
             status="scheduled",
             message=f"Scheduled: {job_id}",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
         )
 
     def _wrapped():
@@ -2710,7 +2711,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 job_id,
                 status="cancelled",
                 cancel_requested=True,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Operation cancelled",
                 result={"success": False, "cancelled": True},
             )
@@ -2719,7 +2720,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 error=str(exc),
                 message=f"Failed: {job_id}",
             )
@@ -2736,7 +2737,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             set_job_status(
                 job_id,
                 status="cancelled",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=st.get("message") or f"Cancelled: {job_id}",
             )
             return
@@ -2744,7 +2745,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
             set_job_status(
                 job_id,
                 status="running",
-                started_at=st.get("started_at") or datetime.utcnow().isoformat(),
+                started_at=st.get("started_at") or utcnow().isoformat(),
                 message=st.get("message") or f"Running: {job_id}",
             )
         result = func(*args, **kwargs)
@@ -2763,7 +2764,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 job_id,
                 status="cancelled",
                 cancel_requested=True,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Operation cancelled",
                 result=cancel_result,
             )
@@ -2787,7 +2788,7 @@ def schedule_immediate(job_id: str, func, *args, **kwargs) -> bool:
                 done_message = f"Completed: {job_id}"
             payload = {
                 "status": "completed",
-                "finished_at": datetime.utcnow().isoformat(),
+                "finished_at": utcnow().isoformat(),
                 "message": done_message,
             }
             if isinstance(result, dict):

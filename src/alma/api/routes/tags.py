@@ -8,7 +8,6 @@ import logging
 import re
 import sqlite3
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -16,6 +15,7 @@ from pydantic import BaseModel, Field
 from alma.api.deps import get_current_user, get_db, open_db_connection
 from alma.api.helpers import raise_internal
 from alma.core.db_write import run_write_unit
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 MAX_TAGS_PER_PAPER = 5
@@ -254,7 +254,7 @@ def bulk_generate_suggestions(
         operation_key=operation_key,
         trigger_source="user",
         message="Bulk tag suggestion generation queued",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
     )
 
     schedule_immediate(
@@ -577,7 +577,7 @@ def _run_bulk_tag_suggestions(job_id: str) -> None:
             job_id,
             status="failed",
             message=f"Could not resolve publications DB path: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
         return
 
@@ -594,7 +594,7 @@ def _run_bulk_tag_suggestions(job_id: str) -> None:
                 job_id,
                 status="cancelled",
                 message="Bulk tag suggestion cancelled before execution",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -631,7 +631,7 @@ def _run_bulk_tag_suggestions(job_id: str) -> None:
             total=result["total"],
             generated=result["generated"],
             errors=result["errors"],
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
 
     except Exception as exc:
@@ -640,7 +640,7 @@ def _run_bulk_tag_suggestions(job_id: str) -> None:
             job_id,
             status="failed",
             message=f"Bulk tag suggestion failed: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         conn.close()

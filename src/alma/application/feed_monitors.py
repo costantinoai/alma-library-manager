@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime
 from typing import Any
 
 from alma.application.feed_query_language import normalize_keyword_expression
 from alma.core.db_write import commit_unless_gated, run_write_unit
+from alma.core.time import utcnow
 
 NON_AUTHOR_MONITOR_TYPES = {"query", "topic", "venue", "preprint", "branch"}
 AUTHOR_MONITOR_PREFIX = "author:"
@@ -157,7 +157,7 @@ def sync_author_monitors(db: sqlite3.Connection) -> None:
         """
     ).fetchall()
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     active_ids: set[str] = set()
     for row in rows:
         author_id = str(row["author_id"] or "").strip()
@@ -303,7 +303,7 @@ def create_feed_monitor(
     if existing:
         raise sqlite3.IntegrityError("Feed monitor already exists")
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     monitor_id = uuid.uuid4().hex
     payload = {"query": normalized_query, **extra_config}
     # Single gated INSERT. The duplicate guard above raised IntegrityError
@@ -348,7 +348,7 @@ def update_feed_monitor(
     if monitor_type == "author":
         if definition_changed:
             raise ValueError("Author monitors can only be enabled or disabled from Feed settings")
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
 
         def _persist_author() -> None:
             # One gated unit: an enable/disable toggle (author monitors can't
@@ -428,7 +428,7 @@ def update_feed_monitor(
     if duplicate:
         raise sqlite3.IntegrityError("Feed monitor already exists")
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     source_definition_changed = (
         query is not None
         or config is not None
@@ -504,7 +504,7 @@ def reorder_feed_monitors(db: sqlite3.Connection, ordered_ids: list[str]) -> Non
         return
 
     def _persist() -> None:
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         for index, monitor_id in enumerate(clean):
             db.execute(
                 "UPDATE feed_monitors SET position = ?, updated_at = ? WHERE id = ?",
@@ -541,7 +541,7 @@ def update_feed_monitor_result(
     result: dict[str, Any] | None = None,
     error: str | None = None,
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     db.execute(
         """
         UPDATE feed_monitors

@@ -16,11 +16,11 @@ import logging
 import math
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import datetime
 from typing import Any
 
 from alma.core.scoring_math import clamp
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 
 from .lens_crud import (
@@ -495,7 +495,7 @@ def _top_preferred_authors(
 
     try:
         rows = db.execute(
-            f"""
+            """
             SELECT entity_id, affinity_weight, confidence, interaction_count
             FROM preference_profiles
             WHERE entity_type = 'author'
@@ -776,7 +776,7 @@ def _seed_strength(seed: dict) -> float:
     citations = float(seed.get("cited_by_count") or 0.0)
     citation_score = _clamp(citations / 200.0, 0.0, 1.0)
     year_raw = int(seed.get("year") or 0)
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
     recency_score = _clamp((year_raw - (current_year - 12)) / 12.0, 0.0, 1.0)
     return (rating_score * 0.6) + (citation_score * 0.25) + (recency_score * 0.15)
 
@@ -1256,7 +1256,7 @@ def preview_lens_branches(
         "seed_count": len(seeds),
         "temperature": round(effective_temp, 3),
         "resolution": round(effective_resolution, 3),
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": utcnow().isoformat(),
         "branches": enriched_branches,
     }
 

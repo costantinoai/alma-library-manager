@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -24,6 +23,7 @@ from alma.application import feed_monitors as monitor_app
 from alma.application.discovery import lens_crud
 from alma.core.db_write import run_write_unit
 from alma.core.operations import OperationOutcome, OperationRunner
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -479,7 +479,7 @@ def refresh_feed_inbox(
             status="queued",
             operation_key=operation_key,
             trigger_source="user",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             processed=0,
             total=len(active_monitors),
             message=queued_message,
@@ -500,7 +500,7 @@ def refresh_feed_inbox(
                 set_job_status(
                     job_id,
                     status=final_status,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     processed=len(active_monitors),
                     total=len(active_monitors),
                     message=final_message,
@@ -513,7 +513,7 @@ def refresh_feed_inbox(
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=f"Feed refresh failed: {exc}",
                     error=str(exc),
                     operation_key=operation_key,
@@ -587,7 +587,7 @@ def refresh_feed_monitor(
             status="queued",
             operation_key=operation_key,
             trigger_source="user",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             processed=0,
             total=1,
             message=queued_message,
@@ -602,7 +602,7 @@ def refresh_feed_monitor(
                     set_job_status(
                         job_id,
                         status="noop",
-                        finished_at=datetime.utcnow().isoformat(),
+                        finished_at=utcnow().isoformat(),
                         processed=1,
                         total=1,
                         message="Feed monitor not found",
@@ -617,7 +617,7 @@ def refresh_feed_monitor(
                 set_job_status(
                     job_id,
                     status=final_status,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     processed=1,
                     total=1,
                     message=f"Refreshed feed monitor {monitor_label}",
@@ -630,7 +630,7 @@ def refresh_feed_monitor(
                 set_job_status(
                     job_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     message=f"Feed monitor refresh failed: {exc}",
                     error=str(exc),
                     operation_key=operation_key,

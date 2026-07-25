@@ -12,7 +12,6 @@ import sqlite3
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -20,6 +19,7 @@ from alma.core.components import resolve_component
 from alma.core.db_write import commit_unless_gated, run_write_unit, write_section
 from alma.core.paper_groups import settle_new_paper_group
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import (
     clean_display_text,
     generate_paper_id,
@@ -1587,7 +1587,7 @@ def _create_staged_import_paper(
     matched_paper_id: str | None = None,
 ) -> str:
     paper_id = generate_paper_id()
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     if matched_paper_id and title_confidence >= LOW_CONFIDENCE_IMPORT_TITLE_THRESHOLD:
         # 40.5: a title-only import that fuzzy-matches an existing paper is held
         # for review (never auto-saved beside its likely duplicate). Record the
@@ -1733,7 +1733,7 @@ def _merge_missing_import_metadata(
     if not updates:
         return
     updates.append("updated_at = ?")
-    params.append(datetime.utcnow().isoformat())
+    params.append(utcnow().isoformat())
     conn.execute(
         f"UPDATE papers SET {', '.join(updates)} WHERE id = ?",
         (*params, paper_id),
@@ -2000,7 +2000,7 @@ def _create_library_paper(
         paper_id (UUID string).
     """
     paper_id = generate_paper_id()
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     # 44.7: route through the canonical dynamic-kwargs helper instead of a
     # hand-rolled ~19-column INSERT. This site sets added_at=now (it IS a saved
@@ -2314,7 +2314,7 @@ def _trigger_background_enrichment(
         set_job_status(
             job_id,
             status="running",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             operation_key="imports.postprocess",
             trigger_source="user",
             message="Post-import pipeline: enrich, resolve IDs, dedup, embeddings",
@@ -2346,7 +2346,7 @@ def _trigger_background_enrichment(
             set_job_status(
                 subtask_id,
                 status="running",
-                started_at=datetime.utcnow().isoformat(),
+                started_at=utcnow().isoformat(),
                 operation_key=f"imports.postprocess.{stage_key}",
                 trigger_source="subtask",
                 parent_job_id=job_id,
@@ -2390,7 +2390,7 @@ def _trigger_background_enrichment(
                 set_job_status(
                     subtask_id,
                     status="failed",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     error=str(exc),
                     message=f"{stage_label} failed",
                     parent_job_id=job_id,
@@ -2411,7 +2411,7 @@ def _trigger_background_enrichment(
             set_job_status(
                 subtask_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=f"{stage_label} completed",
                 result=summary,
                 parent_job_id=job_id,

@@ -28,7 +28,6 @@ import re
 import sqlite3
 import uuid
 from collections import defaultdict
-from datetime import datetime
 from typing import Any
 
 from alma.core.components import link_orphan_components, resolve_component
@@ -42,6 +41,7 @@ from alma.core.paper_groups import (
 )
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
 from alma.discovery import openalex_related
 from alma.discovery import similarity as sim_module
@@ -670,9 +670,9 @@ def _generate_with_conn(conn: sqlite3.Connection, max_results: int) -> list[dict
                 logger.debug("Failed to compute negative centroid: %s", exc)
 
     skip_titles, skip_keys = _recommendation_skip_sets(conn)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     merged: dict[str, dict] = {}
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
 
     followed_author_ids: list[tuple[str, str]] = []
     if strat_followed:
@@ -1128,7 +1128,7 @@ def _dense_fallback_candidates(
         ranked.append((score, row_dict))
 
     ranked.sort(key=lambda pair: pair[0], reverse=True)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     out: list[dict] = []
     for score, row_dict in ranked[:limit]:
         real_paper_id = str(row_dict.get("id") or "").strip()
@@ -1239,7 +1239,7 @@ def _discover_similar_with_meta_and_conn(
     )
 
     skip_titles, skip_keys = _recommendation_skip_sets(conn)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     merged: dict[str, dict] = {}
 
     def _merge_batch(

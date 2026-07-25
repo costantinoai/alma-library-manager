@@ -69,7 +69,7 @@ import re
 import sqlite3
 import threading
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.db_write import write_section
@@ -81,6 +81,7 @@ from alma.core.fetch_pipeline import (
     run_staged_fetch_pipeline,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import canonical_lookup_doi
 from alma.core.utils import utcnow_iso as _utcnow_iso
 from alma.discovery import semantic_scholar
@@ -804,7 +805,7 @@ def _apply_s2_title_match(
                     "cited_by_count": cited_by,
                     "influential_citation_count": influential,
                 },
-                always_fields={"fetched_at": datetime.utcnow().isoformat()},
+                always_fields={"fetched_at": utcnow().isoformat()},
             )
             or []
         )
@@ -818,7 +819,7 @@ def _apply_s2_title_match(
                 paper_id,
                 vector,
                 source=EMBEDDING_SOURCE_SEMANTIC_SCHOLAR,
-                created_at=datetime.utcnow().isoformat(),
+                created_at=utcnow().isoformat(),
             )
         except Exception as exc:
             logger.warning("title-resolution S2 vector store failed for %s: %s", paper_id, exc)
@@ -969,7 +970,7 @@ def run_title_resolution_sweep(
                 processed=0,
                 total=0,
                 message="No papers need title resolution",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -1129,7 +1130,7 @@ def run_title_resolution_sweep(
                     processed=processed,
                     total=total,
                     message=message,
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     result=result_payload,
                 )
                 add_job_log(job_id, message, step=reason or "background_yield", data=result_payload)
@@ -1140,7 +1141,7 @@ def run_title_resolution_sweep(
                 processed=processed,
                 total=total,
                 message="Title resolution cancelled",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -1234,7 +1235,7 @@ def run_title_resolution_sweep(
                     f"Title resolution continuation queued "
                     f"({remaining} eligible, depth {continuation_depth + 1})"
                 ),
-                "started_at": datetime.utcnow().isoformat(),
+                "started_at": utcnow().isoformat(),
             }
             if parent_chain_id:
                 status_kwargs["chain_id"] = parent_chain_id
@@ -1289,7 +1290,7 @@ def run_title_resolution_sweep(
             total=total,
             message=message,
             result=result_data,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
         add_job_log(
             job_id,
@@ -1303,7 +1304,7 @@ def run_title_resolution_sweep(
             job_id,
             status="failed",
             message=f"Title resolution sweep failed: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         conn.close()

@@ -36,6 +36,7 @@ from alma.core.settings_helpers import (
     setting_int as _setting_int,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import (
     clean_display_text,
     normalize_doi,
@@ -464,7 +465,7 @@ def _filter_monitor_candidates(
 def _resolve_feed_from_year(settings: dict[str, str]) -> int:
     from alma.config import get_fetch_year
 
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
     recency_years = _setting_int(settings, "monitor_defaults.recency_years", 2, 0, 10)
     recent_floor = current_year - recency_years
     global_fetch_year = get_fetch_year()
@@ -823,7 +824,7 @@ def count_new_feed_items(
 
 def mark_feed_seen(db: sqlite3.Connection, *, when: str | None = None) -> str:
     """Stamp "the user has now looked at the Feed". Caller owns the write unit."""
-    stamp = when or datetime.utcnow().isoformat()
+    stamp = when or utcnow().isoformat()
     db.execute(
         """
         INSERT INTO discovery_settings (key, value, updated_at)
@@ -1083,7 +1084,7 @@ def list_feed_items(
         # which we first saw the paper (feed_items.fetched_at). We deliberately
         # skip a year-only fallback — stamping papers with YYYY-01-01 corrupts
         # chronological filters for every paper without a full date.
-        cutoff = (datetime.utcnow() - timedelta(days=int(since_days))).isoformat()
+        cutoff = (utcnow() - timedelta(days=int(since_days))).isoformat()
         where.append(
             """COALESCE(
                 NULLIF(p.publication_date, ''),
@@ -1226,7 +1227,7 @@ def apply_feed_action(
 
     paper_id = row["paper_id"]
     feed_item = get_feed_item(db, feed_item_id) or {}
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         # One atomic feed-action unit (writer gate + BEGIN IMMEDIATE + retry):
@@ -1805,7 +1806,7 @@ def refresh_feed_inbox(db: sqlite3.Connection, *, ctx=None) -> dict:
         monitor_search_settings,
     ) = _read_monitor_refresh_settings(discovery_settings)
     from_year = _resolve_feed_from_year(discovery_settings)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     _log(
         "query_monitors",
@@ -2273,7 +2274,7 @@ def refresh_feed_monitor(
         return diag
 
     from_year = _resolve_feed_from_year(discovery_settings)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     usage_before = openalex_usage_snapshot()
     with source_diagnostics_scope() as source_diag:
         if monitor.get("monitor_type") == "author":

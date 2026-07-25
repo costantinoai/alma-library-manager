@@ -18,6 +18,7 @@ from alma.application import library as library_app
 from alma.core.db_write import run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -297,7 +298,7 @@ def semantic_paper_search(
         operation_key=operation_key,
         trigger_source="user",
         message="SPECTER2 semantic search queued; query embedding may use CPU/GPU",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         total=limit,
         processed=0,
     )
@@ -367,7 +368,7 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
                     "embedding_model": S2_SPECTER2_MODEL,
                     "query_model": SPECTER2_ADHOC_QUERY_ADAPTER,
                 },
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -411,7 +412,7 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
                 "embedding_model": S2_SPECTER2_MODEL,
                 "query_model": SPECTER2_ADHOC_QUERY_ADAPTER,
             },
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     except Exception as exc:
         message = str(exc)
@@ -432,7 +433,7 @@ def _run_semantic_paper_search(job_id: str, query: str, scope: str, limit: int) 
             status="failed",
             error=str(exc),
             message=message,
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         conn.close()
@@ -524,7 +525,7 @@ def rehydrate_paper_metadata(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=0,
         message=(
@@ -893,7 +894,7 @@ def _network_cache_read(
         expires = datetime.fromisoformat(str(row["expires_at"] or ""))
     except ValueError:
         return None
-    if expires < datetime.utcnow():
+    if expires < utcnow():
         return None
     try:
         return json.loads(row["payload_json"] or "null")
@@ -905,7 +906,7 @@ def _network_cache_write(
     db: sqlite3.Connection, paper_id: str, direction: str, payload: dict
 ) -> None:
     try:
-        now = datetime.utcnow()
+        now = utcnow()
         params = (
             paper_id,
             direction,
@@ -1330,7 +1331,7 @@ def dedup_preprint_twins(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Scanning for preprint↔journal twins (scope={scope_value})",
     )
     add_job_log(job_id, f"Preprint dedup queued (scope={scope_value})", step="queued")

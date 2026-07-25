@@ -12,9 +12,9 @@ untagged publications.
 
 import logging
 import sqlite3
-from datetime import datetime
 
 from alma.core.db_write import write_section
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -465,7 +465,7 @@ def bulk_suggest_tags(conn: sqlite3.Connection, progress_callback=None) -> dict:
         ).fetchall()
 
         total = len(pubs)
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
 
         for idx, pub_row in enumerate(pubs, start=1):
             pid = pub_row["paper_id"]

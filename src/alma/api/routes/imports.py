@@ -12,7 +12,6 @@ import hashlib
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -38,6 +37,7 @@ from alma.core.secrets import (
     get_secret,
     set_secret,
 )
+from alma.core.time import utcnow
 from alma.library.importer import (
     ImportResult,
     import_bibtex,
@@ -289,7 +289,7 @@ def _queue_import_background(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=0,
         message=queued_message,
@@ -334,7 +334,7 @@ def _queue_import_background(
             set_job_status(
                 job_id,
                 status=final_status,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=total,
                 total=total,
                 message=final_message,
@@ -353,7 +353,7 @@ def _queue_import_background(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message=f"Import failed: {safe_msg}",
                 error=safe_msg,
                 operation_key=operation_key,
@@ -784,7 +784,7 @@ def enrich_imports(
             status="queued",
             operation_key=operation_key,
             trigger_source="user",
-            started_at=datetime.utcnow().isoformat(),
+            started_at=utcnow().isoformat(),
             message="Enrichment queued",
         )
         add_job_log(job_id, "Queued enrichment for imported publications", step="queued")
@@ -985,7 +985,7 @@ def resolve_imported_publications_openalex(
                 set_job_status(
                     job_id,
                     status="cancelled",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     processed=idx - 1,
                     total=total,
                     message="Publication resolution cancelled",
@@ -1045,7 +1045,7 @@ def resolve_imported_publications_openalex(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         processed=0,
         total=total,
         message="Queued OpenAlex resolution for publications",

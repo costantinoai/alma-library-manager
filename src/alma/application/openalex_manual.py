@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 from alma.application import library as library_app
 from alma.application.feed import _upsert_candidate_paper
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_write import run_write_unit
+from alma.core.time import utcnow
 from alma.core.utils import is_doi_shaped, normalize_doi, resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.engine import (
@@ -1042,7 +1042,7 @@ def save_online_search_result(
                 pid = _upsert_candidate_paper(
                     db,
                     dict(candidate),
-                    now=datetime.utcnow().isoformat(),
+                    now=utcnow().isoformat(),
                 )
                 ms = (
                     str(candidate.get("source_api") or "").strip()
@@ -1061,7 +1061,7 @@ def save_online_search_result(
                 )
 
         target_rating = _ONLINE_SEARCH_ACTION_RATINGS[action]
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         current = db.execute(
             "SELECT status, rating FROM papers WHERE id = ?", (pid,)
         ).fetchone()
@@ -1195,7 +1195,7 @@ def add_work_to_library(
         # `upsert_work_sidecars` (the resolve selects `referenced_works`) — no
         # separate referenced-works fetch needed.
 
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         library_app.add_to_library(
             db,
             pid,

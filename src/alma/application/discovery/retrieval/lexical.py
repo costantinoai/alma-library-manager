@@ -6,8 +6,8 @@ Split out of the discovery god-module (D-9); pure move.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
 
+from alma.core.time import utcnow
 from alma.discovery import openalex_related
 
 from ..seed_profile import _extract_keywords
@@ -42,7 +42,7 @@ def _retrieve_lexical_channel(
     if not topics:
         return []
     results = openalex_related.search_works_by_topics(
-        topics, limit=limit, from_year=datetime.utcnow().year - 3
+        topics, limit=limit, from_year=utcnow().year - 3
     )
     # Stamp provenance so downstream `_derive_recommendation_provenance`
     # routes these to the `lexical` bucket instead of the un-tagged

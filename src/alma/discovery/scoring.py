@@ -23,7 +23,6 @@ import logging
 import math
 import re
 import sqlite3
-from datetime import datetime
 from typing import Any
 
 from alma.application.author_signal import build_discovery_author_affinity
@@ -43,6 +42,7 @@ from alma.core.scoring_math import (
     log_prevalence_weights,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.services.signal_lab import get_preference_affinity_signal
@@ -548,7 +548,7 @@ def score_candidate(
     else:
         _scoring_provider = topic_provider
 
-    current_year = datetime.utcnow().year
+    current_year = utcnow().year
     recency_window = int(settings.get("limits.recency_window_years", "10"))
 
     # -- 1. Source relevance --

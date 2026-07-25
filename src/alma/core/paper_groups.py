@@ -12,9 +12,9 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterable, Mapping
-from datetime import datetime
 from typing import Any
 
+from alma.core.time import utcnow
 from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
@@ -334,7 +334,7 @@ def _merge_preference_profile(conn: sqlite3.Connection, loser_id: str, root_id: 
         last_updated = max(
             str(loser["last_updated"] or ""),
             str(root["last_updated"] or "") if root else "",
-        ) or datetime.utcnow().isoformat()
+        ) or utcnow().isoformat()
         conn.execute(
             """
             INSERT INTO preference_profiles
@@ -404,7 +404,7 @@ def _upgrade_root_scalars(
         updates["status"] = "library"
     if not updates:
         return
-    updates["updated_at"] = datetime.utcnow().isoformat()
+    updates["updated_at"] = utcnow().isoformat()
     assignments = ", ".join(f"{field} = ?" for field in updates)
     conn.execute(
         f"UPDATE papers SET {assignments} WHERE id = ?",
@@ -566,7 +566,7 @@ def absorb_paper_group(
             "skipped": True,
             "reason": "already_merged",
         }
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     migrated: dict[str, int] = {}
     cleaned = feedback_migrated = preferences_migrated = 0
     journal_promoted = root_id != keeper_id and _root_rank(root) > _root_rank(rows[keeper_id])

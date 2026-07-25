@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from alma.api.deps import get_current_user
 from alma.api.models import ErrorResponse, PluginConfigUpdate, PluginInfo, PluginTestResult
 from alma.core.redaction import redact_sensitive_text
+from alma.core.time import utcnow
 from alma.plugins.config import load_plugin_config, save_plugin_config
 from alma.plugins.registry import PluginRegistry
 
@@ -343,7 +344,6 @@ def _slack_test_envelope(user: dict) -> dict:
     """
     import asyncio
     import uuid
-    from datetime import datetime as _dt
 
     from alma.api.scheduler import (
         activity_envelope,
@@ -389,7 +389,7 @@ def _slack_test_envelope(user: dict) -> dict:
         operation_key=operation_key,
         trigger_source="user",
         actor=actor,
-        started_at=_dt.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Sending Slack test message",
     )
 
@@ -457,7 +457,6 @@ def _email_test_envelope(user: dict) -> dict:
     """
     import asyncio
     import uuid
-    from datetime import datetime as _dt
 
     from alma.api.scheduler import (
         activity_envelope,
@@ -494,7 +493,7 @@ def _email_test_envelope(user: dict) -> dict:
         operation_key=operation_key,
         trigger_source="user",
         actor=actor,
-        started_at=_dt.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Sending test email",
     )
 

@@ -27,6 +27,7 @@ from alma.core.db_write import run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.scoring_math import age_decay, clamp
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery.defaults import (
     DISCOVERY_SETTINGS_DEFAULTS,
     merge_discovery_defaults,
@@ -438,7 +439,7 @@ def mark_recommendation_action(
     effective_rating = current_rating
     feedback_action: str | None = None
     stamp_recommendation = action in {"save", "read", "dismiss", "seen"}
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         # One atomic discovery-action unit (writer gate + BEGIN IMMEDIATE +
@@ -576,7 +577,7 @@ def _paper_dismissal_scores(rows: list[sqlite3.Row]) -> dict[str, float]:
     a paper is still cooling down before being eligible for fresh Discovery
     recommendations.
     """
-    now = datetime.utcnow()
+    now = utcnow()
     grouped: dict[str, list[datetime | None]] = defaultdict(list)
     for row in rows:
         paper_id = str(row["paper_id"] or "").strip()
@@ -807,7 +808,7 @@ def create_lens(
         raise ValueError(f"Invalid context_type: {context_type}")
 
     lens_id = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     effective_weights = weights or default_channel_weights(context_type)
     db.execute(
         """
@@ -1059,7 +1060,7 @@ def _aggregate_branch_outcomes(
     """
     if not _table_exists(db, "recommendations"):
         return {}
-    since = (datetime.utcnow() - timedelta(days=max(7, int(days or 60)))).date().isoformat()
+    since = (utcnow() - timedelta(days=max(7, int(days or 60)))).date().isoformat()
     params: list[Any] = [since]
     lens_clause = ""
     if str(lens_id or "").strip():
@@ -1087,7 +1088,7 @@ def _aggregate_branch_outcomes(
     except sqlite3.OperationalError:
         return {}
 
-    today_julian = float(datetime.utcnow().toordinal())
+    today_julian = float(utcnow().toordinal())
     grouped: dict[str, dict[str, Any]] = {}
     for row in rows:
         branch_id = str(row["branch_id"] or "").strip()

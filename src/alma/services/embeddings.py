@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
 
 from alma.ai.embedding_sources import source_for_provider_name
 from alma.core.db_write import write_section
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import normalize_id_list
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def run_embedding_computation(
                 job_id,
                 status="failed",
                 message="No active embedding provider available",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -140,7 +140,7 @@ def run_embedding_computation(
                 job_id,
                 status="failed",
                 message=user_msg,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -265,7 +265,7 @@ def run_embedding_computation(
                 message=f"No papers matched embedding scope '{scope}'",
                 processed=0,
                 total=0,
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
             )
             return
 
@@ -340,7 +340,7 @@ def run_embedding_computation(
                     total=total,
                     errors=errors,
                     message="Embedding computation cancelled by user",
-                    finished_at=datetime.utcnow().isoformat(),
+                    finished_at=utcnow().isoformat(),
                     result={
                         "processed": processed,
                         "total": total,
@@ -391,7 +391,7 @@ def run_embedding_computation(
                                     encode_vector(emb),
                                     storage_model,
                                     source_for_provider_name(provider.name),
-                                    datetime.utcnow().isoformat(),
+                                    utcnow().isoformat(),
                                 ),
                             )
                             inserted_paper_ids.append(str(row["id"]))
@@ -454,7 +454,7 @@ def run_embedding_computation(
                                         encode_vector(emb),
                                         storage_model,
                                         source_for_provider_name(provider.name),
-                                        datetime.utcnow().isoformat(),
+                                        utcnow().isoformat(),
                                     ),
                                 )
                         except Exception as exc:
@@ -504,7 +504,7 @@ def run_embedding_computation(
                 f"Completed ({scope}): {processed - errors - skipped_empty}/{total} embeddings computed "
                 f"({errors} errors, {skipped_empty} empty texts skipped)"
             ),
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     except Exception as exc:
         logger.exception("Embedding computation failed: %s", exc)
@@ -512,7 +512,7 @@ def run_embedding_computation(
             job_id,
             status="failed",
             message=f"Embedding computation failed: {exc}",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
         )
     finally:
         conn.close()

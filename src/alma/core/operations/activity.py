@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
 from typing import Any
+
+from alma.core.time import utcnow
 
 from .models import OperationContext
 
@@ -66,7 +67,7 @@ def persist_operation_status(
             error_value,
             ctx.started_at,
             ctx.finished_at,
-            datetime.utcnow().isoformat(),
+            utcnow().isoformat(),
             processed,
             total,
             current_author,
@@ -132,7 +133,7 @@ def persist_operation_log(
         """,
         (
             operation_id,
-            datetime.utcnow().isoformat(),
+            utcnow().isoformat(),
             level,
             step,
             message,

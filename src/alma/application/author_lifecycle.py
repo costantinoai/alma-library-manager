@@ -42,10 +42,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime
 
 from alma.core.db_write import run_after_gate_release, write_section
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ def soft_remove_author(
     if (row["status"] or "active") == "removed":
         return False
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     db.execute(
         "UPDATE authors SET status = 'removed' WHERE id = ?", (aid,),
     )

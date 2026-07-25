@@ -3,7 +3,6 @@
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -35,6 +34,7 @@ from alma.application.followed_authors import (
 from alma.core.db_write import run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.sql_helpers import paper_date_sort_expr, standalone_paper_sql
+from alma.core.time import utcnow
 from alma.services import health as health_service
 
 logger = logging.getLogger(__name__)
@@ -582,7 +582,7 @@ def create_collection(
     """Create a new collection."""
     try:
         cid = uuid.uuid4().hex
-        now = datetime.utcnow().isoformat()
+        now = utcnow().isoformat()
         run_write_unit(
             db,
             lambda: db.execute(
@@ -714,7 +714,7 @@ def add_collection_item(
     if not coll:
         raise HTTPException(status_code=404, detail="Collection not found")
     root_id = _require_library_paper(db, body.paper_id)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     try:
         run_write_unit(
             db,
@@ -1151,7 +1151,7 @@ def create_topic(
         )
 
     topic_id = _topic_id_from_normalized(normalized)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         db.execute(
@@ -1195,7 +1195,7 @@ def create_topic_alias(
     canon_normalized = normalize_topic(canonical)
     alias_normalized = normalize_topic(alias)
     topic_id = _topic_id_from_normalized(canon_normalized)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         # Ensure canonical topic exists
@@ -1271,7 +1271,7 @@ def rename_topic(
     else:
         topic_id = existing["topic_id"]
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         # Update the canonical name
@@ -1320,7 +1320,7 @@ def group_topic(
     source_normalized = normalize_topic(source)
     target_topic_id = _topic_id_from_normalized(target_normalized)
     source_topic_id = _topic_id_from_normalized(source_normalized)
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist() -> None:
         # Ensure target topic exists
@@ -1402,7 +1402,7 @@ def delete_topic(
     replacement_term = None
     repl_normalized = None
     repl_topic_id = None
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     if replacement:
         replacement_term = normalize_topic_term(replacement)
         if not replacement_term:
@@ -1561,7 +1561,7 @@ def follow_author(
     followed") is already satisfied, and a 409 here turned harmless client
     retries / double-submits into scary error toasts.
     """
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
 
     def _persist_follow() -> tuple[str, bool]:
         # Whole follow write unit — serialized behind the process writer

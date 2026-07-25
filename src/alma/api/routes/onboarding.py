@@ -18,7 +18,6 @@ the frontend against the existing endpoints — see ``tasks/02_ONBOARDING.md``.
 
 import logging
 import sqlite3
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -33,6 +32,7 @@ from alma.application.followed_authors import (
 )
 from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid
 from alma.openalex.client import (
     _normalize_openalex_author_id,
@@ -197,7 +197,7 @@ def complete_onboarding(
     fresh library ends healthy, not "queued". Its `auto:onboarding_complete`
     trigger is user-facing (never yields to the idle gate) and survives
     restarts via the orphan-resume path."""
-    completed_at = datetime.utcnow().isoformat()
+    completed_at = utcnow().isoformat()
 
     def _persist() -> None:
         upsert_setting(db, _COMPLETED_KEY, "true")

@@ -25,13 +25,14 @@ from alma.core.database import (
     ensure_output_folder,
     get_authors_json,
 )
-from alma.core.paper_updates import fill_only_update_paper
 from alma.core.paper_groups import (
     promote_matching_preprints,
     purge_orphan_subordinate_state,
     resolve_action_paper_id,
     resolve_paper_root_id,
 )
+from alma.core.paper_updates import fill_only_update_paper
+from alma.core.time import utcnow
 from alma.core.utils import generate_paper_id
 
 logger = logging.getLogger(__name__)
@@ -439,11 +440,10 @@ def save_updated_cache(
             except Exception:
                 pass
 
-        from datetime import datetime as _dt
 
         from alma.core.utils import resolve_existing_paper_id
 
-        fetched_iso = _dt.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+        fetched_iso = utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
 
         # Commit every N papers so a collision on pub 350 of 400 doesn't
         # roll back the previous 349 upserts. Consolidated Phase B

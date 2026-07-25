@@ -22,7 +22,8 @@ import re
 import sqlite3
 import unicodedata
 from collections import defaultdict
-from datetime import datetime
+
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
                ON CONFLICT(topic_id) DO UPDATE SET
                    canonical_name = excluded.canonical_name,
                    normalized_name = excluded.normalized_name""",
-            (topic_id, canonical_name, normalized, datetime.utcnow().isoformat()),
+            (topic_id, canonical_name, normalized, utcnow().isoformat()),
         )
         topics_created += 1
 
@@ -231,7 +232,7 @@ def build_canonical_topics(conn: sqlite3.Connection) -> dict:
                        ON CONFLICT(normalized_term) DO UPDATE SET
                            topic_id = excluded.topic_id,
                            raw_term = excluded.raw_term""",
-                    (topic_id, raw_term, raw_normalized, datetime.utcnow().isoformat()),
+                    (topic_id, raw_term, raw_normalized, utcnow().isoformat()),
                 )
                 aliases_created += 1
             except sqlite3.IntegrityError:
@@ -455,7 +456,7 @@ def merge_topics(
                (topic_id, raw_term, normalized_term, source, confidence, created_at)
                VALUES (?, ?, ?, 'manual', 1.0, ?)""",
             (keep_topic_id, merge["canonical_name"], merge_normalized,
-             datetime.utcnow().isoformat()),
+             utcnow().isoformat()),
         )
     except sqlite3.IntegrityError:
         pass

@@ -4,7 +4,7 @@ import logging
 import sqlite3
 import statistics
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -26,6 +26,7 @@ from alma.application.recommendation_outcomes import (
 )
 from alma.core.db_write import run_write_unit
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.services import health as health_service  # noqa: F401 — registers the health:corpus MV
 
@@ -323,7 +324,7 @@ def _build_recommendation_action_trend(db: sqlite3.Connection, *, days: int = 30
     """
     if not table_exists(db, "recommendations"):
         return []
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (utcnow() - timedelta(days=days)).isoformat()
     by_day: dict[str, list] = defaultdict(list)
     for rec in build_recommendation_outcomes(db, since=since):
         if rec.day:
@@ -358,7 +359,7 @@ def _build_alert_history_trend(
 ) -> list[dict[str, Any]]:
     if not table_exists(db, "alert_history"):
         return []
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (utcnow() - timedelta(days=days)).isoformat()
     if bucket == "week":
         rows = db.execute(
             """
@@ -429,7 +430,7 @@ def _build_branch_trends(
 ) -> list[dict[str, Any]]:
     if not table_exists(db, "recommendations"):
         return []
-    since = (datetime.utcnow() - timedelta(days=days)).date().isoformat()
+    since = (utcnow() - timedelta(days=days)).date().isoformat()
 
     # Group authoritative outcomes by (branch, day). `positive`/`dismissed` now
     # come from the real outcome (feedback/ratings/lifecycle), not the
@@ -473,7 +474,7 @@ def _build_branch_trends(
     # last seven *active* days, so a branch with sparse activity compared windows
     # spanning months and the "7d" label was a lie. These explicit ISO bounds
     # make the windows exactly the last 7 calendar days vs the 7 before them.
-    today = datetime.utcnow().date()
+    today = utcnow().date()
     recent_start = (today - timedelta(days=6)).isoformat()  # 7 calendar days incl. today
     prior_start = (today - timedelta(days=13)).isoformat()
     prior_end = (today - timedelta(days=7)).isoformat()
@@ -518,7 +519,7 @@ def _build_author_follow_trend(
 ) -> list[dict[str, Any]]:
     if not table_exists(db, "followed_authors"):
         return []
-    since = (datetime.utcnow() - timedelta(days=max(1, days - 1))).date().isoformat()
+    since = (utcnow() - timedelta(days=max(1, days - 1))).date().isoformat()
     try:
         rows = db.execute(
             """
@@ -546,7 +547,7 @@ def _build_signal_lab_trend(
 ) -> list[dict[str, Any]]:
     if not table_exists(db, "feedback_events"):
         return []
-    since = (datetime.utcnow() - timedelta(days=max(1, days - 1))).isoformat()
+    since = (utcnow() - timedelta(days=max(1, days - 1))).isoformat()
     try:
         rows = db.execute(
             """
@@ -616,7 +617,7 @@ def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> 
             "long_horizon": {"days": 90, "summary": {}, "weekly_trend": []},
         }
 
-    since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    since = (utcnow() - timedelta(days=days)).isoformat()
     row = db.execute(
         """
         SELECT
@@ -689,7 +690,7 @@ def _build_alert_quality_snapshot(db: sqlite3.Connection, *, days: int = 30) -> 
             }
         )
     long_horizon_days = max(days, 90)
-    long_since = (datetime.utcnow() - timedelta(days=long_horizon_days)).isoformat()
+    long_since = (utcnow() - timedelta(days=long_horizon_days)).isoformat()
     long_row = db.execute(
         """
         SELECT
@@ -1315,7 +1316,7 @@ def _build_operational_snapshot(
     recent_failed_operations_24h = 0
     failed_operations: list[dict[str, Any]] = []
     if table_exists(db, "operation_status"):
-        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        cutoff = (utcnow() - timedelta(hours=24)).isoformat()
         row = db.execute(
             """
             SELECT COUNT(*) AS c

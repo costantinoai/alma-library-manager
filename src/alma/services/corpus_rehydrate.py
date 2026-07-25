@@ -13,7 +13,7 @@ import logging
 import sqlite3
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from html.parser import HTMLParser
 from typing import Any
 
@@ -21,6 +21,7 @@ from alma.application.paper_metadata import merge_openalex_work_metadata
 from alma.core.db_write import write_section
 from alma.core.fetch_pipeline import FetchError, run_fetch_write_pipeline
 from alma.core.sql_helpers import canonical_paper_filter, standalone_paper_sql
+from alma.core.time import utcnow
 from alma.core.utils import (
     normalize_doi,
     normalize_id_list,
@@ -649,7 +650,7 @@ def _run_s2_batched_phase(
                 try:
                     _reuse_vec = semantic_scholar.extract_specter2_vector(paper)
                     if _reuse_vec and semantic_scholar.upsert_specter2_vector(
-                        conn, paper_id, _reuse_vec, created_at=datetime.utcnow().isoformat()
+                        conn, paper_id, _reuse_vec, created_at=utcnow().isoformat()
                     ):
                         # Keep the vector ledger honest: clear any stale
                         # missing_vector/error row now that the vector exists.

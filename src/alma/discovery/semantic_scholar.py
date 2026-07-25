@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
 from typing import Any
 
 from alma.ai.embedding_sources import EMBEDDING_SOURCE_SEMANTIC_SCHOLAR
 from alma.core.http_sources import get_source_http_client
 from alma.core.scoring_math import rank_score
+from alma.core.time import utcnow
 from alma.core.utils import normalize_doi
 from alma.core.vector_blob import encode_vector
 
@@ -128,7 +128,7 @@ def upsert_specter2_vector(
             blob,
             S2_SPECTER2_MODEL,
             source,
-            created_at or datetime.utcnow().isoformat(),
+            created_at or utcnow().isoformat(),
             source,
         ),
     )

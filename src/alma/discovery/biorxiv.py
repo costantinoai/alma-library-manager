@@ -8,6 +8,7 @@ from datetime import datetime
 from time import monotonic
 
 from alma.core.http_sources import get_source_http_client
+from alma.core.time import utcnow
 from alma.core.utils import normalize_doi
 
 logger = logging.getLogger(__name__)
@@ -296,7 +297,7 @@ def search_works(
     if not query:
         return []
 
-    now = datetime.utcnow()
+    now = utcnow()
     if from_year and from_year >= now.year:
         interval = "30d"
     elif from_year and from_year >= (now.year - 1):

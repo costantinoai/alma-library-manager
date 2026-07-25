@@ -5,7 +5,6 @@ import json
 import logging
 import sqlite3
 import uuid
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -43,6 +42,7 @@ from alma.core.http_sources import (
 from alma.core.operations import OperationOutcome, OperationRunner
 from alma.core.redaction import redact_sensitive_text
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -556,14 +556,14 @@ def refresh_recommendations(
                 status="running",
                 operation_key=operation_key,
                 trigger_source="user",
-                started_at=datetime.utcnow().isoformat(),
+                started_at=utcnow().isoformat(),
                 message="Refreshing discovery recommendations",
             )
             result = _run_refresh(job_id)
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Discovery refresh completed",
                 result=result,
             )
@@ -572,7 +572,7 @@ def refresh_recommendations(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Discovery refresh failed",
                 error=str(e),
             )
@@ -584,7 +584,7 @@ def refresh_recommendations(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message="Refreshing discovery recommendations",
     )
 
@@ -603,7 +603,7 @@ def refresh_recommendations(
         set_job_status(
             job_id,
             status="failed",
-            finished_at=datetime.utcnow().isoformat(),
+            finished_at=utcnow().isoformat(),
             message="Discovery refresh scheduling failed",
             error=str(e),
         )
@@ -661,13 +661,12 @@ def _write_similarity_cache(
 ) -> None:
     """Persist similarity results into the cache with settings-driven TTL."""
     try:
-        from datetime import datetime as _dt
         from datetime import timedelta
         ttl_row = db.execute(
             "SELECT value FROM discovery_settings WHERE key = 'cache.similarity_ttl_hours'"
         ).fetchone()
         ttl_hours = int(ttl_row["value"]) if ttl_row else 24
-        now = _dt.utcnow()
+        now = utcnow()
         expires_at = now + timedelta(hours=ttl_hours)
         cache_data = [item.model_dump() for item in items]
         # Gated write-behind cache store (best-effort; lock escapes are
@@ -724,7 +723,7 @@ def discover_similar(
             if row:
                 from datetime import datetime as _dt
                 expires_at = _dt.fromisoformat(row["expires_at"])
-                if _dt.utcnow() < expires_at:
+                if utcnow() < expires_at:
                     cached_results = json.loads(row["results"])
                     return SimilarityResponse(
                         results=[SimilarityResultItem(**r) for r in cached_results],
@@ -760,7 +759,7 @@ def discover_similar(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Discovering similar papers for {len(req.paper_ids)} seed(s)",
     )
 
@@ -802,7 +801,7 @@ def discover_similar(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=len(items),
                 total=len(items),
                 message=(
@@ -817,7 +816,7 @@ def discover_similar(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Discover similar failed",
                 error=str(exc),
             )
@@ -927,7 +926,7 @@ def manual_discovery_search(
         status="queued",
         operation_key=operation_key,
         trigger_source="user",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
         message=f"Searching online sources for '{query[:80]}'",
     )
 
@@ -943,7 +942,7 @@ def manual_discovery_search(
             set_job_status(
                 job_id,
                 status="completed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 processed=len(items),
                 total=len(items),
                 message=f"Found {len(items)} results",
@@ -954,7 +953,7 @@ def manual_discovery_search(
             set_job_status(
                 job_id,
                 status="failed",
-                finished_at=datetime.utcnow().isoformat(),
+                finished_at=utcnow().isoformat(),
                 message="Manual discovery search failed",
                 error=str(exc),
             )

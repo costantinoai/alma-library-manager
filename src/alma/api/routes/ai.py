@@ -2,7 +2,6 @@
 
 import sqlite3
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,6 +26,7 @@ from alma.core.secrets import (
     set_secret,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.services.health import embedding_coverage
 
 router = APIRouter(
@@ -122,7 +122,7 @@ def _write_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
     """Write a single value into the discovery_settings table."""
     conn.execute(
         "INSERT OR REPLACE INTO discovery_settings (key, value, updated_at) VALUES (?, ?, ?)",
-        (key, value, datetime.utcnow().isoformat()),
+        (key, value, utcnow().isoformat()),
     )
 
 
@@ -1140,7 +1140,7 @@ def compute_embeddings(
         operation_key=operation_key,
         trigger_source="user",
         message=f"AI embedding compute queued ({normalized_scope}); may use local CPU/GPU",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
     )
 
     schedule_immediate(
@@ -1207,7 +1207,7 @@ def backfill_s2_vectors(
         operation_key=operation_key,
         trigger_source="user",
         message="S2/SPECTER2 vector fetch queued; remote API only, no local AI compute",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
     )
     schedule_immediate(job_id, _run_s2_vector_backfill, job_id, int(limit))
     env = activity_envelope(
@@ -1273,7 +1273,7 @@ def title_resolution_sweep(
         operation_key=operation_key,
         trigger_source="user",
         message="Title resolution sweep queued; remote API only, no local AI compute",
-        started_at=datetime.utcnow().isoformat(),
+        started_at=utcnow().isoformat(),
     )
     schedule_immediate(job_id, _run_title_resolution_sweep, job_id, int(limit))
     env = activity_envelope(

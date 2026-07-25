@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 from alma.mailer.client import get_email_notifier
 from alma.slack.client import get_slack_notifier
 
@@ -145,7 +146,7 @@ def create_rule(
         raise ValueError(f"Unsupported rule_type: {rule_type}")
     _validate_rule_config(rule_type, rule_config)
     rid = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     db.execute(
         """
         INSERT INTO alert_rules (id, name, rule_type, rule_config, channels, enabled, created_at)
@@ -744,7 +745,7 @@ def create_alert(
     if _is_unscheduled(schedule):
         schedule_config = None
     aid = uuid.uuid4().hex
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     db.execute(
         """
         INSERT INTO alerts (id, name, channels, schedule, schedule_config, format, enabled, created_at)
@@ -987,7 +988,7 @@ async def evaluate_digest(
             }
 
     # ── Phase 2: record (writes only, network done) ────────────────────────
-    now = datetime.utcnow().isoformat()
+    now = utcnow().isoformat()
     for channel_name in channels:
         ch_result = channel_results.get(channel_name, {"status": "unknown", "error": None})
         new_papers = new_by_channel.get(channel_name, [])
@@ -1134,7 +1135,7 @@ def build_alert_response(
     upcoming = next_slot(
         schedule,
         schedule_config if isinstance(schedule_config, dict) else {},
-        datetime.utcnow(),
+        utcnow(),
     )
     return {
         "id": alert_row["id"],
@@ -1246,7 +1247,7 @@ def prune_alert_history(
     alerts sweep; the caller owns the commit.
     """
     retention_days = max(int(retention_days), _ALERT_HISTORY_RETENTION_FLOOR_DAYS)
-    cutoff = ((now or datetime.utcnow()) - timedelta(days=retention_days)).isoformat()
+    cutoff = ((now or utcnow()) - timedelta(days=retention_days)).isoformat()
     cursor = db.execute("DELETE FROM alert_history WHERE sent_at < ?", (cutoff,))
     return cursor.rowcount
 
@@ -1525,7 +1526,7 @@ def _evaluate_rule(
         # Existing per-rule "lookback" gates which feed_items rows are
         # eligible by `fetched_at`. Kept for back-compat (test-fire et al).
         lookback_days = max(1, int(config.get("lookback_days", 14) or 14))
-        since = (datetime.utcnow() - timedelta(days=lookback_days)).isoformat()
+        since = (utcnow() - timedelta(days=lookback_days)).isoformat()
         status_placeholders = ", ".join("?" for _ in statuses)
 
         # Layer 1 (D-AL-3): publication-date window. Default 30 days.

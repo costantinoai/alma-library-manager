@@ -34,7 +34,6 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from alma.core.db_write import commit_unless_gated
@@ -43,6 +42,7 @@ from alma.core.resolution import (
     get_author_sample_titles,
     resolve_author_identity,
 )
+from alma.core.time import utcnow
 from alma.core.utils import normalize_orcid, normalize_title_key
 
 logger = logging.getLogger(__name__)
@@ -390,7 +390,7 @@ def persist_identity_result(
     schema (bootstrap DDL + ``core.migrations``). Evidence is serialised
     as JSON so the UI can re-hydrate it without shipping a second join.
     """
-    timestamp = now or datetime.utcnow().isoformat()
+    timestamp = now or utcnow().isoformat()
     evidence_blob = json.dumps(result.to_dict(), ensure_ascii=False)
 
     updates: list[str] = []

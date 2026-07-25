@@ -5,7 +5,6 @@ manually trigger scheduled jobs.
 """
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -15,6 +14,7 @@ from alma.api.scheduler import (
     list_jobs,
     run_job,
 )
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def scheduler_status():
         "enabled": enabled,
         "running": running,
         "jobs": jobs,
-        "checked_at": datetime.utcnow().isoformat(),
+        "checked_at": utcnow().isoformat(),
     }
 
 
@@ -77,5 +77,5 @@ def trigger_job(job_id: str):
         "success": True,
         "job_id": job_id,
         "message": f"Job '{job_id}' triggered to run immediately",
-        "triggered_at": datetime.utcnow().isoformat(),
+        "triggered_at": utcnow().isoformat(),
     }

@@ -62,6 +62,7 @@ from alma.core.secrets import (
     mask_secret,
     set_secret,
 )
+from alma.core.time import utcnow
 from alma.openalex.http import get_client as get_openalex_client
 from alma.openalex.http import reset_client as reset_openalex_client
 from alma.plugins.config import save_plugin_config
@@ -407,7 +408,7 @@ def export_data_snapshot():
         )
 
     return {
-        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "exported_at": utcnow().isoformat() + "Z",
         "schema_version": 1,
         "settings": settings,
         "data": dump,

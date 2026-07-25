@@ -17,12 +17,13 @@ import json
 import logging
 import sqlite3
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from alma.api.helpers import table_exists
 from alma.application import diagnostics_stats as stats
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def _count_papers_rated_since(conn: sqlite3.Connection, since_iso: str) -> int:
 
 def weekly_research_brief(conn: sqlite3.Connection) -> dict[str, Any]:
     """Weekly summary: new papers, trending topics, active authors, engagement."""
-    now = datetime.utcnow()
+    now = utcnow()
     week_ago = (now - timedelta(days=7)).isoformat()
 
     # Papers added this week (library only).
@@ -297,7 +298,7 @@ def topic_drift(conn: sqlite3.Connection) -> dict[str, Any]:
     * An explicit **insufficient** state when either compared window is too thin
       to support a claim, instead of inventing a trend from a handful of papers.
     """
-    now = datetime.utcnow()
+    now = utcnow()
     cy = now.year
     window_defs = [
         ("recent", cy - 1, cy),
