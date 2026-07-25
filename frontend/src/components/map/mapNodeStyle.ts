@@ -156,3 +156,22 @@ export function radiusFor(kind: MapNodeKind, sizeValue: number | null, maxValue:
   // two different objects (user call 2026-07-25).
   return base + t * base * 0.7
 }
+
+
+/** Percentile colour limits for the Year ramp: p10–p90 of the observed
+ *  years (clamped), so one 1950s outlier can't flatten everything modern
+ *  into a single dark tone. Returns null when there's nothing to ramp. */
+export function yearRampLimits(years: number[]): { lo: number; hi: number } | null {
+  const ys = years.filter((y) => Number.isFinite(y) && y > 1800).sort((a, b) => a - b)
+  if (ys.length === 0) return null
+  const lo = ys[Math.floor(ys.length * 0.1)]
+  const hi = ys[Math.min(ys.length - 1, Math.floor(ys.length * 0.9))]
+  return hi > lo ? { lo, hi } : { lo: ys[0], hi: ys[ys.length - 1] || ys[0] + 1 }
+}
+
+/** Slate→folio recency mix for a year within [lo, hi] (clamped). */
+export function yearRampColor(year: number, lo: number, hi: number): string {
+  const t = Math.max(0, Math.min(1, (year - lo) / Math.max(1, hi - lo)))
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
+  return `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
+}

@@ -30,6 +30,8 @@ import {
   EDGE_LAYER_FALLBACK_COLOR,
   EDGE_LAYER_LABELS,
   MAP_INK,
+  yearRampColor,
+  yearRampLimits,
   type MapNodeKind,
 } from './mapNodeStyle'
 
@@ -121,27 +123,17 @@ export function GraphMapView({
     return new Map(ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i) }]))
   }, [nodes])
 
-  const yearRange = useMemo(() => {
-    let lo = Infinity
-    let hi = -Infinity
-    for (const n of nodes) {
-      const y = Number(n.metadata?.year)
-      if (Number.isFinite(y) && y > 1800) {
-        lo = Math.min(lo, y)
-        hi = Math.max(hi, y)
-      }
-    }
-    return lo <= hi ? { lo, hi } : null
-  }, [nodes])
+  const yearRange = useMemo(
+    () => yearRampLimits(nodes.map((n) => Number(n.metadata?.year))),
+    [nodes],
+  )
 
   const dataColour = (n: GraphNode): string | undefined => {
     if (colourMode === 'year' && yearRange) {
       const y = Number(n.metadata?.year)
       if (!Number.isFinite(y) || y < 1800) return MAP_INK.ambientSoft
-      const t = (y - yearRange.lo) / Math.max(1, yearRange.hi - yearRange.lo)
       // Older = receding slate, newer = folio — recency reads as presence.
-      const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
-      return `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
+      return yearRampColor(y, yearRange.lo, yearRange.hi)
     }
     if (colourMode === 'rating') {
       const r = Number(n.metadata?.rating)
@@ -307,6 +299,15 @@ export function GraphMapView({
             In your library — filled
           </span>
           <span className="text-slate-400">{nodes.length} on the map</span>
+          {colourMode === 'year' && yearRange && (
+            <span className="inline-flex items-center gap-1.5 text-slate-400">
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.lo, yearRange.lo, yearRange.hi) }} />
+              {yearRange.lo}
+              <span aria-hidden>→</span>
+              <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.hi, yearRange.lo, yearRange.hi) }} />
+              {yearRange.hi} (10th–90th percentile; outliers clamped)
+            </span>
+          )}
           {layout?.computed_at && (
             <span className="text-slate-400">
               layout {String(layout.computed_at).slice(0, 10)}

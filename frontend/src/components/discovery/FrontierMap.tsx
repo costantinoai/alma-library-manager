@@ -28,7 +28,7 @@ import {
 import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK } from '@/components/map/mapNodeStyle'
+import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -153,17 +153,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     prevRecIds.current = current
   }, [nodes, query.data?.status])
 
-  const yearRange = useMemo(() => {
-    let lo = Infinity
-    let hi = -Infinity
-    for (const n of nodes) {
-      if (typeof n.year === 'number' && n.year > 1800) {
-        lo = Math.min(lo, n.year)
-        hi = Math.max(hi, n.year)
-      }
-    }
-    return lo <= hi ? { lo, hi } : null
-  }, [nodes])
+  const yearRange = useMemo(
+    () => yearRampLimits(nodes.map((n) => Number(n.year))),
+    [nodes],
+  )
 
   // Heat valence (50-J): what carries signal HERE — a strong suggestion and
   // your library are positive mass, weak suggestions negative, seen papers
@@ -190,13 +183,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         color =
           typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id)?.color : undefined
       } else if (groupBy === 'year') {
-        if (yearRange && typeof n.year === 'number' && n.year > 1800) {
-          const t = (n.year - yearRange.lo) / Math.max(1, yearRange.hi - yearRange.lo)
-          const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
-          color = `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
-        } else {
-          color = MAP_INK.ambientSoft
-        }
+        color =
+          yearRange && typeof n.year === 'number' && n.year > 1800
+            ? yearRampColor(n.year, yearRange.lo, yearRange.hi)
+            : MAP_INK.ambientSoft
       } else if (groupBy === 'branches' && n.layer === 'rec') {
         color = n.branch_id ? branchColors.get(n.branch_id)?.color : branchMapColor(0)
       }
@@ -520,6 +510,15 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               />
               Suggestions {counts ? `(${counts.recs})` : ''} — hollow
             </span>
+            {groupBy === 'year' && yearRange && (
+              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.lo, yearRange.lo, yearRange.hi) }} />
+                {yearRange.lo}
+                <span aria-hidden>→</span>
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.hi, yearRange.lo, yearRange.hi) }} />
+                {yearRange.hi} (10th–90th pct)
+              </span>
+            )}
             {showSeen && (
               <span className="inline-flex items-center gap-1.5 text-slate-400">
                 <span
