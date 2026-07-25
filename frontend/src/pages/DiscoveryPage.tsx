@@ -1304,7 +1304,7 @@ export function DiscoveryPage() {
                 <div>
                   <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
                     <MapIcon className="h-5 w-5 text-alma-folio" />
-                    Frontier Map
+                    Suggestions Map
                   </CardTitle>
                   <p className="mt-1 max-w-3xl text-sm text-slate-600">
                     Your library, this lens&apos;s suggestions, and the space between — click a
