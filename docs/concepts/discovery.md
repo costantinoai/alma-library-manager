@@ -392,6 +392,16 @@ the map refetches. Pan and zoom to explore; the coordinates come from the
 corpus-scope layout (built once and cached — a short "building the layout" state
 shows on first use).
 
+The **branch legend** does more than highlight: each chip can boost or mute
+its branch inline, writing the same `branch_controls` Branch Studio writes —
+one state, two views. A **Branches / Clusters** switch recolours the map by
+corpus cluster instead of by branch (never both at once, per 47-H: two
+colourings on one scatter would lie about which structure you're reading). When
+a lens has seeds, the **seen layer is ranked against that lens's centroid**
+rather than the whole library — the legend says which it used. After an
+Explore-direction refresh, recommendations that weren't in the previous set
+carry a dashed halo, so the loop is visible end to end.
+
 An opt-in **Citation links** toggle overlays the citation fabric — coupling
 (shared references) and co-citation (cited-together) edges — between the library
 and suggestion nodes, so you can see how a suggestion connects to what you

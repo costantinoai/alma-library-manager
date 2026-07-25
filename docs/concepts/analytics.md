@@ -27,17 +27,26 @@ editing it.
 
 ## Tabs
 
-### Stats
+### Overview
 
-The default tab. Aggregated metrics:
+The default section. Aggregated metrics:
 
 * **Summary** — total papers, total followed authors, total
   collections, total tags.
-* **Publications by year** — bar chart of saved-papers volume.
-* **Top topics** — most-saved topics, with counts.
-* **Top journals** — venue mix.
-* **Top institutions** — institutional geography of your saved
-  authors.
+* **Publications timeline** — bars for volume, plus a **median**
+  citations line. Median is the default because one runaway paper drags a
+  year's *mean* far from where its papers actually sit; the mean is one
+  toggle away, dashed. Dots above a bar mark that year's papers in your
+  library-wide **top citation decile** (a paper must exceed the 90th
+  percentile, not merely equal it). Hovering a year names its most-cited
+  paper; clicking drills into that year, citations first.
+* **Your topics** — clusters of *your* library, labelled by the c-TF-IDF
+  terms that distinguish them. See the note below.
+* **Top journals** — a ranked list you can act on: each row drills into its
+  papers and can be **followed** on the spot, using the same follow state as
+  the paper cards. Journals with 3+ saved papers show a quiet "Follow?" hint.
+* **Provenance** — where the work came from, with a Countries / Institutions
+  switch (one question, two zoom levels, one card).
 * **Authors rail** — the most-published / most-cited authors in your
   Library, with paper counts and h-index.
 * **Recommendations engagement** — Discovery-side stats: total
@@ -48,6 +57,15 @@ The default tab. Aggregated metrics:
 
 All Overview blocks are **Library-scoped** — they reflect the saved
 corpus, not the entire tracked set.
+
+!!! note "Your topics are yours, not a global taxonomy"
+    This card used to show OpenAlex's subject taxonomy applied to your papers.
+    It now shows how *your* library actually groups: the clusters computed from
+    your SPECTER2 embeddings, each labelled by the terms that distinguish it.
+    Those answer different questions, so the taxonomy no longer stands in for
+    it — if embeddings aren't computed yet the card says so and points at
+    **Settings → AI** rather than silently falling back. OpenAlex topics remain
+    visible inside individual paper rows.
 
 ### Graph
 
@@ -127,9 +145,11 @@ Re-clustering is opt-in via Settings → Operational status →
 Time-window summaries:
 
 * **Weekly brief** — what was added, what shifted, what surfaced.
-* **Collection intelligence** — growth, coverage, and density by collection.
 * **Topic drift** — how topic mix changes over time.
 * **Signal impact** — which ranking signals correlate with useful outcomes.
+
+**Collection intelligence** moved to the bottom of **Library → Collections**,
+beside the collections it describes. It still generates on demand.
 
 ## How fresh is what I'm seeing?
 
