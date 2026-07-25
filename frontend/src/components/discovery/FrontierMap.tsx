@@ -1,8 +1,20 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Eye, EyeOff, Loader2, Maximize2, Share2, LassoSelect, Sparkles, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  Eye,
+  EyeOff,
+  LassoSelect,
+  Loader2,
+  Maximize2,
+  Share2,
+  Sparkles,
+  X,
+} from 'lucide-react'
 
-import { describeRegion, getFrontier, type FrontierNode, type RegionDescription } from '@/api/client'
+import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
+import { useBranchControls } from '@/hooks/useBranchControls'
 import { LAYER_COLORS, LAYER_FALLBACK_COLOR } from '@/components/graphs/graphConfig'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { FRONTIER_MAP, branchMapColor } from '@/lib/palette'
@@ -14,6 +26,9 @@ const PAD = 40
 
 interface FrontierMapProps {
   lensId: string | null
+  /** The lens itself — needed to read/write branch controls from the legend
+   *  chips. Optional so the map still renders read-only without it. */
+  lens?: Lens | null
   /** Open the shared PaperDetailPanel for a paper (same as the list views). */
   onSelectPaper: (paperId: string) => void
   /** Adopt a selected region as a custom direction on the current lens
@@ -60,7 +75,7 @@ function useBranchColors(nodes: FrontierNode[]) {
   }, [nodes])
 }
 
-export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: FrontierMapProps) {
+export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection }: FrontierMapProps) {
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
@@ -71,6 +86,11 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
   // Region selection: in select mode a drag draws a rectangle (viewBox coords)
   // instead of panning; on release the papers inside become a candidate
   // Direction. `region` holds the pending selection + its describe payload.
+  // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
+  // (the recs are its hero layer); corpus clusters are the alternative lens on
+  // the same points. Never both — two colourings on one scatter is a lie about
+  // which structure you're looking at.
+  const [groupBy, setGroupBy] = useState<'branches' | 'clusters'>('branches')
   const [selectMode, setSelectMode] = useState(false)
   const [selRect, setSelRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
   const selRef = useRef<{ x1: number; y1: number } | null>(null)
@@ -89,6 +109,40 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
   const edges = useMemo(() => query.data?.edges ?? [], [query.data])
   const counts = query.data?.counts
   const branchColors = useBranchColors(nodes)
+  const branchControls = useBranchControls(lens)
+
+  // Corpus clusters present on the map, largest first, each with a stable hue.
+  // Unclustered (-1) is deliberately excluded from the legend: it is the
+  // absence of a group, not a group.
+  const clusterColors = useMemo(() => {
+    const tally = new Map<number, { label: string; count: number }>()
+    for (const n of nodes) {
+      if (typeof n.cluster_id !== 'number' || n.cluster_id < 0) continue
+      const row = tally.get(n.cluster_id)
+      if (row) row.count += 1
+      else tally.set(n.cluster_id, { label: n.cluster_label || `Cluster ${n.cluster_id}`, count: 1 })
+    }
+    const ordered = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)
+    return new Map(
+      ordered.map(([id, v], i) => [id, { ...v, color: branchMapColor(i), index: i }]),
+    )
+  }, [nodes])
+
+  // Recs that were NOT in the previous payload — the visible end of the
+  // adopt-a-direction loop. Tracked across refetches for this session only;
+  // an empty previous set (first load) marks nothing, so a cold open is calm.
+  const prevRecIds = useRef<Set<string> | null>(null)
+  const [newRecIds, setNewRecIds] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    if (query.data?.status !== 'ready') return
+    const current = new Set(nodes.filter((n) => n.layer === 'rec').map((n) => n.paper_id))
+    const previous = prevRecIds.current
+    if (previous && previous.size > 0) {
+      const fresh = new Set([...current].filter((id) => !previous.has(id)))
+      if (fresh.size > 0) setNewRecIds(fresh)
+    }
+    prevRecIds.current = current
+  }, [nodes, query.data?.status])
 
   // Normalize raw layout coords → viewBox pixels (fit bounds).
   const placed = useMemo<Placed[]>(() => {
@@ -283,6 +337,34 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
           <Share2 className="h-3.5 w-3.5" />
           Citation links{showEdges && counts?.edges ? ` · ${counts.edges}` : ''}
         </button>
+        {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
+        {clusterColors.size > 0 && (
+          <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
+            {(['branches', 'clusters'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => {
+                  setGroupBy(mode)
+                  setHighlightBranch(null)
+                }}
+                className={cn(
+                  'px-2 py-1 text-xs font-medium transition-colors',
+                  groupBy === mode
+                    ? 'bg-accent-soft text-alma-folio'
+                    : 'bg-surface-2 text-slate-600 hover:bg-surface-3',
+                )}
+                title={
+                  mode === 'branches'
+                    ? 'Colour suggestions by the lens branch that found them'
+                    : 'Colour every paper by its corpus cluster'
+                }
+              >
+                {mode === 'branches' ? 'Branches' : 'Clusters'}
+              </button>
+            ))}
+          </div>
+        )}
         {onAdoptDirection && (
           <button
             type="button"
@@ -372,7 +454,11 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
                 cx={n.px}
                 cy={n.py}
                 r={3}
-                fill={FRONTIER_MAP.library}
+                fill={
+                  groupBy === 'clusters' && typeof n.cluster_id === 'number'
+                    ? (clusterColors.get(n.cluster_id)?.color ?? FRONTIER_MAP.library)
+                    : FRONTIER_MAP.library
+                }
                 fillOpacity={0.85}
                 onMouseEnter={() => setHover({ node: n })}
                 onMouseLeave={() => setHover(null)}
@@ -384,25 +470,48 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
           {/* Recs — the hero layer, colored by branch, sized by score */}
           <g className="frontier-layer-rec">
             {recNodes.map((n) => {
+              // Colour follows whichever grouping is active — never both.
               const bc = n.branch_id ? branchColors.get(n.branch_id) : undefined
-              const color = bc?.color ?? branchMapColor(0)
-              const dim = highlightBranch != null && n.branch_id !== highlightBranch
+              const cc =
+                typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id) : undefined
+              const color =
+                groupBy === 'clusters'
+                  ? (cc?.color ?? FRONTIER_MAP.library)
+                  : (bc?.color ?? branchMapColor(0))
+              const dim =
+                groupBy === 'branches' && highlightBranch != null && n.branch_id !== highlightBranch
+              const isNew = newRecIds.has(n.paper_id)
               const r = 4 + Math.max(0, Math.min(1, (n.score ?? 0) / 100)) * 4
               return (
-                <circle
-                  key={n.paper_id}
-                  cx={n.px}
-                  cy={n.py}
-                  r={r}
-                  fill={color}
-                  fillOpacity={dim ? 0.18 : 0.9}
-                  stroke="var(--color-surface-0)"
-                  strokeWidth={0.8}
-                  onMouseEnter={() => setHover({ node: n, branchColor: color })}
-                  onMouseLeave={() => setHover(null)}
-                  onClick={() => nodeClick(n)}
-                  className="cursor-pointer transition-opacity"
-                />
+                <g key={n.paper_id}>
+                  {/* A halo, not a different colour: "new" is a temporal fact
+                      about the same node, so it must not fight the grouping. */}
+                  {isNew && (
+                    <circle
+                      cx={n.px}
+                      cy={n.py}
+                      r={r + 3.5}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={1}
+                      strokeOpacity={dim ? 0.15 : 0.55}
+                      strokeDasharray="2 2"
+                    />
+                  )}
+                  <circle
+                    cx={n.px}
+                    cy={n.py}
+                    r={r}
+                    fill={color}
+                    fillOpacity={dim ? 0.18 : 0.9}
+                    stroke="var(--color-surface-0)"
+                    strokeWidth={0.8}
+                    onMouseEnter={() => setHover({ node: n, branchColor: color })}
+                    onMouseLeave={() => setHover(null)}
+                    onClick={() => nodeClick(n)}
+                    className="cursor-pointer transition-opacity"
+                  />
+                </g>
               )
             })}
           </g>
@@ -528,29 +637,95 @@ export function FrontierMap({ lensId, onSelectPaper, onAdoptDirection }: Frontie
           {showSeen && (
             <span className="inline-flex items-center gap-1.5 text-slate-400">
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: FRONTIER_MAP.seen }} />
-              {counts ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` : 'seen'}
+              {counts
+                ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
+                  (query.data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
+                : 'seen'}
             </span>
           )}
         </div>
-        {branchColors.size > 0 && (
+        {/* Branch chips — highlight on click, and (when the lens is available)
+            steer the branch inline. Boost/mute here write the SAME
+            branch_controls Branch Studio writes, through the shared hook: one
+            state, two views. */}
+        {groupBy === 'branches' && branchColors.size > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-            {[...branchColors.entries()].map(([id, b]) => (
-              <button
+            {[...branchColors.entries()].map(([id, b]) => {
+              const state = lens ? branchControls.stateOf(id) : 'normal'
+              return (
+                <span
+                  key={id}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-full border transition-colors',
+                    highlightBranch === id
+                      ? 'border-transparent text-white'
+                      : 'border-[var(--color-border)] bg-surface-1 text-slate-600',
+                    state === 'muted' && 'opacity-50',
+                  )}
+                  style={highlightBranch === id ? { background: b.color } : undefined}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
+                    className="inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 hover:opacity-80"
+                    title={`Highlight the "${b.label}" branch`}
+                  >
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ background: b.color }}
+                    />
+                    {b.label} · {b.count}
+                  </button>
+                  {lens && (
+                    <span className="flex items-center pr-1">
+                      <button
+                        type="button"
+                        onClick={() => branchControls.cycleBranchState(id, 'boosted')}
+                        disabled={branchControls.isPending}
+                        className={cn(
+                          'rounded-full p-0.5 transition-colors hover:text-alma-folio',
+                          state === 'boosted' ? 'text-alma-folio' : 'opacity-50 hover:opacity-100',
+                        )}
+                        title={state === 'boosted' ? 'Remove boost' : 'Boost this branch'}
+                      >
+                        <ChevronUp className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => branchControls.cycleBranchState(id, 'muted')}
+                        disabled={branchControls.isPending}
+                        className={cn(
+                          'rounded-full p-0.5 transition-colors hover:text-warning-700',
+                          state === 'muted' ? 'text-warning-700' : 'opacity-50 hover:opacity-100',
+                        )}
+                        title={state === 'muted' ? 'Unmute this branch' : 'Mute this branch'}
+                      >
+                        <ChevronDown className="h-3 w-3" />
+                      </button>
+                    </span>
+                  )}
+                </span>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Cluster chips — identity only; corpus clusters aren't steerable. */}
+        {groupBy === 'clusters' && clusterColors.size > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+            {[...clusterColors.entries()].slice(0, 8).map(([id, c]) => (
+              <span
                 key={id}
-                type="button"
-                onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 transition-colors',
-                  highlightBranch === id
-                    ? 'border-transparent text-white'
-                    : 'border-[var(--color-border)] bg-surface-1 text-slate-600 hover:bg-surface-3',
-                )}
-                style={highlightBranch === id ? { background: b.color } : undefined}
-                title={`Highlight the "${b.label}" branch`}
+                className="inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-[var(--color-border)] bg-surface-1 px-1.5 py-0.5 text-slate-600"
+                title={`${c.label} · ${c.count} papers`}
               >
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: b.color }} />
-                {b.label} · {b.count}
-              </button>
+                <span
+                  className="inline-block h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: c.color }}
+                />
+                <span className="truncate">{c.label}</span>
+                <span className="shrink-0 text-slate-400">· {c.count}</span>
+              </span>
             ))}
           </div>
         )}

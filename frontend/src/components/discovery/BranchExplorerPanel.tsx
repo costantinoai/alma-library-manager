@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import {
   Compass,
   Flame,
@@ -13,7 +13,7 @@ import {
   VolumeX,
 } from 'lucide-react'
 
-import { previewLensBranches, updateLens, type Lens, type LensBranchItem } from '@/api/client'
+import { previewLensBranches, type Lens, type LensBranchItem } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,8 +22,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { EyebrowLabel } from '@/components/ui/eyebrow-label'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { JargonHint, MetricTile } from '@/components/shared'
-import { useToast, errorToast} from '@/hooks/useToast'
-import { invalidateQueries } from '@/lib/queryHelpers'
+import { useToast } from '@/hooks/useToast'
+import { useBranchControls } from '@/hooks/useBranchControls'
 
 interface BranchExplorerPanelProps {
   lens: Lens | null
@@ -87,7 +87,6 @@ function closestPreset(temperature: number) {
 }
 
 export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
-  const queryClient = useQueryClient()
   const { toast } = useToast()
   const [temperature, setTemperature] = useState(0.28)
   const [resolution, setResolution] = useState(BRANCH_RESOLUTION_DEFAULT)
@@ -113,59 +112,34 @@ export function BranchExplorerPanel({ lens }: BranchExplorerPanelProps) {
     staleTime: 30_000,
   })
 
+  // Both writers go through the shared hook so the merge rule (never drop a
+  // field the other surface owns) lives in exactly one place.
+  const branchControls = useBranchControls(lens)
+  const customDirections = branchControls.controls.custom_directions
+
   const saveControlsMutation = useMutation({
     mutationFn: () =>
-      updateLens(lens?.id as string, {
-        branch_controls: {
-          temperature,
-          resolution,
-          pinned,
-          muted,
-          boosted,
-          // Preserve adopted directions — this mutation only edits the branch
-          // knobs, so it must carry the directions through untouched (else
-          // saving temperature would silently wipe them).
-          custom_directions: lens?.branch_controls?.custom_directions ?? [],
-        },
+      branchControls.saveControls.mutateAsync({
+        temperature,
+        resolution,
+        pinned,
+        muted,
+        boosted,
       }),
-    onSuccess: (updatedLens) => {
-      queryClient.setQueryData<Lens[]>(['lenses'], (prev) => {
-        const current = prev ?? []
-        return current.map((item) => (item.id === updatedLens.id ? updatedLens : item))
-      })
-      void invalidateQueries(queryClient, ['lenses'], ['lens-branches', updatedLens.id])
+    onSuccess: () => {
       toast({
         title: 'Branch controls applied',
         description: 'Saved controls will shape the next discovery refresh for this lens.',
       })
     },
-    onError: () => {
-      errorToast('Branch controls failed', 'Could not save branch controls.')
-    },
   })
 
-  // Adopted map regions (task 47 §8). Removing one deletes the entry, preserving
-  // every other branch control.
-  const customDirections = lens?.branch_controls?.custom_directions ?? []
+  // Adopted map regions (task 47 §8). Removing one deletes just that entry.
   const removeDirectionMutation = useMutation({
     mutationFn: (directionId: string) =>
-      updateLens(lens?.id as string, {
-        branch_controls: {
-          temperature,
-          resolution,
-          pinned,
-          muted,
-          boosted,
-          custom_directions: customDirections.filter((d) => d.id !== directionId),
-        },
+      branchControls.saveControls.mutateAsync({
+        custom_directions: customDirections.filter((d) => d.id !== directionId),
       }),
-    onSuccess: (updatedLens) => {
-      queryClient.setQueryData<Lens[]>(['lenses'], (prev) =>
-        (prev ?? []).map((item) => (item.id === updatedLens.id ? updatedLens : item)),
-      )
-      void invalidateQueries(queryClient, ['lenses'], ['lens-branches', updatedLens.id])
-    },
-    onError: () => errorToast('Could not remove direction', 'Please try again.'),
   })
 
   const branches = useMemo(() => branchQuery.data?.branches ?? [], [branchQuery.data?.branches])

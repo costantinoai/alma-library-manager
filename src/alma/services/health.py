@@ -927,9 +927,12 @@ def assess_corpus(conn: sqlite3.Connection) -> dict[str, Any]:
                 severity_reason=group_reason,
                 impact_tier="integrity",
                 explanation=(
-                    f"{group_defects} paper-group pointers are inconsistent. Each defect below "
-                    "says what is broken and what the repair does about it; the list underneath "
-                    "names the papers carrying them."
+                    # Deliberately "defects", not "papers": one paper can trip several
+                    # classes, and leftover-sidecar defects are counted in sidecar rows.
+                    f"{group_defects} paper-group defects across "
+                    f"{len(paper_group_breakdown(group_integrity))} kinds. Each one below says "
+                    "what is broken and what the repair does about it; the list underneath names "
+                    "the papers carrying them."
                 ),
                 impact="Broken paper-group pointers can hide papers or let child rows affect graphs, counts, and preferences.",
                 repair_task="paper_group_reconcile",

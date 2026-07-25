@@ -466,10 +466,21 @@ def get_frontier(
     if coord_count == 0:
         return JSONResponse(status_code=202, content={"status": "building", **_enqueue_corpus_layout_build()})
 
-    coords: dict[str, tuple[float, float]] = {
-        str(r["paper_id"]): (float(r["x"]), float(r["y"]))
-        for r in conn.execute("SELECT paper_id, x, y FROM publication_clusters WHERE scope = 'corpus'")
-    }
+    coords: dict[str, tuple[float, float]] = {}
+    # Corpus cluster identity travels with the coordinates so the map can offer
+    # "group by corpus clusters" as an ALTERNATIVE to branch colouring (47-H:
+    # one grouping shown at a time, never both). -1 is the Unclustered bucket
+    # and is deliberately kept — it's an honest "this didn't cluster", not a
+    # topic. Labels come from the same c-TF-IDF pass the graph uses.
+    clusters: dict[str, dict] = {}
+    for r in conn.execute(
+        "SELECT paper_id, x, y, cluster_id, label FROM publication_clusters WHERE scope = 'corpus'"
+    ):
+        pid = str(r["paper_id"])
+        coords[pid] = (float(r["x"]), float(r["y"]))
+        cid = r["cluster_id"]
+        if cid is not None:
+            clusters[pid] = {"cluster_id": int(cid), "cluster_label": r["label"]}
 
     nodes: list[dict] = []
 
@@ -484,6 +495,7 @@ def get_frontier(
             nodes.append({
                 "paper_id": str(r["id"]), "x": c[0], "y": c[1], "in_library": True,
                 "layer": "library", "title": r["title"], "year": r["year"],
+                **clusters.get(str(r["id"]), {}),
             })
     library_shown = len(nodes)
 
@@ -515,18 +527,45 @@ def get_frontier(
                 "paper_id": pid, "x": c[0], "y": c[1], "in_library": False, "layer": "rec",
                 "branch_id": r["branch_id"], "branch_label": r["branch_label"],
                 "score": r["score"], "title": r["title"], "year": r["year"],
+                **clusters.get(pid, {}),
             })
             recs_shown += 1
         else:
             recs_unplaced += 1
 
-    # (c) Seen layer — opt-in top-N by cosine to the library centroid.
+    # (c) Seen layer — opt-in top-N by cosine to a centroid.
+    #
+    # The centroid is the LENS's own seeds when the lens has them, falling back
+    # to the whole library otherwise. That matters: "nearest to my library" and
+    # "nearest to what THIS lens is chasing" are different frontiers, and the
+    # map is always shown in the context of one lens. `seen_ranked_by` tells the
+    # UI which one it got, so the legend can say so instead of guessing.
     seen_shown = 0
     seen_total = 0
+    seen_ranked_by = "library"
     if seen_limit > 0 and library_ids:
         from alma.discovery.scoring import compute_centroid_from_ids
 
-        centroid = compute_centroid_from_ids(conn, library_ids)
+        centroid = None
+        try:
+            from alma.application.discovery.lens_crud import get_lens
+            from alma.application.discovery.seed_profile import _load_seed_papers_for_lens
+
+            lens = get_lens(conn, lens_id)
+            if lens is not None:
+                seed_ids = [
+                    str(s.get("id") or "").strip()
+                    for s in (_load_seed_papers_for_lens(conn, lens) or [])
+                ]
+                seed_ids = [sid for sid in seed_ids if sid]
+                if seed_ids:
+                    centroid = compute_centroid_from_ids(conn, seed_ids)
+                    if centroid is not None:
+                        seen_ranked_by = "lens"
+        except Exception:
+            logger.debug("lens-centroid seen ranking unavailable; using library", exc_info=True)
+        if centroid is None:
+            centroid = compute_centroid_from_ids(conn, library_ids)
         if centroid is not None:
             taken, seen_total = _score_seen_candidates(
                 conn, centroid, exclude_ids=rec_ids | set(library_ids), coords=coords, limit=seen_limit
@@ -536,6 +575,7 @@ def get_frontier(
                 nodes.append({
                     "paper_id": pid, "x": c[0], "y": c[1], "in_library": False,
                     "layer": "seen", "title": title, "year": year,
+                    **clusters.get(pid, {}),
                 })
                 seen_shown += 1
 
@@ -579,6 +619,9 @@ def get_frontier(
             "seen_total": seen_total,
             "edges": len(edges),
         },
+        # Which centroid ranked the seen layer — "lens" or "library". The
+        # legend states it rather than letting the user assume.
+        "seen_ranked_by": seen_ranked_by,
     }
 
 

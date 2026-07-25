@@ -3365,6 +3365,9 @@ export interface FrontierNode {
   score?: number | null
   title?: string | null
   year?: number | null
+  /** Corpus-cluster identity, for the map's "group by clusters" mode. */
+  cluster_id?: number | null
+  cluster_label?: string | null
 }
 export interface FrontierEdge {
   source: string
@@ -3384,6 +3387,9 @@ export interface FrontierResponse {
     seen_total: number
     edges?: number
   }
+  /** Which centroid ranked the seen layer: the lens's own seeds, or the
+   *  whole library when the lens has none. The legend states it. */
+  seen_ranked_by?: 'lens' | 'library'
   message?: string
   job_id?: string
 }

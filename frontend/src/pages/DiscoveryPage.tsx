@@ -1229,6 +1229,7 @@ export function DiscoveryPage() {
           ) : viewMode === 'map' ? (
             <FrontierMap
               lensId={selectedLensId}
+              lens={selectedLens as Lens | null}
               onSelectPaper={async (paperId) => {
                 try {
                   const paper = await getPaperById(paperId)
