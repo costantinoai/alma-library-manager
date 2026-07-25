@@ -564,11 +564,12 @@ export function AuthorDetailPanel({
                   Unfollow
                 </Button>
               ) : (
-                // Follow is the affirmative CTA → accent (folio), per the
-                // Button contract.
+                // Follow is a filled primary action → `default` (navy), the
+                // one heavy button fill. Folio stays the interactive identity
+                // (links, active nav, selected states), never a second fill.
                 <Button
                   size="sm"
-                  variant="accent"
+                  variant="default"
                   onClick={() => followMutation.mutate()}
                   disabled={followMutation.isPending}
                 >

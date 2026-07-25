@@ -26,6 +26,15 @@ import { cn } from '@/lib/utils'
  *   unfilled button reading as the same object whether it sits on a card,
  *   a panel, or inside a near-white popover, instead of borrowing (and
  *   dissolving into) whatever cream is under it.
+ * - **`default` (navy `alma-800`) is the ONE heavy button fill.** Every
+ *   filled primary action — Follow, Save, Create, Confirm — takes it, so
+ *   the same verb is never two different blues on two different surfaces.
+ *   `accent` (folio) is the *interactive identity*: links, active nav,
+ *   focus rings, and selected / active / checked / on states. Reaching for
+ *   it as a second CTA fill is what let Follow render folio on the
+ *   suggested-author card and navy in the author hover card (fixed
+ *   2026-07-25). Filled `accent` buttons are for surfaces that are ALL
+ *   accent by design — the onboarding flow's step CTAs.
  * - **Gold** is reserved for fine accents / premium actions (export,
  *   citation copy, decorative CTAs). It is NOT a default CTA.
  * - **Focus** — teal halo (the v2 accent) on the warm paper offset, so

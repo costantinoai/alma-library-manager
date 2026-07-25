@@ -237,9 +237,14 @@ export function SuggestedAuthorCard({
         className="mt-auto flex flex-wrap items-center gap-1.5"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Follow is a filled primary action → `default` (navy alma-800), the
+            app's ONE heavy button fill. Not `accent`: folio is the interactive
+            identity (links, active nav, selected/checked states), and using it
+            as a second button fill put two different blues on the same verb —
+            folio here, navy on the same Follow in AuthorHoverCard. */}
         <Button
           size="sm"
-          variant={alreadyFollowed ? 'ghost' : 'accent'}
+          variant={alreadyFollowed ? 'ghost' : 'default'}
           className="min-w-0 flex-1"
           onClick={(e) => {
             e.stopPropagation()
