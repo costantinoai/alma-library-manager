@@ -134,3 +134,38 @@ export function ClusterLegendChips({
     </div>
   )
 }
+
+
+/**
+ * ColourBarLegend — every colour ramp announces its scale: the gradient the
+ * dots actually use, its min / (optional centre) / max, and the mean of the
+ * plotted values. Divergent ramps pass their true centre (0 valence,
+ * 3★ rating) so the midpoint label is a MEANING, not a coincidence.
+ */
+export function ColourBarLegend({
+  gradient,
+  min,
+  mid,
+  max,
+  mean,
+}: {
+  gradient: string
+  min: string
+  mid?: string
+  max: string
+  mean?: string
+}) {
+  return (
+    <span className="inline-flex items-center gap-2 text-[11px] text-slate-500">
+      <span className="inline-flex flex-col">
+        <span className="h-2 w-28 rounded-full" style={{ background: gradient }} />
+        <span className="mt-0.5 flex justify-between tabular-nums text-slate-400">
+          <span>{min}</span>
+          {mid != null && <span>{mid}</span>}
+          <span>{max}</span>
+        </span>
+      </span>
+      {mean != null && <span className="tabular-nums">mean {mean}</span>}
+    </span>
+  )
+}

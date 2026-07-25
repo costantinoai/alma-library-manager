@@ -18,6 +18,7 @@ import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
 import {
   ClusterLegendChips,
+  ColourBarLegend,
   MapLegend,
   MapModeSwitch,
   MapToggle,
@@ -30,6 +31,8 @@ import {
   EDGE_LAYER_FALLBACK_COLOR,
   EDGE_LAYER_LABELS,
   MAP_INK,
+  RAMP_GRADIENTS,
+  summarizeValues,
   yearRampColor,
   yearRampLimits,
   type MapNodeKind,
@@ -160,6 +163,20 @@ export function GraphMapView({
     }
     return m
   }, [colourMode, nodes])
+
+  // Colourbar stats — the numbers the legend owes the reader.
+  const yearStats = useMemo(
+    () => summarizeValues(nodes.map((n) => Number(n.metadata?.year)).filter((y) => y > 1800)),
+    [nodes],
+  )
+  const ratingStats = useMemo(
+    () => summarizeValues(nodes.map((n) => Number(n.metadata?.rating)).filter((r) => r > 0)),
+    [nodes],
+  )
+  const heatStats = useMemo(
+    () => (heatValues ? summarizeValues([...heatValues.values()]) : null),
+    [heatValues],
+  )
 
   const query = search.trim().toLowerCase()
   const mapNodes = useMemo<SemanticMapNode[]>(
@@ -299,14 +316,35 @@ export function GraphMapView({
             In your library — filled
           </span>
           <span className="text-slate-400">{nodes.length} on the map</span>
-          {colourMode === 'year' && yearRange && (
-            <span className="inline-flex items-center gap-1.5 text-slate-400">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.lo, yearRange.lo, yearRange.hi) }} />
-              {yearRange.lo}
-              <span aria-hidden>→</span>
-              <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.hi, yearRange.lo, yearRange.hi) }} />
-              {yearRange.hi} (10th–90th percentile; outliers clamped)
-            </span>
+          {colourMode === 'year' && yearRange && yearStats && (
+            <ColourBarLegend
+              gradient={RAMP_GRADIENTS.year}
+              min={String(yearRange.lo)}
+              max={String(yearRange.hi)}
+              mean={String(Math.round(yearStats.mean))}
+            />
+          )}
+          {colourMode === 'rating' && (
+            // Absolute, centred on the neutral 3★ — ratings have a fixed
+            // domain, so the scale never restretches per view.
+            <ColourBarLegend
+              gradient={RAMP_GRADIENTS.divergent}
+              min="1★"
+              mid="3★"
+              max="5★"
+              mean={ratingStats ? ratingStats.mean.toFixed(1) + '★' : undefined}
+            />
+          )}
+          {colourMode === 'heat' && heatStats && (
+            // Divergent, SYMMETRIC about true 0 (neutral valence): the wash
+            // saturates at the largest observed |value|.
+            <ColourBarLegend
+              gradient={RAMP_GRADIENTS.divergent}
+              min={(-Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max))).toFixed(2)}
+              mid="0"
+              max={Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max)).toFixed(2)}
+              mean={heatStats.mean.toFixed(2)}
+            />
           )}
           {layout?.computed_at && (
             <span className="text-slate-400">

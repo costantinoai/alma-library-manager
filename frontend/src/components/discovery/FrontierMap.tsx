@@ -28,7 +28,8 @@ import {
 import { describeRegion, getFrontier, type FrontierNode, type Lens, type RegionDescription } from '@/api/client'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
+import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
+import { ColourBarLegend } from '@/components/map/MapChrome'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -172,6 +173,15 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     }
     return m
   }, [groupBy, nodes])
+
+  const yearStats = useMemo(
+    () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
+    [nodes],
+  )
+  const heatStats = useMemo(
+    () => (heatValues ? summarizeValues([...heatValues.values()]) : null),
+    [heatValues],
+  )
 
   // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
   const mapNodes = useMemo<SemanticMapNode[]>(() => {
@@ -512,14 +522,22 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               />
               Suggestions {counts ? `(${counts.recs})` : ''} — hollow
             </span>
-            {groupBy === 'year' && yearRange && (
-              <span className="inline-flex items-center gap-1.5 text-slate-400">
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.lo, yearRange.lo, yearRange.hi) }} />
-                {yearRange.lo}
-                <span aria-hidden>→</span>
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: yearRampColor(yearRange.hi, yearRange.lo, yearRange.hi) }} />
-                {yearRange.hi} (10th–90th pct)
-              </span>
+            {groupBy === 'year' && yearRange && yearStats && (
+              <ColourBarLegend
+                gradient={RAMP_GRADIENTS.year}
+                min={String(yearRange.lo)}
+                max={String(yearRange.hi)}
+                mean={String(Math.round(yearStats.mean))}
+              />
+            )}
+            {groupBy === 'heat' && heatStats && (
+              <ColourBarLegend
+                gradient={RAMP_GRADIENTS.divergent}
+                min={(-Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max))).toFixed(2)}
+                mid="0"
+                max={Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max)).toFixed(2)}
+                mean={heatStats.mean.toFixed(2)}
+              />
             )}
             {showSeen && (
               <span className="inline-flex items-center gap-1.5 text-slate-400">

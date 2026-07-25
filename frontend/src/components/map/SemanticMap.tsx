@@ -340,23 +340,23 @@ export function SemanticMap({
         const img = hctx.createImageData(gw, gh)
         let maxW = 0
         for (let i = 0; i < wsum.length; i++) if (wsum[i] > maxW) maxW = wsum[i]
-        // Normalise the local means to their OBSERVED range: raw valences
-        // often pool in a narrow band (all-yellow wash) — the ramp should
-        // always spend its full red→green span on the spread that exists.
-        let lo = Infinity
-        let hi = -Infinity
+        // SYMMETRIC normalisation about zero: on a divergent ramp the
+        // midpoint must MEAN neutral (valence 0), so cells scale by the
+        // largest observed |mean| — full saturation is reachable on
+        // whichever side has data, and yellow stays honest. (A min–max
+        // stretch moved the yellow to "average of what we saw".)
+        let vmax = 0
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
-          const m = vsum[i] / wsum[i]
-          if (m < lo) lo = m
-          if (m > hi) hi = m
+          const m = Math.abs(vsum[i] / wsum[i])
+          if (m > vmax) vmax = m
         }
-        const span = hi > lo ? hi - lo : 1
+        if (vmax <= 0) vmax = 1
         for (let i = 0; i < wsum.length; i++) {
           if (wsum[i] <= 0.02) continue
           const mean = vsum[i] / wsum[i]
           // Divergent ramp: -1 red (220,68,61) → 0 yellow (233,196,76) → +1 green (64,160,92)
-          const t = hi > lo ? (2 * (mean - lo)) / span - 1 : 0
+          const t = Math.max(-1, Math.min(1, mean / vmax))
           const [r, g, b] =
             t < 0
               ? [220 + (233 - 220) * (1 + t), 68 + (196 - 68) * (1 + t), 61 + (76 - 61) * (1 + t)]

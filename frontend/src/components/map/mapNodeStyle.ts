@@ -169,9 +169,53 @@ export function yearRampLimits(years: number[]): { lo: number; hi: number } | nu
   return hi > lo ? { lo, hi } : { lo: ys[0], hi: ys[ys.length - 1] || ys[0] + 1 }
 }
 
-/** Slate→folio recency mix for a year within [lo, hi] (clamped). */
-export function yearRampColor(year: number, lo: number, hi: number): string {
-  const t = Math.max(0, Math.min(1, (year - lo) / Math.max(1, hi - lo)))
-  const mix = (a: number, b: number) => Math.round(a + (b - a) * t)
-  return `rgb(${mix(203, 47)}, ${mix(213, 128)}, ${mix(225, 196)})`
+/** Viridis — perceptually uniform, colour-blind-safe; the standard for a
+ *  sequential data ramp (user call 2026-07-25). Five control points,
+ *  linearly interpolated. */
+const VIRIDIS_STOPS: Array<[number, number, number]> = [
+  [68, 1, 84], // 0.00 #440154
+  [59, 82, 139], // 0.25 #3B528B
+  [33, 145, 140], // 0.50 #21918C
+  [94, 201, 98], // 0.75 #5EC962
+  [253, 231, 37], // 1.00 #FDE725
+]
+
+export function viridis(t: number): string {
+  const x = Math.max(0, Math.min(1, t)) * (VIRIDIS_STOPS.length - 1)
+  const i = Math.min(VIRIDIS_STOPS.length - 2, Math.floor(x))
+  const f = x - i
+  const a = VIRIDIS_STOPS[i]
+  const b = VIRIDIS_STOPS[i + 1]
+  const mix = (k: number) => Math.round(a[k] + (b[k] - a[k]) * f)
+  return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`
 }
+
+/** Viridis recency ramp for a year within [lo, hi] (clamped): dark violet =
+ *  oldest, bright yellow = newest. */
+export function yearRampColor(year: number, lo: number, hi: number): string {
+  return viridis((year - lo) / Math.max(1, hi - lo))
+}
+
+
+/** Min / max / mean of a value list — the numbers every colourbar owes the
+ *  reader. Null on empty input. */
+export function summarizeValues(values: number[]): { min: number; max: number; mean: number } | null {
+  const vs = values.filter((v) => Number.isFinite(v))
+  if (vs.length === 0) return null
+  let min = Infinity
+  let max = -Infinity
+  let sum = 0
+  for (const v of vs) {
+    if (v < min) min = v
+    if (v > max) max = v
+    sum += v
+  }
+  return { min, max, mean: sum / vs.length }
+}
+
+/** CSS gradients matching the canvas ramps exactly — the legend bar must be
+ *  the same ramp the dots use. */
+export const RAMP_GRADIENTS = {
+  divergent: 'linear-gradient(to right, rgb(220,68,61), rgb(233,196,76), rgb(64,160,92))',
+  year: 'linear-gradient(to right, #440154, #3B528B, #21918C, #5EC962, #FDE725)',
+} as const
