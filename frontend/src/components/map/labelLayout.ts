@@ -103,35 +103,32 @@ export function placeLabels(
 }
 
 /**
- * Compact a c-TF-IDF cluster label ("lateral, visual, stream, level visual")
- * into a printable toponym. Raw labels are comma piles: long lines place
- * badly, and later terms often repeat earlier words. Rules:
- *   - keep terms in order, but DROP a term whose words all already appeared
- *     (redundancy: "level visual" after "visual" adds only "level" — kept
- *     only if it brings a new word);
- *   - stop at `maxTerms` kept terms or `maxChars` total;
- *   - join with " · " (a place name, not a list).
+ * Split a c-TF-IDF cluster label ("lateral, visual, stream, level visual")
+ * into SEPARATE toponym terms — never a joined string (user call
+ * 2026-07-25: each word falls on the map where its mass sits; no comma
+ * piles, no long lines). Rules:
+ *   - terms keep label order (c-TF-IDF already ranks by weight);
+ *   - a term whose words ALL appeared in earlier kept terms is redundant
+ *     and dropped ("visual" after "level visual" adds nothing);
+ *   - at most `maxTerms`; every term hard-capped at `maxChars` on a word
+ *     edge (single-word overflow is truncated with an ellipsis).
  */
-export function compactToponym(label: string, maxTerms = 2, maxChars = 24): string {
+export function toponymTerms(label: string, maxTerms = 3, maxChars = 16): string[] {
   const seen = new Set<string>()
   const kept: string[] = []
   for (const rawTerm of label.split(',')) {
-    const term = rawTerm.trim()
+    let term = rawTerm.trim()
     if (!term) continue
     const words = term.toLowerCase().split(/\s+/)
     if (words.every((w) => seen.has(w))) continue // fully redundant
-    const candidate = [...kept, term].join(' · ')
-    if (kept.length > 0 && candidate.length > maxChars) break
+    if (term.length > maxChars) {
+      const cut = term.slice(0, maxChars + 1)
+      const at = cut.lastIndexOf(' ')
+      term = at > 3 ? cut.slice(0, at).trimEnd() : cut.slice(0, maxChars).trimEnd() + '\u2026'
+    }
     kept.push(term)
     words.forEach((w) => seen.add(w))
     if (kept.length >= maxTerms) break
   }
-  const out = kept.join(' · ')
-  // A single pathological first term still gets a hard cap, on a word edge.
-  if (out.length > maxChars) {
-    const cut = out.slice(0, maxChars + 1)
-    const at = cut.lastIndexOf(' ')
-    return (at > 8 ? cut.slice(0, at) : cut.slice(0, maxChars)).trimEnd() + '…'
-  }
-  return out
+  return kept
 }

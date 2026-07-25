@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { compactToponym, placeLabels, type LabelInput } from './labelLayout'
+import { placeLabels, toponymTerms, type LabelInput } from './labelLayout'
 
 const box = (id: string, x: number, y: number, priority: number, w = 100, h = 14): LabelInput => ({
   id,
@@ -70,20 +70,26 @@ describe('placeLabels', () => {
   })
 })
 
-describe('compactToponym', () => {
-  it('keeps the two leading informative terms, dot-joined', () => {
-    expect(compactToponym('lateral, visual, stream, level')).toBe('lateral · visual')
+describe('toponymTerms', () => {
+  it('splits into SEPARATE terms — never a joined string', () => {
+    expect(toponymTerms('lateral, visual, stream, level')).toEqual([
+      'lateral',
+      'visual',
+      'stream',
+    ])
   })
   it('drops fully redundant later terms', () => {
-    expect(compactToponym('visual, level visual, stream', 3, 40)).toBe(
-      'visual · level visual · stream',
-    )
-    // "visual" again brings nothing once seen.
-    expect(compactToponym('visual, visual, stream')).toBe('visual · stream')
+    expect(toponymTerms('visual, visual, stream')).toEqual(['visual', 'stream'])
+    // "level visual" brings a new word after "visual" → kept.
+    expect(toponymTerms('visual, level visual, stream')).toEqual([
+      'visual',
+      'level visual',
+      'stream',
+    ])
   })
-  it('respects the character budget at a word edge', () => {
-    const out = compactToponym('a very long single pathological first term about cortex')
-    expect(out.length).toBeLessThanOrEqual(26)
-    expect(out.endsWith('…')).toBe(true)
+  it('caps each term on a word edge', () => {
+    const [t] = toponymTerms('anterior temporal lobe semantics, x')
+    expect(t.length).toBeLessThanOrEqual(17)
+    expect(t).toBe('anterior')
   })
 })

@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
-import { compactToponym, placeLabels, type LabelInput } from './labelLayout'
+import { placeLabels, toponymTerms, type LabelInput } from './labelLayout'
 import {
   DIMMED_OPACITY,
   HOLLOW_FILL_ALPHA,
@@ -205,45 +205,68 @@ export function SemanticMap({
     [grid, screenPos],
   )
 
-  // ── Toponyms: cluster aggregation → collision-free placement (50-H) ──────
+  // ── Toponyms: PER-TERM labels, placed where the mass sits (50-H) ─────────
+  // Each cluster contributes its top terms as SEPARATE labels — never one
+  // joined string. The cluster's points are ordered along their principal
+  // axis and chunked, one chunk per term; each term lands at its chunk's
+  // centroid, so words spread across the territory they describe. The
+  // primary term carries the cluster's full priority + size; later terms
+  // step down, so under collision the primaries win the ground.
   const toponyms = useMemo(() => {
     if (!showToponyms) return []
-    const clusters = new Map<number, { label: string; count: number; sx: number; sy: number }>()
+    const clusters = new Map<number, { label: string; pts: Array<[number, number]> }>()
     for (const n of nodes) {
       if (typeof n.clusterId !== 'number' || n.clusterId < 0 || !n.clusterLabel) continue
       const p = screenPos.get(n.id)
       if (!p) continue
       const c = clusters.get(n.clusterId)
-      if (c) {
-        c.count += 1
-        c.sx += p[0]
-        c.sy += p[1]
-      } else {
-        clusters.set(n.clusterId, { label: n.clusterLabel, count: 1, sx: p[0], sy: p[1] })
+      if (c) c.pts.push(p)
+      else clusters.set(n.clusterId, { label: n.clusterLabel, pts: [p] })
+    }
+    const maxCount = Math.max(1, ...[...clusters.values()].map((c) => c.pts.length))
+    const inputs: LabelInput[] = []
+    const texts = new Map<string, { text: string; fontPx: number }>()
+    for (const [cid, c] of clusters) {
+      const terms = toponymTerms(c.label)
+      if (terms.length === 0) continue
+      // Principal axis of the cluster's screen points (2-D PCA angle).
+      const n = c.pts.length
+      const mx = c.pts.reduce((a, p) => a + p[0], 0) / n
+      const my = c.pts.reduce((a, p) => a + p[1], 0) / n
+      let sxx = 0
+      let sxy = 0
+      let syy = 0
+      for (const [px, py] of c.pts) {
+        sxx += (px - mx) ** 2
+        sxy += (px - mx) * (py - my)
+        syy += (py - my) ** 2
+      }
+      const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy)
+      const ux = Math.cos(angle)
+      const uy = Math.sin(angle)
+      const ordered = [...c.pts].sort(
+        (a, b) => (a[0] - mx) * ux + (a[1] - my) * uy - ((b[0] - mx) * ux + (b[1] - my) * uy),
+      )
+      // One contiguous chunk of the cluster per term; tiny clusters keep
+      // only as many terms as they have points to anchor.
+      const termCount = Math.min(terms.length, Math.max(1, Math.floor(n / 2)))
+      const chunk = Math.ceil(ordered.length / termCount)
+      const basePx = toponymFontPx(n, maxCount)
+      for (let i = 0; i < termCount; i++) {
+        const part = ordered.slice(i * chunk, (i + 1) * chunk)
+        if (part.length === 0) continue
+        const cx = part.reduce((a, p) => a + p[0], 0) / part.length
+        const cy = part.reduce((a, p) => a + p[1], 0) / part.length
+        const fontPx = Math.max(9, Math.round(basePx * (i === 0 ? 1 : i === 1 ? 0.85 : 0.75)))
+        const text = terms[i].toUpperCase()
+        const w = text.length * fontPx * 0.68 + text.length * 1.5
+        const id = `c${cid}:t${i}`
+        inputs.push({ id, x: cx, y: cy, width: w, height: fontPx + 4, priority: n * (1 - 0.2 * i) })
+        texts.set(id, { text, fontPx })
       }
     }
-    const maxCount = Math.max(1, ...[...clusters.values()].map((c) => c.count))
-    const inputs: LabelInput[] = []
-    for (const [cid, c] of clusters) {
-      const fontPx = toponymFontPx(c.count, maxCount)
-      const text = compactToponym(c.label).toUpperCase()
-      // Canvas-free measurement: tracked uppercase at ~0.68em/char + tracking.
-      const w = text.length * fontPx * 0.68 + text.length * 1.5
-      inputs.push({
-        id: `c${cid}`,
-        x: c.sx / c.count,
-        y: c.sy / c.count,
-        width: w,
-        height: fontPx + 4,
-        priority: c.count,
-      })
-    }
     const placed = placeLabels(inputs, width, height)
-    return placed.map((p) => {
-      const cid = Number(p.id.slice(1))
-      const c = clusters.get(cid)!
-      return { ...p, text: compactToponym(c.label).toUpperCase(), fontPx: toponymFontPx(c.count, maxCount) }
-    })
+    return placed.map((p) => ({ ...p, ...texts.get(p.id)! }))
   }, [nodes, screenPos, showToponyms, width, height])
 
   // ── Draw ──────────────────────────────────────────────────────────────────
