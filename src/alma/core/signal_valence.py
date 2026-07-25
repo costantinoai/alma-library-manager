@@ -28,7 +28,25 @@ VALENCE_LIBRARY = 0.35
 """Saved to Library — a mild, durable positive."""
 
 RATING_NEUTRAL = 3
-"""The neutral star on the fixed 1–5 rating domain."""
+"""The neutral star on the fixed 1–5 rating domain.
+
+Also the value `alma.application.library.DEFAULT_LIBRARY_RATING` stamps on
+EVERY save, so a stored 3 is a placeholder, not an opinion — see
+`rating_is_expressed`."""
+
+
+def rating_is_expressed(rating: int) -> bool:
+    """Has the user actually rated this paper?
+
+    Only a rating that DEVIATES from neutral counts. Saving a paper writes
+    `rating = 3` (`DEFAULT_LIBRARY_RATING`), so `rating > 0` is true for the
+    entire library and cannot distinguish "saved" from "rated exactly neutral".
+    Reading a stored 3 as an expressed opinion made `paper_valence` return a
+    hard 0.0 for every saved paper — the `status == 'library'` branch below was
+    unreachable, your whole library read as explicit indifference, and both map
+    terrains flattened to neutral yellow (user catch 2026-07-26).
+    """
+    return rating > 0 and rating != RATING_NEUTRAL
 
 RATING_HALF_RANGE = 2.0
 """Stars from neutral to either end (3★→1★ or 3★→5★)."""
@@ -84,7 +102,7 @@ def paper_valence(
     """
     if status in NEGATIVE_STATUSES:
         return VALENCE_REMOVED
-    if rating > 0:
+    if rating_is_expressed(rating):
         return rating_valence(rating)
     if n_negative_actions > 0:
         return VALENCE_NEGATIVE_ACTION
