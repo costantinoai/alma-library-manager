@@ -40,7 +40,20 @@ cover the last 60 days — the same horizon the Feed inbox is bounded to.
     That split matters: if loading the page stamped the visit, refreshing would
     silently destroy the very window you were reading.
 
-## 2. Needs you
+## 2. Newest in your Feed
+
+The four most recent untriaged arrivals, over the same window as the brief. A
+count tells you something happened; a title tells you *what*, which is the
+difference between a page you read and one you pass through. Clicking a line
+opens the paper. Absent when nothing arrived.
+
+## 3. Still reading
+
+What you already committed to — up to three papers from your reading list — so
+Home closes that loop instead of only opening new ones. Absent when the list is
+empty.
+
+## 4. Needs you
 
 Actionable rows, each with the control that resolves it:
 
@@ -51,7 +64,7 @@ When there is nothing to do, **this module renders nothing at all**. ALMa never
 shows an "all good" card — a healthy system should be silent, so anything you
 see on Home is something you can act on.
 
-## 3. One to look at
+## 5. One to look at
 
 The top-ranked suggestion you haven't acted on yet, from the most recent
 Discovery refresh. It's a normal paper card, so **Save** and **Dismiss** here do
