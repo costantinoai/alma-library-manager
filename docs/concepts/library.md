@@ -12,7 +12,7 @@ Membership = `status='library'`. Nothing else.
 
 The Library page is **action-oriented**: it surfaces what you need
 to do next (read, triage, organise), not analytics about the
-collection. Analytics live on [Insights](insights.md); the full
+collection. Analytics live on the [Analytics](analytics.md) tab; the full
 tracked-paper table lives in the Corpus Explorer (Settings → Data &
 system).
 

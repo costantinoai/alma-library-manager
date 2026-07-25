@@ -11,6 +11,12 @@ else assumes you've read it.
 
 <div class="grid cards" markdown>
 
+-   :material-home:{ .lg .middle } **[Home](home.md)**
+
+    ---
+
+    What arrived since your last visit, and what needs you.
+
 -   :material-clipboard-text-clock:{ .lg .middle } **[Paper lifecycle](paper-lifecycle.md)**
 
     ---
@@ -48,11 +54,11 @@ else assumes you've read it.
 
     People you track and identity resolution between sources.
 
--   :material-chart-box:{ .lg .middle } **[Insights](insights.md)**
+-   :material-chart-box:{ .lg .middle } **[Analytics](analytics.md)**
 
     ---
 
-    Charts, geography, topics, and a clustered SPECTER2 graph.
+    Charts, geography, topics, and a clustered SPECTER2 graph — a Library tab.
 
 -   :material-bell-ring:{ .lg .middle } **[Alerts](alerts.md)**
 

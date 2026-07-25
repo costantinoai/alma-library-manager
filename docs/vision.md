@@ -171,7 +171,7 @@ provider. No half-working fallbacks that quietly degrade quality.
 
 Failures are loud, either blocking with a clear error, or logged
 prominently with the chosen fallback explained. The
-[Activity panel](concepts/insights.md#activity-panel) and
+[Activity panel](concepts/analytics.md#activity-panel) and
 `/api/v1/logs` are the two surfaces that keep this honest.
 
 ## In practice

@@ -1,22 +1,29 @@
 ---
-title: Insights
-description: Charts, geography, topics, journals, authors, and a clustered SPECTER2 graph of your Library — read-only analytics, never curation.
+title: Analytics
+description: Charts, geography, topics, journals, authors, and a clustered SPECTER2 graph of your Library — read-only analytics, never curation. Lives as a tab inside Library.
 ---
 
-# Insights
+# Analytics
 
-The **Insights** page projects your data into charts, maps, and a
-2D embedding graph. Read-only — Insights is for understanding your
-corpus, not editing it.
+**Library → Analytics** projects your data into charts, maps, and a 2D
+embedding graph. Read-only — Analytics is for understanding your corpus, not
+editing it.
 
-!!! note "Insights is analytics; Health is fixes"
-    The old *Diagnostics* tab split in two: its **trend/quality scorecards**
-    are now the **Activity** tab here, and the actionable **operational health**
-    (what's degraded / failing) moved to the **[Health](health.md)** page's
-    Status tab. Rule of thumb: a chart you read → Insights; something wrong you
-    fix → Health.
+!!! note "It used to be its own page"
+    Analytics was a top-level *Insights* page. It now lives as a tab inside
+    **Library**, because it describes your library and belongs beside it. Old
+    `#/insights?tab=…` links still work — they redirect to the matching
+    Analytics section.
 
-![Insights page with the Stats / Graph / Activity / Reports tabs](../screenshots/desktop-insights.png)
+!!! note "Analytics is what you read; Health is what you fix"
+    The old *Diagnostics* tab is gone. Its operational half — failed background
+    operations, quality scorecards, recent refreshes — moved to the
+    **[Health](health.md)** page's **Activity** tab, next to the repairs it
+    explains. Its five passive trend charts were deleted rather than moved:
+    they plotted history nobody acted on. Rule of thumb: a chart you read →
+    Analytics; something wrong you fix → Health.
+
+![Library Analytics with the Overview / Map / Reports tabs](../screenshots/desktop-insights.png)
 
 ## Tabs
 
@@ -124,19 +131,9 @@ Time-window summaries:
 * **Topic drift** — how topic mix changes over time.
 * **Signal impact** — which ranking signals correlate with useful outcomes.
 
-### Activity
-
-Subsystem **trends, distributions, and quality over time** — the analytics half
-of the old Diagnostics tab: feed-refresh and discovery-action trends, branch
-quality, source quality, the AI similarity profile, followed-author growth,
-alert delivery + usefulness, feedback-learning activity, and the evaluation
-scorecards. Read it to understand *how the pipeline is behaving*. The actionable
-operational health (degraded monitors, failed jobs, plugins) is **not** here —
-it lives in the **[Health](health.md)** page's System status cards.
-
 ## How fresh is what I'm seeing?
 
-The Insights page and the three graphs (Paper Map, Author Network,
+The Analytics tab and the three graphs (Paper Map, Author Network,
 Topic Map) are served from a fingerprint-keyed cache: each GET
 returns the previously-computed payload in <10 ms as long as nothing
 the view depends on has changed. When you save / edit / unfollow /
@@ -154,7 +151,7 @@ status triggers it explicitly.
 
 ## Activity panel
 
-Not strictly part of Insights, but always docked at the bottom of
+Not part of Analytics, but always docked at the bottom of
 the screen on every page:
 
 * **Operations tab** — running and completed background jobs with

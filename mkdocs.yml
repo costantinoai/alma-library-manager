@@ -119,13 +119,14 @@ nav:
       - Docker: getting-started/docker.md
   - Concepts:
       - concepts/index.md
+      - Home: concepts/home.md
       - Paper lifecycle: concepts/paper-lifecycle.md
       - Feed: concepts/feed.md
       - Library: concepts/library.md
       - Discovery: concepts/discovery.md
       - Lenses: concepts/lenses.md
       - Authors: concepts/authors.md
-      - Insights: concepts/insights.md
+      - Analytics: concepts/analytics.md
       - Health: concepts/health.md
       - Alerts: concepts/alerts.md
       - AI capabilities: concepts/ai.md

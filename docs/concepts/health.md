@@ -1,17 +1,35 @@
 ---
 title: Health
-description: Is my data healthy, and what do I do about it — one scrollable page that diagnoses corpus-data gaps and repairs them, shows the operational status of every system component, and runs an opt-in idle healer. Health owns all repair; Settings is configuration only.
+description: Is my data healthy, and what do I do about it — a page that diagnoses corpus-data gaps and repairs them, shows the operational status of every system component, records what the system has been doing, and runs an opt-in idle healer. Health owns all repair; Settings is configuration only.
 ---
 
 # Health
 
 The **Health** page answers one question: *is my data healthy — and what do I
 do about it?* It reads a single canonical health layer, so every number agrees
-with the rest of the app, and it is **one scrollable page, no tabs**: the status
-of something and the operation that repairs it live in the *same* card.
+with the rest of the app, and the status of something and the operation that
+repairs it always live in the *same* card.
 
 Health owns **all diagnosis and repair**. Settings is configuration only — when
 something is fixable, Settings points you here.
+
+A **persistent band** at the top — the vitals ribbon, the system-status chips,
+and the API budget — answers "is everything OK?" without making you pick a tab.
+Two tabs below carry the work, most actionable first:
+
+| Tab | What's in it |
+|---|---|
+| **Repairs** | The recommended next step, the repair-operation cards worst-first, and the observed gaps that have no automatic fix. What you can *do*. |
+| **Activity** | What already *ran*: failed background operations (expand a row for its error and step log), the evaluation scorecards, and the latest Feed / Discovery refreshes. |
+
+!!! note "Activity used to live in Insights"
+    Operational telemetry moved here because it belongs beside the repairs it
+    explains. The five passive trend charts that surrounded it (intake,
+    discovery action, alert delivery, followed-author growth, feedback
+    activity) were deleted rather than moved — they plotted history nobody
+    acted on. Old `#/insights?tab=activity` links redirect here, and the
+    "Background jobs" status popup deep-links straight to the failing run
+    (`#/health?tab=activity&focus=failed`).
 
 From top to bottom:
 
@@ -55,9 +73,9 @@ explaining that component:
 
 This consolidates what used to be three overlapping surfaces (a scoreboard of
 counts, a subsystem list, and a separate "degraded right now" list) into one
-strip fed from a single diagnostics source, so everything agrees. No charts live
-here — subsystem *trends and analytics* are in
-**[Insights → Activity](insights.md)**.
+strip fed from a single diagnostics source, so everything agrees. No charts
+live here: what the system has been *doing* is in the **Activity** tab, and
+corpus *analytics* are in [Library → Analytics](analytics.md).
 
 ## Repair operations
 
