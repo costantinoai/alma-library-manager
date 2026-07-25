@@ -201,6 +201,9 @@ export function MapPage() {
                   ? ` · ${n.metadata.cited_by_count} citations`
                   : ''}
               </p>
+              {typeof n.metadata?.rating === 'number' && (n.metadata.rating as number) > 0 && (
+                <p className="mt-0.5 text-slate-500">your rating: {'★'.repeat(Number(n.metadata.rating))}</p>
+              )}
               {typeof n.metadata?.cluster_label === 'string' &&
                 n.metadata.cluster_label !== 'Unclustered' && (
                   <p className="mt-0.5 text-slate-400">cluster: {String(n.metadata.cluster_label)}</p>

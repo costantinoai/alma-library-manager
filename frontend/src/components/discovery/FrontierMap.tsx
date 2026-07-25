@@ -387,8 +387,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
               <p className="mt-0.5 text-slate-500">
                 {n.layer === 'library' ? 'In your library' : n.layer === 'rec' ? 'Suggestion' : 'Seen'}
                 {n.year ? ` · ${n.year}` : ''}
-                {typeof n.score === 'number' && n.layer === 'rec' ? ` · score ${Math.round(n.score)}` : ''}
               </p>
+              {typeof n.score === 'number' && n.layer === 'rec' && (
+                <p className="mt-0.5 font-medium text-alma-800">Score {Math.round(n.score)}/100</p>
+              )}
               {n.branch_label && <p className="mt-0.5 text-slate-500">branch: {n.branch_label}</p>}
               {n.cluster_label && n.cluster_label !== 'Unclustered' && (
                 <p className="mt-0.5 text-slate-400">cluster: {n.cluster_label}</p>
