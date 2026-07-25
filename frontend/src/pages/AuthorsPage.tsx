@@ -25,7 +25,7 @@ import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { GraphMapView } from '@/components/map/GraphMapView'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import {
   MapDisplayTuningRows,
@@ -332,17 +332,22 @@ export function AuthorsPage() {
           Discovery frontier map. Every dot opens the same author drawer the
           sections below use; dashed halo = followed. */}
       <section data-tour="authors-network">
-      {/* Proper section box — the map is a first-class section of the page,
-          never a floating plate (user call 2026-07-25, mirrors Discovery). */}
-      <Card>
+      {/* Proper section box in the Branch Studio idiom (user call
+          2026-07-25): Card with a tinted header band, brand-face title,
+          subtitle — the map is a first-class section, never a floating
+          plate. */}
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
+          <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
+            <Share2 className="h-5 w-5 text-alma-folio" />
+            Author Network
+          </CardTitle>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
+            The co-authorship communities behind your corpus — click an author to open them,
+            switch scope to see who anchors the areas your suggestions come from.
+          </p>
+        </CardHeader>
       <CardContent className="space-y-3 p-4">
-        <header className="flex items-center gap-2">
-          <Share2 className="h-4 w-4 text-alma-600" />
-          <h2 className="text-sm font-semibold text-alma-800">Author network</h2>
-          <span className="text-xs text-slate-500">
-            co-authorship structure across your corpus — click an author to open them
-          </span>
-        </header>
         <ConceptCallout
           eyebrow="How to read this map"
           summary="Every author in scope, placed by what they write about — links are shared papers, dashed rings are the authors you follow."

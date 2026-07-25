@@ -68,7 +68,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Switch } from '@/components/ui/switch'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
@@ -1294,39 +1294,50 @@ export function DiscoveryPage() {
             persisted; lasso → adopt a Direction or filter the list below. */}
         {selectedLensId && (
           <section>
-          {/* Proper section box — the map is a first-class section of the
-              page, never a floating plate (user call 2026-07-25). */}
-          <Card>
+          {/* Proper section box in the Branch Studio idiom (user call
+              2026-07-25): Card with a tinted header band, brand-face title,
+              subtitle — the map is a first-class section, never a floating
+              plate. */}
+          <Card className="overflow-hidden">
+            <CardHeader className="border-b border-[var(--color-border)] bg-surface-2">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2 font-brand text-xl text-alma-800">
+                    <MapIcon className="h-5 w-5 text-alma-folio" />
+                    Frontier Map
+                  </CardTitle>
+                  <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                    Your library, this lens&apos;s suggestions, and the space between — click a
+                    suggestion to jump to its row, lasso a region to explore it as a Direction.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {mapFilterIds && (
+                    <button
+                      type="button"
+                      onClick={() => setMapFilterIds(null)}
+                      className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
+                      title="Clear the map-region filter"
+                    >
+                      Map region · {recommendations.length} shown ×
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setMapOpen((open) => {
+                        localStorage.setItem('alma.discovery.mapOpen', String(!open))
+                        return !open
+                      })
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
+                  >
+                    {mapOpen ? 'Hide map' : 'Show map'}
+                  </button>
+                </div>
+              </div>
+            </CardHeader>
           <CardContent className="space-y-3 p-4">
-            <header className="flex items-center gap-2">
-              <MapIcon className="h-4 w-4 text-alma-600" />
-              <h3 className="text-sm font-semibold text-alma-800">Frontier map</h3>
-              <span className="text-xs text-slate-500">
-                your library, this lens&apos;s suggestions, and the space between
-              </span>
-              {mapFilterIds && (
-                <button
-                  type="button"
-                  onClick={() => setMapFilterIds(null)}
-                  className="inline-flex items-center gap-1 rounded-full border border-accent-edge bg-accent-soft px-2 py-0.5 text-xs font-medium text-alma-folio hover:opacity-80"
-                  title="Clear the map-region filter"
-                >
-                  Map region · {recommendations.length} shown ×
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() =>
-                  setMapOpen((open) => {
-                    localStorage.setItem('alma.discovery.mapOpen', String(!open))
-                    return !open
-                  })
-                }
-                className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet"
-              >
-                {mapOpen ? 'Hide map' : 'Show map'}
-              </button>
-            </header>
             {mapOpen && (
               <ConceptCallout
                 eyebrow="How to read this map"

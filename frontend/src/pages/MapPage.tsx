@@ -18,7 +18,7 @@
  *
  * Clicking selects; the paper panel opens from the inspector's own button.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, Map as MapIcon, X } from 'lucide-react'
 
@@ -44,6 +44,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { invalidateQueries } from '@/lib/queryHelpers'
+import { useHashRoute } from '@/lib/hashRoute'
 import { useToast } from '@/hooks/useToast'
 
 interface ClusterMeta {
@@ -73,6 +74,13 @@ export function MapPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
+  // "Show on map" deep link (#/map?paper=<id>): once the payload is in,
+  // select that paper — accent ring, cluster focus, inspector. Fired once
+  // per id so a manual deselect afterwards sticks.
+  const route = useHashRoute()
+  const deepLinkPaperId = route.params.get('paper')
+  const didDeepLinkRef = useRef<string | null>(null)
+
   const rebuildMutation = useMutation({
     mutationFn: () => api.post<{ status?: string }>(`/graphs/rebuild?scope=${scope}`),
     onSuccess: (r) => {
@@ -98,6 +106,20 @@ export function MapPage() {
     }
     return p
   }, [scope, resolution, blend])
+
+  useEffect(() => {
+    if (!deepLinkPaperId || !payload || didDeepLinkRef.current === deepLinkPaperId) return
+    didDeepLinkRef.current = deepLinkPaperId
+    const node = payload.nodes.find(
+      (n) => n.id === deepLinkPaperId || String(n.metadata?.paper_id ?? '') === deepLinkPaperId,
+    )
+    if (node) setSelected(node)
+    else
+      toast({
+        title: 'Not on the map yet',
+        description: 'This paper has no placement — it appears once it has a vector.',
+      })
+  }, [deepLinkPaperId, payload, toast])
 
   const clustering = useMemo(
     () =>
