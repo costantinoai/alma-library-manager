@@ -159,7 +159,7 @@ when your data changes, the next page load serves the previous
 snapshot while a background job rebuilds it, then swaps silently.
 The **Refreshing…** pill in the header lights up during that window.
 
-**Maps (Paper Map / Author Network)** follow a stricter contract: the
+**Maps (Paper Map / Author Map)** follow a stricter contract: the
 2-D layout is a durable artifact — ONE corpus-scope "substrate"
 (positions + clusters + labels), computed only by background jobs,
 never during a page load. Opening the map is a pure read of the
@@ -176,7 +176,16 @@ stored payload (fast at any corpus size). Freshness is owned by the
 The map header shows when the layout was built and how many new
 papers await the next fold-in. The Library map is a *filter* of the
 corpus substrate — there is no second layout, so the two views can
-never disagree about where a paper sits. To force a fresh layout
+never disagree about where a paper sits.
+
+Both maps also read membership on the **same three channels**: a
+**filled** dot is yours (a saved paper; an author you follow or have
+saved a paper from), a **hollow** dot is being suggested to you, and a
+**faint** dot is context. One common space, so "who is mine and who is
+new" reads identically wherever you meet it. Anything that cannot be
+placed is never faked into position: an author with no embedded paper
+has no semantic location, so the Author Map omits them and says how
+many in the legend. To force a fresh layout
 right now, the **Rebuild graphs** button still works; custom knob
 combinations (a different cluster detail, a fused layout) build in
 the background too — the map shows "Building this view…" and appears

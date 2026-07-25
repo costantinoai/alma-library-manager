@@ -242,7 +242,9 @@ parameters and response shapes.
 | `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
 | `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options served from cache; custom options bypass cache. SWR flags ride inside `metadata`. |
-| `GET` | `/graphs/author-network` | Co-authorship clusters. Cached. |
+| `GET` | `/graphs/author-network` | The Author Map: authors placed by what they write about, clustered into research communities. Cached. Ships **no edges** — co-authorship and bibliographic coupling shape the layout, so adjacency already encodes them. Authors with no embedded paper are omitted and counted in `metadata.omitted_unplaced`. |
+| `GET` | `/graphs/signal-field` | Space-owned preference field over the corpus substrate: one valence per paper at its layout coordinates, plus its live 0–100 score. Feeds every paper map's Terrain overlay and Score colouring. Pure read. |
+| `GET` | `/graphs/author-field` | The Author Map's live field, keyed by author id: mean `paper_valence` over the papers of theirs you have a signal on (`v: null` when none), plus their mean live score. Same `signal_valence` weights as `/graphs/signal-field`. Pure read. |
 | `POST` | `/graphs/cluster-labels/refresh` | Re-label paper-map clusters. |
 | `POST` | `/graphs/rebuild` | Force a full rebuild of all graph caches (re-cluster + re-project). |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
