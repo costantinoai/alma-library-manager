@@ -17,8 +17,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 
 from alma.api.deps import get_plugin_registry, open_db_connection
+from alma.api.http_cache import GraphHttpCacheMiddleware
 from alma.api.models import HealthResponse, StatisticsResponse, VersionResponse
 from alma.api.routes import authors_router, papers_router, plugins_router
 from alma.api.routes.activity import router as activity_router
@@ -32,6 +34,7 @@ from alma.api.routes.feed import router as feed_router
 from alma.api.routes.feedback import router as feedback_router
 from alma.api.routes.graphs import router as graphs_router
 from alma.api.routes.health import router as health_router
+from alma.api.routes.home import router as home_router
 from alma.api.routes.imports import router as imports_router
 from alma.api.routes.insights import router as insights_router
 from alma.api.routes.lenses import router as lenses_router
@@ -41,7 +44,6 @@ from alma.api.routes.logs import install_log_handler
 from alma.api.routes.logs import router as logs_router
 from alma.api.routes.onboarding import router as onboarding_router
 from alma.api.routes.operations import router as operations_router
-from alma.api.routes.home import router as home_router
 from alma.api.routes.reports import router as reports_router
 from alma.api.routes.scheduler import router as scheduler_router
 from alma.api.routes.search import router as search_router
@@ -219,6 +221,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Graph JSON is the application's largest repeated response. The inner cache
+# middleware hashes the uncompressed representation and handles conditional
+# GETs; gzip wraps it so ready payloads travel compactly. Building envelopes
+# are tiny and marked no-store.
+app.add_middleware(GraphHttpCacheMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 # Request logging middleware
