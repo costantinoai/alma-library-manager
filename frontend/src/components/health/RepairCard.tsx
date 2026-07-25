@@ -30,7 +30,7 @@ import { MetricTile } from '@/components/shared/MetricTile'
 import { AsyncButton, SettingsNumberField } from '@/components/settings/primitives'
 import { EtaHint } from '@/components/shared/EtaHint'
 import { JargonHint } from '@/components/shared/JargonHint'
-import { formatRelativeShort, parseAlmaTimestamp } from '@/lib/utils'
+import { formatRelativeShort, formatTimestamp } from '@/lib/utils'
 import {
   estimateMaintenanceOperation,
   type HealthDimension,
@@ -91,12 +91,9 @@ export function RepairCard({
 }: RepairCardProps) {
   // A manual stop of a BACKGROUND run holds automation off this task for a
   // cooldown window. `auto_enabled` is untouched, so the switch alone would
-  // claim "on" while nothing runs — say the pause out loud instead.
-  // (The stamp is naive UTC; `parseAlmaTimestamp` is the one parser that
-  //  knows that, so a local-time reading can't shift it by the TZ offset.)
+  // claim "on" while nothing runs — say the pause out loud instead. The
+  // backend already nulls an expired stamp, so this is purely a render.
   const pausedUntil = op.paused_by_user_until
-    ? parseAlmaTimestamp(op.paused_by_user_until)
-    : null
   const [autoCap, setAutoCap] = useState(op.auto_daily_cap)
   useEffect(() => setAutoCap(op.auto_daily_cap), [op.auto_daily_cap])
   const [manualLimit, setManualLimit] = useState(op.manual_limit)
@@ -270,7 +267,7 @@ export function RepairCard({
           )}
           {pausedUntil ? (
             <span className="inline-flex items-center gap-1 text-xs text-warning-700">
-              Paused by you until {formatDateTime(pausedUntil)}
+              Paused by you until {formatTimestamp(pausedUntil)}
               <button
                 type="button"
                 className="rounded px-1.5 py-0.5 font-medium text-accent-700 underline-offset-2 hover:bg-control-quiet-hover hover:underline"
