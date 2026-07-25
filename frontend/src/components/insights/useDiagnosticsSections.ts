@@ -1,9 +1,10 @@
 /**
- * useDiagnosticsSections — the shared data hook behind both the Insights
- * **Activity** tab (analytics) and the Health **Status** tab (operational
- * health). One materialised view per subsystem; each streams in independently
- * and caches for 60s. Extracted so the two surfaces read the SAME section data
- * (DRY) instead of each wiring its own eight queries.
+ * useDiagnosticsSections — the shared data hook behind the Health page's
+ * **System status** band and its **Activity** section. One materialised view
+ * per subsystem; each streams in independently and caches for 60s, so both
+ * surfaces read the SAME section data (DRY) instead of wiring eight queries
+ * twice. It also owns the section-state TYPES, which used to live in the
+ * (now deleted) Insights diagnostics tab.
  */
 import { useQuery } from '@tanstack/react-query'
 
@@ -18,10 +19,31 @@ import {
   type DiagnosticsFeedbackSection,
   type DiagnosticsOperationalSection,
 } from '@/api/client'
-import {
-  type InsightsDiagnosticsSections,
-  type SectionState,
-} from '@/components/insights/InsightsDiagnosticsTab'
+
+/**
+ * Per-section load state. Sections stream independently so a fast one paints
+ * while a slow one still shows a skeleton. `loading` is true while the first
+ * response is in flight; `stale` means a cached payload is being served while
+ * a background rebuild runs (surfaced as a "Refreshing…" pill, never as a
+ * blocking spinner).
+ */
+export interface SectionState<T> {
+  data?: T
+  loading: boolean
+  error: boolean
+  stale?: boolean
+}
+
+export interface InsightsDiagnosticsSections {
+  feed: SectionState<DiagnosticsFeedSection>
+  discovery: SectionState<DiagnosticsDiscoverySection>
+  ai: SectionState<DiagnosticsAiSection>
+  authors: SectionState<DiagnosticsAuthorsSection>
+  alerts: SectionState<DiagnosticsAlertsSection>
+  feedback: SectionState<DiagnosticsFeedbackSection>
+  operational: SectionState<DiagnosticsOperationalSection>
+  evaluation: SectionState<DiagnosticsEvaluationSection>
+}
 
 function toSectionState<T extends { stale?: boolean }>(query: {
   data?: T

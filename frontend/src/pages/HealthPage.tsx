@@ -1,14 +1,18 @@
 /**
  * HealthPage — the single front door for "is my data healthy, and what do I do
- * about it?" One scrollable surface, no tabs: status and the operation that
- * repairs it live in the SAME card (a `RepairCard`), so nothing is scattered.
+ * about it?"
  *
- * Top → bottom:
- *   - persistent vitals ribbon + scoreboard (at-a-glance triage)
- *   - "Corpus & embeddings" repair group  — op cards, worst-first
- *   - "Authors" repair group               — op cards, worst-first
- *   - "Observed — no automatic repair"      — dimensions with no repair op
- *   - "System status"                       — operational subsystems
+ * A PERSISTENT band (vitals ribbon + system-status chips + API budget) answers
+ * "is everything OK?" without making you pick a tab. Two tabs below carry the
+ * WORK, most actionable first (task 47 Phase 5):
+ *   - Repairs   — recommended next + op cards (worst-first) + observed gaps
+ *                 with no automatic fix. What you can DO.
+ *   - Activity  — what already ran: failed background ops with step logs,
+ *                 quality scorecards, latest Feed/Discovery refreshes.
+ *                 Deep-link target `#/health?tab=activity&focus=failed`.
+ *
+ * Status and the operation that repairs it still live in the SAME card (a
+ * `RepairCard`) — the tabs separate kinds of work, never a status from its fix.
  *
  * The card unit is the maintenance OPERATION (not the dimension) because the
  * mapping is many-to-many — `corpus_metadata` alone repairs seven dimensions.
@@ -39,6 +43,10 @@ import { DiagnosticsSection } from '@/components/health/DiagnosticsSection'
 import { SystemStatusCards } from '@/components/health/SystemStatusCards'
 import { ApiBudgetCard } from '@/components/health/ApiBudgetCard'
 import { SectionLabel } from '@/components/health/SectionLabel'
+import { ActivitySection } from '@/components/health/ActivitySection'
+import { useDiagnosticsSections } from '@/components/insights/useDiagnosticsSections'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { buildHashRoute, useHashRoute } from '@/lib/hashRoute'
 import { HealthDimensionDrilldown } from '@/components/health/HealthDimensionDrilldown'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { freshnessNote } from '@/components/health/healthFormat'
@@ -52,6 +60,13 @@ export function HealthPage() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
   const [openDim, setOpenDim] = useState<HealthDimension | null>(null)
+  // Operational telemetry for the Activity tab. Same query keys the
+  // System-status band already uses, so React Query serves both from one fetch.
+  const diagnosticsSections = useDiagnosticsSections()
+  // Tabbed detail under a persistent vitals ribbon. `?tab=` is the deep-link
+  // contract: Health popups link `#/health?tab=activity&focus=failed`.
+  const route = useHashRoute()
+  const activeTab = route.params.get('tab')?.trim() || 'repairs'
   // "Run recommended sequence" state (H-4). The sequence is driven by the DURABLE
   // terminal state of the launched background job — never by a blind poll of
   // `recommended_next`. `watchedJob` is the step we fired and are waiting on; we
@@ -354,17 +369,19 @@ export function HealthPage() {
           SPECTER2).
         </p>
         <p>
-          <strong>Observed — no automatic repair</strong> lists gaps that have no one-click fix.{' '}
-          <strong>System status</strong> is the operational health of the running system — what's
-          degraded or failing right now (monitors, sources, plugins, background jobs). Subsystem{' '}
-          <em>trends and analytics</em> live under <strong>Insights → Activity</strong>.
+          <strong>System status</strong> above is what's degraded or failing right now —
+          monitors, sources, plugins, background jobs. Below it, <strong>Repairs</strong> is
+          what you can fix, and <strong>Activity</strong> is what already ran: failed background
+          operations with their step logs, quality scorecards, and the latest Feed / Discovery
+          refreshes. Corpus <em>analytics</em> live under <strong>Library → Analytics</strong>.
         </p>
       </ConceptCallout>
 
-      {/* Vitals + System status — ONE panel (the bright forefront band): the
-          colored data-health ribbon up top, then a one-line strip of clickable
-          system-component chips. They share a panel because together they ARE
-          the at-a-glance "is everything OK?" — clicking a chip opens its detail. */}
+      {/* Vitals + System status — ONE panel, PERSISTENT above the tabs. Together
+          they ARE the at-a-glance "is everything OK?": the colored data-health
+          ribbon, then a strip of clickable system-component chips. That question
+          must be answerable without picking a tab first, so it never moves into
+          one; the tabs below carry the WORK (what to fix / what already ran). */}
       <section className="space-y-4 rounded-sm border border-[var(--color-border)] bg-surface-1 p-4 shadow-paper-sm sm:p-5">
         {snapshotQuery.isError ? (
           <div className="flex items-center justify-between gap-3 rounded-sm border border-critical-100 bg-critical-50 p-3">
@@ -405,6 +422,22 @@ export function HealthPage() {
         runningKey={runningKey}
       />
 
+      {/* Tabs carry the WORK, most actionable first: what you can fix, then what
+          already ran. (Status stays out of the tabs, in the persistent band
+          above — it's the page's at-a-glance answer, not a task.) `?tab=` is the
+          deep-link contract: Health popups link `#/health?tab=activity`. */}
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          window.location.hash = buildHashRoute('health', { tab: value })
+        }}
+      >
+        <TabsList>
+          <TabsTrigger value="repairs">Repairs</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="repairs" className="mt-4 space-y-4">
       {/* Recommended next — the safe one-click sequence driver. The backend points
           this at the first actionable, non-blocked, non-destructive, non-manual op
           in dependency order. "Run sequence" walks the steps, advancing only when
@@ -493,8 +526,20 @@ export function HealthPage() {
         <p className="text-sm text-success-700">No repair operations pending — everything's clear.</p>
       )}
 
-      {/* Observed dimensions with no repair op. */}
-      <DiagnosticsSection dims={orphanDims} onOpenDim={setOpenDim} />
+          {/* Observed dimensions with no repair op — last, because nothing here
+              is actionable; it's the honest "we see it, we can't auto-fix it". */}
+          <DiagnosticsSection dims={orphanDims} onOpenDim={setOpenDim} />
+        </TabsContent>
+
+        <TabsContent value="activity" className="mt-4">
+          {/* What the system has already DONE (task 47 Phase 5). Re-homed from
+              the retired Insights → Diagnostics tab: operational telemetry
+              belongs with the health surface, not in an analytics page. The
+              "Open in Activity" popups deep-link to
+              `#/health?tab=activity&focus=failed`. */}
+          <ActivitySection sections={diagnosticsSections} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

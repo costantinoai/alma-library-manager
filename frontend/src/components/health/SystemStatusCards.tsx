@@ -863,9 +863,11 @@ export function SystemStatusCards() {
             description: 'Maintenance, hydration and embedding jobs run on the scheduler.',
             states: at('jobs'),
             reviewItems: [],
-            ownerPage: 'insights',
-            // focus=failed → the Activity tab scrolls to + rings the
-            // Background-operations card naming each failure.
+            // Activity re-homed onto the Health page itself (task 47 Phase 5),
+            // so this now links within the page: focus=failed makes the Activity
+            // tab scroll to + ring the Background-operations card naming each
+            // failure, instead of bouncing through the retired Insights page.
+            ownerPage: 'health',
             ownerParams: { tab: 'activity', focus: 'failed' },
           },
           { count: failedJobs, countLabel: 'failed (24h)', healthyLabel: 'all healthy' },

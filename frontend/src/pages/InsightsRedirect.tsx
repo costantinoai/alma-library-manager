@@ -2,14 +2,13 @@ import { useEffect } from 'react'
 
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 
-// The Insights page retired into Library › Analytics (task 47 Phase 4, 47-C).
-// This shim keeps every old `#/insights?tab=…` deep link (Alerts digests,
-// Health status popups, bookmarks) landing on the right Analytics section.
-// Phase 5 will re-point the `activity` subtab at the Health page.
+// The Insights page retired into Library › Analytics (task 47 Phase 4, 47-C)
+// and its operational Activity tab into Health (Phase 5). This shim keeps every
+// old `#/insights?tab=…` deep link (Alerts digests, Health status popups,
+// bookmarks) landing where the content actually lives now.
 const SECTION_MAP: Record<string, string> = {
   stats: 'overview',
   graph: 'map',
-  activity: 'activity',
   reports: 'reports',
 }
 
@@ -18,6 +17,13 @@ export function InsightsRedirect() {
   useEffect(() => {
     const tab = route.params.get('tab')?.trim() ?? 'stats'
     const focus = route.params.get('focus')?.trim()
+    // Operational telemetry moved to Health, analytics to Library (Phase 5).
+    if (tab === 'activity') {
+      const params: Record<string, string> = { tab: 'activity' }
+      if (focus) params.focus = focus
+      navigateTo('health', params)
+      return
+    }
     const params: Record<string, string> = {
       tab: 'analytics',
       section: SECTION_MAP[tab] ?? 'overview',

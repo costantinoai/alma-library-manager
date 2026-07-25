@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { InsightsActivity } from '@/components/insights/InsightsActivity'
 import { InsightsGraphTab } from '@/components/insights/InsightsGraphTab'
 import { InsightsOverviewTab } from '@/components/insights/InsightsOverviewTab'
 import { InsightsReportsTab } from '@/components/insights/InsightsReportsTab'
@@ -94,7 +93,6 @@ export function AnalyticsTab() {
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="map">Map</TabsTrigger>
-            <TabsTrigger value="activity">Activity</TabsTrigger>
             <TabsTrigger value="reports">Reports</TabsTrigger>
           </TabsList>
           {isRefreshing ? (
@@ -118,9 +116,6 @@ export function AnalyticsTab() {
         </TabsContent>
         <TabsContent value="map" className="mt-4">
           <InsightsGraphTab embeddingsReady={!!aiStatus?.capability_tiers?.tier1_embeddings?.ready} />
-        </TabsContent>
-        <TabsContent value="activity" className="mt-4">
-          <InsightsActivity />
         </TabsContent>
         <TabsContent value="reports" className="mt-4">
           <InsightsReportsTab
