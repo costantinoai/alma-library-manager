@@ -25,6 +25,7 @@ import { PageTour, AUTHORS_TOUR } from '@/components/onboarding'
 import { AddAuthorDialog, type AddAuthorPayload } from '@/components/authors/AddAuthorDialog'
 import { CorpusAuthorsTable } from '@/components/authors/CorpusAuthorsTable'
 import { GraphMapView } from '@/components/map/GraphMapView'
+import { Card, CardContent } from '@/components/ui/card'
 import { ConceptCallout } from '@/components/ui/concept-callout'
 import {
   MapDisplayTuningRows,
@@ -330,7 +331,11 @@ export function AuthorsPage() {
           FIRST-CLASS citizen — top of the page, always visible, like the
           Discovery frontier map. Every dot opens the same author drawer the
           sections below use; dashed halo = followed. */}
-      <section className="space-y-3" data-tour="authors-network">
+      <section data-tour="authors-network">
+      {/* Proper section box — the map is a first-class section of the page,
+          never a floating plate (user call 2026-07-25, mirrors Discovery). */}
+      <Card>
+      <CardContent className="space-y-3 p-4">
         <header className="flex items-center gap-2">
           <Share2 className="h-4 w-4 text-alma-600" />
           <h2 className="text-sm font-semibold text-alma-800">Author network</h2>
@@ -350,10 +355,11 @@ export function AuthorsPage() {
           </p>
           <p className="mt-2">
             <strong>Colour modes:</strong> Clusters shows the communities;{' '}
-            <strong>Score and Heat use the engine&apos;s internal criteria</strong> — each author
-            carries the mean of their papers&apos; latest relevance scores (0–100, green strong /
-            red weak), the same scoring Discovery uses, so a green region is a community the
-            engine keeps finding relevant to you.
+            <strong>Score and the Terrain overlay use the engine&apos;s internal criteria</strong>{' '}
+            — each author carries the mean of their papers&apos; latest relevance scores (0–100,
+            green strong / red weak), the same scoring Discovery uses, so a green region is a
+            community the engine keeps finding relevant to you. Terrain composes with any
+            colouring.
           </p>
           <p className="mt-2">
             <strong>Scope:</strong> Library shows only authors of papers you saved; Corpus widens
@@ -370,7 +376,7 @@ export function AuthorsPage() {
           // Year is meaningless for an author; Score/Heat reflect the mean
           // internal score of the author's papers (same criteria as
           // Discovery) — user call 2026-07-25.
-          colourModes={['clusters', 'score', 'heat']}
+          colourModes={['clusters', 'score']}
           toolbarExtras={
             <>
               <MapModeSwitch
@@ -437,6 +443,8 @@ export function AuthorsPage() {
           }
           height={480}
         />
+      </CardContent>
+      </Card>
       </section>
 
       <div data-tour="authors-suggestions">

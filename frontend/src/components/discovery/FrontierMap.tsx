@@ -19,6 +19,7 @@ import {
   EyeOff,
   LassoSelect,
   Loader2,
+  Mountain,
   Share2,
   Sparkles,
   Type,
@@ -101,7 +102,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   // (the recs are its hero layer); corpus clusters are the alternative lens on
   // the same points. Never both — two colourings on one scatter is a lie about
   // which structure you're looking at.
-  const [groupBy, setGroupBy] = useState<'branches' | 'clusters' | 'year' | 'heat'>('branches')
+  const [groupBy, setGroupBy] = useState<'branches' | 'clusters' | 'year'>('branches')
+  // Terrain (formerly "Heat") is an OVERLAY — the preference field composes
+  // with ANY grouping (user call 2026-07-25), it never competes with them.
+  const [showTerrain, setShowTerrain] = useState(false)
   // Legend chips as toggles: a dimmed cluster recedes (never disappears —
   // the territory stays honest), so you can mute the mega-cluster and read
   // the rest. Reset on grouping switch.
@@ -170,19 +174,19 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     [nodes],
   )
 
-  // Heat (50-J): the SPACE-OWNED preference field — one valence per
-  // signal-carrying corpus paper at its substrate coordinates, fetched from
+  // Terrain (50-J): the SPACE-OWNED preference field — one valence per
+  // corpus paper at its substrate coordinates, fetched from
   // /graphs/signal-field. NOT derived from the rendered dots: toggling
   // "show seen" (or any layer) never changes the terrain, and a
   // library-only view still shows the red of dismissed / weak-scored
   // territory whose dots are hidden (user call 2026-07-25).
-  const signalField = useSignalField(groupBy === 'heat')
+  const signalField = useSignalField(showTerrain)
 
   const yearStats = useMemo(
     () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
     [nodes],
   )
-  const heatStats = signalField.stats
+  const terrainStats = signalField.stats
 
   // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
   const mapNodes = useMemo<SemanticMapNode[]>(() => {
@@ -330,10 +334,24 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
             onWordCount={setWordCount}
           />
         </MapTuningPopover>
+        <button
+          type="button"
+          onClick={() => setShowTerrain((s) => !s)}
+          className={cn(
+            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
+            showTerrain
+              ? 'border-accent-edge bg-accent-soft text-alma-folio'
+              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
+          )}
+          title="Preference terrain — the space-owned signal field (all your ratings, saves, dismissals + engine scores) washed under the dots. Composes with any grouping; the same whatever layers are shown (view only)"
+        >
+          <Mountain className="h-3.5 w-3.5" />
+          Terrain
+        </button>
         {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
         {clusterColors.size > 0 && (
           <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
-            {(['branches', 'clusters', 'year', 'heat'] as const).map((mode) => (
+            {(['branches', 'clusters', 'year'] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -353,12 +371,10 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                     ? 'Colour suggestions by the lens branch that found them'
                     : mode === 'clusters'
                       ? 'Colour every paper by its corpus cluster'
-                      : mode === 'year'
-                        ? 'Recency ramp — older fades, newer leads'
-                        : 'Preference terrain — the space-owned signal field (all your ratings, saves, dismissals + engine scores), the same whatever layers are shown (view only)'
+                      : 'Recency ramp — older fades, newer leads'
                 }
               >
-                {mode === 'branches' ? 'Branches' : mode === 'clusters' ? 'Clusters' : mode === 'year' ? 'Year' : 'Heat'}
+                {mode === 'branches' ? 'Branches' : mode === 'clusters' ? 'Clusters' : 'Year'}
               </button>
             ))}
           </div>
@@ -392,7 +408,7 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
         sizeScale={sizeScale}
         toponymScale={wordScale}
         toponymWordCount={wordCount}
-        heatField={groupBy === 'heat' ? signalField.points : undefined}
+        heatField={showTerrain ? signalField.points : undefined}
         height={520}
         lassoMode={selectMode}
         onLasso={(ids, anchor) => {
@@ -556,13 +572,13 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 mean={String(Math.round(yearStats.mean))}
               />
             )}
-            {groupBy === 'heat' && heatStats && (
+            {showTerrain && terrainStats && (
               <ColourBarLegend
                 gradient={RAMP_GRADIENTS.divergent}
-                min={(-Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max))).toFixed(2)}
+                min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
                 mid="0"
-                max={Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max)).toFixed(2)}
-                mean={heatStats.mean.toFixed(2)}
+                max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+                mean={terrainStats.mean.toFixed(2)}
               />
             )}
             {showSeen && (

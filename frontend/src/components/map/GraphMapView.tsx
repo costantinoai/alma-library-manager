@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Search, Share2, Type } from 'lucide-react'
+import { Loader2, Mountain, Search, Share2, Type } from 'lucide-react'
 
 import { api, type GraphData, type GraphNode } from '@/api/client'
 import { branchMapColor } from '@/lib/palette'
@@ -69,7 +69,7 @@ export interface GraphMapViewProps {
   toponymWordCount?: number
   /** Colour modes this host offers (default: all). Authors drop Year —
    *  an author has no single publication year (user call 2026-07-25). */
-  colourModes?: ReadonlyArray<'clusters' | 'year' | 'score' | 'heat'>
+  colourModes?: ReadonlyArray<'clusters' | 'year' | 'score'>
 }
 
 export function GraphMapView({
@@ -89,16 +89,19 @@ export function GraphMapView({
   sizeScale = 1,
   toponymScale = 1,
   toponymWordCount = 3,
-  colourModes = ['clusters', 'year', 'score', 'heat'],
+  colourModes = ['clusters', 'year', 'score'],
 }: GraphMapViewProps) {
   const [showEdges, setShowEdges] = useState(false)
   const [showToponyms, setShowToponyms] = useState(true)
   // Colour restores the old color-by knob on the shared stack: cluster hues,
-  // a year ramp, a score ramp, or the 50-J heat wash. DATA ramps (year /
-  // score / heat) are deliberate exceptions to the chip valence contract.
-  // Score = the engine's INTERNAL relevance score (latest recommendation,
-  // 0–100), NOT the user's star rating (user call 2026-07-25).
-  const [colourMode, setColourMode] = useState<'clusters' | 'year' | 'score' | 'heat'>('clusters')
+  // a year ramp, or a score ramp. DATA ramps (year / score) are deliberate
+  // exceptions to the chip valence contract. Score = the engine's INTERNAL
+  // relevance score (latest recommendation, 0–100), NOT the user's star
+  // rating (user call 2026-07-25).
+  const [colourMode, setColourMode] = useState<'clusters' | 'year' | 'score'>('clusters')
+  // Terrain (formerly "Heat") is an OVERLAY, not a colour mode — the
+  // preference field composes with ANY dot colouring (user call 2026-07-25).
+  const [showTerrain, setShowTerrain] = useState(false)
   // Per-layer link chips (the old typed-edge toggles): view-only filters.
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set())
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
@@ -166,15 +169,16 @@ export function GraphMapView({
     [colourMode, yearRange],
   )
 
-  // 50-J heat. Paper maps splat the SPACE-OWNED field (/graphs/signal-field):
-  // one valence per signal-carrying corpus paper, independent of which dots
-  // this view renders — the terrain never changes when a layer is toggled
-  // (user call 2026-07-25). The author network has its own layout space, so
-  // it keeps a per-node valence (its payload always carries every author).
+  // 50-J terrain. Paper maps splat the SPACE-OWNED field
+  // (/graphs/signal-field): one valence per corpus paper, independent of
+  // which dots this view renders — the terrain never changes when a layer
+  // is toggled (user call 2026-07-25). The author network has its own
+  // layout space, so it keeps a per-node valence (its payload always
+  // carries every author).
   const isPaperMap = endpoint === 'paper-map'
-  const signalField = useSignalField(colourMode === 'heat' && isPaperMap)
-  const heatValues = useMemo(() => {
-    if (colourMode !== 'heat' || isPaperMap) return undefined
+  const signalField = useSignalField(showTerrain && isPaperMap)
+  const terrainValues = useMemo(() => {
+    if (!showTerrain || isPaperMap) return undefined
     const m = new Map<string, number>()
     for (const n of nodes) {
       const s = Number(n.metadata?.score)
@@ -182,7 +186,7 @@ export function GraphMapView({
       else m.set(n.id, 0)
     }
     return m
-  }, [colourMode, isPaperMap, nodes])
+  }, [showTerrain, isPaperMap, nodes])
 
   // Colourbar stats — the numbers the legend owes the reader.
   const yearStats = useMemo(
@@ -193,12 +197,12 @@ export function GraphMapView({
     () => summarizeValues(nodes.map((n) => Number(n.metadata?.score))),
     [nodes],
   )
-  // Heat bar: field stats are the SPACE's stats (stable across view state);
-  // node-derived stats only for the author network's own space.
-  const heatStats = useMemo(() => {
+  // Terrain bar: field stats are the SPACE's stats (stable across view
+  // state); node-derived stats only for the author network's own space.
+  const terrainStats = useMemo(() => {
     if (isPaperMap) return signalField.stats
-    return heatValues ? summarizeValues([...heatValues.values()]) : null
-  }, [isPaperMap, signalField.stats, heatValues])
+    return terrainValues ? summarizeValues([...terrainValues.values()]) : null
+  }, [isPaperMap, signalField.stats, terrainValues])
 
   const query = search.trim().toLowerCase()
   const mapNodes = useMemo<SemanticMapNode[]>(
@@ -284,6 +288,14 @@ export function GraphMapView({
           <Type className="h-3.5 w-3.5" />
           Names
         </MapToggle>
+        <MapToggle
+          active={showTerrain}
+          onClick={() => setShowTerrain((s) => !s)}
+          title="Preference terrain — the space-owned signal field (ratings, saves, dismissals + engine scores) washed under the dots. Composes with any colouring; the same whatever layers are shown (view-only)"
+        >
+          <Mountain className="h-3.5 w-3.5" />
+          Terrain
+        </MapToggle>
         <MapModeSwitch
           value={colourMode}
           onChange={setColourMode}
@@ -292,7 +304,6 @@ export function GraphMapView({
               { value: 'clusters', label: 'Clusters', title: 'Colour by corpus cluster' },
               { value: 'year', label: 'Year', title: 'Recency ramp — older fades, newer leads' },
               { value: 'score', label: 'Score', title: 'Engine relevance (latest suggestion score, 0–100) — red weak, green strong; never-scored grey' },
-              { value: 'heat', label: 'Heat', title: 'Preference terrain — the space-owned signal field (ratings, saves, dismissals + engine scores), the same whatever is shown (view-only)' },
             ] as const
           ).filter((o) => colourModes.includes(o.value))}
         />
@@ -319,8 +330,8 @@ export function GraphMapView({
         sizeScale={sizeScale}
         toponymScale={toponymScale}
         toponymWordCount={toponymWordCount}
-        heatValues={heatValues}
-        heatField={colourMode === 'heat' && isPaperMap ? signalField.points : undefined}
+        heatValues={terrainValues}
+        heatField={showTerrain && isPaperMap ? signalField.points : undefined}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
         renderHover={(id) => {
           const n = nodesById.get(id)
@@ -364,15 +375,16 @@ export function GraphMapView({
               mean={scoreStats ? String(Math.round(scoreStats.mean)) : undefined}
             />
           )}
-          {colourMode === 'heat' && heatStats && (
+          {showTerrain && terrainStats && (
             // Divergent, SYMMETRIC about true 0 (neutral valence): the wash
-            // saturates at the largest observed |value|.
+            // saturates at the largest observed |value|. Space-owned stats —
+            // stable whatever the colour mode or visible layers.
             <ColourBarLegend
               gradient={RAMP_GRADIENTS.divergent}
-              min={(-Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max))).toFixed(2)}
+              min={(-Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max))).toFixed(2)}
               mid="0"
-              max={Math.max(Math.abs(heatStats.min), Math.abs(heatStats.max)).toFixed(2)}
-              mean={heatStats.mean.toFixed(2)}
+              max={Math.max(Math.abs(terrainStats.min), Math.abs(terrainStats.max)).toFixed(2)}
+              mean={terrainStats.mean.toFixed(2)}
             />
           )}
           {layout?.computed_at && (

@@ -881,12 +881,17 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
 
     The valence hierarchy and every weight live in ONE place:
     `alma.core.signal_valence` (strongest user signal wins; engine
-    evidence at reduced authority; no-signal papers are EXCLUDED — no
-    information is not a neutral opinion).
+    evidence at reduced authority; no-signal papers carry
+    VALENCE_NO_SIGNAL so EVERY substrate point has a value — the
+    terrain has no holes, user call 2026-07-25).
 
     Pure read; the substrate is the durable corpus layout.
     """
-    from alma.core.signal_valence import NEGATIVE_REC_ACTIONS, paper_valence
+    from alma.core.signal_valence import (
+        NEGATIVE_REC_ACTIONS,
+        VALENCE_NO_SIGNAL,
+        paper_valence,
+    )
 
     neg_actions_sql = ",".join(f"'{a}'" for a in NEGATIVE_REC_ACTIONS)
     try:
@@ -927,7 +932,7 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
             rec_score=row["rec_score"],
         )
         if v is None:
-            continue
+            v = VALENCE_NO_SIGNAL
         points.append({"x": float(row["x"]), "y": float(row["y"]), "v": round(v, 3)})
         vmin = min(vmin, v)
         vmax = max(vmax, v)

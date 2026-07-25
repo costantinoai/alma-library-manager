@@ -1293,7 +1293,11 @@ export function DiscoveryPage() {
             control surface for the deck, not an alternative to it. Collapsible,
             persisted; lasso → adopt a Direction or filter the list below. */}
         {selectedLensId && (
-          <section className="space-y-2">
+          <section>
+          {/* Proper section box — the map is a first-class section of the
+              page, never a floating plate (user call 2026-07-25). */}
+          <Card>
+          <CardContent className="space-y-3 p-4">
             <header className="flex items-center gap-2">
               <MapIcon className="h-4 w-4 text-alma-600" />
               <h3 className="text-sm font-semibold text-alma-800">Frontier map</h3>
@@ -1338,11 +1342,11 @@ export function DiscoveryPage() {
                 </p>
                 <p className="mt-2">
                   <strong>Colour modes:</strong> Branches shows who found what; Clusters shows the
-                  corpus topics; Year is a recency ramp; <strong>Heat is the preference
-                  terrain</strong> — a field built from ALL your signals (ratings, saves,
-                  dismissals, engine scores) over the whole space. It belongs to the space, not the
-                  view: hiding a layer never changes the terrain, so a red valley stays red even
-                  when its dots are hidden.
+                  corpus topics; Year is a recency ramp. <strong>Terrain is the preference
+                  field</strong> — an overlay you can combine with any colouring, built from ALL
+                  your signals (ratings, saves, dismissals, engine scores) over the whole space.
+                  It belongs to the space, not the view: hiding a layer never changes the terrain,
+                  so a red valley stays red even when its dots are hidden.
                 </p>
                 <p className="mt-2">
                   <strong>Do with it:</strong> click a suggestion to jump to its row below; click
@@ -1386,6 +1390,8 @@ export function DiscoveryPage() {
                 }}
               />
             )}
+          </CardContent>
+          </Card>
           </section>
         )}
 

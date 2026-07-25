@@ -8,8 +8,10 @@ drift between surfaces (user call 2026-07-25: no hardcoded valence
 literals in route code).
 
 Hierarchy: the strongest USER signal wins; engine evidence fills the
-rest at reduced authority. Papers with no signal at all return None —
-no information is NOT a neutral opinion, and must not dilute the field.
+rest at reduced authority. Papers with no signal at all return None so
+callers can DISTINGUISH "no information" from an explicit neutral; the
+field endpoint maps None to `VALENCE_NO_SIGNAL` because every substrate
+point must carry a value (no holes in the terrain).
 """
 
 from __future__ import annotations
@@ -41,6 +43,13 @@ SCORE_HALF_RANGE = 50.0
 ENGINE_AUTHORITY = 0.5
 """How much an engine opinion counts relative to a user signal."""
 
+VALENCE_NO_SIGNAL = 0.0
+"""Papers with no signal at all still occupy the space: they contribute
+NEUTRAL mass so the field covers every substrate point (user call
+2026-07-25 — no empty holes in the terrain). Neutral, not positive:
+unworked territory reads yellow, pulling optimistic green honestly
+toward "no opinion yet"."""
+
 # Membership states that read as a hard negative (D3: removed stays
 # visible in the corpus and reads as a negative signal).
 NEGATIVE_STATUSES = ("removed", "dismissed")
@@ -69,8 +78,9 @@ def paper_valence(
 ) -> float | None:
     """Resolve a paper's signals to one valence, strongest-user-first.
 
-    Returns None when the paper carries no signal at all — the caller
-    must EXCLUDE it from the field rather than treat it as neutral.
+    Returns None when the paper carries no signal at all; the field
+    endpoint substitutes `VALENCE_NO_SIGNAL` so the terrain has no
+    holes, while other callers can still tell "no info" apart.
     """
     if status in NEGATIVE_STATUSES:
         return VALENCE_REMOVED
