@@ -58,6 +58,17 @@ When `publication_date` is missing, ALMa falls back to
 order correctly. There is no `YYYY-01-01` fabrication for missing
 dates.
 
+## Hiding what you've already dealt with
+
+**Unsaved only** (in the control bar) hides papers already saved to your
+Library or sitting on your reading list. It's **off by default**: Feed is a
+chronological *record* of what your monitors found, and hiding what you kept
+would make that record dishonest. Turn it on when you want the inbox to show
+only what still needs a decision. The choice persists.
+
+Reading-list papers count as dealt-with — you've committed to them, so they
+aren't awaiting a decision either.
+
 ## New markers
 
 **New means "arrived since you last opened the Feed"** — not "since the last

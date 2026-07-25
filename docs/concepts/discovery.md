@@ -77,6 +77,17 @@ profile. Tracked papers used to be double-blocked by a permanent
 "any prior interaction" filter; that block was removed because it
 created a dead funnel as the corpus grew.
 
+### Hiding what you've already saved
+
+Discovery already excludes Library papers when it *builds* a deck (see the
+lifecycle filters above), but it deliberately keeps a card in place the moment
+you save it, so nothing vanishes under your cursor mid-triage. **Unsaved only**
+in the control bar clears those out — off by default, and the choice persists.
+
+On a collection lens the toggle also overrides that lens's usual exception (it
+normally still surfaces Library papers filed under *other* collections so you
+can pull them in), so "unsaved only" means the same thing on every lens type.
+
 ### Retrieval channels
 
 | Channel | Source | What it returns |
