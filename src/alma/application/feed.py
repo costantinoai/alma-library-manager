@@ -814,6 +814,7 @@ def list_feed_items(
     offset: int = 0,
     since_days: int | None = None,
     monitor_scope: str | None = None,
+    hide_library: bool = False,
 ) -> tuple[list[dict], int]:
     """List feed inbox items with joined paper/author data.
 
@@ -822,6 +823,11 @@ def list_feed_items(
         since_days: If set, only include items whose effective publication or
             fetch timestamp is within the last ``since_days`` days. Keeps the
             chronological feed bounded and avoids scanning unbounded history.
+        hide_library: drop papers already saved to the Library or sitting on
+            the reading list. Feed is a chronological inbox and shows them by
+            default — you asked for them, and hiding what you kept would make
+            the record dishonest. This is the opt-in "only what I haven't dealt
+            with" view.
         monitor_scope: split the inbox by monitor type so noisy journal
             (venue) monitors get their own surface. ``"inbox"`` excludes venue
             items; ``"journals"`` returns ONLY venue items; ``None`` / ``"all"``
@@ -854,6 +860,13 @@ def list_feed_items(
         where.append("COALESCE(fm.monitor_type, fi.monitor_type, '') = 'venue'")
     elif scope == "inbox":
         where.append("COALESCE(fm.monitor_type, fi.monitor_type, '') <> 'venue'")
+    if hide_library:
+        # "Only what I haven't dealt with." Reading-list papers count as dealt
+        # with too — you've committed to them, so they're not awaiting a
+        # decision. Applied row-level, before the per-paper aggregation, so the
+        # count and the list agree.
+        where.append("COALESCE(p.status, '') <> 'library'")
+        where.append("COALESCE(TRIM(p.reading_status), '') <> 'reading'")
     requested_status = str(status or "").strip().lower()
     if requested_status and requested_status != "all":
         if requested_status not in VALID_FEED_STATUSES:

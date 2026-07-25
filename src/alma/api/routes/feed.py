@@ -176,6 +176,10 @@ def list_feed_items(
         le=3650,
         description="Restrict to items published (or fetched) within the last N days. Defaults to 60.",
     ),
+    hide_library: bool = Query(
+        False,
+        description="Hide papers already saved to the Library or on the reading list.",
+    ),
     monitor_scope: str | None = Query(
         default=None,
         description="Split by monitor type: 'inbox' (exclude journals) | 'journals' (venue only) | omit for all",
@@ -192,6 +196,7 @@ def list_feed_items(
             offset=offset,
             since_days=since_days,
             monitor_scope=monitor_scope,
+            hide_library=hide_library,
         )
         return {"items": [FeedItemResponse(**item).model_dump() for item in items], "total": total}
     except ValueError as exc:

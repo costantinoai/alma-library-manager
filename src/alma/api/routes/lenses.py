@@ -212,13 +212,19 @@ def list_lens_recommendations(
     lens_id: str,
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    hide_library: bool = Query(
+        default=False,
+        description="Hide papers already saved to the Library or on the reading list.",
+    ),
     db: sqlite3.Connection = Depends(get_db),
 ):
     try:
         lens = discovery_app.get_lens(db, lens_id)
         if lens is None:
             raise HTTPException(status_code=404, detail="Lens not found")
-        rows = discovery_app.list_lens_recommendations(db, lens_id, limit=limit, offset=offset)
+        rows = discovery_app.list_lens_recommendations(
+            db, lens_id, limit=limit, offset=offset, hide_library=hide_library
+        )
         return [RecommendationResponse(**r) for r in rows]
     except HTTPException:
         raise

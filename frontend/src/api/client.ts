@@ -3827,11 +3827,18 @@ export function refreshLens(lensId: string, limit = 50): Promise<JobEnvelope> {
 
 export function listLensRecommendations(
   lensId: string,
-  params?: { limit?: number; offset?: number },
+  params?: {
+    limit?: number
+    offset?: number
+    /** Hide papers already saved to the Library or on the reading list —
+     *  including the ones this deck keeps visible right after you save them. */
+    hide_library?: boolean
+  },
 ): Promise<LensRecommendation[]> {
   const qs = new URLSearchParams()
   if (params?.limit != null) qs.set('limit', String(params.limit))
   if (params?.offset != null) qs.set('offset', String(params.offset))
+  if (params?.hide_library) qs.set('hide_library', 'true')
   const q = qs.toString()
   return api.get<LensRecommendation[]>(`/lenses/${encodeURIComponent(lensId)}/recommendations${q ? `?${q}` : ''}`)
 }
@@ -4143,6 +4150,8 @@ export function listFeedInbox(params?: {
   since_days?: number
   /** Split by monitor type: 'inbox' hides journals, 'journals' shows only them. */
   monitor_scope?: 'inbox' | 'journals' | 'all'
+  /** Hide papers already saved to the Library or on the reading list. */
+  hide_library?: boolean
 }): Promise<{ items: FeedInboxItem[]; total: number }> {
   const qs = new URLSearchParams()
   if (params?.status) qs.set('status', params.status)
@@ -4153,6 +4162,8 @@ export function listFeedInbox(params?: {
   if (params?.monitor_scope && params.monitor_scope !== 'all') {
     qs.set('monitor_scope', params.monitor_scope)
   }
+  // Only sent when on — an absent param keeps the default (show everything).
+  if (params?.hide_library) qs.set('hide_library', 'true')
   const q = qs.toString()
   return api.get(`/feed${q ? `?${q}` : ''}`)
 }

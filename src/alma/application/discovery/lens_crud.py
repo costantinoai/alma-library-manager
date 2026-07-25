@@ -1073,6 +1073,7 @@ def list_lens_recommendations(
     *,
     limit: int = 100,
     offset: int = 0,
+    hide_library: bool = False,
 ) -> list[dict]:
     """List recommendations for one lens, enriched with paper metadata.
 
@@ -1094,11 +1095,37 @@ def list_lens_recommendations(
     ``refresh_lens_recommendations`` or a staged rec would be re-hidden on read;
     the save/read arm is deliberately more permissive than staging (a persisted
     card is a superset), which is safe.
+
+    ``hide_library`` drops the save/read arm entirely — the user asking for
+    "hide what's already in my library" is asking for exactly the cards that arm
+    keeps alive. It also collapses the collection-lens exception (a Library
+    paper filed under a DIFFERENT collection is still in the Library), so the
+    flag means one thing on every lens type.
     """
     lens = get_lens(db, lens_id)
     lens_collection_id = None
     if lens and lens.get("context_type") == "collection":
         lens_collection_id = str((lens.get("context_config") or {}).get("collection_id") or "").strip() or None
+
+    # The "keep a card visible the instant you act on it" arm. Hiding library
+    # papers means precisely dropping it — those cards ARE the library ones.
+    kept_arm = (
+        ""
+        if hide_library
+        else """OR (r.user_action IN ('save', 'read')
+                       AND r.suggestion_set_id = (
+                           SELECT id FROM suggestion_sets
+                           WHERE lens_id = r.lens_id ORDER BY created_at DESC LIMIT 1))"""
+    )
+    # A collection lens normally still surfaces Library papers filed under OTHER
+    # collections, so they can be pulled in. With the flag on, "already in the
+    # Library" wins — the toggle must mean the same thing on every lens type.
+    collection_unactioned = (
+        "p.status NOT IN ('library', 'dismissed', 'removed') "
+        "AND COALESCE(TRIM(p.reading_status), '') = ''"
+        if hide_library
+        else "(p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = '')"
+    )
 
     select_cols = """
         SELECT r.*,
@@ -1133,11 +1160,8 @@ def list_lens_recommendations(
               AND (
                     (r.user_action IS NULL
                        AND ci.paper_id IS NULL
-                       AND (p.status = 'library' OR COALESCE(TRIM(p.reading_status), '') = ''))
-                 OR (r.user_action IN ('save', 'read')
-                       AND r.suggestion_set_id = (
-                           SELECT id FROM suggestion_sets
-                           WHERE lens_id = r.lens_id ORDER BY created_at DESC LIMIT 1))
+                       AND {collection_unactioned})
+                    {kept_arm}
                   )
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?
@@ -1158,10 +1182,7 @@ def list_lens_recommendations(
                     (r.user_action IS NULL
                        AND p.status NOT IN ('library', 'dismissed', 'removed')
                        AND COALESCE(TRIM(p.reading_status), '') = '')
-                 OR (r.user_action IN ('save', 'read')
-                       AND r.suggestion_set_id = (
-                           SELECT id FROM suggestion_sets
-                           WHERE lens_id = r.lens_id ORDER BY created_at DESC LIMIT 1))
+                    {kept_arm}
                   )
             ORDER BY r.score DESC, COALESCE(r.rank, 999999) ASC, r.created_at DESC
             LIMIT ? OFFSET ?

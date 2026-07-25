@@ -11,6 +11,8 @@ import {
   LayoutList,
   Loader2,
   RefreshCw,
+  Eye,
+  EyeOff,
   Rows3,
   Search,
   Settings2,
@@ -205,7 +207,7 @@ function MonitorBadge({
     <StatusBadge
       icon={Icon}
       title={formatMonitorTypeLabel(monitorType)}
-      className={cn('border-transparent', chip)}
+      className={cn(chip && 'border-transparent', chip)}
     >
       {label}
     </StatusBadge>
@@ -267,9 +269,17 @@ export function FeedPage() {
   const [viewMode, setViewMode] = useState<FeedViewMode>('normal')
   // U-12: grows by a page on "Load more" so the inbox isn't hard-capped at 60.
   const [feedLimit, setFeedLimit] = useState(60)
+  // Persisted view preference: a stable choice about what the inbox shows, not
+  // a transient filter, so it should survive a reload.
+  const [hideLibrary, setHideLibrary] = useState(
+    () => window.localStorage.getItem('alma.feed.hideLibrary') === '1',
+  )
+  useEffect(() => {
+    window.localStorage.setItem('alma.feed.hideLibrary', hideLibrary ? '1' : '0')
+  }, [hideLibrary])
 
   const feedQuery = useQuery({
-    queryKey: ['feed-inbox', feedScope, filter, sort, feedLimit],
+    queryKey: ['feed-inbox', feedScope, filter, sort, feedLimit, hideLibrary],
     queryFn: () =>
       listFeedInbox({
         status: filter === 'all' ? undefined : filter,
@@ -279,6 +289,7 @@ export function FeedPage() {
         offset: 0,
         since_days: 60,
         monitor_scope: feedScope,
+        hide_library: hideLibrary,
       }),
     retry: 1,
     placeholderData: (previous) => previous,
@@ -672,7 +683,7 @@ export function FeedPage() {
                 onClick={() => {
                   window.location.hash = buildHashRoute('settings')
                 }}
-                className="group inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-alma-700 transition-colors hover:bg-alma-50 hover:text-alma-800"
+                className="group inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-alma-700 transition-colors hover:bg-control-quiet hover:text-alma-800"
               >
                 <Settings2 className="h-3.5 w-3.5" />
                 <span className="underline-offset-2 group-hover:underline">Manage in Settings</span>
@@ -861,7 +872,30 @@ export function FeedPage() {
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
-            <div className="h-5 w-px bg-slate-200" aria-hidden />
+            <div className="h-5 w-px bg-control-edge" aria-hidden />
+            {/* "Only what I haven't dealt with." Feed is a chronological
+                record, so saved papers stay by default — hiding what you kept
+                would make the record dishonest. This is the opt-in view. */}
+            <button
+              type="button"
+              onClick={() => setHideLibrary((v) => !v)}
+              aria-pressed={hideLibrary}
+              title={
+                hideLibrary
+                  ? 'Showing only papers you have not saved or queued'
+                  : 'Hide papers already in your Library or reading list'
+              }
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs font-medium transition-colors',
+                hideLibrary
+                  ? 'bg-accent-soft text-alma-folio'
+                  : 'text-slate-600 hover:bg-control-quiet-hover hover:text-alma-800',
+              )}
+            >
+              {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              Unsaved only
+            </button>
+            <div className="h-5 w-px bg-control-edge" aria-hidden />
           </>
         }
         sort={{
@@ -900,7 +934,7 @@ export function FeedPage() {
         <section
           role="region"
           aria-label="Bulk actions"
-          className="flex flex-wrap items-center gap-3 rounded-sm border border-alma-200 bg-alma-50/60 px-4 py-2.5 shadow-sm"
+          className="flex flex-wrap items-center gap-3 rounded-sm border border-accent-edge bg-accent-soft px-4 py-2.5 shadow-sm"
         >
           <div className="flex items-center gap-2.5 text-sm">
             <span className="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full bg-alma-600 px-1.5 text-[11px] font-semibold tabular-nums text-white shadow-sm">
@@ -924,7 +958,7 @@ export function FeedPage() {
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'love' })} disabled={bulkMutation.isPending}>Love</Button>
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'dislike' })} disabled={bulkMutation.isPending}>Dislike</Button>
             <Button size="sm" variant="outline" onClick={() => bulkMutation.mutate({ action: 'dismiss' })} disabled={bulkMutation.isPending}>Dismiss</Button>
-            <span className="mx-1 h-5 w-px bg-alma-200" aria-hidden />
+            <span className="mx-1 h-5 w-px bg-control-edge" aria-hidden />
             <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())} disabled={bulkMutation.isPending}>
               Clear
             </Button>

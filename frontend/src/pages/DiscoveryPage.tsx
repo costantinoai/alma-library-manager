@@ -4,6 +4,8 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   ExternalLink,
+  Eye,
+  EyeOff,
   Gauge,
   Globe,
   LayoutGrid,
@@ -74,7 +76,7 @@ import {
   invalidateAfterPaperMutation,
   invalidateQueries,
 } from '@/lib/queryHelpers'
-import { formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
+import { cn, formatPublicationDate, formatRelativeShort, formatTimestamp } from '@/lib/utils'
 
 // List view state — mirrors the Feed page so Discovery and Feed feel
 // like the same product. `relevance` keeps the lens's ranked order;
@@ -124,6 +126,16 @@ export function DiscoveryPage() {
   // Find & add is the manual entry point at the top of the page — open by
   // default (but collapsible; state keeps re-renders from fighting the user).
   const [findAddOpen, setFindAddOpen] = useState(true)
+  // Discovery already excludes Library papers when it BUILDS a deck, but keeps
+  // a card visible the moment you save it so it doesn't vanish under the
+  // cursor. This is the opt-in "clear them out" view; persisted, since it's a
+  // stable preference rather than a transient filter.
+  const [hideLibrary, setHideLibrary] = useState(
+    () => window.localStorage.getItem('alma.discovery.hideLibrary') === '1',
+  )
+  useEffect(() => {
+    window.localStorage.setItem('alma.discovery.hideLibrary', hideLibrary ? '1' : '0')
+  }, [hideLibrary])
   const [detailOpen, setDetailOpen] = useState(false)
   // Track dismissed rec IDs locally for instant removal. Dismiss is the ONLY
   // action that removes a card from Discovery; save / read / like / love / add-
@@ -170,8 +182,13 @@ export function DiscoveryPage() {
   }, [selectedLensId])
 
   const lensRecommendationsQuery = useQuery({
-    queryKey: ['lens-recommendations', selectedLensId],
-    queryFn: () => listLensRecommendations(selectedLensId as string, { limit: 200, offset: 0 }),
+    queryKey: ['lens-recommendations', selectedLensId, hideLibrary],
+    queryFn: () =>
+      listLensRecommendations(selectedLensId as string, {
+        limit: 200,
+        offset: 0,
+        hide_library: hideLibrary,
+      }),
     enabled: Boolean(selectedLensId),
     // Recommendations only change when the user refreshes the lens (an explicit
     // mutation that invalidates this key). Without a staleTime every lens switch
@@ -895,7 +912,7 @@ export function DiscoveryPage() {
           after the hero so the user knows what they're looking at
           before they hit the lens controls. */}
       {seedPaperId && (
-        <Card className="border-alma-200 bg-alma-50/50">
+        <Card className="border-accent-edge bg-accent-soft">
           <CardContent className="p-4">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -1186,6 +1203,30 @@ export function DiscoveryPage() {
             controls are local view state.
         ─────────────────────────────────────────────────────────────── */}
         <ListControlBar
+          leading={
+            <>
+              <button
+                type="button"
+                onClick={() => setHideLibrary((v) => !v)}
+                aria-pressed={hideLibrary}
+                title={
+                  hideLibrary
+                    ? 'Showing only papers you have not saved or queued'
+                    : 'Hide papers already in your Library or reading list'
+                }
+                className={cn(
+                  'inline-flex h-7 items-center gap-1.5 rounded-sm px-2.5 text-xs font-medium transition-colors',
+                  hideLibrary
+                    ? 'bg-accent-soft text-alma-folio'
+                    : 'text-slate-600 hover:bg-control-quiet-hover hover:text-alma-800',
+                )}
+              >
+                {hideLibrary ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                Unsaved only
+              </button>
+              <div className="h-5 w-px bg-control-edge" aria-hidden />
+            </>
+          }
           sort={{
             label: sort === 'relevance' ? 'Ranking' : 'Recent',
             title:
