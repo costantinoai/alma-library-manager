@@ -23,6 +23,7 @@ import {
   Legend,
   Line,
   ResponsiveContainer,
+  Scatter,
   Tooltip,
   XAxis,
   YAxis,
@@ -43,9 +44,11 @@ import {
   SeriesToggleGroup,
 } from '@/components/insights/ChartSeriesToggle'
 import {
-  PAPERS_AVG_CIT_SERIES,
+  TIMELINE_SERIES,
   useSeriesVisibility,
 } from '@/components/insights/chartSeries'
+import { VenueHoverCard } from '@/components/shared/VenueHoverCard'
+import { usePaperVenueFollow } from '@/hooks/usePaperVenueFollow'
 import { formatNumber, truncate } from '@/lib/utils'
 
 interface Palette {
@@ -104,7 +107,7 @@ export function InsightsOverviewTab({
     publications_by_year,
     countries,
     top_institutions,
-    top_topics,
+    cluster_topics,
     top_journals,
     recommendations,
     embeddings,
@@ -114,8 +117,13 @@ export function InsightsOverviewTab({
   // I-18: charts that overlay a count + a per-paper average (Publications
   // Timeline, Top Journals) let the reader view volume and impact independently
   // via the SHARED toggle primitive (keeps at least one series on).
-  const timeline = useSeriesVisibility(['papers', 'avg_citations'])
-  const journals = useSeriesVisibility(['papers', 'avg_citations'])
+  // Median is the default impact line; the mean ships but starts off, so the
+  // chart opens on the typical year rather than the skewed one.
+  const timeline = useSeriesVisibility(['papers', 'median_citations', 'avg_citations'], {
+    papers: true,
+    median_citations: true,
+    avg_citations: false,
+  })
   // I-19: paper-list drilldown opened from a chart bar or summary tile (null = closed).
   const [drilldown, setDrilldown] = useState<DrilldownTarget | null>(null)
 
@@ -127,20 +135,20 @@ export function InsightsOverviewTab({
     if (v) setDrilldown({ filterType, filterValue: v, scope: 'library', title: label })
   }
 
-  const topJournalsData = useMemo(
-    () => top_journals.map((j) => ({ ...j, journal: truncate(j.journal, 30), drillValue: j.journal })),
-    [top_journals],
-  )
+  // Cluster vocabulary is the Overview's topic source (47-E). `top_topics`
+  // (the OpenAlex taxonomy) stays in the payload for paper drilldown rows.
+  const clusterTopics = cluster_topics ?? []
   const embeddingModels = aiStatus?.embeddings?.models ?? []
 
-  const visibleJournalMax = useMemo(() => {
-    const values: number[] = []
-    if (journals.visible.papers) values.push(...top_journals.map((j) => Number(j.count) || 0))
-    if (journals.visible.avg_citations)
-      values.push(...top_journals.map((j) => Number(j.avg_citations) || 0))
-    if (values.length === 0) return 1
-    return Math.max(...values, 1)
-  }, [top_journals, journals.visible])
+  // Widest bar in the journals list — the row bars are proportional to the
+  // top journal, not to an absolute scale.
+  const journalMax = useMemo(
+    () => Math.max(1, ...top_journals.map((j) => Number(j.count) || 0)),
+    [top_journals],
+  )
+  // Journals are followable straight from this table (Phase 2.4): the same
+  // hook + monitors cache the paper cards use, so follow-state can't disagree.
+  const venueFollow = usePaperVenueFollow()
 
   return (
     <div className="space-y-6">
@@ -208,7 +216,7 @@ export function InsightsOverviewTab({
           title="Publications Timeline"
           action={
             <SeriesToggleGroup
-              specs={PAPERS_AVG_CIT_SERIES}
+              specs={TIMELINE_SERIES}
               visible={timeline.visible}
               onToggle={timeline.toggle}
             />
@@ -223,10 +231,10 @@ export function InsightsOverviewTab({
                 <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                 <XAxis dataKey="year" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                 <YAxis yAxisId="left" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
-                {timeline.visible.avg_citations && (
+                {(timeline.visible.avg_citations || timeline.visible.median_citations) && (
                   <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                 )}
-                <Tooltip {...tooltipStyle} />
+                <Tooltip {...tooltipStyle} content={<TimelineTooltip />} />
                 <Legend />
                 {timeline.visible.papers && (
                   <Bar
@@ -241,14 +249,43 @@ export function InsightsOverviewTab({
                     }
                   />
                 )}
+                {/* Seminal markers: papers in the library-wide top citation
+                    decile, drawn as dots ABOVE the bar so a year's standout
+                    work is visible without reading the tooltip. Click drills
+                    into that year (sorted by citations, so they lead). */}
+                {timeline.visible.papers && (
+                  <Scatter
+                    yAxisId="left"
+                    dataKey="count"
+                    name="Top-decile papers"
+                    fill={colors.amber}
+                    shape={<SeminalMarker />}
+                    cursor="pointer"
+                    onClick={(d: { year?: number | string }) =>
+                      openDrilldown('year', d?.year, `Papers from ${d?.year}`)
+                    }
+                  />
+                )}
+                {timeline.visible.median_citations && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="median_citations"
+                    name="Median Citations"
+                    stroke={colors.amber}
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                )}
                 {timeline.visible.avg_citations && (
                   <Line
                     yAxisId="right"
                     type="monotone"
                     dataKey="avg_citations"
-                    name="Avg Citations"
-                    stroke={colors.amber}
-                    strokeWidth={2}
+                    name="Mean Citations"
+                    stroke={colors.slate ?? '#94a3b8'}
+                    strokeWidth={1.5}
+                    strokeDasharray="4 3"
                     dot={false}
                   />
                 )}
@@ -288,28 +325,47 @@ export function InsightsOverviewTab({
           </CardContent>
         </Card>
 
+        {/* 47-E: "Topics" means YOUR library's own structure — the c-TF-IDF
+            labels over its embedding clusters — not OpenAlex's global taxonomy
+            applied to your papers. Those two answer different questions, and
+            showing the taxonomy under this heading would quietly substitute one
+            for the other. When clusters aren't computed yet we SAY so and point
+            at the setting that produces them, rather than falling back. */}
         <Card>
-          <SectionHeader icon={Tag} accent="text-alma-folio" title="Top Topics" />
+          <SectionHeader
+            icon={Tag}
+            accent="text-alma-folio"
+            title="Your topics"
+            description="Clusters of your library, labelled by the terms that distinguish them."
+          />
           <CardContent>
-            {top_topics.length === 0 ? (
-              <EmptyChart message="No topic data available" />
+            {clusterTopics.length === 0 ? (
+              <EmptyState
+                icon={Sparkles}
+                title="Topics appear once embeddings are computed"
+                description="These are your library's own clusters, not a generic taxonomy — they need SPECTER2 vectors. Turn embeddings on in Settings → AI."
+              />
             ) : (
-              <ResponsiveContainer width="100%" height={Math.max(250, top_topics.length * 28)}>
+              <ResponsiveContainer width="100%" height={Math.max(250, clusterTopics.length * 28)}>
                 <BarChart
-                  data={top_topics.map((t) => ({ ...t, term: truncate(t.term, 30), drillValue: t.term }))}
+                  data={clusterTopics.map((t) => ({
+                    ...t,
+                    term: truncate(t.term, 30),
+                    drillValue: String(t.cluster_id),
+                  }))}
                   layout="vertical"
                   margin={{ left: 10 }}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
                   <XAxis type="number" tick={{ fontSize: 12, fill: '#152642' }} stroke="#D9CBAF" />
                   <YAxis dataKey="term" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
-                  {/* Topic names are long and the axis truncates them; the tooltip
-                      restores the FULL name on hover (mirrors the Institutions chart). */}
+                  {/* Cluster labels are long and the axis truncates them; the
+                      tooltip restores the FULL label on hover. */}
                   <Tooltip
                     {...tooltipStyle}
                     formatter={(value: number) => [value, 'Papers']}
                     labelFormatter={(label: string) => {
-                      const t = top_topics.find((x) => truncate(x.term, 30) === label)
+                      const t = clusterTopics.find((x) => truncate(x.term, 30) === label)
                       return t ? t.term : label
                     }}
                   />
@@ -319,8 +375,8 @@ export function InsightsOverviewTab({
                     fill={colors.cyan}
                     radius={[0, 2, 2, 0]}
                     cursor="pointer"
-                    onClick={(d: { drillValue?: string }) =>
-                      openDrilldown('topic', d?.drillValue, `Papers in topic: ${d?.drillValue}`)
+                    onClick={(d: { drillValue?: string; term?: string }) =>
+                      openDrilldown('cluster', d?.drillValue, `Papers in: ${d?.term}`)
                     }
                   />
                 </BarChart>
@@ -333,54 +389,79 @@ export function InsightsOverviewTab({
       {/* ── Journals + Institutions ── */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <ActionCardHeader
+          <SectionHeader
             icon={Newspaper}
             accent="text-alma-700"
             title="Top Journals"
-            action={
-              <SeriesToggleGroup
-                specs={PAPERS_AVG_CIT_SERIES}
-                visible={journals.visible}
-                onToggle={journals.toggle}
-              />
-            }
+            description="Where your library comes from — and the ones you can follow."
           />
           <CardContent>
             {top_journals.length === 0 ? (
               <EmptyChart message="No journal data available" />
             ) : (
-              <ResponsiveContainer width="100%" height={Math.max(250, top_journals.length * 32)}>
-                <BarChart data={topJournalsData} layout="vertical" margin={{ left: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E9DCBC" />
-                  <XAxis
-                    type="number"
-                    tick={{ fontSize: 12, fill: '#152642' }}
-                    stroke="#D9CBAF"
-                    domain={[0, Math.ceil(visibleJournalMax * 1.1)]}
-                  />
-                  <YAxis dataKey="journal" type="category" width={200} tick={<SingleLineTick />} stroke="#D9CBAF" />
-                  <Tooltip {...tooltipStyle} />
-                  <Legend />
-                  <Bar
-                    dataKey="count"
-                    name="Papers"
-                    fill={colors.blue}
-                    radius={[0, 2, 2, 0]}
-                    hide={!journals.visible.papers}
-                    cursor="pointer"
-                    onClick={(d: { drillValue?: string }) =>
-                      openDrilldown('journal', d?.drillValue, `Papers in journal: ${d?.drillValue}`)
-                    }
-                  />
-                  <Bar
-                    dataKey="avg_citations"
-                    name="Avg Citations"
-                    fill={colors.amber}
-                    radius={[0, 2, 2, 0]}
-                    hide={!journals.visible.avg_citations}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
+              // A ranked list, not a bar chart: the useful acts here are "see
+              // the papers" and "follow this journal", and a chart affords
+              // neither. The bar lives INSIDE each row, so volume still reads
+              // at a glance without costing a second axis.
+              <ul className="space-y-0.5">
+                {top_journals.map((j) => {
+                  const share = journalMax > 0 ? (Number(j.count) || 0) / journalMax : 0
+                  const followed = venueFollow.isVenueFollowed(j.journal)
+                  return (
+                    <li key={j.journal} className="group relative">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openDrilldown('journal', j.journal, `Papers in journal: ${j.journal}`)
+                        }
+                        className="flex w-full items-center gap-3 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-surface-2"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-baseline justify-between gap-2">
+                            <VenueHoverCard
+                              journal={j.journal}
+                              isFollowed={followed}
+                              followPending={venueFollow.pendingVenueName === j.journal}
+                              onFollow={venueFollow.followVenue}
+                            >
+                              <span className="truncate text-sm text-alma-800">{j.journal}</span>
+                            </VenueHoverCard>
+                            <span className="shrink-0 text-xs tabular-nums text-slate-500">
+                              {j.count}
+                              <span className="ml-2 text-slate-400">
+                                {Number(j.avg_citations).toFixed(0)} avg cit
+                              </span>
+                            </span>
+                          </span>
+                          <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-surface-2">
+                            <span
+                              className="block h-1 rounded-full bg-alma-500"
+                              style={{ width: `${Math.max(2, share * 100)}%` }}
+                            />
+                          </span>
+                        </span>
+                        {followed ? (
+                          <StatusBadge tone="positive" size="sm" className="shrink-0">
+                            Following
+                          </StatusBadge>
+                        ) : (
+                          // A quiet nudge, only where following would clearly
+                          // pay off (3+ saved papers) — never on every row.
+                          Number(j.count) >= 3 && (
+                            <StatusBadge
+                              tone="neutral"
+                              size="sm"
+                              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                            >
+                              Follow?
+                            </StatusBadge>
+                          )
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </CardContent>
         </Card>
@@ -612,6 +693,73 @@ export function InsightsOverviewTab({
       </div>
 
       <InsightsPaperDrilldown target={drilldown} onClose={() => setDrilldown(null)} />
+    </div>
+  )
+}
+
+/**
+ * A year's top-decile ("seminal") papers, drawn as small dots stacked just
+ * above the bar. Renders nothing when the year has none, so the row stays
+ * quiet rather than showing an empty slot per year.
+ */
+function SeminalMarker(props: {
+  cx?: number
+  cy?: number
+  payload?: { seminal_count?: number }
+}) {
+  const { cx, cy, payload } = props
+  const n = Number(payload?.seminal_count ?? 0)
+  if (!n || cx == null || cy == null) return null
+  const dots = Math.min(n, 3)
+  return (
+    <g>
+      {Array.from({ length: dots }).map((_, i) => (
+        <circle key={i} cx={cx} cy={cy - 8 - i * 5} r={2} fill="var(--color-gold-400)" />
+      ))}
+    </g>
+  )
+}
+
+/**
+ * Timeline tooltip. Beyond the plotted series it NAMES the year's most-cited
+ * paper — the fact a reader actually wants when a bar catches their eye — and
+ * states how many that year sit in the library-wide top citation decile.
+ */
+function TimelineTooltip(props: {
+  active?: boolean
+  label?: string | number
+  payload?: Array<{ payload?: Record<string, unknown> }>
+}) {
+  const { active, label, payload } = props
+  if (!active || !payload?.length) return null
+  const row = (payload[0]?.payload ?? {}) as {
+    count?: number
+    median_citations?: number
+    avg_citations?: number
+    seminal_count?: number
+    top_paper_title?: string
+    top_paper_citations?: number
+  }
+  return (
+    <div className="max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
+      <p className="font-semibold text-alma-800">{label}</p>
+      <p className="mt-0.5 text-slate-600">
+        {row.count ?? 0} paper{row.count === 1 ? '' : 's'} · median{' '}
+        {Number(row.median_citations ?? 0).toFixed(1)} citations
+        {typeof row.avg_citations === 'number' ? ` · mean ${row.avg_citations.toFixed(1)}` : ''}
+      </p>
+      {row.seminal_count ? (
+        <p className="mt-0.5 text-gold-700">
+          {row.seminal_count} in your top citation decile
+        </p>
+      ) : null}
+      {row.top_paper_title ? (
+        <p className="mt-1.5 border-t border-[var(--color-border)] pt-1.5 text-slate-500">
+          <span className="text-slate-400">Most cited:</span>{' '}
+          <span className="text-alma-800">{row.top_paper_title}</span>
+          {row.top_paper_citations ? ` (${row.top_paper_citations})` : ''}
+        </p>
+      ) : null}
     </div>
   )
 }

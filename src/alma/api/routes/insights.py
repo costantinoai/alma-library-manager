@@ -2042,6 +2042,14 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
         }
 
         # ── Publications by year (Library-scoped) ──
+        #
+        # The timeline is the Overview's signature, so it carries more than bar
+        # heights. MEAN citations is skewed by one runaway paper per year;
+        # MEDIAN is the honest centre, so the payload provides both and the
+        # chart defaults to median. `top_paper_*` names the year's most-cited
+        # work for the tooltip, and `seminal_count` counts that year's papers in
+        # the LIBRARY-WIDE top citation decile — computed across the whole
+        # library, not per year, or every year would trivially have one.
         rows = db.execute(
             f"SELECT year, COUNT(*) AS count, "
             "COALESCE(SUM(cited_by_count), 0) AS citations, "
@@ -2050,6 +2058,54 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "GROUP BY year ORDER BY year ASC"
         ).fetchall()
         publications_by_year = [dict(r) for r in rows]
+
+        try:
+            # Per-year citation lists, in Python: SQLite has no percentile
+            # function and library-scale row counts make a window CTE overkill.
+            by_year_cites: dict[int, list[int]] = {}
+            all_cites: list[int] = []
+            best_per_year: dict[int, tuple[int, str, str]] = {}
+            for r in db.execute(
+                f"SELECT year, id, title, COALESCE(cited_by_count, 0) AS c FROM papers "
+                f"WHERE {library_where} AND year IS NOT NULL"
+            ):
+                y = int(r["year"])
+                c = int(r["c"])
+                by_year_cites.setdefault(y, []).append(c)
+                all_cites.append(c)
+                if c > best_per_year.get(y, (-1, "", ""))[0]:
+                    best_per_year[y] = (c, str(r["id"]), r["title"] or "")
+
+            # One library-wide threshold: the 90th percentile of citations, and
+            # a paper must EXCEED it, not merely equal it. On a flat library
+            # (say most papers at 1 citation) the p90 value IS 1, so a `>=`
+            # test would crown most of the library "seminal" — the marker has
+            # to mean "stands out here", which only strict `>` guarantees.
+            seminal_threshold = 0
+            if all_cites:
+                ordered = sorted(all_cites)
+                seminal_threshold = ordered[min(len(ordered) - 1, int(len(ordered) * 0.9))]
+
+            for row in publications_by_year:
+                y = int(row["year"])
+                cites = sorted(by_year_cites.get(y, []))
+                if cites:
+                    mid = len(cites) // 2
+                    row["median_citations"] = float(
+                        cites[mid] if len(cites) % 2 else (cites[mid - 1] + cites[mid]) / 2
+                    )
+                else:
+                    row["median_citations"] = 0.0
+                row["seminal_count"] = sum(
+                    1 for c in cites if c > seminal_threshold and c > 0
+                )
+                best = best_per_year.get(y)
+                if best and best[0] > 0:
+                    row["top_paper_citations"] = best[0]
+                    row["top_paper_id"] = best[1]
+                    row["top_paper_title"] = best[2]
+        except Exception:
+            logger.debug("timeline enrichment skipped", exc_info=True)
 
         # ── Countries (Library-scoped) ──
         countries = []
@@ -2122,6 +2178,40 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
                     """
                 ).fetchall()
             top_topics = [dict(r) for r in rows]
+
+        # ── Cluster vocabulary (47-E) ──
+        #
+        # YOUR library's own topic structure: the c-TF-IDF labels the graph
+        # already computed for scope='library', grouped and counted. This is
+        # what the Overview shows as "topics", because it describes how YOUR
+        # papers actually group — whereas `top_topics` above is OpenAlex's
+        # global taxonomy applied to them. The taxonomy stays available inside
+        # paper drilldown rows, but it never stands in for this: if clusters
+        # aren't computed yet the UI says so and points at Settings → AI,
+        # rather than silently showing a different thing under the same word.
+        cluster_topics: list[dict[str, Any]] = []
+        if table_exists(db, "publication_clusters"):
+            try:
+                rows = db.execute(
+                    f"""
+                    SELECT pc.cluster_id,
+                           pc.label AS term,
+                           COUNT(DISTINCT pc.paper_id) AS count,
+                           ROUND(COALESCE(AVG(p.cited_by_count), 0), 1) AS avg_citations
+                    FROM publication_clusters pc
+                    JOIN papers p ON p.id = pc.paper_id
+                    WHERE pc.scope = 'library'
+                      AND pc.cluster_id >= 0
+                      AND TRIM(COALESCE(pc.label, '')) <> ''
+                      AND {library_where_p}
+                    GROUP BY pc.cluster_id, pc.label
+                    ORDER BY count DESC
+                    LIMIT 20
+                    """
+                ).fetchall()
+                cluster_topics = [dict(r) for r in rows]
+            except sqlite3.OperationalError:
+                cluster_topics = []
 
         # ── Top journals (Library-scoped) ──
         rows = db.execute(
@@ -2353,6 +2443,7 @@ def _build_insights_payload(db: sqlite3.Connection) -> dict[str, Any]:
             "countries": countries,
             "top_institutions": top_institutions,
             "top_topics": top_topics,
+            "cluster_topics": cluster_topics,
             "top_journals": top_journals,
             "authors": authors,
             "recommendations": rec_data,

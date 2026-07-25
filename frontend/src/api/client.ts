@@ -2082,6 +2082,21 @@ export interface InsightsData {
     count: number
     citations: number
     avg_citations: number
+    /** Outlier-robust centre — the timeline's default line. */
+    median_citations?: number
+    /** Papers that year inside the library-wide top citation decile. */
+    seminal_count?: number
+    top_paper_id?: string
+    top_paper_title?: string
+    top_paper_citations?: number
+  }>
+  /** The library's OWN cluster labels (c-TF-IDF over scope='library'), which
+   *  replace the OpenAlex taxonomy as the Overview's "topics" (47-E). */
+  cluster_topics?: Array<{
+    cluster_id: number
+    term: string
+    count: number
+    avg_citations: number
   }>
   countries: Array<{ country_code: string; count: number }>
   top_institutions: Array<{

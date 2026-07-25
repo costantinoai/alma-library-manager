@@ -122,7 +122,13 @@ LABELLING_VERSION = "2026.07-8"
 #            0–100 "workflow score" turned an unread library red; reading/done are
 #            opt-in, not an obligation, so it's now reading-progress measures with
 #            no composite grade. Evaluation MV payload shape changed → rebuild.
-INSIGHTS_LOGIC_VERSION = "2026.07-6"
+# 2026.07-7: Analytics timeline + topics (task 47 Phase 4). `publications_by_year`
+#            rows gain median_citations / seminal_count / top_paper_* so the chart
+#            can default to the outlier-robust centre and name each year's most
+#            cited work; the payload gains `cluster_topics` — the library's OWN
+#            c-TF-IDF cluster labels, which replace the OpenAlex taxonomy as the
+#            Overview's "topics". New payload fields → cached overview rebuilds.
+INSIGHTS_LOGIC_VERSION = "2026.07-7"
 
 
 def with_version(fingerprint_sql: str, *versions: str) -> str:
