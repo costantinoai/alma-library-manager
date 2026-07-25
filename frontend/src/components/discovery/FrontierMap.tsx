@@ -88,7 +88,6 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
   const [showSeen, setShowSeen] = useState(false)
   const [showEdges, setShowEdges] = useState(false)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
-  const [hoverId, setHoverId] = useState<string | null>(null)
   // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
   // (the recs are its hero layer); corpus clusters are the alternative lens on
   // the same points. Never both — two colourings on one scatter is a lie about
@@ -212,8 +211,6 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
     setSelectMode(false)
   }
 
-  const hoverNode = hoverId ? nodesById.get(hoverId) : null
-
   if (!lensId) {
     return (
       <div className="flex h-[420px] items-center justify-center rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
@@ -333,7 +330,24 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
           if (n?.layer === 'rec' && onSelectRec) onSelectRec(id)
           else onSelectPaper(id)
         }}
-        onHover={(id) => setHoverId(id)}
+        renderHover={(id) => {
+          const n = nodesById.get(id)
+          if (!n) return null
+          return (
+            <>
+              <p className="line-clamp-2 font-medium text-alma-800">{n.title || n.paper_id}</p>
+              <p className="mt-0.5 text-slate-500">
+                {n.layer === 'library' ? 'In your library' : n.layer === 'rec' ? 'Suggestion' : 'Seen'}
+                {n.year ? ` · ${n.year}` : ''}
+                {typeof n.score === 'number' && n.layer === 'rec' ? ` · score ${Math.round(n.score)}` : ''}
+              </p>
+              {n.branch_label && <p className="mt-0.5 text-slate-500">branch: {n.branch_label}</p>}
+              {n.cluster_label && n.cluster_label !== 'Unclustered' && (
+                <p className="mt-0.5 text-slate-400">cluster: {n.cluster_label}</p>
+              )}
+            </>
+          )
+        }}
         className="rounded-none border-0"
       >
         {/* Region popover — the describe payload + adopt action. Meaning
@@ -424,24 +438,6 @@ export function FrontierMap({ lensId, lens, onSelectPaper, onAdoptDirection, onF
                 </div>
               </>
             )}
-          </div>
-        )}
-
-        {/* Hover tooltip */}
-        {hoverNode && (
-          <div className="pointer-events-none absolute bottom-3 right-12 z-10 max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
-            <p className="line-clamp-2 font-medium text-alma-800">
-              {hoverNode.title || hoverNode.paper_id}
-            </p>
-            <p className="mt-0.5 text-slate-500">
-              {hoverNode.layer === 'library'
-                ? 'In your library'
-                : hoverNode.layer === 'rec'
-                  ? 'Suggestion'
-                  : 'Seen'}
-              {hoverNode.year ? ` · ${hoverNode.year}` : ''}
-              {hoverNode.branch_label ? ` · ${hoverNode.branch_label}` : ''}
-            </p>
           </div>
         )}
 

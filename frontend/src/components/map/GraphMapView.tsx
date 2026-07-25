@@ -9,7 +9,7 @@
  * "cluster studio" + live physics) is retired: substrate coordinates are
  * the one physics everywhere.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, Search, Share2, Type } from 'lucide-react'
 
@@ -48,6 +48,13 @@ export interface GraphMapViewProps {
   toolbarExtras?: React.ReactNode
   legendExtras?: React.ReactNode
   height?: number
+  /** 50-M drill-down hooks (the Map page host): the raw payload for
+   *  inspector panels, an accent-ring selection, a cluster FOCUS (everything
+   *  outside it dims), and a dot-size knob. */
+  onPayload?: (data: GraphData) => void
+  selectedNodeId?: string | null
+  focusClusterId?: number | null
+  sizeScale?: number
 }
 
 export function GraphMapView({
@@ -60,12 +67,15 @@ export function GraphMapView({
   toolbarExtras,
   legendExtras,
   height = 560,
+  onPayload,
+  selectedNodeId,
+  focusClusterId,
+  sizeScale = 1,
 }: GraphMapViewProps) {
   const [showEdges, setShowEdges] = useState(false)
   const [showToponyms, setShowToponyms] = useState(true)
   const [dimmedClusters, setDimmedClusters] = useState<Set<number>>(new Set())
   const [search, setSearch] = useState('')
-  const [hoverId, setHoverId] = useState<string | null>(null)
 
   const qs = new URLSearchParams(params).toString()
   const { data: raw, isLoading } = useQuery<GraphData & { status?: string }>({
@@ -77,6 +87,9 @@ export function GraphMapView({
   })
   const building = raw?.status === 'building'
   const data = building ? undefined : raw
+  useEffect(() => {
+    if (data) onPayload?.(data)
+  }, [data, onPayload])
 
   const nodes = useMemo(() => data?.nodes ?? [], [data])
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
@@ -114,11 +127,14 @@ export function GraphMapView({
           clusterLabel: label,
           dimmed:
             (cid != null && dimmedClusters.has(cid)) ||
-            (query.length > 1 && !n.name.toLowerCase().includes(query)),
+            (query.length > 1 && !n.name.toLowerCase().includes(query)) ||
+            // 50-M cluster focus: clicking a paper highlights its cluster —
+            // everything OUTSIDE it recedes (dimmed, never hidden).
+            (focusClusterId != null && cid !== focusClusterId),
           halo: haloIds?.has(n.id) ?? false,
         }
       }),
-    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds],
+    [nodes, clusterColors, dimmedClusters, query, nodeKind, haloIds, focusClusterId],
   )
 
   const mapEdges = useMemo(
@@ -137,7 +153,6 @@ export function GraphMapView({
     [clusterColors],
   )
 
-  const hoverNode = hoverId ? nodesById.get(hoverId) : null
   const layout = (data?.metadata as Record<string, unknown> | undefined)?.layout as
     | { computed_at?: string; new_vectors_since_build?: number }
     | undefined
@@ -191,18 +206,18 @@ export function GraphMapView({
         showEdges={showEdges}
         showToponyms={showToponyms}
         height={height}
-        onHover={(id) => setHoverId(id)}
+        sizeScale={sizeScale}
+        selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
+        renderHover={(id) => {
+          const n = nodesById.get(id)
+          return n ? hoverCard(n) : null
+        }}
         onClickNode={(id) => {
           const n = nodesById.get(id)
           if (n) onOpenNode?.(n)
         }}
         className="rounded-none border-0"
       >
-        {hoverNode && (
-          <div className="pointer-events-none absolute bottom-3 right-12 z-10 max-w-xs rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md">
-            {hoverCard(hoverNode)}
-          </div>
-        )}
       </SemanticMap>
 
       <MapLegend>

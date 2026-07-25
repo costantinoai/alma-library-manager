@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { placeLabels, type LabelInput } from './labelLayout'
+import { compactToponym, placeLabels, type LabelInput } from './labelLayout'
 
 const box = (id: string, x: number, y: number, priority: number, w = 100, h = 14): LabelInput => ({
   id,
@@ -67,5 +67,23 @@ describe('placeLabels', () => {
     const placed = placeLabels([box('edge', 4, 4, 10, 300, 20)], 200, 100)
     // 300px wide label near the corner of a 200px screen: no candidate fits.
     expect(placed).toHaveLength(0)
+  })
+})
+
+describe('compactToponym', () => {
+  it('keeps the two leading informative terms, dot-joined', () => {
+    expect(compactToponym('lateral, visual, stream, level')).toBe('lateral · visual')
+  })
+  it('drops fully redundant later terms', () => {
+    expect(compactToponym('visual, level visual, stream', 3, 40)).toBe(
+      'visual · level visual · stream',
+    )
+    // "visual" again brings nothing once seen.
+    expect(compactToponym('visual, visual, stream')).toBe('visual · stream')
+  })
+  it('respects the character budget at a word edge', () => {
+    const out = compactToponym('a very long single pathological first term about cortex')
+    expect(out.length).toBeLessThanOrEqual(26)
+    expect(out.endsWith('…')).toBe(true)
   })
 })

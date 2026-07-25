@@ -101,3 +101,37 @@ export function placeLabels(
   }
   return placed
 }
+
+/**
+ * Compact a c-TF-IDF cluster label ("lateral, visual, stream, level visual")
+ * into a printable toponym. Raw labels are comma piles: long lines place
+ * badly, and later terms often repeat earlier words. Rules:
+ *   - keep terms in order, but DROP a term whose words all already appeared
+ *     (redundancy: "level visual" after "visual" adds only "level" — kept
+ *     only if it brings a new word);
+ *   - stop at `maxTerms` kept terms or `maxChars` total;
+ *   - join with " · " (a place name, not a list).
+ */
+export function compactToponym(label: string, maxTerms = 2, maxChars = 24): string {
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (const rawTerm of label.split(',')) {
+    const term = rawTerm.trim()
+    if (!term) continue
+    const words = term.toLowerCase().split(/\s+/)
+    if (words.every((w) => seen.has(w))) continue // fully redundant
+    const candidate = [...kept, term].join(' · ')
+    if (kept.length > 0 && candidate.length > maxChars) break
+    kept.push(term)
+    words.forEach((w) => seen.add(w))
+    if (kept.length >= maxTerms) break
+  }
+  const out = kept.join(' · ')
+  // A single pathological first term still gets a hard cap, on a word edge.
+  if (out.length > maxChars) {
+    const cut = out.slice(0, maxChars + 1)
+    const at = cut.lastIndexOf(' ')
+    return (at > 8 ? cut.slice(0, at) : cut.slice(0, maxChars)).trimEnd() + '…'
+  }
+  return out
+}

@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
-import { placeLabels, type LabelInput } from './labelLayout'
+import { compactToponym, placeLabels, type LabelInput } from './labelLayout'
 import {
   DIMMED_OPACITY,
   HOLLOW_FILL_ALPHA,
@@ -38,7 +38,7 @@ import {
   radiusFor,
   type MapNodeKind,
 } from './mapNodeStyle'
-import { useMapViewport, worldToScreen } from './useMapViewport'
+import { fitViewport, useMapViewport, worldToScreen } from './useMapViewport'
 
 export interface SemanticMapNode {
   id: string
@@ -76,6 +76,12 @@ export interface SemanticMapProps {
   selectedIds?: ReadonlySet<string>
   onHover?: (id: string | null, anchor: { x: number; y: number } | null) => void
   onClickNode?: (id: string) => void
+  /** Hover card content for a node. Rendered BY the plate at the hover
+   *  point (edge-flipped, pointer-transparent) so every host gets the same
+   *  at-cursor behaviour — hosts supply only the words. */
+  renderHover?: (id: string) => React.ReactNode
+  /** Dot-size multiplier (host knob; 1 = registry default). */
+  sizeScale?: number
   /** Rectangle-select mode: drag selects instead of panning. */
   lassoMode?: boolean
   onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
@@ -86,6 +92,14 @@ export interface SemanticMapProps {
 
 const NODE_HIT_RADIUS = 9
 const GRID_CELL = 36
+// Edge-drawing budget (user call 2026-07-25): links are NEVER drawn beyond
+// this count — a 500+ library's full edge set melts the frame budget. Below
+// the small-graph floor everything draws; above it, links appear only for a
+// SUB-SELECTION (focused cluster / search / selection dimming) or once
+// zoomed past the threshold, and even then the strongest ones first.
+const MAX_DRAWN_EDGES = 1200
+const SMALL_GRAPH_EDGE_FLOOR = 800
+const EDGE_ZOOM_FACTOR = 1.5
 
 /** Toponym type ramp: mass → font px. Small caps + tracking happen at draw. */
 function toponymFontPx(count: number, maxCount: number): number {
@@ -100,8 +114,10 @@ export function SemanticMap({
   showToponyms = true,
   height = 560,
   selectedIds,
+  sizeScale = 1,
   onHover,
   onClickNode,
+  renderHover,
   lassoMode = false,
   onLasso,
   children,
@@ -135,6 +151,12 @@ export function SemanticMap({
   }, [fit, nodeCount > 0])
 
   const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+  // Strongest-first order, computed once per edge set — the draw loop stops
+  // at the budget, so it must meet the best edges first.
+  const sortedEdges = useMemo(
+    () => [...edges].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0)),
+    [edges],
+  )
   const maxSizeValue = useMemo(
     () => Math.max(1, ...nodes.map((n) => n.sizeValue ?? 0)),
     [nodes],
@@ -204,7 +226,7 @@ export function SemanticMap({
     const inputs: LabelInput[] = []
     for (const [cid, c] of clusters) {
       const fontPx = toponymFontPx(c.count, maxCount)
-      const text = c.label.toUpperCase()
+      const text = compactToponym(c.label).toUpperCase()
       // Canvas-free measurement: tracked uppercase at ~0.68em/char + tracking.
       const w = text.length * fontPx * 0.68 + text.length * 1.5
       inputs.push({
@@ -220,7 +242,7 @@ export function SemanticMap({
     return placed.map((p) => {
       const cid = Number(p.id.slice(1))
       const c = clusters.get(cid)!
-      return { ...p, text: c.label.toUpperCase(), fontPx: toponymFontPx(c.count, maxCount) }
+      return { ...p, text: compactToponym(c.label).toUpperCase(), fontPx: toponymFontPx(c.count, maxCount) }
     })
   }, [nodes, screenPos, showToponyms, width, height])
 
@@ -242,22 +264,50 @@ export function SemanticMap({
     const visible = (sx: number, sy: number) =>
       sx >= -20 && sy >= -20 && sx <= width + 20 && sy <= height + 20
 
-    // Edges first, under everything. Only at meaningful zoom or small counts.
-    if (showEdges && edges.length > 0) {
-      ctx.lineWidth = 0.6
-      for (const e of edges) {
-        const a = screenPos.get(e.source)
-        const b = screenPos.get(e.target)
-        if (!a || !b) continue
-        if (!visible(a[0], a[1]) && !visible(b[0], b[1])) continue
-        ctx.strokeStyle = e.color ?? MAP_FIELD.edgeLine
-        ctx.globalAlpha = 0.25 + 0.45 * (e.weight ?? 0.5)
-        ctx.beginPath()
-        ctx.moveTo(a[0], a[1])
-        ctx.lineTo(b[0], b[1])
-        ctx.stroke()
+    // Edges first, under everything — BUDGETED (never more than
+    // MAX_DRAWN_EDGES). Draw when the graph is small, a sub-selection is
+    // active (some nodes dimmed → links of the visible subset), or the view
+    // is zoomed in; strongest links win the budget.
+    let edgesDrawn = 0
+    let edgesEligible = false
+    if (showEdges && sortedEdges.length > 0) {
+      const anyDimming = nodes.some((n) => n.dimmed)
+      const zoomedIn = viewport.scale > fitViewport(width, height).scale * EDGE_ZOOM_FACTOR
+      edgesEligible = anyDimming || zoomedIn || sortedEdges.length <= SMALL_GRAPH_EDGE_FLOOR
+      if (edgesEligible) {
+        ctx.lineWidth = 0.6
+        for (const e of sortedEdges) {
+          if (edgesDrawn >= MAX_DRAWN_EDGES) break
+          const na = byId.get(e.source)
+          const nb = byId.get(e.target)
+          if (anyDimming && (na?.dimmed || nb?.dimmed)) continue
+          const a = screenPos.get(e.source)
+          const b = screenPos.get(e.target)
+          if (!a || !b) continue
+          if (!visible(a[0], a[1]) && !visible(b[0], b[1])) continue
+          ctx.strokeStyle = e.color ?? MAP_FIELD.edgeLine
+          ctx.globalAlpha = 0.25 + 0.45 * (e.weight ?? 0.5)
+          ctx.beginPath()
+          ctx.moveTo(a[0], a[1])
+          ctx.lineTo(b[0], b[1])
+          ctx.stroke()
+          edgesDrawn += 1
+        }
+        ctx.globalAlpha = 1
       }
-      ctx.globalAlpha = 1
+    }
+    if (showEdges && sortedEdges.length > 0 && edgesDrawn === 0) {
+      // Honest hint instead of a silently empty layer.
+      ctx.font = '11px ui-sans-serif, system-ui, sans-serif'
+      ctx.fillStyle = MAP_INK.ambient
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(
+        edgesEligible
+          ? 'No links in the current focus'
+          : 'Zoom in — or focus a cluster / search — to draw links',
+        10,
+        height - 8,
+      )
     }
 
     // Nodes by layer weight: ambient first, hero last (draw order = z order).
@@ -268,7 +318,7 @@ export function SemanticMap({
         if (n.kind !== kind) continue
         const p = screenPos.get(n.id)
         if (!p || !visible(p[0], p[1])) continue
-        const r = radiusFor(kind, n.sizeValue ?? null, maxSizeValue)
+        const r = radiusFor(kind, n.sizeValue ?? null, maxSizeValue) * sizeScale
         const color = n.color ?? style.defaultColor
         ctx.globalAlpha = n.dimmed ? DIMMED_OPACITY : style.opacity
         if (n.halo) {
@@ -309,7 +359,7 @@ export function SemanticMap({
       const n = byId.get(id)
       const p = screenPos.get(id)
       if (!n || !p) return
-      const r = radiusFor(n.kind, n.sizeValue ?? null, maxSizeValue)
+      const r = radiusFor(n.kind, n.sizeValue ?? null, maxSizeValue) * sizeScale
       ctx.beginPath()
       ctx.arc(p[0], p[1], r + pad, 0, Math.PI * 2)
       ctx.lineWidth = spec.width
@@ -347,7 +397,7 @@ export function SemanticMap({
     }
   }, [
     nodes,
-    edges,
+    sortedEdges,
     showEdges,
     byId,
     screenPos,
@@ -355,9 +405,11 @@ export function SemanticMap({
     hoverId,
     selectedIds,
     lassoRect,
+    viewport,
     width,
     height,
     maxSizeValue,
+    sizeScale,
   ])
 
   // ── Pointer interactions ──────────────────────────────────────────────────
@@ -459,6 +511,27 @@ export function SemanticMap({
           onHover?.(null, null)
         }}
       />
+      {/* At-cursor hover card — positioned at the dot, flipped away from the
+          nearest edges so it never clips. Hosts only supply the content. */}
+      {renderHover && hoverId && (() => {
+        const p = screenPos.get(hoverId)
+        if (!p) return null
+        const flipX = p[0] > width - 300
+        const flipY = p[1] > height - 150
+        return (
+          <div
+            className="pointer-events-none absolute z-20 w-max max-w-[18rem] rounded-sm border border-[var(--color-border)] bg-surface-3 px-3 py-2 text-xs shadow-paper-md"
+            style={{
+              left: p[0] + (flipX ? -14 : 14),
+              top: p[1] + (flipY ? -14 : 14),
+              transform: `translate(${flipX ? '-100%' : '0'}, ${flipY ? '-100%' : '0'})`,
+            }}
+          >
+            {renderHover(hoverId)}
+          </div>
+        )
+      })()}
+
       {/* Fit-to-view — the one navigation affordance the canvas itself owns. */}
       <button
         type="button"
