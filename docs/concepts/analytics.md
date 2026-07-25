@@ -153,21 +153,34 @@ beside the collections it describes. It still generates on demand.
 
 ## How fresh is what I'm seeing?
 
-The Analytics tab and the three graphs (Paper Map, Author Network,
-Topic Map) are served from a fingerprint-keyed cache: each GET
-returns the previously-computed payload in <10 ms as long as nothing
-the view depends on has changed. When you save / edit / unfollow /
-import, the next page load detects the change automatically — the
-displayed values are the *previous* snapshot for a few seconds while
-the cache rebuilds in the background, then the page silently swaps
-to the fresh values when the background job completes. The
-**Refreshing…** pill in the header lights up whenever any tab is in
-that swap window.
+**Charts (Overview / Reports)** are served from a fingerprint-keyed
+cache: each GET returns the previously-computed payload in <10 ms;
+when your data changes, the next page load serves the previous
+snapshot while a background job rebuilds it, then swaps silently.
+The **Refreshing…** pill in the header lights up during that window.
 
-You don't usually need to do anything. If you want to force a fresh
-graph layout (full re-clustering and re-projection — the layout may
-shift), the **Rebuild graphs** button under Settings → Operational
-status triggers it explicitly.
+**Maps (Paper Map / Author Network)** follow a stricter contract: the
+2-D layout is a durable artifact — ONE corpus-scope "substrate"
+(positions + clusters + labels), computed only by background jobs,
+never during a page load. Opening the map is a pure read of the
+stored payload (fast at any corpus size). Freshness is owned by the
+**graph layout maintenance** job (every 6 h, idle-gated):
+
+* a paper that gains a vector is placed **incrementally** at its
+  nearest cluster centroid, usually within minutes of the vector
+  arriving — no re-layout;
+* a **full re-layout** happens only when the embedding set drifts
+  ≥20 %, the algorithm/model version changes, or the layout is a
+  week old.
+
+The map header shows when the layout was built and how many new
+papers await the next fold-in. The Library map is a *filter* of the
+corpus substrate — there is no second layout, so the two views can
+never disagree about where a paper sits. To force a fresh layout
+right now, the **Rebuild graphs** button still works; custom knob
+combinations (a different cluster detail, a fused layout) build in
+the background too — the map shows "Building this view…" and appears
+automatically when ready.
 
 ## Activity panel
 
