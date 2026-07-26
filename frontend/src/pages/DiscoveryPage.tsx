@@ -122,14 +122,17 @@ type RecommendationCacheSnapshot = Array<
  * lens. Both the list card and map popup read this same cache, so one click
  * changes both surfaces immediately instead of waiting for a refetch.
  */
-function patchRecommendationCaches(
+async function patchRecommendationCaches(
   queryClient: QueryClient,
   lensId: string | null,
   recId: string,
   patch: (rec: LensRecommendation) => LensRecommendation,
-): RecommendationCacheSnapshot {
+): Promise<RecommendationCacheSnapshot> {
   if (!lensId) return []
   const filters = { queryKey: ['lens-recommendations', lensId] as const }
+  // Prevent an already-running list request from landing between the
+  // optimistic patch and the mutation response and reverting the button.
+  await queryClient.cancelQueries(filters)
   const snapshots = queryClient.getQueriesData<LensRecommendation[]>(filters)
   queryClient.setQueriesData<LensRecommendation[]>(filters, (current) =>
     current?.map((rec) => (rec.id === recId ? patch(rec) : rec)),
@@ -516,13 +519,29 @@ export function DiscoveryPage() {
   }
 
   const undoMutation = usePaperUndo(selectedLensId)
+  const reconcileReactionObservers = () => {
+    // Reconciliation is deliberately background work. Returning these
+    // promises from a mutation callback kept the clicked card disabled while
+    // the terrain and recommendation list refetched, making a successful
+    // click look inert on slower corpora.
+    void Promise.all([
+      invalidatePaperSignalFields(queryClient),
+      invalidateQueries(
+        queryClient,
+        ['lens-recommendations', selectedLensId],
+        ['lens-signals', selectedLensId],
+      ),
+    ])
+  }
 
   const dismissMutation = useMutation({
     mutationFn: dismissRecommendation,
-    onSuccess: async (_data, recId) => {
+    onMutate: (recId) => {
       markDismissed(recId)
+    },
+    onSuccess: () => {
       toast({ title: 'Dismissed', description: 'Paper hidden from Discovery.' })
-      await Promise.all([
+      void Promise.all([
         invalidatePaperSignalFields(queryClient),
         invalidateQueries(
           queryClient,
@@ -532,20 +551,29 @@ export function DiscoveryPage() {
         ),
       ])
     },
+    onError: (error, recId) => {
+      setDismissedIds((previous) => {
+        const next = new Set(previous)
+        next.delete(recId)
+        return next
+      })
+      errorToast('Dismiss failed', getApiErrorMessage(error))
+    },
   })
 
   const likeMutation = useMutation({
     mutationFn: (recId: string) => likeRecommendation(recId, 4),
-    onSuccess: async () => {
+    onMutate: (recId) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(rec, { rating: 4 }),
+      ),
+    onSuccess: () => {
       toast({ title: 'Rated', description: 'Paper rated 4 stars.' })
-      await Promise.all([
-        invalidatePaperSignalFields(queryClient),
-        invalidateQueries(
-          queryClient,
-          ['lens-recommendations', selectedLensId],
-          ['lens-signals', selectedLensId],
-        ),
-      ])
+      reconcileReactionObservers()
+    },
+    onError: (error, _recId, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Like failed', getApiErrorMessage(error))
     },
   })
 
@@ -556,7 +584,18 @@ export function DiscoveryPage() {
         undefined,
         selectedLensCollectionId ? [selectedLensCollectionId] : undefined,
       ),
-    onSuccess: async () => {
+    onMutate: (recId) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(
+          rec,
+          {
+            status: 'library',
+            rating: Math.max(3, Number(rec.paper?.rating ?? 0)),
+          },
+          { in_library: true, user_action: 'save' },
+        ),
+      ),
+    onSuccess: () => {
       // Card stays visible (it flips to a checked "Saved" state); only Dismiss
       // removes a card from Discovery. The refetch below re-reads the rec with
       // its now-'library' paper status so the button reflects the save.
@@ -566,8 +605,14 @@ export function DiscoveryPage() {
           ? "Paper added to this lens's collection."
           : 'Paper saved to library.',
       })
-      await invalidateAfterPaperMutation(queryClient, selectedLensId)
-      await invalidateQueries(queryClient, ['lens-recommendations', selectedLensId])
+      void Promise.all([
+        invalidateAfterPaperMutation(queryClient, selectedLensId),
+        invalidateQueries(queryClient, ['lens-recommendations', selectedLensId]),
+      ])
+    },
+    onError: (error, _recId, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Save failed', getApiErrorMessage(error))
     },
   })
 
@@ -576,30 +621,48 @@ export function DiscoveryPage() {
   const addToCollectionsMutation = useMutation({
     mutationFn: ({ recId, collectionIds }: { recId: string; collectionIds: string[] }) =>
       saveRecommendation(recId, undefined, collectionIds),
-    onSuccess: async () => {
+    onMutate: ({ recId }) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(
+          rec,
+          {
+            status: 'library',
+            rating: Math.max(3, Number(rec.paper?.rating ?? 0)),
+          },
+          { in_library: true, user_action: 'save' },
+        ),
+      ),
+    onSuccess: () => {
       // Card stays visible (flips to a checked "Saved" state); only Dismiss removes.
       toast({ title: 'Added', description: 'Paper saved and filed into collection(s).' })
-      await invalidateAfterPaperMutation(queryClient, selectedLensId)
-      await invalidateQueries(
-        queryClient,
-        ['lens-recommendations', selectedLensId],
-        ['library-collections'],
-      )
+      void Promise.all([
+        invalidateAfterPaperMutation(queryClient, selectedLensId),
+        invalidateQueries(
+          queryClient,
+          ['lens-recommendations', selectedLensId],
+          ['library-collections'],
+        ),
+      ])
+    },
+    onError: (error, _variables, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Add to collection failed', getApiErrorMessage(error))
     },
   })
 
   const loveMutation = useMutation({
     mutationFn: (recId: string) => likeRecommendation(recId, 5),
-    onSuccess: async () => {
+    onMutate: (recId) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(rec, { rating: 5 }),
+      ),
+    onSuccess: () => {
       toast({ title: 'Rated', description: 'Paper rated 5 stars.' })
-      await Promise.all([
-        invalidatePaperSignalFields(queryClient),
-        invalidateQueries(
-          queryClient,
-          ['lens-recommendations', selectedLensId],
-          ['lens-signals', selectedLensId],
-        ),
-      ])
+      reconcileReactionObservers()
+    },
+    onError: (error, _recId, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Love failed', getApiErrorMessage(error))
     },
   })
 
@@ -607,16 +670,17 @@ export function DiscoveryPage() {
   // the explicit "hide this suggestion" action.
   const dislikeMutation = useMutation({
     mutationFn: dislikeRecommendation,
-    onSuccess: async () => {
+    onMutate: (recId) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(rec, { rating: 1 }),
+      ),
+    onSuccess: () => {
       toast({ title: 'Rated', description: 'Paper rated 1 star.' })
-      await Promise.all([
-        invalidatePaperSignalFields(queryClient),
-        invalidateQueries(
-          queryClient,
-          ['lens-recommendations', selectedLensId],
-          ['lens-signals', selectedLensId],
-        ),
-      ])
+      reconcileReactionObservers()
+    },
+    onError: (error, _recId, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Dislike failed', getApiErrorMessage(error))
     },
   })
 
@@ -627,13 +691,24 @@ export function DiscoveryPage() {
   // from Discovery. The refetch re-reads the rec's reading_status.
   const queueMutation = useMutation({
     mutationFn: (recId: string) => readRecommendation(recId),
-    onSuccess: async () => {
+    onMutate: (recId) =>
+      patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
+        patchRecommendationPaper(
+          rec,
+          { reading_status: 'reading' },
+          { user_action: 'read' },
+        ),
+      ),
+    onSuccess: () => {
       toast({ title: 'Added to reading list', description: 'Marked as Reading.' })
-      await invalidateQueries(queryClient,
+      void invalidateQueries(queryClient,
         ['lens-recommendations', selectedLensId], ['library-workflow-summary'], ['reading-queue'], ['library-saved'],
       )
     },
-    onError: () => errorToast('Queue failed', 'Could not add to reading list.'),
+    onError: (error, _recId, snapshots) => {
+      restoreRecommendationCaches(queryClient, snapshots)
+      errorToast('Queue failed', getApiErrorMessage(error))
+    },
   })
 
   const allRecommendations = useMemo<LensRecommendation[]>(
@@ -743,6 +818,8 @@ export function DiscoveryPage() {
     (queueMutation.isPending && (queueMutation.variables as string)) ||
     (addToCollectionsMutation.isPending && addToCollectionsMutation.variables?.recId) ||
     null
+  const pendingUndoPaperId =
+    (undoMutation.isPending && undoMutation.variables?.paperId) || null
 
   const openPaperDetails = async (paperId: string) => {
     try {
@@ -1534,7 +1611,10 @@ export function DiscoveryPage() {
                       savedLabel={
                         selectedLensCollectionId && rec.in_library ? 'In library' : undefined
                       }
-                      pending={pendingRecId === rec.id}
+                      pending={
+                        pendingRecId === rec.id ||
+                        pendingUndoPaperId === rec.paper_id
+                      }
                     />
                   )
                 }}
@@ -1715,7 +1795,10 @@ export function DiscoveryPage() {
                     seed: cardPaper.id,
                     seedTitle: cardPaper.title,
                   })}
-                  actionDisabled={pendingRecId === rec.id}
+                  actionDisabled={
+                    pendingRecId === rec.id ||
+                    pendingUndoPaperId === rec.paper_id
+                  }
                   onAddToCollections={async (collectionIds) => {
                     await addToCollectionsMutation.mutateAsync({ recId: rec.id, collectionIds })
                   }}

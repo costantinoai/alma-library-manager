@@ -20,6 +20,8 @@ describe('map click popups', () => {
   it('shows paper context and routes every compact action through host callbacks', () => {
     const close = vi.fn()
     const like = vi.fn()
+    const love = vi.fn()
+    const dislike = vi.fn()
     const add = vi.fn()
     const queue = vi.fn()
     const collections = vi.fn()
@@ -52,8 +54,8 @@ describe('map click popups', () => {
         onQueue={queue}
         onAdd={add}
         onLike={like}
-        onLove={() => undefined}
-        onDislike={() => undefined}
+        onLove={love}
+        onDislike={dislike}
         onAddToCollections={collections}
       />,
     )
@@ -71,12 +73,16 @@ describe('map click popups', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save to library' }))
     fireEvent.click(screen.getByRole('button', { name: 'Add to reading list — decide later' }))
     fireEvent.click(screen.getByRole('button', { name: 'Like — save to library with a positive signal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Love — save to library with a strong positive signal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Negative signal — keeps the paper visible' }))
     fireEvent.click(screen.getByRole('button', { name: 'Close paper popup' }))
     fireEvent.click(screen.getByRole('button', { name: 'Go to paper' }))
 
     expect(add).toHaveBeenCalledTimes(1)
     expect(queue).toHaveBeenCalledTimes(1)
     expect(like).toHaveBeenCalledTimes(1)
+    expect(love).toHaveBeenCalledTimes(1)
+    expect(dislike).toHaveBeenCalledTimes(1)
     expect(close).toHaveBeenCalledTimes(1)
     expect(goToPaper).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: 'Collections' })).toBeInTheDocument()
@@ -121,5 +127,30 @@ describe('map click popups', () => {
 
     expect(follow).toHaveBeenCalledTimes(1)
     expect(details).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes a second click on an active reaction through the shared undo action', () => {
+    const dislike = vi.fn()
+    const undo = vi.fn()
+
+    withQueryClient(
+      <MapPaperPopup
+        paper={{ id: 'paper-1', title: 'A disliked paper' }}
+        onClose={() => undefined}
+        onQueue={() => undefined}
+        onAdd={() => undefined}
+        onLike={() => undefined}
+        onLove={() => undefined}
+        onDislike={dislike}
+        onUndo={undo}
+        onAddToCollections={() => undefined}
+        reaction="dislike"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Negative signal — keeps the paper visible' }))
+
+    expect(undo).toHaveBeenCalledWith('rating')
+    expect(dislike).not.toHaveBeenCalled()
   })
 })

@@ -1,33 +1,29 @@
 """2D projection of publication embeddings for visualization."""
 
+import hashlib
 import json
 import logging
+import math
 import sqlite3
 from collections import defaultdict
 from typing import Any
 
 import numpy as np
 
-from alma.ai.embedding_graph import CouplingSpec, build_embedding_graph, build_typed_edges
+from alma.ai.clustering import cluster_preprojected, score_cluster_terms
+from alma.application.graph_substrate import SUBSTRATE_SCOPE
 from alma.core.scope import Scope
 from alma.core.sql_helpers import standalone_paper_sql
 
 logger = logging.getLogger(__name__)
 
-# Co-authorship df cap: a paper with more than this many authors is a
-# mega-consortium — it would emit df²/2 author pairs (the O(n²) blow-up) and its
-# authors aren't meaningful pairwise collaborators. Dropped from the co-authorship
-# layer, the same IDF intuition the bibliographic coupling applies to references.
-_COAUTHOR_PAPER_DF_CAP = 100
-# Bibliographic-coupling df cap: a work cited by more than this many authors
-# couples them all pairwise and is non-discriminative (everyone cites the classic).
-_AUTHOR_BIB_DF_CAP = 200
 # Minimum in-scope papers for an author to appear in the network. A one-paper
-# author has no co-authorship/coupling signal and too thin an embedding basis to
-# place meaningfully — HDBSCAN can only leave it a stray outlier at a position
-# that reads as data but isn't. We drop them from generation entirely rather than
-# scatter meaningless dots. Raise to prune more aggressively.
-_MIN_AUTHOR_PUBS = 2
+# author has too thin a semantic basis to place meaningfully. The shared corpus
+# substrate also needs three placeable authors for an honest density grouping.
+# Export both constants so the
+# API's cheap empty-cache guard cannot drift from the builder's admission rules.
+MIN_AUTHOR_PUBLICATIONS = 2
+MIN_AUTHOR_LAYOUT_NODES = 3
 
 # Optional dependency
 try:
@@ -255,6 +251,40 @@ def fuse_layout(
     return {ids[i]: (float(coords_2d[i, 0]), float(coords_2d[i, 1])) for i in range(n)}
 
 
+def _author_candidate_count(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+) -> int:
+    """Count two-paper authors, including those hidden for thin embeddings."""
+    scope_filter = Scope.parse(scope).paper_filter("p")
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT pa.openalex_id
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''{scope_filter}
+                GROUP BY pa.openalex_id
+                HAVING COUNT(DISTINCT pa.paper_id) >= ?
+            )
+            """,
+            (MIN_AUTHOR_PUBLICATIONS,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int((row[0] if row else 0) or 0)
+
+
+def _author_coordinate_jitter(author_id: str) -> tuple[float, float]:
+    """Small stable offset so identical co-author centroids remain clickable."""
+    digest = hashlib.sha1(author_id.encode()).hexdigest()
+    angle = (int(digest[:8], 16) / float(16**8)) * 2.0 * math.pi
+    radius = 0.004 + (int(digest[8:12], 16) / float(16**4)) * 0.006
+    return math.cos(angle) * radius, math.sin(angle) * radius
+
+
 def build_coauthor_network(
     conn: sqlite3.Connection,
     *,
@@ -299,6 +329,19 @@ def build_coauthor_network(
     try:
         authors_data = conn.execute(
             f"""
+            WITH placeable AS (
+                SELECT pa.openalex_id AS author_id,
+                       AVG(pc.x) AS substrate_x,
+                       AVG(pc.y) AS substrate_y
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                JOIN publication_clusters pc
+                  ON pc.paper_id = pa.paper_id
+                 AND pc.scope = ?
+                WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''{status_filter}
+                GROUP BY pa.openalex_id
+                HAVING COUNT(DISTINCT pc.paper_id) >= ?
+            )
             SELECT pa.openalex_id AS author_id,
                    COALESCE(NULLIF(a.name, ''), MIN(pa.display_name)) AS author_name,
                    COUNT(DISTINCT pa.paper_id) AS pub_count,
@@ -309,9 +352,12 @@ def build_coauthor_network(
                    COALESCE(a.works_count, 0) AS works_count,
                    COALESCE(a.orcid, '') AS orcid,
                    COALESCE(NULLIF(a.openalex_id, ''), pa.openalex_id) AS openalex_id,
-                   COALESCE(a.interests, '') AS interests
+                   COALESCE(a.interests, '') AS interests,
+                   placeable.substrate_x,
+                   placeable.substrate_y
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
+            JOIN placeable ON placeable.author_id = pa.openalex_id
             LEFT JOIN authors a ON lower(a.openalex_id) = lower(pa.openalex_id)
             WHERE pa.openalex_id <> ''{status_filter}
               AND {standalone_paper_sql('p')}
@@ -323,18 +369,30 @@ def build_coauthor_network(
                      a.works_count,
                      a.orcid,
                      a.openalex_id,
-                     a.interests
-            HAVING COUNT(DISTINCT pa.paper_id) >= ?
+                     a.interests,
+                     placeable.substrate_x,
+                     placeable.substrate_y
             ORDER BY pub_count DESC
             """,
-            (_MIN_AUTHOR_PUBS,),
+            (SUBSTRATE_SCOPE, MIN_AUTHOR_PUBLICATIONS),
         ).fetchall()
     except Exception as exc:
         logger.warning("Could not query publication_authors for author network: %s", exc)
-        return {"nodes": [], "edges": []}
+        # Every exit carries `omitted_unplaced`: it is part of the payload
+        # contract the legend reads, and an absent key is not the same claim as
+        # "nothing was omitted".
+        return {"nodes": [], "edges": [], "omitted_unplaced": 0}
 
-    if len(authors_data) < 2:
-        return {"nodes": [], "edges": []}
+    if not authors_data:
+        return {
+            "nodes": [],
+            "edges": [],
+            "clusters": [],
+            "method": "no_substrate_positions",
+            "edge_layers": {},
+            "clustering": {},
+            "omitted_unplaced": _author_candidate_count(conn, scope=scope),
+        }
 
     author_ids = [r["author_id"] if isinstance(r, sqlite3.Row) else r[0] for r in authors_data]
     author_names = {
@@ -394,6 +452,13 @@ def build_coauthor_network(
     interests_raw = {
         (r["author_id"] if isinstance(r, sqlite3.Row) else r[0]): (
             r["interests"] if isinstance(r, sqlite3.Row) else r[10]
+        )
+        for r in authors_data
+    }
+    coords_by_author = {
+        (r["author_id"] if isinstance(r, sqlite3.Row) else r[0]): (
+            float(r["substrate_x"] if isinstance(r, sqlite3.Row) else r[11]),
+            float(r["substrate_y"] if isinstance(r, sqlite3.Row) else r[12]),
         )
         for r in authors_data
     }
@@ -470,98 +535,65 @@ def build_coauthor_network(
                 parsed = [x.strip() for x in val.split(",") if x.strip()]
         author_interests[aid] = parsed[:8]
 
-    # NOTE (Phase 3 / I-11): author topic vectors are kept ONLY for cluster
-    # labelling (via score_cluster_terms below) + the per-author top_topic.
-    # Topic similarity no longer drives edges — the semantic edge layer is now
-    # mutual k-NN over the 768-d author embeddings, and productivity stats never
-    # enter edge geometry (they stay node metadata).
+    # Author placement is an AGGREGATION over the ONE durable paper substrate:
+    # the mean of an author's in-scope paper coordinates. The former pipeline
+    # fitted a second 5-D + 2-D UMAP over 6k+ author means, which took minutes
+    # and produced a different coordinate frame despite the UI calling it the
+    # "same space". A bounded HDBSCAN pass over these existing 2-D centroids
+    # preserves the cluster-detail knob without repeating projection work.
+    placed_ids = list(author_ids)
 
-    # ── Structural coupling inputs for the SHARED pipeline (entity → features) ──
-    # Co-authorship: each author keyed by the papers they wrote. Bibliographic
-    # coupling: each author keyed by the works their papers cite. Both are ONE
-    # indexed scan; the shared cooccurrence primitive (inside the pipeline) does the
-    # pairing + df cap — no SQL self-join, no per-graph edge code.
-    placeholders = ",".join(["?"] * len(author_ids))
-    scope_filter = Scope.parse(scope).paper_filter("p")
-    author_papers: dict[str, set[str]] = defaultdict(set)
-    try:
-        for row in conn.execute(
-            f"""SELECT pa.openalex_id AS aid, pa.paper_id AS pid
-                FROM publication_authors pa JOIN papers p ON p.id = pa.paper_id
-                WHERE pa.openalex_id IN ({placeholders}){scope_filter}
-                  AND {standalone_paper_sql('p')}
-                  AND TRIM(COALESCE(pa.openalex_id, '')) <> ''""",
-            author_ids,
-        ).fetchall():
-            aid = row["aid"] if isinstance(row, sqlite3.Row) else row[0]
-            pid = row["pid"] if isinstance(row, sqlite3.Row) else row[1]
-            author_papers[str(aid)].add(str(pid))
-    except Exception as exc:
-        logger.warning("Could not load author→paper links: %s", exc)
-    author_refs = _author_referenced_works(conn, author_ids, scope=scope)
-
-    author_embeddings = _author_mean_embeddings(conn, author_ids)
-    embedded_ids = [aid for aid in author_ids if aid in author_embeddings]
-    emb_map = {aid: author_embeddings[aid].tolist() for aid in embedded_ids}
-
-    # The author network's edge layers — same shapes the paper map uses, just over
-    # author/paper features. (co_authorship: shared papers; bibliographic_coupling:
-    # shared cited works, sparsified to each author's top-4 partners.)
-    coupling_specs = [
-        CouplingSpec(
-            edge_type="co_authorship", entity_features=author_papers,
-            min_shared=1, max_feature_df=_COAUTHOR_PAPER_DF_CAP,
-            weight_floor=0.5, weight_span=0.5, use_for_fusion=True,
-        ),
-        CouplingSpec(
-            edge_type="bibliographic_coupling", entity_features=author_refs,
-            min_shared=1, max_feature_df=_AUTHOR_BIB_DF_CAP,
-            weight_floor=0.4, weight_span=0.5, top_k_per_node=4, use_for_fusion=True,
-        ),
-    ]
-
-    # ── The ONE shared machine (alma.ai.embedding_graph) ──────────────────────
-    # Clusters, 2-D layout, typed edges, and c-TF-IDF text labels all come from the
-    # identical pipeline the paper map uses. The author graph differs ONLY in its
-    # inputs (mean-embeddings, title text, author/paper coupling) and its node
-    # payloads (assembled below) — never in the machine itself.
     cluster_ids = np.full(n_authors, -1, dtype=np.int32)
-    coords_by_author: dict[str, tuple[float, float]] = {}
-    clustering_method = "no_embeddings"
+    clustering_method = "no_substrate_positions"
     clustering_panel: dict[str, Any] = {}
     cluster_topic_labels: dict[int, str] = {}
     cluster_word_clouds: dict[int, list[dict[str, Any]]] = {}
     cluster_member_ids: dict[int, list[str]] = {}
+    edges: list[dict[str, Any]] = []
+    edge_layers: dict[str, int] = {}
 
-    if len(embedded_ids) >= 3:
-        graph = build_embedding_graph(
-            emb_map,
-            node_text=author_text_by_id,
+    if len(placed_ids) >= MIN_AUTHOR_LAYOUT_NODES:
+        clustering = cluster_preprojected(
+            {aid: coords_by_author[aid] for aid in placed_ids},
             resolution=cluster_resolution,
-            layout_weights=layout_weights,
-            coupling_specs=coupling_specs,
-            semantic_k=6,
-            semantic_min_similarity=0.5,
         )
-        clustering_method = graph.clustering_meta["method"]
-        clustering_panel = graph.clustering_meta
-        coords_by_author.update(graph.coords)
-        edges, edge_layers = graph.edges, graph.edge_layers
-        cluster_topic_labels = graph.labels_by_cluster
-        cluster_word_clouds = graph.word_clouds
-        cluster_member_ids = graph.cluster_members
-        for aid, cid in graph.cluster_ids.items():
-            if cid >= 0 and aid in author_index:
-                cluster_ids[author_index[aid]] = cid
-    else:
-        # Too few embeddings to cluster/lay out — still surface the structural edge
-        # layers (semantic is empty, co-authorship/bib still emit) through the same
-        # edge builder, so even a tiny author set isn't edgeless.
-        edges, edge_layers = build_typed_edges(
-            emb_map, coupling_specs=coupling_specs, semantic_k=6, semantic_min_similarity=0.5
+        clustering_method = clustering.method
+        cluster_member_ids = {
+            int(cluster.cluster_id): list(cluster.member_keys)
+            for cluster in clustering.clusters
+        }
+        for cluster_id, members in cluster_member_ids.items():
+            for aid in members:
+                if aid in author_index:
+                    cluster_ids[author_index[aid]] = cluster_id
+        member_text_docs = {
+            cluster_id: [author_text_by_id.get(aid, "") for aid in members]
+            for cluster_id, members in cluster_member_ids.items()
+        }
+        scored = score_cluster_terms(
+            member_text_docs,
+            ngram_range=(1, 2),
+            top_k=10,
         )
+        for cluster_id, ranked in scored.items():
+            terms = [term for term, _weight in ranked[:2]]
+            cluster_topic_labels[cluster_id] = (
+                ", ".join(terms) if terms else f"Cluster {cluster_id + 1}"
+            )
+            cluster_word_clouds[cluster_id] = [
+                {"term": term, "weight": round(float(weight), 4)}
+                for term, weight in ranked[:10]
+            ]
+        clustering_panel = {
+            "method": clustering.method,
+            "n_clusters": clustering.n_clusters,
+            "outlier_count": len(clustering.outliers),
+            "coverage": round(clustering.coverage, 4),
+            "stability": clustering.stability,
+            "params": clustering.params,
+        }
 
-    # Authors with no mean embedding have NO semantic position. They used to be
+    # Authors with no placed paper have NO semantic position. They used to be
     # scattered on a radius-0.48 ring about the centre (and any residual piled
     # exactly at 0.5/0.5) — invented geometry that read as real structure: a
     # halo of unplaceable authors framing the corpus view, in the one region a
@@ -569,7 +601,10 @@ def build_coauthor_network(
     # places by meaning or not at all, so they are OMITTED here and COUNTED, and
     # the count rides the payload so the UI can say how many are missing instead
     # of dropping them silently.
-    omitted_unplaced = sum(1 for aid in author_ids if aid not in coords_by_author)
+    omitted_unplaced = max(
+        0,
+        _author_candidate_count(conn, scope=scope) - len(author_ids),
+    )
 
     nodes = []
     for idx, aid in enumerate(author_ids):
@@ -577,8 +612,9 @@ def build_coauthor_network(
         if placed is None:
             continue
         x_raw, y_raw = placed
-        x = float(min(0.98, max(0.02, x_raw)))
-        y = float(min(0.98, max(0.02, y_raw)))
+        jitter_x, jitter_y = _author_coordinate_jitter(aid)
+        x = float(min(0.98, max(0.02, x_raw + jitter_x)))
+        y = float(min(0.98, max(0.02, y_raw + jitter_y)))
         raw_cid = int(cluster_ids[idx])
         cid = raw_cid if raw_cid >= 0 else None
         nodes.append(
@@ -604,12 +640,6 @@ def build_coauthor_network(
                 "y": y,
             }
         )
-
-    # An edge may only join two rendered nodes. Dropping unplaced authors above
-    # can orphan an endpoint (the degenerate <3-embeddings path builds structural
-    # edges with no layout at all), and a dangling edge is a link to nowhere.
-    placed_ids = {n["id"] for n in nodes}
-    edges = [e for e in edges if e["source"] in placed_ids and e["target"] in placed_ids]
 
     clusters = [
         {

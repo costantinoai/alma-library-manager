@@ -569,6 +569,106 @@ def cluster_publications(
     )
 
 
+def cluster_preprojected(
+    points: dict[str, tuple[float, float]],
+    *,
+    resolution: float = 1.0,
+) -> ClusteringResult:
+    """Cluster entities already placed on the durable 2-D semantic substrate.
+
+    Author nodes are centroids of their papers on the ONE corpus substrate. A
+    second UMAP over author means is both expensive and a different coordinate
+    frame, so it cannot honestly be called the same space. HDBSCAN can consume
+    these existing semantic coordinates directly: this keeps the user-facing
+    detail knob, retained outliers, and membership confidence while turning a
+    multi-minute duplicate fit into a bounded density pass.
+    """
+    if not points:
+        return ClusteringResult(clusters=[])
+
+    keys = list(points)
+    vectors = np.asarray([points[key] for key in keys], dtype=np.float32)
+    n_items = len(keys)
+    base = max(3, min(12, int(round(math.sqrt(n_items) * 0.5))))
+    scale = 1.0 / resolution if resolution and resolution > 0 else 1.0
+    ceiling = max(3, n_items // 4)
+    min_cluster_size = max(2, min(int(round(base * scale)), ceiling))
+    min_samples = max(2, min(min_cluster_size - 1, min_cluster_size // 2))
+
+    if _HDBSCAN_AVAILABLE:
+        clusterer = _hdbscan.HDBSCAN(
+            min_cluster_size=min_cluster_size,
+            min_samples=min_samples,
+            metric="euclidean",
+            cluster_selection_method="eom",
+            prediction_data=True,
+        )
+        labels = np.asarray(clusterer.fit_predict(vectors), dtype=np.int32)
+        point_probabilities = np.asarray(clusterer.probabilities_, dtype=np.float32)
+        method = "hdbscan_eom_on_corpus_substrate"
+    else:
+        from sklearn.cluster import MiniBatchKMeans
+
+        n_clusters = min(30, max(2, int(round(math.sqrt(n_items) / 2))))
+        n_clusters = min(n_clusters, max(1, n_items))
+        labels = np.asarray(
+            MiniBatchKMeans(
+                n_clusters=n_clusters,
+                random_state=42,
+                n_init=5,
+                batch_size=min(256, max(32, n_items * 2)),
+            ).fit_predict(vectors),
+            dtype=np.int32,
+        )
+        point_probabilities = np.ones(n_items, dtype=np.float32)
+        method = "kmeans_on_corpus_substrate"
+
+    unique_labels = sorted(int(label) for label in np.unique(labels) if int(label) >= 0)
+    label_map = {old: new for new, old in enumerate(unique_labels)}
+    dense_labels = np.asarray(
+        [label_map.get(int(label), -1) for label in labels],
+        dtype=np.int32,
+    )
+
+    cluster_map: dict[int, list[str]] = {}
+    outliers: list[str] = []
+    probabilities: dict[str, float] = {}
+    for index, label in enumerate(dense_labels):
+        key = keys[index]
+        probabilities[key] = float(point_probabilities[index])
+        if int(label) < 0:
+            outliers.append(key)
+        else:
+            cluster_map.setdefault(int(label), []).append(key)
+
+    clusters = [
+        Cluster(
+            cluster_id=cluster_id,
+            member_keys=members,
+            centroid=np.mean(
+                np.asarray([points[key] for key in members], dtype=np.float32),
+                axis=0,
+            ).tolist(),
+        )
+        for cluster_id, members in sorted(cluster_map.items())
+    ]
+    return ClusteringResult(
+        clusters=clusters,
+        outliers=outliers,
+        probabilities=probabilities,
+        method=method,
+        params={
+            "min_cluster_size": int(min_cluster_size),
+            "min_samples": int(min_samples),
+            "resolution": round(float(resolution), 3),
+            "selection": "eom" if _HDBSCAN_AVAILABLE else "fixed_k",
+            "reduced_dim": 2,
+            "substrate": "durable_corpus_layout",
+            "metric": "euclidean_on_substrate",
+        },
+    )
+
+
 def select_representatives(
     member_keys: list[str],
     vectors: dict[str, Any],

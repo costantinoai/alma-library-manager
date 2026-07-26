@@ -325,7 +325,7 @@ def _run_author_seed_thin(job_id: str, cap: int, target_paper_ids=None, params=N
 
     The repair for `authors.unplaceable`. Cheap and bounded (a page of works per
     author), unlike `author_works`, which paginates an author's whole output —
-    this only needs enough papers to clear `_MIN_AUTHOR_PUBS` so the author gains
+    this only needs enough papers to clear `MIN_AUTHOR_PUBLICATIONS` so the author gains
     a map position, sample titles, and a score.
     """
     from alma.api.deps import _db_path

@@ -52,8 +52,47 @@ router = APIRouter(
 
 # Author-only layout contract. Bump when placement semantics change so existing
 # materialized/variant payloads cannot keep serving obsolete geometry. The
-# 2026-07-26 bump retires the radius-0.48 fallback for authors with no vectors.
-_AUTHOR_NETWORK_LAYOUT_VERSION = "author-layout-no-radial-fallback-v1"
+# 2026-07-26 v2 aggregates authors over the durable paper substrate and admits
+# only authors with at least two embedded/placed papers.
+_AUTHOR_NETWORK_LAYOUT_VERSION = "author-layout-paper-substrate-v2"
+
+
+def _author_network_placeable_count(
+    conn: sqlite3.Connection,
+    scope: Scope,
+) -> int:
+    """Return authors with at least two in-scope substrate papers.
+
+    Graph GETs deliberately skip full fingerprint freshness work. An empty
+    stored author payload is nevertheless invalid when the current corpus has
+    enough placeable authors to fit a layout. This mirrors the builder's exact
+    admission rule: two papers already embedded and placed on the ONE corpus
+    substrate.
+    """
+    from alma.ai.projections import MIN_AUTHOR_PUBLICATIONS
+
+    scope_filter = scope.paper_filter("p")
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) FROM (
+                SELECT pa.openalex_id AS author_id
+                FROM publication_authors pa
+                JOIN papers p ON p.id = pa.paper_id
+                JOIN publication_clusters pc
+                  ON pc.paper_id = pa.paper_id
+                 AND pc.scope = ?
+                WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''
+                  {scope_filter}
+                GROUP BY pa.openalex_id
+                HAVING COUNT(DISTINCT pc.paper_id) >= ?
+            )
+            """,
+            (SUBSTRATE_SCOPE, MIN_AUTHOR_PUBLICATIONS),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int((row[0] if row else 0) or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -848,11 +887,34 @@ def get_author_network(
         stored_layout_version = (
             ((envelope or {}).get("payload") or {}).get("metadata") or {}
         ).get("layout_version")
-        if envelope is None or stored_layout_version != _AUTHOR_NETWORK_LAYOUT_VERSION:
+        cached_nodes = ((envelope or {}).get("payload") or {}).get("nodes") or []
+        from alma.ai.projections import MIN_AUTHOR_LAYOUT_NODES
+
+        # While an empty/obsolete view is already rebuilding, polling must be a
+        # constant-time status read. Re-running the placeability aggregation
+        # every 2.5 s caused each poll to take seconds under build contention.
+        if envelope is not None and not cached_nodes and envelope.get("rebuilding"):
+            return JSONResponse(
+                status_code=202,
+                content={"status": "building", "message": "Building the graph…"},
+            )
+        empty_cache_is_invalid = (
+            envelope is not None
+            and not cached_nodes
+            and _author_network_placeable_count(conn, scope)
+            >= MIN_AUTHOR_LAYOUT_NODES
+        )
+        if (
+            envelope is None
+            or stored_layout_version != _AUTHOR_NETWORK_LAYOUT_VERSION
+            or empty_cache_is_invalid
+        ):
             # One-time compatibility gate, not a freshness calculation: a
             # pre-fix payload contains fabricated radial coordinates and is not
-            # valid data under the current semantic-placement contract. Treat
-            # it like a missing view and enqueue the normal background build.
+            # valid data under the current semantic-placement contract. The
+            # same applies to a poisoned empty payload when current inputs can
+            # place a real network. Treat either like a missing view and enqueue
+            # the normal background build.
             return JSONResponse(
                 status_code=202,
                 content={"status": "building", **_enqueue_graph_view_build(view_key)},
@@ -1210,14 +1272,10 @@ def _build_author_network_payload(
         for n in raw["nodes"]
     ]
 
-    # The author map has NO link layer (user call 2026-07-26). Co-authorship and
-    # bibliographic coupling still SHAPE the layout — they are fusion inputs to
-    # `build_embedding_graph`, so co-authors already sit together — but drawing
-    # them again as lines re-states position as topology and buries the dots. The
-    # paper map's link layers answer "why are these two adjacent"; on an author
-    # map adjacency IS collaboration, so the lines add nothing and cost a very
-    # large payload. `edge_layers` stays in metadata: it describes the coupling
-    # that built the layout, which is true whether or not anything is drawn.
+    # The author map has NO link layer (user call 2026-07-26). Its position is
+    # the centroid of each author's papers on the corpus substrate; drawing the
+    # paper-level relationships again as thousands of author lines would bury
+    # the dots and add a large payload without adding information.
     edges: list[GraphEdge] = []
 
     enriched_clusters: list[dict[str, object]] = []
@@ -1244,13 +1302,13 @@ def _build_author_network_payload(
             "method": raw.get("method", "author_embedding_mean"),
             "layout_version": _AUTHOR_NETWORK_LAYOUT_VERSION,
             "clusters": enriched_clusters,
-            # Typed coupling counts (build diagnostics — the layers that shaped
-            # the layout; the author map draws no links) + clustering panel.
+            # No author link payload; the clustering panel describes the
+            # bounded density pass over durable paper-substrate centroids.
             "edge_layers": raw.get("edge_layers", {}),
             "clustering": raw.get("clustering", {}),
-            # In-scope authors with no embedded paper, therefore no semantic
-            # position, therefore not on the map. Reported so the legend can own
-            # the omission out loud rather than inventing a ring for them.
+            # In-scope two-paper authors with fewer than two embedded/placed
+            # papers. Hidden before clustering; counted so the legend owns the
+            # omission rather than inventing geometry.
             "omitted_unplaced": int(raw.get("omitted_unplaced", 0)),
         },
     )

@@ -9,7 +9,6 @@ import {
   getFollowedAuthorSignals,
   followAuthor,
   isRetryableApiError,
-  listAuthorSuggestions,
   listAuthorsNeedsAttention,
   listFollowedAuthors,
   retryDelayMs,
@@ -54,10 +53,8 @@ import {
   SliderRow,
 } from '@/components/map/MapChrome'
 import { FollowedAuthorCard } from '@/components/authors/FollowedAuthorCard'
-import {
-  AUTHOR_SUGGESTION_FETCH_COUNT,
-  SuggestedAuthorsRail,
-} from '@/components/authors/SuggestedAuthorsRail'
+import { SuggestedAuthorsRail } from '@/components/authors/SuggestedAuthorsRail'
+import { authorSuggestionsQueryOptions } from '@/components/authors/authorSuggestionQueries'
 import {
   AuthorsNeedsAttentionSection,
 } from '@/components/authors/AuthorsNeedsAttentionSection'
@@ -146,10 +143,13 @@ export function AuthorsPage() {
   )
   const [networkSelected, setNetworkSelected] = useState<GraphNode | null>(null)
   const [networkPayload, setNetworkPayload] = useState<GraphData | null>(null)
-  // The map consumes this same query when Score/Terrain is active. React Query
-  // deduplicates it; keeping it warm here makes popup + drilldown scores live
-  // even while the plate itself is in Clusters mode.
-  const networkAuthorField = useAuthorField(networkScope, true)
+  // Do not build the expensive author field in parallel with a missing map.
+  // Once a payload exists it stays live for popup/drilldown scores, and the map
+  // itself shares this exact React Query cache when Score/Terrain is active.
+  const networkAuthorField = useAuthorField(
+    networkScope,
+    networkPayload !== null || networkSelected !== null,
+  )
 
   const authorsQuery = useQuery({
     queryKey: ['authors'],
@@ -302,11 +302,7 @@ export function AuthorsPage() {
   // Authors currently offered in the suggestions rail — the map's hollow tier.
   // Same cached query the rail itself uses, so the two surfaces can never
   // disagree about who is being suggested right now.
-  const suggestionsQuery = useQuery({
-    queryKey: ['author-suggestions', AUTHOR_SUGGESTION_FETCH_COUNT],
-    queryFn: () => listAuthorSuggestions(AUTHOR_SUGGESTION_FETCH_COUNT),
-    retry: 1,
-  })
+  const suggestionsQuery = useQuery(authorSuggestionsQueryOptions())
   const suggestionsByKey = useMemo(() => {
     const map = new Map<string, AuthorSuggestion>()
     for (const s of suggestionsQuery.data ?? []) {

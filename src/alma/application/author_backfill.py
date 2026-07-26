@@ -763,7 +763,7 @@ SEED_TARGET_PAPERS = 2
 """How many of an author's own papers the corpus needs before they become a
 first-class citizen of the semantic surfaces.
 
-TWO, because that is `alma.ai.projections._MIN_AUTHOR_PUBS` — the author map
+TWO, because that is `alma.ai.projections.MIN_AUTHOR_PUBLICATIONS` — the author map
 refuses to place anyone below it (one paper is not a research position, it is a
 coincidence). The same threshold also gives `_sample_titles_for_openalex_author`
 something to show and gives the author field two papers to average a score over.
@@ -889,7 +889,7 @@ def seed_papers_for_author(
     Why it is needed (measured 2026-07-26): an author suggested from citation or
     co-author expansion typically has 0–1 papers in the corpus — they are
     suggested precisely because you don't have them yet. Below two papers they
-    have no map dot (`_MIN_AUTHOR_PUBS`), no sample titles (those are read from
+    have no map dot (`MIN_AUTHOR_PUBLICATIONS`), no sample titles (those are read from
     the local corpus), and no score (nothing to average). The suggestion card was
     therefore thinnest exactly where the user most needed evidence.
 

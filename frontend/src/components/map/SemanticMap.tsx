@@ -753,6 +753,14 @@ export function SemanticMap({
       {renderClick && clickedId && (() => {
         const p = screenPos.get(clickedId)
         if (!p) return null
+        // Ask the host for the body BEFORE committing to the shell. Every host
+        // can legitimately decline a node — FrontierMap on an id missing from
+        // its node map, DiscoveryPage when the rec has left `allRecommendations`,
+        // GraphMapView on an unknown node. Rendering the bordered, shadowed
+        // 22rem panel first left an EMPTY card floating over the plate until it
+        // was dismissed (2026-07-26).
+        const body = renderClick(clickedId, closeClickCard)
+        if (body == null || body === false) return null
         const flipX = p[0] > width - 390
         const flipY = p[1] > height - 280
         return (
@@ -767,7 +775,7 @@ export function SemanticMap({
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
           >
-            {renderClick(clickedId, closeClickCard)}
+            {body}
           </div>
         )
       })()}

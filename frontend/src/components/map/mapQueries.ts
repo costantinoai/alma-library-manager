@@ -26,7 +26,10 @@ import {
 
 export const MAP_LAYOUT_GC_TIME = 30 * 60_000
 export const FRONTIER_STALE_TIME = 5 * 60_000
-export const MAP_BUILD_POLL_TIME = 2_500
+// Layout jobs are durable background work, not interactive RPCs. Eight-second
+// polling keeps the loading state responsive without hammering SQLite while a
+// CPU-bound clustering pass is running.
+export const MAP_BUILD_POLL_TIME = 8_000
 
 export interface MapBuildStatus {
   status: 'building'

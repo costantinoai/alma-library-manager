@@ -7,10 +7,8 @@ import {
   followAuthor,
   getApiErrorMessage,
   isRetryableApiError,
-  listAuthorSuggestions,
   markSuggestionNotDuplicate,
   mergeSuggestionInto,
-  refreshAuthorSuggestionNetwork,
   rejectAuthorSuggestion,
   retryDelayMs,
   trackFollowedAuthorSuggestion,
@@ -26,15 +24,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useElementWidth } from '@/hooks/useElementWidth'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
+import {
+  AUTHOR_SUGGESTION_FETCH_COUNT,
+  authorSuggestionsQueryOptions,
+} from '@/components/authors/authorSuggestionQueries'
 
 // Expanded view shows up to this many rows of the measured grid.
 const EXPANDED_ROWS = 5
-// Server route enforces its own ceiling (limit ≤ 30) — fetch right up to it
-// so the expanded view (max 6 columns × 5 rows) is always covered. Exported so
-// the Authors map can mark the SAME suggestions as hollow dots off ONE cached
-// query — a second limit would make the rail and the map disagree about who is
-// currently suggested.
-export const AUTHOR_SUGGESTION_FETCH_COUNT = 30
 const FETCH_COUNT = AUTHOR_SUGGESTION_FETCH_COUNT
 
 // ── Container-measured grid ──────────────────────────────────────────
@@ -189,26 +185,7 @@ export function SuggestedAuthorsRail({
   // serialized + idempotent, so this is purely a client-ordering concern.
   const followQueueRef = useRef<Promise<unknown>>(Promise.resolve())
 
-  const suggestionsQuery = useQuery({
-    queryKey: ['author-suggestions', FETCH_COUNT],
-    queryFn: () => listAuthorSuggestions(FETCH_COUNT),
-    retry: 1,
-  })
-
-  // D12 AUTH-SUG-3/4: on mount, fire-and-forget the refresh-network
-  // call so the OpenAlex co-author expansion + S2 paper-recommendation
-  // buckets warm their caches in the background. Stale/missing caches
-  // enqueue an Activity job; fresh caches no-op. `useOperationToasts`
-  // auto-invalidates `author-suggestions` on `authors.*` completion,
-  // so the new rows will appear here without a manual refetch.
-  const refreshTriggeredRef = useRef(false)
-  useEffect(() => {
-    if (refreshTriggeredRef.current) return
-    refreshTriggeredRef.current = true
-    refreshAuthorSuggestionNetwork().catch(() => {
-      // silent — the rail always has the local buckets to fall back on
-    })
-  }, [])
+  const suggestionsQuery = useQuery(authorSuggestionsQueryOptions())
 
   const rejectMutation = useMutation({
     mutationFn: (suggestion: AuthorSuggestion) =>

@@ -1075,7 +1075,7 @@ def _m_0033_author_seed_status(conn: sqlite3.Connection) -> None:
     """Terminal outcome of a suggested-author paper seed (2026-07-26).
 
     The `author_seed_thin` repair lands an author's most-cited own papers so
-    they clear `projections._MIN_AUTHOR_PUBS` and gain a map position, sample
+    they clear `projections.MIN_AUTHOR_PUBLICATIONS` and gain a map position, sample
     titles, and a score. Some authors CANNOT clear it: OpenAlex genuinely holds
     fewer than two works for them (observed live — two suggested authors with
     exactly one work in the entire index). Without a record of that, the

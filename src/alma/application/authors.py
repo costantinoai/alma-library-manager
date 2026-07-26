@@ -3594,7 +3594,7 @@ def seed_thin_suggestion_authors(
     because you don't have their work yet, so they typically hold 0–1 papers
     locally. Below two papers they are invisible three times over:
 
-      * no dot on the author map — `projections._MIN_AUTHOR_PUBS` needs two;
+      * no dot on the author map — `projections.MIN_AUTHOR_PUBLICATIONS` needs two;
       * no evidence on the suggestion card — `_sample_titles_for_openalex_author`
         reads titles from the LOCAL corpus, so "No sample title" is not missing
         metadata, it is a missing paper;

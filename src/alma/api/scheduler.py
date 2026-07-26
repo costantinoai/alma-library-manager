@@ -19,6 +19,8 @@ Environment variables
 SCHEDULER_ENABLED           -- set to "false" to disable scheduler (default: true)
 ALERT_CHECK_INTERVAL_HOURS  -- interval between alert evaluation sweeps (default: 1)
 AUTHOR_REFRESH_HOUR         -- UTC hour for the daily author refresh cron (default: 3)
+ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS
+                            -- idle-gated suggestion-cache cadence (default: 6)
 """
 
 import asyncio
@@ -1209,6 +1211,39 @@ def setup_scheduler() -> None:
         "Registered refresh_authors job (cron hour=%d)", refresh_hour,
     )
 
+    # -- Author suggestion discovery (interval, background-owned) ----------
+    # Page navigation is a pure read: opening Authors must never enqueue
+    # OpenAlex/S2 expansion or thin-author seeding. This idle-gated tick checks
+    # the durable cache TTL every few hours; actual network work normally runs
+    # once per day (the cache default TTL is 24h).
+    try:
+        suggestion_refresh_hours = max(
+            1,
+            int(os.getenv("ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS", "6")),
+        )
+    except (TypeError, ValueError):
+        suggestion_refresh_hours = 6
+    sched.add_job(
+        refresh_author_suggestions_periodic,
+        trigger=IntervalTrigger(hours=suggestion_refresh_hours),
+        id="refresh_author_suggestions",
+        name="Periodic author suggestion refresh",
+        replace_existing=True,
+    )
+    with _job_lock:
+        _job_meta["refresh_author_suggestions"] = {
+            "action": "refresh_author_suggestions",
+            "name": "Periodic author suggestion refresh",
+            "description": (
+                "Refreshes stale author-suggestion caches while idle "
+                f"(checks every {suggestion_refresh_hours}h)"
+            ),
+        }
+    logger.info(
+        "Registered refresh_author_suggestions job (interval=%dh)",
+        suggestion_refresh_hours,
+    )
+
     # -- Discovery recommendation refresh (interval, opt-in) --------------
     # Runs only when the page/Settings toggle (schedule.refresh_enabled) is on
     # AND the interval is > 0. Default OFF.
@@ -1620,6 +1655,120 @@ def refresh_authors_periodic() -> None:
             error=f"{type(exc).__name__}: {exc}",
         )
         add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+
+
+def refresh_author_suggestions_periodic() -> None:
+    """Refresh stale author-suggestion sources while the app is idle.
+
+    The interval is only a cheap TTL probe. Network expansion and the bounded
+    two-paper seeding pass run only when at least one durable source cache is
+    stale, so the default 24-hour cache still means roughly daily work.
+    """
+    job_id = "periodic_author_suggestion_refresh"
+    operation_key = "authors.suggestions_periodic"
+    from alma.api.deps import _db_path, open_db_connection
+    from alma.application import author_network
+
+    conn = open_db_connection()
+    try:
+        ok, reason = may_background_run(conn, exclude_operation_key=operation_key)
+        if not ok:
+            logger.debug("author suggestion refresh skipped: %s", reason)
+            return
+
+        sources = (
+            (
+                author_network.SOURCE_OPENALEX_RELATED,
+                author_network.refresh_openalex_related_network,
+            ),
+            (
+                author_network.SOURCE_S2_RELATED,
+                author_network.refresh_s2_related_network,
+            ),
+        )
+        stale = [
+            (source, runner)
+            for source, runner in sources
+            if author_network.is_cache_stale(conn, source)
+        ]
+        if not stale:
+            return
+
+        set_job_status(
+            job_id,
+            status="running",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            started_at=utcnow().isoformat(),
+            processed=0,
+            total=len(stale) + 1,
+            message="Refreshing author suggestions in the background",
+        )
+
+        class _PeriodicSuggestionCtx:
+            def log_step(
+                self,
+                step,
+                *,
+                message=None,
+                processed=None,
+                total=None,
+                **_,
+            ):
+                add_job_log(
+                    job_id,
+                    message or str(step),
+                    step=f"suggestion_{step}",
+                )
+
+        results: dict[str, dict] = {}
+        for index, (source, runner) in enumerate(stale, start=1):
+            set_job_status(
+                job_id,
+                status="running",
+                processed=index - 1,
+                total=len(stale) + 1,
+                message=f"Refreshing {source}",
+            )
+            results[source] = runner(str(_db_path()), ctx=_PeriodicSuggestionCtx())
+
+        from alma.application.authors import seed_thin_suggestion_authors
+
+        set_job_status(
+            job_id,
+            status="running",
+            processed=len(stale),
+            total=len(stale) + 1,
+            message="Seeding under-covered suggested authors",
+        )
+        results["suggestion_seed"] = seed_thin_suggestion_authors(
+            str(_db_path()),
+            ctx=_PeriodicSuggestionCtx(),
+        )
+        set_job_status(
+            job_id,
+            status="completed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            processed=len(stale) + 1,
+            total=len(stale) + 1,
+            finished_at=utcnow().isoformat(),
+            message="Author suggestions refreshed",
+            result=results,
+        )
+    except Exception as exc:
+        logger.exception("Periodic author suggestion refresh failed")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message="Author suggestion refresh failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+    finally:
+        conn.close()
 
 
 def refresh_recommendations_periodic() -> None:

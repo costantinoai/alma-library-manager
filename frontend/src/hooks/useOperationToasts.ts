@@ -102,6 +102,10 @@ function rootsForOperation(operationKey?: string): string[] {
       'discovery-seeded-similar',
       'discovery-explain',
       'frontier',
+      // Recommendation reactions change the space-owned preference field
+      // independently of the durable layout payload.
+      'signal-field',
+      'author-field',
       'insights-diagnostics',
     ]
   }
@@ -110,6 +114,8 @@ function rootsForOperation(operationKey?: string): string[] {
     return [
       'graph',
       'frontier',
+      'signal-field',
+      'author-field',
       'authors',
       'insights-diagnostics',
     ]
