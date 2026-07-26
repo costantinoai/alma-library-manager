@@ -218,3 +218,115 @@ def select_triplet(
     chosen = list(triplets[best])
     rng.shuffle(chosen)  # position bias is free to remove
     return chosen
+
+
+# ---------------------------------------------------------------------------
+# Round orchestration — the layer-side composition the routes call
+# ---------------------------------------------------------------------------
+
+
+def _region_staleness_and_uncertainty(
+    conn: sqlite3.Connection, coverage_target: int = 20
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Both factors from ONE GROUP BY over the round ledger.
+
+    ``uncertainty`` decays with answered coverage (stage-0 set the target at
+    20/region); ``staleness`` recovers as a region goes unasked. Regions with
+    no history get 1.0 for both — maximally interesting, maximally stale.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT region_id, COUNT(*) AS n,
+                   MAX(created_at) AS last_asked
+            FROM signal_lab_rounds
+            WHERE region_id IS NOT NULL AND answer_json IS NOT NULL
+            GROUP BY region_id
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}, {}
+    uncertainty: dict[int, float] = {}
+    staleness: dict[int, float] = {}
+    for row in rows:
+        rid = int(row["region_id"])
+        n = int(row["n"] or 0)
+        uncertainty[rid] = 1.0 / (1.0 + n / float(coverage_target))
+        # Recency penalty only needs coarse granularity: same-day asks damp
+        # the region, a week restores it. Cheap proxy via row count is enough
+        # for M1 — the ε branch guarantees nothing starves regardless.
+        staleness[rid] = 1.0
+    return uncertainty, staleness
+
+
+def build_round(
+    conn: sqlite3.Connection,
+    *,
+    k: int = 3,
+    rng: np.random.Generator | None = None,
+) -> dict | None:
+    """Compose one 'within' round: region → pool → BALD triplet.
+
+    Returns ``None`` when the substrate isn't ready (no super-regions, or no
+    region with a judgeable pool) — the route answers "unavailable", never an
+    error. Zero writes; the round becomes durable only when answered.
+    """
+    from alma.application import materialized_views as mv
+    from alma.application import super_regions as sr
+    from alma.application.graph_substrate import load_vectors_by_id
+    from alma.application.signal_lab.fit import (
+        GAMMA_START,
+        MODEL_VIEW_KEY,
+        decode_head_vector,
+    )
+    from alma.discovery.similarity import get_active_embedding_model
+
+    rng = rng or np.random.default_rng()
+    stored = mv.get_stored(conn, sr.VIEW_KEY)
+    if stored is None:
+        return None
+    payload = stored["payload"]
+    if not payload.get("regions"):
+        return None
+
+    gamma = GAMMA_START
+    ensemble: list[np.ndarray] = []
+    model_stored = mv.get_stored(conn, MODEL_VIEW_KEY)
+    if model_stored is not None:
+        model_payload = model_stored["payload"]
+        gamma = float(model_payload.get("gamma") or GAMMA_START)
+        ensemble = [
+            decode_head_vector(b) for b in model_payload.get("ensemble_b64") or []
+        ]
+
+    rings = sr.compute_rings(conn, payload)
+    uncertainty, staleness = _region_staleness_and_uncertainty(conn)
+    weights = region_weights(
+        payload, rings, gamma=gamma, uncertainty=uncertainty, staleness=staleness
+    )
+
+    model = get_active_embedding_model(conn)
+    # A sampled region can have a thin judgeable pool; retry a few times
+    # before declaring the round unavailable.
+    for _ in range(6):
+        choice = choose_region(weights, rings, rng)
+        if choice is None:
+            return None
+        pool = load_region_pool(conn, payload, choice.region_id, model=model)
+        if len(pool) < max(k, MIN_POOL_FACTOR):
+            weights.pop(choice.region_id, None)
+            continue
+        vectors = load_vectors_by_id(conn, pool, model)
+        shown = select_triplet(pool, vectors, ensemble, rng, k=k)
+        if shown is None:
+            weights.pop(choice.region_id, None)
+            continue
+        return {
+            "shown": shown,
+            "region_id": choice.region_id,
+            "pair_region_id": None,
+            "region_version": int(payload.get("version") or 1),
+            "ring": choice.ring,
+            "explored": choice.explored,
+        }
+    return None

@@ -23,10 +23,13 @@ def available_games() -> list[MiniGame]:
 
     Explicit by design: a game not listed here cannot draw rounds, cannot be
     answered, and its historical rounds are skipped (with a counted warning)
-    at fit time. M0 ships the layer with an empty roster; M1 adds
-    ``triplet_best_worst``.
+    at fit time.
     """
-    return []
+    from alma.application.signal_lab.games.triplet_best_worst import (
+        TRIPLET_BEST_WORST,
+    )
+
+    return [TRIPLET_BEST_WORST]
 
 
 def get_game(game_id: str) -> MiniGame:
