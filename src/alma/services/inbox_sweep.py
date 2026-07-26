@@ -141,7 +141,17 @@ def run_inbox_sweep(
         return {"channels": [], "captured": 0}
 
     per_channel = [sweep_channel(conn, channel, limit=limit) for channel in channels]
+    # A channel that could not even be READ is a failure, not an empty result.
+    # Without this the caller sees captured=0 and reports "nothing new" —
+    # a hard error dressed as success, which is exactly what "no silent
+    # failures" forbids.
+    errors = [
+        {"channel": entry["channel"], "error": entry["fetch_error"]}
+        for entry in per_channel
+        if entry.get("fetch_error")
+    ]
     return {
         "channels": per_channel,
         "captured": sum(int(entry.get("resolved") or 0) for entry in per_channel),
+        "errors": errors,
     }

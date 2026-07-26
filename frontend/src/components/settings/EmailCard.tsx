@@ -6,7 +6,7 @@ import { useMutation } from '@tanstack/react-query'
 import { Mail, Send } from 'lucide-react'
 
 import { testPluginConnection, type Settings } from '@/api/client'
-import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
+import { AsyncButton, SettingsCard, SettingsSaveBar } from '@/components/settings/primitives'
 import {
   Form,
   FormControl,
@@ -33,6 +33,12 @@ const emailSchema = z.object({
 type EmailForm = z.infer<typeof emailSchema>
 
 interface EmailCardProps {
+  /** Shared save state from SettingsPage — ONE mutation, surfaced per card so
+   *  the button sits with the fields it persists. */
+  onSave?: () => void
+  saving?: boolean
+  saved?: boolean
+  saveError?: boolean
   formData: Settings
   onFormDataChange: (updater: (prev: Settings) => Settings) => void
 }
@@ -43,7 +49,7 @@ interface EmailCardProps {
  * backend skips re-saving a masked echo, so leaving it untouched keeps the key.
  * To actually receive digests here, add "Email" to an alert's channels.
  */
-export function EmailCard({ formData, onFormDataChange }: EmailCardProps) {
+export function EmailCard({ formData, onFormDataChange, onSave, saving, saved, saveError }: EmailCardProps) {
   const { toast } = useToast()
 
   const form = useForm<EmailForm>({
@@ -119,6 +125,18 @@ export function EmailCard({ formData, onFormDataChange }: EmailCardProps) {
       icon={Mail}
       title="Email digests"
       description="Send new-paper digests to your inbox over SMTP. Add “Email” to an alert's channels to use it."
+      footer={
+        onSave ? (
+          <SettingsSaveBar
+            onSave={onSave}
+            pending={saving}
+            saved={saved}
+            error={saveError}
+            label="Save email settings"
+            hint="Saves SMTP host, port, credentials and recipients."
+          />
+        ) : undefined
+      }
     >
       <Form {...form}>
         <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>

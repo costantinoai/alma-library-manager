@@ -279,13 +279,34 @@ export function SettingsPage() {
               />
             </Anchor>
             <Anchor id="id-resolution">
-              <IdentifierResolutionCard formData={formData} onFormDataChange={setFormData} />
+              <IdentifierResolutionCard
+                formData={formData}
+                onFormDataChange={setFormData}
+                onSave={handleSave}
+                saving={saveMutation.isPending}
+                saved={saveSuccess}
+                saveError={saveMutation.isError}
+              />
             </Anchor>
             <Anchor id="channels">
-              <ChannelsCard formData={formData} onFormDataChange={setFormData} />
+              <ChannelsCard
+                formData={formData}
+                onFormDataChange={setFormData}
+                onSave={handleSave}
+                saving={saveMutation.isPending}
+                saved={saveSuccess}
+                saveError={saveMutation.isError}
+              />
             </Anchor>
             <Anchor id="email-digests">
-              <EmailCard formData={formData} onFormDataChange={setFormData} />
+              <EmailCard
+                formData={formData}
+                onFormDataChange={setFormData}
+                onSave={handleSave}
+                saving={saveMutation.isPending}
+                saved={saveSuccess}
+                saveError={saveMutation.isError}
+              />
             </Anchor>
 
             {/* Connection-settings save footer.

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { Search } from 'lucide-react'
 
 import type { Settings } from '@/api/client'
-import { SettingsCard, ToggleRow } from '@/components/settings/primitives'
+import { SettingsCard, SettingsSaveBar, ToggleRow } from '@/components/settings/primitives'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Form, FormControl, FormField, FormItem } from '@/components/ui/form'
 
@@ -19,6 +19,12 @@ const identifierSchema = z.object({
 type IdentifierForm = z.infer<typeof identifierSchema>
 
 interface IdentifierResolutionCardProps {
+  /** Shared save state from SettingsPage — ONE mutation, surfaced per card so
+   *  the button sits with the fields it persists. */
+  onSave?: () => void
+  saving?: boolean
+  saved?: boolean
+  saveError?: boolean
   formData: Settings
   onFormDataChange: (updater: (prev: Settings) => Settings) => void
 }
@@ -61,6 +67,10 @@ const TOGGLES: Toggle[] = [
 export function IdentifierResolutionCard({
   formData,
   onFormDataChange,
+  onSave,
+  saving,
+  saved,
+  saveError,
 }: IdentifierResolutionCardProps) {
   const form = useForm<IdentifierForm>({
     resolver: zodResolver(identifierSchema),
@@ -112,6 +122,18 @@ export function IdentifierResolutionCard({
       icon={Search}
       title="Identifier Resolution"
       description="Configure how Scholar IDs are resolved: API-first by default, scraping only when enabled."
+      footer={
+        onSave ? (
+          <SettingsSaveBar
+            onSave={onSave}
+            pending={saving}
+            saved={saved}
+            error={saveError}
+            label="Save resolution settings"
+            hint="Saves which identifier sources ALMa may use."
+          />
+        ) : undefined
+      }
     >
       <Form {...form}>
         <form className="space-y-3" onSubmit={(e) => e.preventDefault()}>

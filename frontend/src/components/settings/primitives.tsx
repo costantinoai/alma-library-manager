@@ -15,10 +15,10 @@
  */
 
 import * as React from 'react'
-import { ChevronDown, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, Save, TriangleAlert, type LucideIcon } from 'lucide-react'
 
 import { Button, type ButtonProps } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
@@ -50,6 +50,14 @@ export interface SettingsCardProps {
   contentClassName?: string
   /** When true, the body gets `space-y-6` instead of the default `space-y-4`. */
   roomy?: boolean
+  /**
+   * Optional footer, rendered under a divider. Cards whose values are persisted
+   * by an explicit action put their save affordance here (see
+   * {@link SettingsSaveBar}) so it sits WITH the fields it saves — a single
+   * page-level button at the bottom of a long section is invisible to anyone
+   * who deep-linked to one card.
+   */
+  footer?: React.ReactNode
   children: React.ReactNode
 }
 
@@ -62,6 +70,7 @@ export function SettingsCard({
   headerClassName,
   contentClassName,
   roomy,
+  footer,
   children,
 }: SettingsCardProps) {
   return (
@@ -83,6 +92,9 @@ export function SettingsCard({
       <CardContent className={cn(roomy ? 'space-y-6' : 'space-y-4', contentClassName)}>
         {children}
       </CardContent>
+      {footer ? (
+        <CardFooter className="border-t border-edge-1 pt-4">{footer}</CardFooter>
+      ) : null}
     </Card>
   )
 }
@@ -554,4 +566,65 @@ export function SettingsSections({
   className?: string
 }) {
   return <div className={cn('space-y-3', className)}>{children}</div>
+}
+
+
+// ---------------------------------------------------------------------------
+// SettingsSaveBar — the save affordance for cards that persist on demand.
+// ---------------------------------------------------------------------------
+
+export interface SettingsSaveBarProps {
+  /** Persist the whole settings form. Every card shares ONE mutation upstream;
+   *  this is just the button that triggers it. */
+  onSave: () => void
+  pending?: boolean
+  /** Show the "saved" confirmation. Driven by the page's single mutation, so
+   *  saving from any card confirms in the card you clicked. */
+  saved?: boolean
+  error?: boolean
+  /** Overrides the default label for cards where "Save" alone is ambiguous. */
+  label?: string
+  /** Optional one-line reminder of what this button covers. */
+  hint?: React.ReactNode
+}
+
+/**
+ * A save row for a settings card footer.
+ *
+ * Exists because the page's single "Save connection settings" button lived at
+ * the bottom of a long section: anyone who deep-linked to one card (Settings →
+ * Channels, say) changed a field and saw nowhere to save it. The fix is one
+ * shared bar rendered per card — NOT one mutation per card, which would be four
+ * copies of the same PUT.
+ */
+export function SettingsSaveBar({
+  onSave,
+  pending,
+  saved,
+  error,
+  label = 'Save',
+  hint,
+}: SettingsSaveBarProps) {
+  return (
+    <div className="flex w-full flex-wrap items-center justify-between gap-3">
+      <span className="text-xs text-slate-500">{hint}</span>
+      <span className="flex items-center gap-3">
+        {saved ? (
+          <span className="inline-flex items-center gap-1.5 text-sm text-success-600">
+            <Check className="h-4 w-4" />
+            Saved
+          </span>
+        ) : null}
+        {error ? (
+          <span className="inline-flex items-center gap-1.5 text-sm text-critical-600">
+            <TriangleAlert className="h-4 w-4" />
+            Couldn&apos;t save
+          </span>
+        ) : null}
+        <AsyncButton icon={<Save className="h-4 w-4" />} pending={pending} onClick={onSave}>
+          {label}
+        </AsyncButton>
+      </span>
+    </div>
+  )
 }

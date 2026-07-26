@@ -6,7 +6,7 @@ import { useMutation } from '@tanstack/react-query'
 import { Inbox, MessageSquare, Zap } from 'lucide-react'
 
 import { sweepInboxNow, testPluginConnection, type Settings } from '@/api/client'
-import { AsyncButton, SettingsCard } from '@/components/settings/primitives'
+import { AsyncButton, SettingsCard, SettingsSaveBar } from '@/components/settings/primitives'
 import {
   Form,
   FormControl,
@@ -40,11 +40,17 @@ const channelsSchema = z.object({
 type ChannelsForm = z.infer<typeof channelsSchema>
 
 interface ChannelsCardProps {
+  /** Shared save state from SettingsPage — ONE mutation, surfaced per card so
+   *  the button sits with the fields it persists. */
+  onSave?: () => void
+  saving?: boolean
+  saved?: boolean
+  saveError?: boolean
   formData: Settings
   onFormDataChange: (updater: (prev: Settings) => Settings) => void
 }
 
-export function ChannelsCard({ formData, onFormDataChange }: ChannelsCardProps) {
+export function ChannelsCard({ formData, onFormDataChange, onSave, saving, saved, saveError }: ChannelsCardProps) {
   const { toast } = useToast()
 
   const form = useForm<ChannelsForm>({
@@ -143,6 +149,18 @@ export function ChannelsCard({ formData, onFormDataChange }: ChannelsCardProps) 
       icon={MessageSquare}
       title="Channels"
       description="Slack for outgoing alerts, and the channel ALMa reads to capture papers you send yourself."
+      footer={
+        onSave ? (
+          <SettingsSaveBar
+            onSave={onSave}
+            pending={saving}
+            saved={saved}
+            error={saveError}
+            label="Save channels"
+            hint="Saves the Slack token and both channel fields."
+          />
+        ) : undefined
+      }
     >
       <Form {...form}>
         <form className="space-y-4" onSubmit={(e) => e.preventDefault()}>

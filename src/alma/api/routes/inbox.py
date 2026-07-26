@@ -116,6 +116,12 @@ def sweep_inbox_now(
     def _handler(_ctx):
         result = run_inbox_sweep(db)
         captured = int(result.get("captured") or 0)
+        errors = result.get("errors") or []
+        if errors:
+            # A channel we could not READ is a failure. Reporting "nothing new"
+            # here would dress a hard error as success — the exact silent
+            # failure this endpoint exists to prevent.
+            raise SlackChannelError(_explain_channel_error(errors[0]["error"]))
         return OperationOutcome(
             status="completed" if captured else "noop",
             message=(
@@ -126,10 +132,64 @@ def sweep_inbox_now(
             result=result,
         )
 
-    op = runner.run(
-        operation_key="inbox.capture_sweep_manual",
-        handler=_handler,
-        trigger_source="user",
-        actor=str(user.get("username") or "api_user"),
-    )
+    try:
+        op = runner.run(
+            operation_key="inbox.capture_sweep_manual",
+            handler=_handler,
+            trigger_source="user",
+            actor=str(user.get("username") or "api_user"),
+        )
+    except SlackChannelError as exc:
+        # 502: the failure is upstream (Slack rejected us), not a bad request.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     return op.get("result") or {"captured": 0, "channels": []}
+
+
+class SlackChannelError(RuntimeError):
+    """A capture channel could not be read. Carries user-facing guidance."""
+
+
+#: Slack's error codes are precise but opaque. Each maps to exactly one thing
+#: the user has to go and do, so say that instead of echoing the code.
+_CHANNEL_ERROR_HELP: dict[str, str] = {
+    "missing_scope": (
+        "The Slack app is missing a permission. ALMa needs BOTH `channels:read` "
+        "and `groups:read` to look a channel up by name, plus `groups:history` "
+        "(private) or `channels:history` (public), and `reactions:write`. Add "
+        "them under OAuth & Permissions, then click Reinstall to Workspace — "
+        "scopes do nothing until the app is reinstalled."
+    ),
+    "not_in_channel": (
+        "The bot is not a member of that channel. Open it in Slack and send "
+        "`/invite @ALMa` (use your bot's name). Installing the app does not "
+        "join any channel by itself."
+    ),
+    "channel_not_found": (
+        "No channel by that name is visible to the bot. Check the spelling in "
+        "Settings (use the bare name, no `#`), and make sure the bot has been "
+        "invited to it — a private channel the bot has not joined is invisible "
+        "to it. You can also paste the channel ID (starts with `C`) instead."
+    ),
+    "invalid_auth": (
+        "Slack rejected the bot token. Re-copy the Bot User OAuth Token from "
+        "OAuth & Permissions into Settings → Channels."
+    ),
+    "account_inactive": (
+        "The Slack app was uninstalled or disabled. Reinstall it to your "
+        "workspace, then re-copy the token."
+    ),
+    "ratelimited": (
+        "Slack is rate-limiting ALMa. Wait a minute and try again; the "
+        "scheduled sweep will catch up on its own."
+    ),
+}
+
+
+def _explain_channel_error(raw: str) -> str:
+    """Turn a Slack error into the one action that fixes it."""
+    text = str(raw or "").strip()
+    lowered = text.lower()
+    for code, help_text in _CHANNEL_ERROR_HELP.items():
+        if code in lowered:
+            return f"{help_text} (Slack said: {code})"
+    return f"Could not read your capture channel. Slack said: {text}"
