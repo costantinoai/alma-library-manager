@@ -930,7 +930,7 @@ def _build_signal_lab_snapshot(db: sqlite3.Connection) -> dict[str, Any]:
     next_actions: list[str] = []
 
     try:
-        from alma.services.signal_lab import compute_signal_stats, get_signal_results_summary
+        from alma.services.feedback_substrate import compute_signal_stats, get_signal_results_summary
 
         stats = compute_signal_stats(db)
         results = get_signal_results_summary(db, days=14)

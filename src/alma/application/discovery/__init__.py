@@ -925,10 +925,10 @@ def refresh_lens_recommendations(
     # to one preload + an `IN (?, ?, …)` authors batch collapses the
     # hot-loop cost to cheap dict hits.
     phase_started = perf_counter()
-    from alma.services.signal_lab import (
+    from alma.services.feedback_substrate import (
         preload_candidate_authors as _preload_authors,
     )
-    from alma.services.signal_lab import (
+    from alma.services.feedback_substrate import (
         preload_preference_profile_maps as _preload_pref,
     )
     preloaded_preference_profile = _preload_pref(db)

@@ -952,7 +952,7 @@ def record_paper_feedback(
 ) -> None:
     """Record a paper feedback event through the one feedback engine.
 
-    Thin adapter over ``services.signal_lab.record_feedback`` — the single
+    Thin adapter over ``services.feedback_substrate.record_feedback`` — the single
     event-recording engine, shared with Feed — so every surface
     (Library / Discovery / onboarding / publications / Feed) writes the same
     ``paper_action`` event shape with consistent context enrichment.
@@ -969,7 +969,7 @@ def record_paper_feedback(
         return
     # Lazy import: a module-level ``application → services`` import would be a
     # cycle. Feed records through the same engine the same way.
-    from alma.services.signal_lab import record_feedback
+    from alma.services.feedback_substrate import record_feedback
 
     record_feedback(
         db,

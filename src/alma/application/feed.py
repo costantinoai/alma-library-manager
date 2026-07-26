@@ -1265,7 +1265,7 @@ def apply_feed_action(
         # writes no event: it is visibility, not an opinion about the paper.
         if action != "dismiss":
             try:
-                from alma.services.signal_lab import record_feedback
+                from alma.services.feedback_substrate import record_feedback
 
                 score_breakdown = feed_item.get("score_breakdown") or {}
                 if not isinstance(score_breakdown, dict):

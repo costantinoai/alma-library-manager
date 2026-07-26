@@ -45,7 +45,7 @@ from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.discovery import similarity as sim_module
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
-from alma.services.signal_lab import get_preference_affinity_signal
+from alma.services.feedback_substrate import get_preference_affinity_signal
 
 logger = logging.getLogger(__name__)
 

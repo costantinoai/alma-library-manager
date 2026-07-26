@@ -1,11 +1,18 @@
-"""Signal Lab service: feedback recording, preference profiles, and stats.
+"""Feedback substrate: feedback recording, preference profiles, and stats.
 
 Records feedback events, maintains the materialized preference_profiles
 table that feeds the discovery scoring engine, derives topic/author
 preferences, and aggregates feedback into the Insights "Feedback Learning"
-stats. The interactive play modes (Source Sprint / Author Duel /
-Swipe·Triage) were removed 2026-07-18 — see
-tasks/archive/completed/ — leaving only the always-on learning substrate.
+stats. This is the ALWAYS-ON learning substrate — every surface (Feed /
+Library / rating endpoints) writes through `record_feedback` here.
+
+Named `signal_lab.py` until 2026-07-26 (task 54 P0): the interactive play
+modes were removed 2026-07-18 (see tasks/archive/completed/), and the name
+now belongs to the reversible minigame layer in
+`alma.application.signal_lab` — which deliberately does NOT write through
+this module (D20: `preference_profiles` is a wall-clock-decay accumulator,
+path-dependent and unreversible, so lab signal keeps its own purgeable
+store).
 """
 
 from __future__ import annotations
