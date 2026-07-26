@@ -123,9 +123,17 @@ so the cursor can never claim progress the database doesn't actually hold.
 ### What `inbox_messages` stores
 
 **Messages, never papers.** A resolved capture is an ordinary `papers` row; this
-table records that a message arrived and what became of it. It exists for three
+table records that a message arrived and what became of it. It exists for four
 jobs nothing else can do: idempotency, a durable home for messages that resolved
-to no paper, and the cursor.
+to no paper, the cursor, and **provenance**.
+
+Provenance is what lets a triage tile on Home say *"Slack · captured 2h ago"*,
+and it is also the Inbox's sort key. Ordering captures by `papers.added_at`
+would answer the wrong question — that is when a paper entered your *corpus* —
+so a paper your Feed collected two years ago, re-sent from your phone this
+morning, would sink to the bottom of the queue it had just joined. Home reads
+the **newest** message per paper: re-sending a link you already sent is the same
+capture, not two.
 
 ## Slack
 
@@ -187,8 +195,9 @@ Prose around the link is ignored.
 ## Adding a channel
 
 1. Implement `InboundChannel` in `src/alma/services/inbox_channels/`.
-2. Register it in `available_channels()` — registration is explicit, so the list
-   tells you exactly what can put a paper in your Inbox.
+2. Add a `ChannelDescriptor` to `alma.channels.CHANNELS` with the `receive`
+   capability — registration is explicit, so that one list tells you exactly
+   what can put a paper in your Inbox (and what ALMa can post to).
 
 That's all. Resolution, corpus landing, Inbox membership, idempotency and the
 cursor are already handled.
@@ -198,3 +207,4 @@ cursor are already handled.
 * [Paper lifecycle](paper-lifecycle.md) — the two state axes
 * [Home](home.md) — where Inbox items surface
 * [Library](library.md) — where triaged papers land
+* [Delivery channels](channels.md) — the registry both directions share
