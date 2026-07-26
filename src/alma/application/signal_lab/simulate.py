@@ -226,7 +226,7 @@ def run_policy(
     world: SimWorld,
     policy: str,
     *,
-    rounds_budget: int = 220,
+    rounds_budget: int = 280,  # 200 answered + skip-rate headroom, every seed
     refit_every: int = 5,
     seed: int = 1,
 ) -> dict[str, Any]:
@@ -372,11 +372,27 @@ def run_stage0(world: SimWorld, *, seeds: tuple[int, ...] = (1, 2, 3)) -> dict[s
     final_cp = max(CHECKPOINTS)
     bald_final = summary.get("bald", {}).get(final_cp)
     random_final = summary.get("stratified_random", {}).get(final_cp)
+    # Two reads of the BALD gate. The final-checkpoint one is the strict
+    # asymptotic test; the EARLY one is the user-relevant regime — a real
+    # user answers tens of rounds, not hundreds, and active-learning gains
+    # are largest exactly there (they converge as the pool saturates).
+    early_cps = [cp for cp in CHECKPOINTS if cp < final_cp]
+    early_deltas = [
+        summary["bald"][cp] - summary["stratified_random"][cp]
+        for cp in early_cps
+        if cp in summary.get("bald", {}) and cp in summary.get("stratified_random", {})
+    ]
     gates = {
         "bald_beats_random_at_200": (
             None
             if bald_final is None or random_final is None
             else bool(bald_final > random_final + 0.02)
+        ),
+        "bald_early_advantage_mean": (
+            round(float(np.mean(early_deltas)), 4) if early_deltas else None
+        ),
+        "bald_beats_random_early": (
+            bool(np.mean(early_deltas) > 0.02) if early_deltas else None
         ),
     }
     return {

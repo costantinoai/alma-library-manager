@@ -60,9 +60,12 @@ OFFSET_SHRINKAGE = 8.0
 # Bootstrap ensemble size for the BALD disagreement scorer (Houlsby 2011).
 ENSEMBLE_K = 8
 
-# Ridge pull of the utility vector toward the prior, and SGD settings.
+# Ridge pull of the utility vector toward the prior, and full-batch
+# gradient-descent settings (vectorised — a per-sample python loop timed out
+# the stage-0 simulator at 500 s; the batch form is ~100× faster and drops
+# the sample-order dependence entirely).
 UTILITY_RIDGE = 0.10
-UTILITY_EPOCHS = 40
+UTILITY_EPOCHS = 200
 UTILITY_LR = 0.5
 
 # A paper needs this many consistent boundary votes before the lab overlays
@@ -204,7 +207,12 @@ def _sgd_utility(
     seed: int,
     sample_with_replacement: bool,
 ) -> np.ndarray | None:
-    """One Bradley–Terry logistic fit of ``w`` on preference differences."""
+    """One Bradley–Terry logistic fit of ``w`` on preference differences.
+
+    Full-batch gradient descent on the n×d difference matrix — vectorised,
+    deterministic given the bootstrap sample, and fast enough that the
+    stage-0 simulator can refit hundreds of times.
+    """
     usable = [
         (vectors[p.a], vectors[p.b])
         for p in prefs
@@ -212,25 +220,23 @@ def _sgd_utility(
     ]
     if not usable:
         return None
-    dim = usable[0][0].shape[0]
-    w = prior_unit.copy() if prior_unit is not None and prior_unit.shape[0] == dim else np.zeros(
-        dim, dtype=np.float32
+    diffs = np.stack([(xa - xb) for xa, xb in usable]).astype(np.float32)  # n × d
+    if sample_with_replacement:
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(len(diffs), size=len(diffs), replace=True)
+        diffs = diffs[idx]
+    n, dim = diffs.shape
+    w = (
+        prior_unit.copy()
+        if prior_unit is not None and prior_unit.shape[0] == dim
+        else np.zeros(dim, dtype=np.float32)
     )
     anchor = w.copy()
-    rng = np.random.default_rng(seed)
-    idx = np.arange(len(usable))
     for _ in range(UTILITY_EPOCHS):
-        order = (
-            rng.choice(idx, size=len(idx), replace=True)
-            if sample_with_replacement
-            else rng.permutation(idx)
-        )
-        for i in order:
-            xa, xb = usable[i]
-            diff = (xa - xb).astype(np.float32)
-            z = float(w @ diff)
-            grad = (1.0 / (1.0 + np.exp(-z)) - 1.0) * diff  # -(1 - σ(z))·diff
-            w = w - UTILITY_LR * (grad + UTILITY_RIDGE * (w - anchor)) / max(1, len(usable))
+        z = diffs @ w
+        residual = 1.0 / (1.0 + np.exp(-z)) - 1.0  # σ(z) − 1, wants each diff > 0
+        grad = (diffs.T @ residual) / n + UTILITY_RIDGE * (w - anchor)
+        w = w - UTILITY_LR * grad
     return w.astype(np.float32)
 
 
@@ -263,7 +269,7 @@ def _fit_overrides(votes: dict[str, dict[int, int]]) -> dict[str, dict[str, int]
 
 def _pairwise_accuracy(
     prefs: list[Pref],
-    score: "dict[str, float] | None",
+    score: dict[str, float] | None,
 ) -> float | None:
     """Share of held-out pairs the scorer orders correctly. None when unscorable."""
     if not prefs or score is None:
