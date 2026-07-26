@@ -904,7 +904,6 @@ export interface Settings {
   from_year?: number
   api_call_delay?: string
   database?: string
-  slack_config_path?: string
   slack_token?: string
   slack_channel?: string
   /** Channel ALMa POLLS for papers you send yourself. Separate from
@@ -2513,7 +2512,7 @@ export interface InsightsDiagnostics {
       slack_configured: boolean
       degraded_monitors: number
       disabled_sources: number
-      unhealthy_plugins: number
+      misconfigured_channels: number
       recent_failed_operations_24h: number
     }
     states: Array<{
@@ -2538,7 +2537,14 @@ export interface InsightsDiagnostics {
     plugins: Array<{
       name: string
       display_name: string
+      /** Directions this channel supports: 'send' and/or 'receive'. */
+      capabilities?: string[]
       is_configured: boolean
+      can_send?: boolean
+      can_receive?: boolean
+      /** Configured, but a direction it supports cannot run (e.g. a Slack
+       *  token with no channel to post into). */
+      half_configured?: boolean
       is_healthy?: boolean | null
     }>
     disabled_sources: string[]

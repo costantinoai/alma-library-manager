@@ -18,7 +18,7 @@ from alma.api.deps import (  # internal helpers for path resolution
     open_db_connection,
 )
 from alma.api.helpers import raise_internal
-from alma.api.models import JobCreate, JobResponse, SavePublicationsRequest, SendPublicationsRequest
+from alma.api.models import JobCreate, JobResponse, SavePublicationsRequest
 from alma.api.scheduler import (
     activity_envelope,
     add_cron_job,
@@ -33,13 +33,8 @@ from alma.api.scheduler import (
 )
 from alma.config import get_fetch_year
 from alma.core.backend import _settings as _fb_settings
-from alma.core.backend import fetch_from_json, fetch_publications_by_id
-from alma.core.utils import derive_source_id, to_publication_dataclass
-from alma.plugins.base import Publication
-from alma.plugins.config import load_plugin_config
-from alma.plugins.helpers import get_slack_plugin
-from alma.plugins.registry import get_global_registry
-from alma.plugins.slack import SlackPlugin
+from alma.core.backend import fetch_publications_by_id
+from alma.core.utils import derive_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -134,67 +129,6 @@ def do_refresh_cache_all(authors_db: sqlite3.Connection, job_id: str | None = No
         result["failed"] = len(failures)
         result["failed_authors"] = [f["author_name"] for f in failures[:20]]
     return result
-
-
-def do_fetch_and_send_all_progress(job_id: str | None = None) -> dict:
-    # Validate plugin config early
-    plugin, config = get_slack_plugin(required=True)
-
-    # Gather authors list for progress
-    conn = open_db_connection()
-    try:
-        rows = conn.execute("SELECT id, name FROM authors").fetchall()
-    finally:
-        conn.close()
-
-    total = len(rows)
-    processed = 0
-    all_works = []
-    from_year = get_fetch_year()
-    for r in rows:
-        if job_id and is_cancellation_requested(job_id):
-            set_job_status(
-                job_id,
-                status="cancelled",
-                finished_at=datetime.now().isoformat(),
-                message="Fetch-and-send cancelled by user",
-                result={
-                    "success": False,
-                    "sent": False,
-                    "cancelled": True,
-                    "processed": processed,
-                    "total": total,
-                    "fetched": len(all_works),
-                },
-            )
-            add_job_log(job_id, "Cancellation acknowledged during fetch-and-send loop", step="cancelled")
-            return {"success": False, "sent": False, "cancelled": True, "processed": processed, "total": total}
-
-        author_id = r["id"]
-        author_name = r["name"]
-        works = fetch_publications_by_id(
-            author_id,
-            output_folder=_data_dir(),
-            args=SimpleNamespace(update_cache=False, test_fetching=False),
-            from_year=from_year,
-        ) or []
-        all_works.extend(works)
-        processed += 1
-        if job_id:
-            try:
-                set_job_status(job_id, status="running", processed=processed, total=total, current_author=author_name)
-            except Exception:
-                pass
-
-    # Convert to Publication dataclasses
-    publications = [to_publication_dataclass(p) for p in all_works]
-
-    message = plugin.format_publications(publications)
-    target = config.get("default_channel") or config.get("channel", "")
-    ok = plugin.send_message(message, target)
-    if not ok:
-        raise RuntimeError("Failed to send notification")
-    return {"success": True, "sent": True, "count": len(publications)}
 
 
 def _existing_author_source_ids(db: sqlite3.Connection, author_id: str) -> set[str]:
@@ -496,93 +430,6 @@ def save_preview_publications_bulk(
     )
 
 
-@router.post("/notify/send", summary="Send publications via plugin")
-def send_publications(req: SendPublicationsRequest):
-    """Queue an Activity-tracked send of publications via the selected plugin.
-
-    Input validation (plugin configured, plugin registered, payload shape) runs
-    synchronously so callers still get a 4xx/404 immediately. The remote send
-    itself runs on the APS scheduler pool so the request thread is released
-    before the network round-trip.
-    """
-    plugin_name = (req.plugin_name or "slack").lower()
-    config = load_plugin_config(plugin_name)
-    if not config:
-        raise HTTPException(status_code=400, detail=f"Plugin '{plugin_name}' not configured")
-
-    registry = get_global_registry()
-    if plugin_name not in registry.list_plugins():
-        if plugin_name == "slack":
-            registry.register(SlackPlugin)
-        else:
-            raise HTTPException(status_code=404, detail=f"Plugin '{plugin_name}' not available")
-
-    publications: list[Publication] = [
-        Publication(
-            title=it.title,
-            authors=it.authors or "",
-            year=str(it.year or ""),
-            abstract=it.abstract or "",
-            pub_url=it.url or "",
-            journal=it.journal or "",
-            citations=it.citations or 0,
-        )
-        for it in req.items
-    ]
-
-    if not publications:
-        return {"success": True, "sent": False, "count": 0, "status": "noop"}
-
-    target = req.target or config.get("default_channel") or config.get("channel", "")
-    operation_key = f"operations.notify_send:{plugin_name}"
-    job_id = f"notify_send_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=datetime.now().isoformat(),
-        processed=0,
-        total=len(publications),
-        message=f"Sending {len(publications)} publications via {plugin_name}",
-    )
-
-    def _runner():
-        try:
-            plugin = registry.create_instance(plugin_name, config, cache=True)
-            message = plugin.format_publications(publications)
-            ok = plugin.send_message(message, target)
-            if not ok:
-                raise RuntimeError("Plugin returned failure from send_message")
-            set_job_status(
-                job_id,
-                status="completed",
-                finished_at=datetime.now().isoformat(),
-                processed=len(publications),
-                total=len(publications),
-                message=f"Sent {len(publications)} publications via {plugin_name}",
-                result={"success": True, "sent": True, "count": len(publications)},
-            )
-        except Exception as exc:  # pragma: no cover - runner crash path
-            logger.error("notify/send runner failed: %s", exc)
-            set_job_status(
-                job_id,
-                status="failed",
-                finished_at=datetime.now().isoformat(),
-                message="Notify send failed",
-                error=str(exc),
-            )
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message=f"Queued send of {len(publications)} publications",
-        total=len(publications),
-    )
-
-
 @router.post("/hard-reset", summary="Hard reset publications database and refetch all authors")
 def hard_reset_publications_db(user: dict = Depends(get_current_user)):
     """Schedule a background hard reset and return a job id for progress polling."""
@@ -725,78 +572,14 @@ def refresh_cache_all(
     )
 
 
-def do_fetch_and_send_all() -> dict:
-    """Core function to fetch from all authors and send Slack summary."""
-    plugin, config = get_slack_plugin(required=True)
-
-    # Fetch publications for all authors (use the configured data dir)
-    args = SimpleNamespace(authors_path=_db_path(), update_cache=False, test_fetching=False)
-    result = fetch_from_json(args)
-    if not result:
-        return {"success": True, "sent": False, "message": "No authors"}
-    authors, pubs_list = result
-
-    # Convert fetched pubs to Publication dataclasses
-    publications = [to_publication_dataclass(p) for p in pubs_list or []]
-
-    message = plugin.format_publications(publications)
-    target = config.get("default_channel") or config.get("channel", "")
-    ok = plugin.send_message(message, target)
-    logger.info("Fetch & send all completed: pubs=%d, send_ok=%s", len(publications), ok)
-    if not ok:
-        raise RuntimeError("Failed to send notification")
-    return {"success": True, "sent": True, "count": len(publications)}
-
-
-@router.post("/fetch-and-send", summary="Fetch and send for all authors")
-def fetch_and_send_all(user: dict = Depends(get_current_user)):
-    operation_key = "fetch.fetch_and_send_all"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            str(existing.get("job_id") or ""),
-            status="already_running",
-            operation_key=operation_key,
-            message="Fetch-and-send is already running",
-        )
-
-    job_id = f"fetch_and_send_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=datetime.now().isoformat(),
-        message="Fetching and sending publications for all authors",
-    )
-
-    def _runner():
-        try:
-            res = do_fetch_and_send_all_progress(job_id=job_id)
-            set_job_status(job_id, status="completed", finished_at=datetime.now().isoformat(), result=res)
-        except RuntimeError as e:
-            set_job_status(job_id, status="failed", finished_at=datetime.now().isoformat(), error=str(e))
-        except Exception as e:  # pragma: no cover
-            logger.error(f"Error in fetch & send all: {e}")
-            set_job_status(job_id, status="failed", finished_at=datetime.now().isoformat(), error=str(e))
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message="Queued fetch-and-send",
-    )
-
-
 @router.post("/jobs", response_model=JobResponse, summary="Schedule a fetch job")
 def schedule_job(payload: JobCreate):
     """Schedule a cron job for fetch operations."""
     try:
-        if payload.action == "fetch_and_notify":
-            job_func = do_fetch_and_send_all
-            name = payload.name or "Fetch & Send"
-        elif payload.action == "fetch":
+        # `fetch_and_notify` is gone with the plain-text digest pipeline it
+        # scheduled (task 55). Alert delivery is the alerts engine's job now,
+        # with its own schedules, rules and per-channel dedup.
+        if payload.action == "fetch":
             def _job_refresh():
                 conn = open_db_connection()
                 try:
@@ -857,7 +640,7 @@ def run_job_now(job_id: str):
 @router.post("/run", summary="Run fetch action asynchronously")
 def run_async_action(payload: dict, user: dict = Depends(get_current_user)):
     action = payload.get("action")
-    if action not in ("fetch", "fetch_and_notify"):
+    if action != "fetch":
         raise HTTPException(status_code=400, detail="Invalid action")
 
     operation_key = f"fetch.run_action:{action}"
@@ -881,16 +664,12 @@ def run_async_action(payload: dict, user: dict = Depends(get_current_user)):
 
     def _runner():
         try:
-            if action == "fetch":
-                conn = open_db_connection()
-                try:
-                    res = do_refresh_cache_all(conn, job_id=job_id)
-                finally:
-                    conn.close()
-                set_job_status(job_id, status="completed", finished_at=datetime.now().isoformat(), result=res)
-            else:
-                res = do_fetch_and_send_all_progress(job_id=job_id)
-                set_job_status(job_id, status="completed", finished_at=datetime.now().isoformat(), result=res)
+            conn = open_db_connection()
+            try:
+                res = do_refresh_cache_all(conn, job_id=job_id)
+            finally:
+                conn.close()
+            set_job_status(job_id, status="completed", finished_at=datetime.now().isoformat(), result=res)
         except Exception as e:  # pragma: no cover
             set_job_status(job_id, status="failed", finished_at=datetime.now().isoformat(), error=str(e))
 

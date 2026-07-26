@@ -42,6 +42,50 @@ _DB_NAME = "scholar.db"
 _DB_SIDECARS = (f"{_DB_NAME}-wal", f"{_DB_NAME}-shm")
 
 
+def slack_token_from_legacy_plugin_config() -> str | None:
+    """Read ``api_token`` out of a pre-task-55 Slack plugin config file.
+
+    MIGRATOR, and the only reader that remains. Runtime code resolves the token
+    from ``SLACK_TOKEN`` or the secret store and knows nothing about these files;
+    :func:`alma.core.secrets.bootstrap_secret_store` calls this once, when the
+    secret store has no Slack token, and never again.
+
+    Two shapes were written over time — ``config/slack.json`` (flat JSON) and
+    ``config/slack.config`` (INI with a ``[slack]`` section) — both storing the
+    bot token in plaintext, both read at runtime as a fallback, which is why the
+    token had to be mirrored back out on every Settings save.
+
+    The file is left on disk: it is the user's, it may hold other keys, and a
+    migrator that silently deletes a credential file is a bad trade for saving
+    them one ``rm``.
+    """
+    import configparser
+    import json
+
+    from alma.config import get_project_root
+
+    root = get_project_root()
+    for relative in ("config/slack.json", "config/slack.config"):
+        path = root / relative
+        if not path.exists():
+            continue
+        try:
+            if path.suffix == ".json":
+                data = json.loads(path.read_text(encoding="utf-8")) or {}
+                token = str(data.get("api_token") or "").strip()
+            else:
+                parser = configparser.ConfigParser()
+                parser.read(path, encoding="utf-8")
+                section = parser["slack"] if parser.has_section("slack") else parser.defaults()
+                token = str(section.get("api_token") or "").strip()
+        except Exception as exc:
+            logger.warning("Could not read legacy Slack config %s: %s", path, exc)
+            continue
+        if token:
+            return token
+    return None
+
+
 class StorageMigrationHaltError(RuntimeError):
     """Raised when a migration decision is required but cannot be made
     (legacy data found, non-interactive, and no policy env var set)."""

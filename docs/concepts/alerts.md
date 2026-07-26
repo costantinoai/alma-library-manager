@@ -174,9 +174,11 @@ call, with `status: "already_running"`.
 Two working channels: **Slack** and **Email**. An alert delivers to
 whichever channels are checked on its `channels` list (`slack`,
 `email`, or both); each channel sends the same matched-paper set
-independently. The `MessagingPlugin` interface in `alma.plugins.base`
-leaves room for Discord / webhook follow-ons, but Slack and Email are
-the implemented paths today. Each has a "Send test" button in
+independently. Both are registered in `alma.channels` with a `send`
+capability; the `MessagingPlugin` interface in `alma.plugins.base` leaves
+room for Discord / webhook follow-ons. See
+[Delivery channels](channels.md) for the full registry and the
+send/receive split. Each has a "Send test" button in
 Settings that runs through the same notifier as real delivery — a
 green test proves the production path works.
 

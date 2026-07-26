@@ -13,7 +13,6 @@ import uuid
 
 from alma.core.time import utcnow as utcnow
 from alma.core.time import utcnow_iso as utcnow_iso
-from alma.plugins.base import Publication
 
 
 def generate_paper_id() -> str:
@@ -484,16 +483,3 @@ def normalize_openalex_id(value: str | None) -> str:
         aid = "A" + aid[1:]
 
     return aid
-
-
-def to_publication_dataclass(pub_dict: dict) -> Publication:
-    """Convert a publication dictionary to a Publication dataclass."""
-    return Publication(
-        title=pub_dict.get("title", ""),
-        authors=pub_dict.get("authors", ""),
-        year=str(pub_dict.get("year", "")),
-        abstract=pub_dict.get("abstract", ""),
-        pub_url=pub_dict.get("pub_url", ""),
-        journal=pub_dict.get("journal", ""),
-        citations=pub_dict.get("num_citations"),
-    )

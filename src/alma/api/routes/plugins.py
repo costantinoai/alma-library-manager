@@ -1,4 +1,15 @@
-"""Plugin configuration and management API endpoints."""
+"""Delivery-channel API endpoints — what can reach you, and can it reach you now.
+
+Serves :mod:`alma.channels`, the one registry that knows every channel and which
+directions it supports. The path stays ``/plugins`` because that is what the
+Settings UI and the health card already call; the object underneath is a channel
+descriptor, not a plugin instance.
+
+Configuration is NOT written here. Slack and email are configured in Settings,
+which owns the secret store; a second config writer on this router is how the
+bot token ended up mirrored into ``config/slack.json`` in plaintext. Reads and
+connectivity tests only.
+"""
 
 import logging
 from datetime import datetime
@@ -6,17 +17,9 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from alma.api.deps import get_current_user
-from alma.api.models import ErrorResponse, PluginConfigUpdate, PluginInfo, PluginTestResult
+from alma.api.models import ErrorResponse, PluginInfo, PluginTestResult
 from alma.core.redaction import redact_sensitive_text
 from alma.core.time import utcnow
-from alma.plugins.config import load_plugin_config, save_plugin_config
-from alma.plugins.registry import PluginRegistry
-
-
-def _get_registry():
-    # Resolve at call time so tests can monkeypatch alma.api.deps.get_plugin_registry
-    from alma.api.deps import get_plugin_registry as _gpr
-    return _gpr()
 
 logger = logging.getLogger(__name__)
 
@@ -30,28 +33,46 @@ router = APIRouter(
 )
 
 
+def _get_registry():
+    # Resolve at call time so tests can monkeypatch alma.api.deps.get_plugin_registry
+    from alma.api.deps import get_plugin_registry as _gpr
+    return _gpr()
+
+
+def _to_plugin_info(described: dict) -> PluginInfo:
+    """Descriptor → API model.
+
+    ``is_healthy`` is deliberately None: health is what the last CONNECTIVITY
+    TEST found, and the registry holds no per-process instance to remember it
+    (that cache is what let a stale plugin object outlive the token it was built
+    from). A channel reports configured-or-not here; whether it works is what
+    ``POST /plugins/{name}/test`` is for.
+    """
+    return PluginInfo(
+        name=described["name"],
+        display_name=described["display_name"],
+        version=described["version"],
+        description=described["description"],
+        config_schema=described["config_schema"],
+        capabilities=described["capabilities"],
+        is_configured=described["is_configured"],
+        can_send=described["can_send"],
+        can_receive=described["can_receive"],
+        is_healthy=None,
+    )
+
+
 @router.get(
     "",
     response_model=list[PluginInfo],
-    summary="List all plugins",
-    description="Retrieve information about all available messaging plugins.",
+    summary="List all delivery channels",
+    description=(
+        "Every channel ALMa knows about, with the directions it supports "
+        "(`send` / `receive`) and whether each direction is configured."
+    ),
 )
-def list_plugins(
-    registry: PluginRegistry = Depends(_get_registry),
-    user: dict = Depends(get_current_user),
-):
-    """List all available messaging plugins.
-
-    Returns information about each plugin including:
-    - Name and display name
-    - Version
-    - Description
-    - Configuration schema
-    - Configuration status
-    - Health status
-
-    Returns:
-        List[PluginInfo]: List of plugin information
+def list_plugins(user: dict = Depends(get_current_user)):
+    """List all registered delivery channels.
 
     Example:
         ```bash
@@ -59,48 +80,9 @@ def list_plugins(
         ```
     """
     try:
-        plugins_info = registry.get_all_plugins_info()
-        result = []
-
-        for plugin_meta in plugins_info:
-            plugin_name = plugin_meta["name"]
-
-            # Check if plugin is configured
-            try:
-                config = load_plugin_config(plugin_name)
-                is_configured = bool(config)
-
-                # Get instance if configured
-                if is_configured:
-                    instance = registry.get_instance(plugin_name)
-                    if instance:
-                        health = instance.get_health_status()
-                        is_healthy = health.get("healthy")
-                    else:
-                        is_healthy = None
-                else:
-                    is_healthy = None
-
-            except Exception as e:
-                logger.warning("Error checking config for %s: %s", plugin_name, redact_sensitive_text(str(e)))
-                is_configured = False
-                is_healthy = None
-
-            result.append(PluginInfo(
-                name=plugin_meta["name"],
-                display_name=plugin_meta["display_name"],
-                version=plugin_meta["version"],
-                description=plugin_meta["description"],
-                config_schema=plugin_meta["config_schema"],
-                is_configured=is_configured,
-                is_healthy=is_healthy
-            ))
-
-        logger.info(f"Retrieved information for {len(result)} plugins")
-        return result
-
+        return [_to_plugin_info(entry) for entry in _get_registry().describe_all()]
     except Exception as e:
-        logger.error("Error listing plugins: %s", redact_sensitive_text(str(e)))
+        logger.error("Error listing channels: %s", redact_sensitive_text(str(e)))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list plugins"
@@ -110,62 +92,17 @@ def list_plugins(
 @router.get(
     "/{plugin_name}",
     response_model=PluginInfo,
-    summary="Get plugin details",
-    description="Retrieve detailed information about a specific plugin.",
+    summary="Get channel details",
+    description="Retrieve detailed information about a specific delivery channel.",
 )
-def get_plugin(
-    plugin_name: str,
-    registry: PluginRegistry = Depends(_get_registry),
-    user: dict = Depends(get_current_user),
-):
-    """Get detailed information about a specific plugin.
-
-    Args:
-        plugin_name: Name of the plugin (e.g., 'slack', 'email')
-
-    Returns:
-        PluginInfo: Plugin information
+def get_plugin(plugin_name: str, user: dict = Depends(get_current_user)):
+    """Get detailed information about one channel.
 
     Raises:
-        HTTPException: If plugin is not found
-
-    Example:
-        ```bash
-        curl http://localhost:8000/api/v1/plugins/slack
-        ```
+        HTTPException: 404 if the channel is not registered.
     """
     try:
-        plugin_meta = registry.get_plugin_info(plugin_name)
-
-        # Check configuration status
-        try:
-            config = load_plugin_config(plugin_name)
-            is_configured = bool(config)
-
-            if is_configured:
-                instance = registry.get_instance(plugin_name)
-                if instance:
-                    health = instance.get_health_status()
-                    is_healthy = health.get("healthy")
-                else:
-                    is_healthy = None
-            else:
-                is_healthy = None
-
-        except Exception:
-            is_configured = False
-            is_healthy = None
-
-        return PluginInfo(
-            name=plugin_meta["name"],
-            display_name=plugin_meta["display_name"],
-            version=plugin_meta["version"],
-            description=plugin_meta["description"],
-            config_schema=plugin_meta["config_schema"],
-            is_configured=is_configured,
-            is_healthy=is_healthy
-        )
-
+        return _to_plugin_info(_get_registry().get(plugin_name).describe())
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -173,7 +110,7 @@ def get_plugin(
         )
     except Exception as e:
         logger.error(
-            "Error retrieving plugin %s: %s",
+            "Error retrieving channel %s: %s",
             plugin_name,
             redact_sensitive_text(str(e)),
         )
@@ -183,115 +120,27 @@ def get_plugin(
         )
 
 
-@router.put(
-    "/{plugin_name}/config",
-    summary="Update plugin configuration",
-    description="Update the configuration for a specific plugin.",
-)
-def update_plugin_config(
-    plugin_name: str,
-    config_update: PluginConfigUpdate,
-    registry: PluginRegistry = Depends(_get_registry),
-    user: dict = Depends(get_current_user),
-):
-    """Update plugin configuration.
-
-    This will save the configuration and attempt to create/refresh
-    the plugin instance with the new settings.
-
-    Args:
-        plugin_name: Name of the plugin
-        config_update: New configuration data
-
-    Returns:
-        dict: Success message
-
-    Raises:
-        HTTPException: If plugin not found or configuration is invalid
-
-    Example:
-        ```bash
-        curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\
-             -H "Content-Type: application/json" \\
-             -d '{"config": {"api_token": "replace-with-real-slack-token", "channel": "#general"}}'
-        ```
-    """
-    try:
-        # Verify plugin exists
-        _ = registry.get_plugin_info(plugin_name)
-
-        # Save configuration
-        save_plugin_config(plugin_name, config_update.config)
-
-        # Clear cached instance to force recreation with new config
-        registry.clear_cache()
-
-        # Plugin health feeds the cached operational diagnostics, whose
-        # fingerprint cannot see config files — force a rebuild so the Health
-        # page reflects the new config now, not at the next hour bucket.
-        try:
-            from alma.application import materialized_views as mv
-
-            mv.enqueue_rebuild("insights:diag:operational")
-        except Exception as exc:  # noqa: BLE001 — best-effort freshness, never block the save
-            logger.warning("operational diagnostics rebuild enqueue failed: %s", exc)
-
-        # Try to create instance with new config to validate
-        try:
-            registry.create_instance(plugin_name, config_update.config)
-            logger.info(f"Successfully configured plugin: {plugin_name}")
-
-            return {
-                "message": f"Plugin '{plugin_name}' configured successfully",
-                "plugin": plugin_name,
-                "config_valid": True
-            }
-        except Exception as e:
-            logger.warning("Configuration saved but validation failed: %s", redact_sensitive_text(str(e)))
-            return {
-                "message": "Configuration saved but validation failed",
-                "plugin": plugin_name,
-                "config_valid": False,
-                "error": "validation_failed",
-            }
-
-    except KeyError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Plugin '{plugin_name}' not found"
-        )
-    except Exception as e:
-        logger.error("Error updating plugin config: %s", redact_sensitive_text(str(e)))
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to update configuration"
-        )
-
-
 @router.post(
     "/{plugin_name}/test",
-    summary="Test plugin connection",
+    summary="Test channel connection",
     description=(
-        "Test if the plugin can connect to its service. For Slack, this "
-        "runs the test asynchronously through the Activity envelope so the "
-        "exact code path that delivers real alerts is what gets exercised."
+        "Test if the channel can reach its service. Slack and email run "
+        "asynchronously through the Activity envelope so the exact code path "
+        "that delivers real alerts is what gets exercised."
     ),
 )
 def test_plugin_connection(
     plugin_name: str,
-    registry: PluginRegistry = Depends(_get_registry),
     user: dict = Depends(get_current_user),
 ):
-    """Test plugin connection.
+    """Test channel connectivity.
 
-    For ``slack``: validate configuration, then queue an Activity-enveloped
-    job that calls :class:`~alma.slack.client.SlackNotifier.send_test_message`
-    (the same path used by real alert delivery). Returns the canonical
-    activity envelope so the frontend can poll progress.
+    For ``slack`` / ``email``: queue an Activity-enveloped job that sends a real
+    test message through the same notifier real alerts use, and return the
+    canonical activity envelope so the frontend can poll progress.
 
-    For other plugin names: fall back to the legacy synchronous
-    ``test_connection()`` against the plugin instance for backwards
-    compatibility. Slack is the only registered plugin today.
+    Any other registered channel falls back to its plugin's synchronous
+    ``test_connection()``.
     """
     if plugin_name == "slack":
         return _slack_test_envelope(user)
@@ -300,39 +149,35 @@ def test_plugin_connection(
         return _email_test_envelope(user)
 
     try:
-        config = load_plugin_config(plugin_name)
-        if not config:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Plugin '{plugin_name}' is not configured",
-            )
-
-        instance = registry.create_instance(plugin_name, config, cache=True)
-        success = instance.test_connection()
-        instance.record_test_result(success)
-        return PluginTestResult(
-            success=success,
-            message="Connection test successful" if success else "Connection test failed",
-            timestamp=datetime.now().isoformat(),
-        )
+        descriptor = _get_registry().get(plugin_name)
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Plugin '{plugin_name}' not found",
         )
-    except HTTPException:
-        raise
+
+    plugin = descriptor.outbound_plugin()
+    if plugin is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Plugin '{plugin_name}' is not configured",
+        )
+
+    try:
+        success = plugin.test_connection()
     except Exception as e:
         logger.error(
-            "Error testing plugin %s: %s",
+            "Error testing channel %s: %s",
             plugin_name,
             redact_sensitive_text(str(e)),
         )
-        return PluginTestResult(
-            success=False,
-            message="Connection test failed",
-            timestamp=datetime.now().isoformat(),
-        )
+        success = False
+
+    return PluginTestResult(
+        success=success,
+        message="Connection test successful" if success else "Connection test failed",
+        timestamp=datetime.now().isoformat(),
+    )
 
 
 def _slack_test_envelope(user: dict) -> dict:
@@ -516,89 +361,3 @@ def _email_test_envelope(user: dict) -> dict:
         operation_key=operation_key,
         message="Email test queued",
     )
-
-
-@router.post(
-    "/{plugin_name}/notify",
-    summary="Send test notification",
-    description="Send a test notification using the plugin.",
-)
-def send_test_notification(
-    plugin_name: str,
-    message: str = "This is a test notification from Scholar Slack Bot API",
-    target: str = None,
-    registry: PluginRegistry = Depends(_get_registry),
-    user: dict = Depends(get_current_user),
-):
-    """Send a test notification using the plugin.
-
-    Args:
-        plugin_name: Name of the plugin to use
-        message: Custom test message (optional)
-        target: Target destination (channel, email, etc.) - uses default if not specified
-
-    Returns:
-        dict: Success status and message
-
-    Raises:
-        HTTPException: If plugin is not found or not configured
-
-    Example:
-        ```bash
-        curl -X POST "http://localhost:8000/api/v1/plugins/slack/notify?message=Hello%20World"
-        ```
-    """
-    try:
-        # Load configuration
-        config = load_plugin_config(plugin_name)
-        if not config:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Plugin '{plugin_name}' is not configured"
-            )
-
-        # Create or get instance
-        instance = registry.create_instance(plugin_name, config, cache=True)
-
-        # Use default target from config if not specified
-        if target is None:
-            # Prefer explicit channel, then generic default_target, then plugin's default_channel
-            target = (
-                config.get("channel")
-                or config.get("default_target")
-                or config.get("default_channel", "")
-            )
-
-        # Format test message
-        formatted_message = instance.format_test_message(message)
-
-        # Send notification
-        success = instance.send_message(formatted_message, target)
-
-        if success:
-            logger.info(f"Test notification sent via {plugin_name}")
-            return {
-                "success": True,
-                "message": f"Test notification sent successfully via {plugin_name}",
-                "plugin": plugin_name,
-                "target": target
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send notification"
-            )
-
-    except KeyError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Plugin '{plugin_name}' not found"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Error sending test notification: %s", redact_sensitive_text(str(e)))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to send notification"
-        )

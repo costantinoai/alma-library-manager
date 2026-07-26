@@ -29,6 +29,7 @@ from pathlib import Path
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from alma.channels import ChannelRegistry, get_channel_registry
 from alma.config import (
     get_data_dir,
     get_db_path,
@@ -36,7 +37,6 @@ from alma.config import (
 from alma.core.migrations import apply_pending_migrations, stamp_schema_version
 from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
-from alma.plugins.registry import PluginRegistry, get_global_registry
 
 logger = logging.getLogger(__name__)
 _schema_init_lock = threading.Lock()
@@ -1538,12 +1538,17 @@ def get_db() -> Generator[sqlite3.Connection, None, None]:
 
 
 # ============================================================================
-# Plugin Registry Dependency
+# Channel Registry Dependency
 # ============================================================================
 
-def get_plugin_registry() -> PluginRegistry:
-    """Get the global plugin registry."""
-    return get_global_registry()
+def get_plugin_registry() -> ChannelRegistry:
+    """The delivery-channel registry (senders AND receivers).
+
+    Name kept for the routes and tests that already inject it; the object is
+    `alma.channels.ChannelRegistry`, which is the single registry for both
+    directions since task 55.
+    """
+    return get_channel_registry()
 
 
 # ============================================================================

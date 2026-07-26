@@ -131,6 +131,7 @@ nav:
       - Analytics: concepts/analytics.md
       - Health: concepts/health.md
       - Alerts: concepts/alerts.md
+      - Delivery channels: concepts/channels.md
       - AI capabilities: concepts/ai.md
   - User guide:
       - user-guide/index.md

@@ -49,7 +49,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # get_data_dir()/scholar.db), so a fresh install resolves to the
     # OS-standard data dir rather than a CWD-relative ./data. An explicit
     # `database` value set by an existing install is still honoured.
-    "slack_config_path": "./config/slack.config",
     "api_call_delay": "1.0",
     # OpenAlex is the primary source: open citation graph, polite-pool
     # rate limits, no scraping, no auth wall. The legacy "scholar"
@@ -387,31 +386,6 @@ def get_db_path() -> Path:
     return get_data_dir() / "scholar.db"
 
 
-def get_slack_config_path() -> Path:
-    """Get the path to the Slack configuration file.
-
-    Priority:
-    1. SLACK_CONFIG_PATH environment variable
-    2. slack_config_path setting from settings.json
-    3. Default: ./config/slack.config
-
-    Returns:
-        Path: Absolute path to slack.config
-    """
-    # Environment variable override
-    env_path = os.getenv("SLACK_CONFIG_PATH")
-    if env_path:
-        return _resolve_path(env_path)
-
-    # Settings.json value
-    settings_path = get_setting("slack_config_path")
-    if settings_path:
-        return _resolve_path(settings_path)
-
-    # Default
-    return _resolve_path("./config/slack.config")
-
-
 def update_settings(updates: dict[str, Any]) -> None:
     """Update settings.json with new values.
 
@@ -425,7 +399,7 @@ def update_settings(updates: dict[str, Any]) -> None:
         ValueError: If any path value is absolute
     """
     # Validate that all path values are relative
-    path_keys = ["database", "slack_config_path"]
+    path_keys = ["database"]
     for key in path_keys:
         if key in updates:
             value = updates[key]

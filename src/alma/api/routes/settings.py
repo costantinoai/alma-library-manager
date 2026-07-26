@@ -66,7 +66,6 @@ from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.openalex.http import get_client as get_openalex_client
 from alma.openalex.http import reset_client as reset_openalex_client
-from alma.plugins.config import save_plugin_config
 from alma.slack.client import get_slack_notifier
 
 _OPENALEX_ENV_KEY = "OPENALEX_API_KEY"
@@ -210,7 +209,6 @@ class SettingsModel(BaseModel):
     # Paths (exposed for convenience; prefer env-vars in production)
     # IMPORTANT: All paths MUST be relative (e.g., ./data/scholar.db)
     database: str | None = Field(None, description="Relative path to the unified scholar database")
-    slack_config_path: str | None = Field(None, description="Relative path to Slack plugin config file (INI)")
     # Slack notification settings
     slack_token: str | None = Field(None, description="Slack Bot User OAuth Token")
     slack_channel: str | None = Field(None, description="Default Slack channel for notifications")
@@ -259,7 +257,7 @@ class SettingsModel(BaseModel):
         description="Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default — D14)",
     )
 
-    @field_validator('database', 'slack_config_path')
+    @field_validator('database')
     @classmethod
     def validate_relative_path(cls, v: str | None) -> str | None:
         """Ensure paths are relative, not absolute."""
@@ -314,18 +312,6 @@ def _export_settings_sanitized(raw: dict) -> dict:
     return out
 
 
-def _sync_slack_plugin_config_from_settings(settings: dict) -> None:
-    """Mirror Settings Slack fields into plugin config for consistency."""
-    token = str(get_secret(SECRET_SLACK_BOT_TOKEN) or "").strip()
-    channel = str(settings.get("slack_channel") or "").strip()
-    cfg: dict[str, str] = {}
-    if token:
-        cfg["api_token"] = token
-    if channel:
-        cfg["default_channel"] = channel
-    save_plugin_config("slack", cfg)
-
-
 @router.get("", response_model=SettingsModel)
 def get_settings():
     """Retrieve core settings.
@@ -346,7 +332,6 @@ def get_settings():
         from_year=raw.get("from_year"),
         api_call_delay=str(raw.get("api_call_delay", "1.0")),
         database=raw.get("database"),
-        slack_config_path=raw.get("slack_config_path"),
         slack_token=slack_token_masked,
         slack_channel=raw.get("slack_channel"),
         slack_inbox_channel=raw.get("slack_inbox_channel"),
@@ -512,10 +497,9 @@ def update_settings(payload: SettingsModel):
             reset_openalex_client()
 
         if incoming_slack_token is not None or "slack_channel" in data:
-            try:
-                _sync_slack_plugin_config_from_settings(_read_settings())
-            except Exception as exc:
-                logger.warning("Failed to sync Slack plugin config from settings: %s", exc)
+            # Nothing to mirror: the secret store is the token's single owner
+            # (task 55). Nothing else is written here.
+            #
             # Slack config feeds the cached operational diagnostics (the
             # slack_unconfigured state); its fingerprint cannot see settings.json,
             # so force a rebuild for instant Health-page feedback.

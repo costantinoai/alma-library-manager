@@ -178,6 +178,22 @@ def bootstrap_secret_store(conn: sqlite3.Connection) -> None:
         set_secret(SECRET_SLACK_BOT_TOKEN, slack_token)
         moved_settings_keys.append("slack_token")
 
+    # `slack_config_path` pointed at the legacy plugin config file. The setting
+    # is retired, so a stale value is stripped along with the plaintext keys.
+    if settings.get("slack_config_path"):
+        moved_settings_keys.append("slack_config_path")
+
+    if not get_secret(SECRET_SLACK_BOT_TOKEN):
+        from alma.core.storage_migration import slack_token_from_legacy_plugin_config
+
+        legacy_token = slack_token_from_legacy_plugin_config()
+        if legacy_token:
+            set_secret(SECRET_SLACK_BOT_TOKEN, legacy_token)
+            logger.info(
+                "Imported the Slack bot token from a legacy plugin config file "
+                "into the secret store; that file is no longer read."
+            )
+
     # OpenAlex key migration path removed 2026-04-24. If a legacy
     # `openalex_api_key` still sits in settings.json, just strip it —
     # the user reimports through the Settings UI (env-backed) or sets

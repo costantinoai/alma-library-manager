@@ -52,6 +52,7 @@ from alma.api.routes.settings import router as settings_router
 from alma.api.routes.tags import router as tags_router
 from alma.api.routes.topics import router as topics_router
 from alma.api.scheduler import setup_scheduler, shutdown_scheduler
+from alma.channels import get_channel_registry
 from alma.core.logging import setup_logging
 from alma.version import get_app_version
 
@@ -105,15 +106,10 @@ async def lifespan(app: FastAPI):
     from alma.api.deps import init_db_schema
     init_db_schema()
 
-    # Initialize plugin registry and register plugins
-    try:
-        # Use the canonical Slack plugin (man-in-the-middle over old slack_bot)
-        from alma.plugins.slack import SlackPlugin
-        registry = get_plugin_registry()
-        registry.register(SlackPlugin)
-        logger.info("Registered Slack plugin")
-    except Exception as e:
-        logger.warning(f"Failed to register Slack plugin: {e}")
+    # Delivery channels need no startup registration: `alma.channels.CHANNELS`
+    # is an explicit, static list. Five call sites used to re-register the Slack
+    # plugin defensively because registration was imperative and could be missed.
+    logger.info("Delivery channels: %s", ", ".join(get_channel_registry().names()))
 
     # Start scheduler with periodic alert evaluation and author refresh jobs
     try:
@@ -460,10 +456,13 @@ def get_statistics():
         finally:
             db.close()
 
-        # Get plugin stats
+        # Delivery-channel stats: how many are actually CONFIGURED. The old
+        # count keyed on whether a plugin instance happened to be cached in the
+        # process, so it read 0 until something sent a message.
         registry = get_plugin_registry()
-        configured_plugins = len([p for p in registry.list_plugins()
-                                  if registry.get_instance(p) is not None])
+        configured_plugins = len(
+            [entry for entry in registry.describe_all() if entry["is_configured"]]
+        )
 
         return StatisticsResponse(
             total_authors=total_authors,

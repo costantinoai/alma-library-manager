@@ -1240,23 +1240,16 @@ def _build_operational_snapshot(
         if not _bool_setting(discovery_settings.get(f"sources.{source}.enabled"), True)
     ]
 
-    settings = {}
-    try:
-        from alma.config import get_all_settings
-
-        settings = get_all_settings() or {}
-    except Exception:
-        settings = {}
-
+    # "Is Slack set up?" has ONE owner (`alma.slack.client.slack_status`).
+    # Alerts need the SEND direction specifically: a token plus a channel to
+    # post into. A capture-only Slack is configured, but not for delivery.
     slack_configured = False
     try:
-        from alma.core.secrets import SECRET_SLACK_BOT_TOKEN, get_secret
+        from alma.slack.client import slack_status
 
-        slack_configured = bool(str(get_secret(SECRET_SLACK_BOT_TOKEN) or "").strip()) and bool(
-            str(settings.get("slack_channel") or "").strip()
-        )
-    except Exception:
-        slack_configured = bool(str(settings.get("slack_channel") or "").strip())
+        slack_configured = bool(slack_status()["can_send"])
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Could not read Slack status for the health card: %s", exc)
 
     ai_summary = ai_snapshot.get("summary") or {}
     provider_present = False
@@ -1279,35 +1272,38 @@ def _build_operational_snapshot(
         pass
     embeddings_ready = provider_present and coverage_ready
 
-    unhealthy_plugins = 0
+    # A channel is HALF-CONFIGURED when it has credentials but a direction it
+    # supports cannot run — a Slack token with no channel to post into, or with
+    # no capture channel nominated. That is a real, detectable misconfiguration
+    # the user can fix, unlike the old "unhealthy plugin" count, which read the
+    # last connectivity test off an in-process plugin instance that existed only
+    # after something had already sent a message (so: almost never).
+    #
+    # An entirely UNconfigured channel is not a fault — every channel is opt-in.
+    misconfigured_channels = 0
     try:
         from alma.api.deps import get_plugin_registry
-        from alma.plugins.config import load_plugin_config
 
-        registry = get_plugin_registry()
-        for plugin_meta in registry.get_all_plugins_info():
-            name = str(plugin_meta.get("name") or "")
-            is_configured = False
-            is_healthy = None
-            try:
-                config = load_plugin_config(name)
-                is_configured = bool(config)
-                if is_configured:
-                    instance = registry.get_instance(name)
-                    if instance:
-                        health = instance.get_health_status()
-                        is_healthy = bool(health.get("healthy")) if health.get("healthy") is not None else None
-            except Exception:
-                is_configured = False
-                is_healthy = None
-            if is_configured and is_healthy is False:
-                unhealthy_plugins += 1
+        for entry in get_plugin_registry().describe_all():
+            capabilities = entry.get("capabilities") or []
+            half_configured = bool(entry["is_configured"]) and (
+                ("send" in capabilities and not entry["can_send"])
+                or ("receive" in capabilities and not entry["can_receive"])
+            )
+            if half_configured:
+                misconfigured_channels += 1
             plugins.append(
                 {
-                    "name": name,
-                    "display_name": plugin_meta.get("display_name") or name,
-                    "is_configured": is_configured,
-                    "is_healthy": is_healthy,
+                    "name": entry["name"],
+                    "display_name": entry["display_name"],
+                    "capabilities": capabilities,
+                    "is_configured": entry["is_configured"],
+                    "can_send": entry["can_send"],
+                    "can_receive": entry["can_receive"],
+                    "half_configured": half_configured,
+                    # Whether a configured channel actually WORKS is what a
+                    # connectivity test establishes; nothing here can know it.
+                    "is_healthy": None,
                 }
             )
     except Exception:
@@ -1538,7 +1534,8 @@ def _build_operational_snapshot(
                 "params": {"section": "channels"},
             }
         )
-    if unhealthy_plugins > 0:
+    if misconfigured_channels > 0:
+        half = [plugin for plugin in plugins if plugin.get("half_configured")]
         plugin_targets = [
             {
                 "id": plugin["name"],
@@ -1547,17 +1544,25 @@ def _build_operational_snapshot(
                 "action": "test_plugin",
                 "plugin_name": plugin["name"],
             }
-            for plugin in plugins
-            if plugin.get("is_configured") and plugin.get("is_healthy") is False
+            for plugin in half
         ][:3]
+        missing = ", ".join(
+            f"{plugin['display_name']} cannot "
+            + " or ".join(
+                direction
+                for direction, ok in (("send", plugin["can_send"]), ("receive", plugin["can_receive"]))
+                if not ok and direction in (plugin.get("capabilities") or [])
+            )
+            for plugin in half
+        )
         states.append(
             {
-                "id": "unhealthy_plugins",
-                "label": "One or more plugins are unhealthy",
+                "id": "misconfigured_channels",
+                "label": "A delivery channel is only half set up",
                 "severity": "warning",
-                "detail": f"{unhealthy_plugins} configured plugins reported unhealthy status.",
-                "page": "alerts",
-                "params": {"section": "alerts"},
+                "detail": f"{missing}. Finish it in Settings -> Channels.",
+                "page": "settings",
+                "params": {"section": "channels"},
                 "targets": plugin_targets,
             }
         )
@@ -1633,7 +1638,7 @@ def _build_operational_snapshot(
             embeddings_ready,
             int(ai_summary.get("stale_embeddings") or 0) == 0,
             slack_configured or int(alert_summary.get("enabled_alerts") or 0) == 0,
-            unhealthy_plugins == 0,
+            misconfigured_channels == 0,
             recent_failed_operations_24h == 0,
         )
         if ok
@@ -1649,7 +1654,7 @@ def _build_operational_snapshot(
             "slack_configured": slack_configured,
             "degraded_monitors": degraded_monitor_count,
             "disabled_sources": len(disabled_sources),
-            "unhealthy_plugins": unhealthy_plugins,
+            "misconfigured_channels": misconfigured_channels,
             "recent_failed_operations_24h": recent_failed_operations_24h,
         },
         "states": states,

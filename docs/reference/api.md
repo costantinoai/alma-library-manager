@@ -361,7 +361,8 @@ remaining steps rendered as children inside one envelope.
 | `GET` | `/search` | Global search (papers + authors + collections) |
 | `GET` | `/backup/export` | Export DB / JSON / BibTeX |
 | `GET` | `/bootstrap` | Frontend boot payload |
-| `GET` | `/plugins` | Plugin inventory (Slack, etc.) |
+| `GET` | `/plugins` | Delivery-channel inventory: each channel's directions (`send` / `receive`) and whether each is configured |
+| `POST` | `/plugins/{name}/test` | Send a real test message through the production notifier (Activity envelope) |
 | `GET` `POST` | `/fetch[/…]` | Fetch / bulk operation endpoints |
 
 ### Browser connector (extension)

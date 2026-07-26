@@ -225,11 +225,14 @@ it in **Settings → Intelligence → AI provider** and store the key in
 
 [Slack Web API](https://api.slack.com/web), bot-token based.
 
-* **Token**: `SLACK_TOKEN` (the bot token from your Slack app).
-* **Default channel**: `SLACK_CHANNEL`.
-* **Per-rule overrides**: `config/slack.config`.
+* **Token**: `SLACK_TOKEN`, or the secret store (`slack.bot_token`).
+* **Outbound channel**: `SLACK_CHANNEL`, or `slack_channel` in settings.
+* **Inbound (capture) channel**: `slack_inbox_channel`, Settings only.
 
-ALMa uses `slack-sdk` and posts via `chat.postMessage`. No webhooks.
+ALMa uses `slack-sdk` through ONE client, `alma.slack.client.SlackNotifier`:
+alerts post with `chat.postMessage` (Block Kit), capture reads with
+`conversations.history` and acknowledges with `reactions.add`. No webhooks, and
+no second client — see [Delivery channels](../concepts/channels.md).
 
 ## Identifier reference
 

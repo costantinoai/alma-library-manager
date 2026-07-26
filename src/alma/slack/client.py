@@ -96,6 +96,16 @@ class SlackNotifier:
         """Return ``True`` when a Slack token is available."""
         return bool(self._token)
 
+    @property
+    def default_channel(self) -> str | None:
+        """The configured outbound channel, or None. Never raises.
+
+        :meth:`resolve_channel` raises when nothing is configured because a SEND
+        with no target is an error. Reporting status is not a send, so it needs
+        the question answered rather than raised.
+        """
+        return (self._default_channel or "").strip() or None
+
     # ------------------------------------------------------------------
     # Public accessors for READ paths (Inbox capture)
     # ------------------------------------------------------------------
@@ -119,6 +129,68 @@ class SlackNotifier:
         ``#alma-inbox`` once rather than listing the workspace every sweep.
         """
         return self._resolve_target(target)
+
+    def check_auth(self) -> bool:
+        """Is the token accepted by Slack right now? (``auth.test``)
+
+        The cheapest possible liveness check — no message is posted. Used by the
+        plugin's ``test_connection``. Returns False rather than raising: a
+        connectivity probe that explodes is harder to report than one that says
+        "no".
+        """
+        if not self.is_configured:
+            return False
+        try:
+            response = self._get_client().auth_test()
+        except Exception as exc:  # pragma: no cover - network failures
+            logger.warning("Slack auth.test failed: %s", exc)
+            return False
+        ok = bool(response.get("ok"))
+        if ok:
+            logger.info("Slack auth.test passed for team %s", response.get("team"))
+        else:
+            logger.warning("Slack auth.test returned ok=False: %s", response.get("error"))
+        return ok
+
+    def post_text(self, channel: str | None, text: str) -> bool:
+        """Post a plain-text message. The generic outbound send.
+
+        Block Kit renders ALMa's own digests (:meth:`send_paper_alert`,
+        :meth:`send_recommendation`); this is the escape hatch for a caller that
+        already has a finished string — today, the messaging-plugin interface.
+        Same resolution, same client, same cache as every other send, so there
+        is exactly ONE object in the process that talks to the workspace.
+        """
+        if not self.is_configured:
+            logger.warning("Slack not configured; skipping text message")
+            return False
+
+        try:
+            target = self.resolve_channel(channel)
+            resolved = self._resolve_target(target)
+        except (ValueError, SlackResolveError) as exc:
+            # ValueError = nothing to send TO; SlackResolveError = that name is
+            # not in this workspace. Both are "not delivered", reported the same
+            # way as every other send failure rather than raised at the caller.
+            logger.error("Failed to resolve Slack target %r: %s", channel, exc)
+            return False
+
+        try:
+            response = self._get_client().chat_postMessage(channel=resolved, text=text)
+        except RuntimeError:
+            raise
+        except Exception as exc:  # pragma: no cover - network failures
+            logger.error("Failed to send Slack text to %s: %s", resolved, exc)
+            return False
+
+        if not response.get("ok"):
+            logger.error(
+                "Slack API returned ok=False for %s: %s",
+                resolved,
+                response.get("error", "unknown"),
+            )
+            return False
+        return True
 
     def resolve_channel(self, channel: str | None = None) -> str:
         """Return the effective channel string, falling back to *default_channel*.
@@ -637,12 +709,16 @@ def get_slack_notifier() -> SlackNotifier:
     Resolution order for the token:
     1. ``SLACK_TOKEN`` environment variable
     2. Unified secret store
-    3. Plugin config file (config/slack.json or config/slack.config ``api_token``)
 
     Resolution order for the default channel:
     1. ``SLACK_CHANNEL`` environment variable
     2. ``slack_channel`` key in settings.json
-    3. Plugin config file ``default_channel``
+
+    There is no third source. The token used to be readable from
+    ``config/slack.json`` as well, which meant the credential lived in two
+    places at once and every Settings save mirrored it back out in plaintext.
+    The secret store is now the single owner; a legacy file is imported ONCE by
+    ``core.secrets.bootstrap_secret_store`` and never read again.
 
     Returns:
         A configured :class:`SlackNotifier`. If no token is found the
@@ -658,18 +734,45 @@ def get_slack_notifier() -> SlackNotifier:
         token = os.getenv("SLACK_TOKEN")
         channel = os.getenv("SLACK_CHANNEL")
 
-    # Fall back to plugin config files
-    if not token:
-        try:
-            from alma.plugins.config import load_plugin_config
-
-            config = load_plugin_config("slack")
-            if config:
-                if not token:
-                    token = config.get("api_token")
-                if not channel:
-                    channel = config.get("default_channel")
-        except Exception:
-            pass
-
     return SlackNotifier(token=token, default_channel=channel)
+
+
+def slack_status() -> dict:
+    """The ONE answer to "is Slack set up, and for what?".
+
+    Three surfaces used to answer this three different ways: ``/plugins`` keyed
+    on whether a mirrored config FILE was non-empty, ``/settings/test/slack`` on
+    the notifier's token, and ``/inbox/status`` on token-plus-capture-channel.
+    They could disagree — and did, because the file and the secret store were
+    separate stores.
+
+    Capability is per DIRECTION, because that is how Slack actually fails: a
+    token with a posting channel and no capture channel can send and not
+    receive, and the UI has to be able to say so.
+
+    Returns keys:
+        ``configured``       — a token is present (the shared prerequisite)
+        ``outbound_channel`` — where alerts are POSTED, or None
+        ``inbound_channel``  — where captures are READ from, or None
+        ``can_send`` / ``can_receive`` — token AND the matching channel
+    """
+    notifier = get_slack_notifier()
+    outbound = notifier.default_channel
+
+    inbound = None
+    try:
+        from alma.config import get_setting
+        from alma.services.inbox_channels.slack import SETTING_INBOX_CHANNEL
+
+        inbound = str(get_setting(SETTING_INBOX_CHANNEL) or "").strip() or None
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Could not read the Slack capture channel: %s", exc)
+
+    configured = bool(notifier.is_configured)
+    return {
+        "configured": configured,
+        "outbound_channel": outbound,
+        "inbound_channel": inbound,
+        "can_send": configured and bool(outbound),
+        "can_receive": configured and bool(inbound),
+    }

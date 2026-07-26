@@ -1,48 +1,30 @@
-"""Abstract base class for messaging plugins.
+"""The outbound half of a delivery channel: what it takes to SEND.
 
-This module defines the MessagingPlugin interface that all messaging platform
-plugins must implement. It provides a standardized way to send notifications
-across different platforms while maintaining platform-specific formatting.
+A messaging plugin answers one question — *can ALMa deliver a finished message
+to this service, and how is it configured?* It is the mirror image of
+:class:`alma.application.inbox_schema.InboundChannel`, which answers *what can
+this service deliver to ALMa?*. Both are registered together in
+:mod:`alma.channels`, per direction, so one service can do one or both.
+
+**Scope line (task 55).** How a paper LOOKS in a channel is transport-scoped;
+what a paper IS is application-scoped. Rendering therefore lives with the
+transport that knows the medium's markup — Block Kit in
+:class:`alma.slack.client.SlackNotifier`, MIME in
+:class:`alma.mailer.client.EmailNotifier` — and identity lives in
+`application.inbound_capture`. This class carries neither: it is the *delivery*
+seam, and it takes text that is already rendered.
+
+Three ``format_publications`` / ``format_authors`` / ``format_test_message``
+abstract methods used to sit here, with a README FIXME asking whether they
+belonged on the base class. They are gone rather than promoted: they produced
+the old plain-text digest that the Block Kit alert pipeline replaced, and after
+that pipeline was deleted nothing called them. The honest answer to "should this
+be shared?" was "nothing was using either copy".
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-
-
-@dataclass
-class Publication:
-    """Publication data structure passed to plugins for formatting.
-
-    Attributes:
-        title: Publication title
-        authors: Comma-separated string of author names
-        year: Publication year
-        abstract: Publication abstract/summary
-        pub_url: URL to the publication
-        journal: Journal or venue name
-        citations: Number of citations (optional)
-    """
-    title: str
-    authors: str
-    year: str
-    abstract: str
-    pub_url: str
-    journal: str
-    citations: int | None = None
-
-
-@dataclass
-class Author:
-    """Author data structure.
-
-    Attributes:
-        name: Author's full name
-        scholar_id: Google Scholar ID
-    """
-    name: str
-    scholar_id: str
 
 
 class PluginConfigError(Exception):
@@ -56,18 +38,13 @@ class PluginConnectionError(Exception):
 
 
 class MessagingPlugin(ABC):
-    """Abstract base class for messaging platform plugins.
-
-    All messaging plugins must inherit from this class and implement
-    the required abstract methods. This ensures a consistent interface
-    across all supported platforms.
+    """Abstract base class for outbound messaging platforms.
 
     The plugin lifecycle:
     1. Initialize with configuration
-    2. Validate configuration (via test_connection)
-    3. Format messages (via format_* methods)
-    4. Send messages (via send_message)
-    5. Check health (via get_health_status)
+    2. Validate configuration (raises during ``__init__``)
+    3. Send an already-rendered message (via ``send_message``)
+    4. Check reachability (via ``test_connection`` / ``get_health_status``)
     """
 
     def __init__(self, config: dict[str, Any]):
@@ -95,7 +72,7 @@ class MessagingPlugin(ABC):
 
     @abstractmethod
     def send_message(self, message: str, target: str) -> bool:
-        """Send a formatted message to the target.
+        """Send an already-rendered message to the target.
 
         Args:
             message: Pre-formatted message string
@@ -110,49 +87,12 @@ class MessagingPlugin(ABC):
         pass
 
     @abstractmethod
-    def format_publications(self, publications: list[Publication]) -> str:
-        """Format a list of publications for this platform.
-
-        Args:
-            publications: List of Publication objects to format
-
-        Returns:
-            Platform-specific formatted string
-        """
-        pass
-
-    @abstractmethod
-    def format_authors(self, authors: list[Author]) -> str:
-        """Format a list of authors for this platform.
-
-        Args:
-            authors: List of Author objects to format
-
-        Returns:
-            Platform-specific formatted string
-        """
-        pass
-
-    @abstractmethod
-    def format_test_message(self, message: str = "This is a test message") -> str:
-        """Format a test message for this platform.
-
-        Args:
-            message: The test message content
-
-        Returns:
-            Platform-specific formatted test message
-        """
-        pass
-
-    @abstractmethod
     def test_connection(self) -> bool:
         """Test if the plugin is properly configured and can connect.
 
         This method should verify:
         - Configuration is valid
         - Can authenticate with the service
-        - Can reach the target endpoint
 
         Returns:
             True if connection test succeeds, False otherwise
@@ -167,23 +107,6 @@ class MessagingPlugin(ABC):
 
         Returns:
             JSON schema dict describing required and optional config fields
-
-        Example:
-            {
-                "type": "object",
-                "required": ["api_token", "channel"],
-                "properties": {
-                    "api_token": {
-                        "type": "string",
-                        "description": "API authentication token",
-                        "secret": True
-                    },
-                    "channel": {
-                        "type": "string",
-                        "description": "Default channel for messages"
-                    }
-                }
-            }
         """
         pass
 

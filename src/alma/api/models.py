@@ -312,14 +312,6 @@ class PublicationSendItem(BaseModel):
     journal: str | None = None
 
 
-class SendPublicationsRequest(BaseModel):
-    """Request to send a previewed list of publications via a plugin."""
-
-    plugin_name: str | None = None
-    target: str | None = None
-    items: list[PublicationSendItem]
-
-
 class SavePublicationsRequest(BaseModel):
     """Request to save previewed publications to the database."""
 
@@ -995,7 +987,10 @@ class JobCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = Field(None, max_length=500)
     cron_expression: str
-    action: str = Field(..., pattern="^(fetch|notify|fetch_and_notify)$")
+    # `notify` / `fetch_and_notify` retired with the plain-text digest they
+    # scheduled (task 55). Alert delivery is the alerts engine's, on its own
+    # rules and schedules.
+    action: str = Field(..., pattern="^(fetch)$")
     plugin_name: str | None = None
     author_ids: list[str] | None = None
     enabled: bool = True
@@ -1022,21 +1017,25 @@ class JobResponse(BaseModel):
 # ============================================================================
 
 class PluginInfo(BaseModel):
-    """Response model for plugin information."""
+    """Response model for one delivery channel.
+
+    `capabilities` is the directions this channel supports — `send` (ALMa posts
+    to it) and/or `receive` (it feeds the Inbox). `can_send` / `can_receive` say
+    whether each of those is CONFIGURED right now, which is a different
+    question: a Slack token with a posting channel and no capture channel can
+    send and not receive.
+    """
 
     name: str
     display_name: str
     version: str
     description: str
     config_schema: dict
+    capabilities: list[str] = []
     is_configured: bool
+    can_send: bool = False
+    can_receive: bool = False
     is_healthy: bool | None = None
-
-
-class PluginConfigUpdate(BaseModel):
-    """Request model for updating plugin configuration."""
-
-    config: dict
 
 
 class PluginTestResult(BaseModel):

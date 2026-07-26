@@ -123,7 +123,12 @@ startup for existing installs and Docker `env_file` setups.
 |---|---|
 | `SLACK_API_TOKEN` / `SLACK_TOKEN` | Bot User OAuth token (`xoxb-…`). |
 | `SLACK_DEFAULT_CHANNEL` | Channel for outgoing alerts. |
-| `SLACK_CONFIG_PATH` | Path to a plugin config file (`config/slack.config`). |
+
+A `config/slack.json` or `config/slack.config` file from an older install is
+**imported once** into the secret store at startup and then ignored — the token
+has a single owner now, and nothing writes a plaintext copy of it any more. The
+file is left where it is; delete it yourself once you have confirmed Slack still
+works.
 
 The **inbound** capture channel has no env alias on purpose — it is set in
 Settings only, so capture cannot be switched on by an environment a user did not
@@ -163,7 +168,6 @@ Auto-created on first run. The committed example is
 
 ```json
 {
-  "slack_config_path": "./config/slack.config",
   "api_call_delay": "1.0",
   "backend": "openalex",
   "openalex_email": null,

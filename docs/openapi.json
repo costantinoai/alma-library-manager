@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ALMa API",
-    "description": "\n    REST API for ALMa — Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
+    "description": "\n    REST API for ALMa \u2014 Another Library Manager.\n\n    This API provides endpoints for:\n    - **Authors**: Manage monitored authors\n    - **Papers**: Query and filter papers\n    - **Plugins**: Configure messaging platform plugins\n    - **System**: Health checks and statistics\n\n    ## Authentication\n\n    The API supports optional authentication via API key:\n    - Set the `API_KEY` environment variable to enable authentication\n    - Provide the key via `X-API-Key` header or `Bearer` token\n    - If no `API_KEY` is set, all requests are allowed (development mode)\n\n    ## Rate Limiting\n\n    Rate limiting will be implemented in a future version.\n\n    ## Examples\n\n    ### List all authors\n    ```bash\n    curl http://localhost:8000/api/v1/authors\n    ```\n\n    ### Add a new author\n    ```bash\n    curl -X POST http://localhost:8000/api/v1/authors \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"scholar_id\": \"abc123xyz\"}'\n    ```\n\n    ### Query papers\n    ```bash\n    curl \"http://localhost:8000/api/v1/papers?min_year=2023&min_citations=10\"\n    ```\n\n    ### Configure a plugin\n    ```bash\n    curl -X PUT http://localhost:8000/api/v1/plugins/slack/config \\\n         -H \"Content-Type: application/json\" \\\n         -d '{\"config\": {\"api_token\": \"replace-with-real-slack-token\", \"channel\": \"#general\"}}'\n    ```\n    ",
     "contact": {
       "name": "ALMa",
       "url": "https://github.com/costantinoai/alma-library-manager"
@@ -525,7 +525,7 @@
           "authors"
         ],
         "summary": "Mark a flagged duplicate suggestion as NOT a duplicate",
-        "description": "The user says a suggestion flagged `duplicate_of` is actually a different person. Records the OpenAlex id so it's no longer flagged — it returns to the normal 'follow a new author' rail instead of being suppressed. Foreground write via run_write_unit.",
+        "description": "The user says a suggestion flagged `duplicate_of` is actually a different person. Records the OpenAlex id so it's no longer flagged \u2014 it returns to the normal 'follow a new author' rail instead of being suppressed. Foreground write via run_write_unit.",
         "operationId": "mark_suggestion_not_duplicate_endpoint_api_v1_authors_suggestions_not_duplicate_post",
         "security": [
           {
@@ -681,7 +681,7 @@
           "authors"
         ],
         "summary": "Log a rail-originated author follow for outcome calibration",
-        "description": "Fire-and-forget call from the Suggested Authors rail after a follow succeeds, so per-bucket outcome calibration can attribute the positive event to the bucket that surfaced the author. The actual follow write goes through the existing follow / author-create routes — this is the calibration log only.",
+        "description": "Fire-and-forget call from the Suggested Authors rail after a follow succeeds, so per-bucket outcome calibration can attribute the positive event to the bucket that surfaced the author. The actual follow write goes through the existing follow / author-create routes \u2014 this is the calibration log only.",
         "operationId": "track_followed_suggestion_api_v1_authors_suggestions_track_follow_post",
         "security": [
           {
@@ -1454,7 +1454,7 @@
           "authors"
         ],
         "summary": "Discover OpenAlex split profiles via ORCID",
-        "description": "Looks up the author's ORCID on OpenAlex and queries every OpenAlex author profile sharing that ORCID. ORCID is person-level and verified, so co-occurrence is high-confidence evidence of a split profile. Returns the alias list for the user to merge via /merge-profiles. Read-only — does not modify any rows.",
+        "description": "Looks up the author's ORCID on OpenAlex and queries every OpenAlex author profile sharing that ORCID. ORCID is person-level and verified, so co-occurrence is high-confidence evidence of a split profile. Returns the alias list for the user to merge via /merge-profiles. Read-only \u2014 does not modify any rows.",
         "operationId": "discover_author_aliases_api_v1_authors__author_id__discover_aliases_post",
         "security": [
           {
@@ -1536,7 +1536,7 @@
           "authors"
         ],
         "summary": "List pending author merge candidates (the review queue)",
-        "description": "The duplicate author pairs the scan recorded and that haven't been merged yet — each with both names, its `source` ('orcid'/'name') + `confidence`, and the number of papers the merge would reassign. Drives the Merge card's review dialog. Defined before /{author_id} so the static path isn't shadowed.",
+        "description": "The duplicate author pairs the scan recorded and that haven't been merged yet \u2014 each with both names, its `source` ('orcid'/'name') + `confidence`, and the number of papers the merge would reassign. Drives the Merge card's review dialog. Defined before /{author_id} so the static path isn't shadowed.",
         "operationId": "list_merge_candidates_endpoint_api_v1_authors_merge_candidates_get",
         "security": [
           {
@@ -1620,7 +1620,7 @@
         "tags": [
           "authors"
         ],
-        "summary": "Reject one merge suggestion (permanent — never resurfaced)",
+        "summary": "Reject one merge suggestion (permanent \u2014 never resurfaced)",
         "description": "The user says 'these two are NOT the same person'. Records a permanent rejection of the unordered author pair and drops the candidate, so every future scan skips it. Foreground write through the request's gated connection (run_write_unit).",
         "operationId": "reject_merge_candidate_endpoint_api_v1_authors_merge_candidates__candidate_id__reject_post",
         "security": [
@@ -1702,8 +1702,8 @@
         "tags": [
           "authors"
         ],
-        "summary": "Apply one merge suggestion (the per-row ✓ Merge)",
-        "description": "Merge this candidate's alt → primary (richer/followed profile wins, the other's papers reassigned) and consume the candidate. Destructive, not reversed automatically. Foreground write through the request's gated connection (run_write_unit).",
+        "summary": "Apply one merge suggestion (the per-row \u2713 Merge)",
+        "description": "Merge this candidate's alt \u2192 primary (richer/followed profile wins, the other's papers reassigned) and consume the candidate. Destructive, not reversed automatically. Foreground write through the request's gated connection (run_write_unit).",
         "operationId": "merge_one_candidate_endpoint_api_v1_authors_merge_candidates__candidate_id__merge_post",
         "security": [
           {
@@ -2763,7 +2763,7 @@
           "authors"
         ],
         "summary": "Fetch a page of the author's full OpenAlex bibliography",
-        "description": "Lazy cursor-paginated window onto the author's complete OpenAlex works list. Does NOT touch the local DB — use /publications for the already-saved view and /library/import/search/save to pull a work into Library. Accepts either a local author UUID (resolved to its openalex_id) or a bare OpenAlex author id (A…).",
+        "description": "Lazy cursor-paginated window onto the author's complete OpenAlex works list. Does NOT touch the local DB \u2014 use /publications for the already-saved view and /library/import/search/save to pull a work into Library. Accepts either a local author UUID (resolved to its openalex_id) or a bare OpenAlex author id (A\u2026).",
         "operationId": "list_author_openalex_works_api_v1_authors__author_id__openalex_works_get",
         "security": [
           {
@@ -3389,7 +3389,7 @@
           "authors"
         ],
         "summary": "Deep refresh all refreshable authors",
-        "description": "Full refresh pipeline for every selected author: hierarchical identity resolution → OpenAlex profile update (name, affiliation, institutions, citations, h-index, works_count, topics, cited_by_year, ORCID) → works + SPECTER2 vectors backfill → SPECTER2 centroid recompute. Same code the popup 'Refresh author' button runs — just iterated over the author pool. Imported-only placeholder authors without any upstream ID are skipped automatically.",
+        "description": "Full refresh pipeline for every selected author: hierarchical identity resolution \u2192 OpenAlex profile update (name, affiliation, institutions, citations, h-index, works_count, topics, cited_by_year, ORCID) \u2192 works + SPECTER2 vectors backfill \u2192 SPECTER2 centroid recompute. Same code the popup 'Refresh author' button runs \u2014 just iterated over the author pool. Imported-only placeholder authors without any upstream ID are skipped automatically.",
         "operationId": "deep_refresh_all_authors_api_v1_authors_deep_refresh_all_post",
         "security": [
           {
@@ -3776,8 +3776,8 @@
         "tags": [
           "authors"
         ],
-        "summary": "Accept an author as unidentifiable (terminal — stops needs-attention flagging)",
-        "description": "Terminal acknowledgment for an identity gap the resolver genuinely can't close (no_match / needs_manual_review / error / followed-without-id). Sets id_resolution_status='dismissed' so the author stops surfacing in needs-attention and the author-health counts — WITHOUT inventing an identifier. The user can still resolve it later by pasting an id (which flips it to resolved_manual). Gated write + Activity row.",
+        "summary": "Accept an author as unidentifiable (terminal \u2014 stops needs-attention flagging)",
+        "description": "Terminal acknowledgment for an identity gap the resolver genuinely can't close (no_match / needs_manual_review / error / followed-without-id). Sets id_resolution_status='dismissed' so the author stops surfacing in needs-attention and the author-health counts \u2014 WITHOUT inventing an identifier. The user can still resolve it later by pasting an id (which flips it to resolved_manual). Gated write + Activity row.",
         "operationId": "accept_author_unidentified_api_v1_authors__author_id__accept_unidentified_post",
         "security": [
           {
@@ -3859,7 +3859,7 @@
           "authors"
         ],
         "summary": "Scan followed authors for ORCID duplicates (record candidates)",
-        "description": "Manual NON-destructive scan that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) if it is another local author row, RECORDS the mergeable pair in `author_merge_candidates` for review (apply via the Merge card), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Never merges. Activity-enveloped — runs in the background and the Activity panel shows per-author progress.",
+        "description": "Manual NON-destructive scan that walks every followed author with an OpenAlex ID, calls /authors?filter=orcid:X to discover every split profile sharing the same ORCID, then for each alias: (a) if it is another local author row, RECORDS the mergeable pair in `author_merge_candidates` for review (apply via the Merge card), or (b) records it in `author_alt_identifiers` so the suggestion rail filters it out. Never merges. Activity-enveloped \u2014 runs in the background and the Activity panel shows per-author progress.",
         "operationId": "dedup_authors_by_orcid_endpoint_api_v1_authors_dedup_by_orcid_post",
         "security": [
           {
@@ -4437,88 +4437,6 @@
             }
           }
         },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/authors/{author_id}/fetch-and-send": {
-      "post": {
-        "tags": [
-          "authors"
-        ],
-        "summary": "Fetch and send for author (Activity-backed)",
-        "description": "Queue a background job that fetches latest publications for an author and sends them via the configured Slack plugin. Returns an Activity envelope.",
-        "operationId": "fetch_and_send_author_api_v1_authors__author_id__fetch_and_send_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "author_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Author Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -5420,7 +5338,7 @@
           "papers"
         ],
         "summary": "Apply a user action to a paper (the canonical triage route)",
-        "description": "THE route for every paper action, from every surface. Feed, Discovery, Inbox, Map, Library and onboarding all come through here, so 'what does Like mean' has exactly one answer.\n\nPass `surface` so feedback provenance reflects where the user acted. `feed` and `discovery` additionally require `scope_ref` — their own row id — because they settle that row rather than the paper globally: dismissing in one lens must not mute the paper in another.",
+        "description": "THE route for every paper action, from every surface. Feed, Discovery, Inbox, Map, Library and onboarding all come through here, so 'what does Like mean' has exactly one answer.\n\nPass `surface` so feedback provenance reflects where the user acted. `feed` and `discovery` additionally require `scope_ref` \u2014 their own row id \u2014 because they settle that row rather than the paper globally: dismissing in one lens must not mute the paper in another.",
         "operationId": "apply_paper_action_route_api_v1_papers__paper_id__action_post",
         "security": [
           {
@@ -5865,7 +5783,7 @@
           "papers"
         ],
         "summary": "Papers referenced by this paper (full OpenAlex graph)",
-        "description": "Return every paper this paper references, fetched from OpenAlex.\n\nThe OpenAlex graph is the source of truth — local\n``publication_references`` is no longer queried for this view, so\nthe user sees the full bibliography rather than a corpus-only\nsubset. Local matches are looked up in bulk and surfaced via\n``in_library=true`` plus an attached ``paper_id`` so the Pivot\nbutton still works for in-library hits.\n\nCached for 24 h in ``paper_network_cache`` so repeat opens are\ninstant; cache key is ``paper_id + 'prior'``.",
+        "description": "Return every paper this paper references, fetched from OpenAlex.\n\nThe OpenAlex graph is the source of truth \u2014 local\n``publication_references`` is no longer queried for this view, so\nthe user sees the full bibliography rather than a corpus-only\nsubset. Local matches are looked up in bulk and surfaced via\n``in_library=true`` plus an attached ``paper_id`` so the Pivot\nbutton still works for in-library hits.\n\nCached for 24 h in ``paper_network_cache`` so repeat opens are\ninstant; cache key is ``paper_id + 'prior'``.",
         "operationId": "list_prior_works_api_v1_papers__paper_id__prior_works_get",
         "security": [
           {
@@ -6125,8 +6043,8 @@
         "tags": [
           "papers"
         ],
-        "summary": "Detect + merge preprint↔journal twin papers",
-        "description": "Scans for pairs where the same work exists as both a preprint (arXiv / bioRxiv / psyRxiv / chemRxiv / OSF / MDPI) and a published journal row, collapsing each pair into the journal version. `scope=library` only collapses pairs where at least one side is a saved Library paper (fast); `scope=corpus` considers every pair (can take a while on a large corpus). FK rows migrate preprint → canonical; Library + Discovery lists filter the merged preprint out automatically.",
+        "summary": "Detect + merge preprint\u2194journal twin papers",
+        "description": "Scans for pairs where the same work exists as both a preprint (arXiv / bioRxiv / psyRxiv / chemRxiv / OSF / MDPI) and a published journal row, collapsing each pair into the journal version. `scope=library` only collapses pairs where at least one side is a saved Library paper (fast); `scope=corpus` considers every pair (can take a while on a large corpus). FK rows migrate preprint \u2192 canonical; Library + Discovery lists filter the merged preprint out automatically.",
         "operationId": "dedup_preprint_twins_api_v1_papers_dedup_preprints_post",
         "security": [
           {
@@ -6240,8 +6158,8 @@
         "tags": [
           "plugins"
         ],
-        "summary": "List all plugins",
-        "description": "Retrieve information about all available messaging plugins.",
+        "summary": "List all delivery channels",
+        "description": "Every channel ALMa knows about, with the directions it supports (`send` / `receive`) and whether each direction is configured.",
         "operationId": "list_plugins_api_v1_plugins_get",
         "security": [
           {
@@ -6319,8 +6237,8 @@
         "tags": [
           "plugins"
         ],
-        "summary": "Get plugin details",
-        "description": "Retrieve detailed information about a specific plugin.",
+        "summary": "Get channel details",
+        "description": "Retrieve detailed information about a specific delivery channel.",
         "operationId": "get_plugin_api_v1_plugins__plugin_name__get",
         "security": [
           {
@@ -6398,105 +6316,13 @@
         }
       }
     },
-    "/api/v1/plugins/{plugin_name}/config": {
-      "put": {
-        "tags": [
-          "plugins"
-        ],
-        "summary": "Update plugin configuration",
-        "description": "Update the configuration for a specific plugin.",
-        "operationId": "update_plugin_config_api_v1_plugins__plugin_name__config_put",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "plugin_name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Plugin Name"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PluginConfigUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/plugins/{plugin_name}/test": {
       "post": {
         "tags": [
           "plugins"
         ],
-        "summary": "Test plugin connection",
-        "description": "Test if the plugin can connect to its service. For Slack, this runs the test asynchronously through the Activity envelope so the exact code path that delivers real alerts is what gets exercised.",
+        "summary": "Test channel connection",
+        "description": "Test if the channel can reach its service. Slack and email run asynchronously through the Activity envelope so the exact code path that delivers real alerts is what gets exercised.",
         "operationId": "test_plugin_connection_api_v1_plugins__plugin_name__test_post",
         "security": [
           {
@@ -6511,107 +6337,6 @@
             "schema": {
               "type": "string",
               "title": "Plugin Name"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/plugins/{plugin_name}/notify": {
-      "post": {
-        "tags": [
-          "plugins"
-        ],
-        "summary": "Send test notification",
-        "description": "Send a test notification using the plugin.",
-        "operationId": "send_test_notification_api_v1_plugins__plugin_name__notify_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "plugin_name",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Plugin Name"
-            }
-          },
-          {
-            "name": "message",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "This is a test notification from Scholar Slack Bot API",
-              "title": "Message"
-            }
-          },
-          {
-            "name": "target",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "title": "Target"
             }
           },
           {
@@ -6801,75 +6526,6 @@
         }
       }
     },
-    "/api/v1/fetch/notify/send": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Send publications via plugin",
-        "description": "Queue an Activity-tracked send of publications via the selected plugin.\n\nInput validation (plugin configured, plugin registered, payload shape) runs\nsynchronously so callers still get a 4xx/404 immediately. The remote send\nitself runs on the APS scheduler pool so the request thread is released\nbefore the network round-trip.",
-        "operationId": "send_publications_api_v1_fetch_notify_send_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SendPublicationsRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/fetch/hard-reset": {
       "post": {
         "tags": [
@@ -6955,64 +6611,6 @@
             },
             "description": "Run in background and track in Activity"
           },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "500": {
-            "description": "Internal Server Error"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/fetch/fetch-and-send": {
-      "post": {
-        "tags": [
-          "fetch"
-        ],
-        "summary": "Fetch and send for all authors",
-        "operationId": "fetch_and_send_all_api_v1_fetch_fetch_and_send_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
           {
             "name": "x-api-key",
             "in": "header",
@@ -7687,7 +7285,7 @@
           "settings"
         ],
         "summary": "Get Openalex Status",
-        "description": "Report whether the OpenAlex API key is configured and, if so, whether\na live probe accepts it. Drives the connection pill in Settings →\nConnections → OpenAlex, mirroring the Semantic Scholar status contract.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False`` — no key set (env or secret store).\n  - ``valid=True``       — probe returned 200, or 429 (key authenticated\n                           before the rate limiter applied).\n  - ``valid=False``      — OpenAlex rejected the key (401 / 403).\n  - ``valid=None``       — probe could not complete / unexpected status.\n\nThe probe hits ``/rate-limit`` directly (bypasses the response cache) so\na manual re-check always re-probes with the current key.",
+        "description": "Report whether the OpenAlex API key is configured and, if so, whether\na live probe accepts it. Drives the connection pill in Settings \u2192\nConnections \u2192 OpenAlex, mirroring the Semantic Scholar status contract.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False`` \u2014 no key set (env or secret store).\n  - ``valid=True``       \u2014 probe returned 200, or 429 (key authenticated\n                           before the rate limiter applied).\n  - ``valid=False``      \u2014 OpenAlex rejected the key (401 / 403).\n  - ``valid=None``       \u2014 probe could not complete / unexpected status.\n\nThe probe hits ``/rate-limit`` directly (bypasses the response cache) so\na manual re-check always re-probes with the current key.",
         "operationId": "get_openalex_status_api_v1_settings_openalex_status_get",
         "security": [
           {
@@ -7743,7 +7341,7 @@
           "settings"
         ],
         "summary": "Get Semantic Scholar Status",
-        "description": "Report whether the Semantic Scholar key is configured and, if so,\nwhether a live authenticated probe accepts it. Drives the connection dot\nin Settings → Connections → Semantic Scholar.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False``         — no key set (env or secret store).\n  - ``valid=True``               — probe returned 200, OR 429 (the key\n                                   was accepted; S2 authenticates before\n                                   applying the 1 req/s throttle).\n  - ``valid=False``              — S2 rejected the key (401 / 403).\n  - ``valid=None``               — probe could not complete (network /\n                                   timeout / unexpected status); unknown.\n\nThe probe is a single cheapest-possible `/paper/search?limit=1` call with\na short timeout and no retries — it is on-demand only (card mount / manual\nrefresh), so it doesn't meaningfully spend the 1 req/s budget.",
+        "description": "Report whether the Semantic Scholar key is configured and, if so,\nwhether a live authenticated probe accepts it. Drives the connection dot\nin Settings \u2192 Connections \u2192 Semantic Scholar.\n\nStates (green dot = ``valid is True``):\n  - ``configured=False``         \u2014 no key set (env or secret store).\n  - ``valid=True``               \u2014 probe returned 200, OR 429 (the key\n                                   was accepted; S2 authenticates before\n                                   applying the 1 req/s throttle).\n  - ``valid=False``              \u2014 S2 rejected the key (401 / 403).\n  - ``valid=None``               \u2014 probe could not complete (network /\n                                   timeout / unexpected status); unknown.\n\nThe probe is a single cheapest-possible `/paper/search?limit=1` call with\na short timeout and no retries \u2014 it is on-demand only (card mount / manual\nrefresh), so it doesn't meaningfully spend the 1 req/s budget.",
         "operationId": "get_semantic_scholar_status_api_v1_settings_semantic_scholar_status_get",
         "security": [
           {
@@ -9975,7 +9573,7 @@
           "library"
         ],
         "summary": "Follow an author",
-        "description": "Start following an author.\n\nIdempotent: following an already-followed author returns the existing\nfollow instead of erroring — the user's intent (\"this author should be\nfollowed\") is already satisfied, and a 409 here turned harmless client\nretries / double-submits into scary error toasts.",
+        "description": "Start following an author.\n\nIdempotent: following an already-followed author returns the existing\nfollow instead of erroring \u2014 the user's intent (\"this author should be\nfollowed\") is already satisfied, and a 409 here turned harmless client\nretries / double-submits into scary error toasts.",
         "operationId": "follow_author_api_v1_library_followed_authors_post",
         "security": [
           {
@@ -10159,7 +9757,7 @@
           "library"
         ],
         "summary": "Update paper reading status",
-        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state ∈ {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` —\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
+        "description": "Update the reading status of any tracked paper.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. Membership of the reading list IS `reading` \u2014\nthere's no separate `queued` step. The legacy `queued` value is\nsilently coerced to `reading` for back-compat with any client\nstill sending it.",
         "operationId": "update_reading_status_api_v1_library_papers__paper_id__reading_status_patch",
         "security": [
           {
@@ -10236,7 +9834,7 @@
           "library"
         ],
         "summary": "Get reading list grouped by status",
-        "description": "Return the reading list grouped by status.\n\nD2 lifecycle (post-2026-04-26): reading state ∈ {None, reading,\ndone, excluded}. The legacy `queued` bucket has been retired —\nmembership of the reading list IS `reading`. Reading state stays\nindependent from library membership: marking reading does not\nsave, saving does not mark reading.",
+        "description": "Return the reading list grouped by status.\n\nD2 lifecycle (post-2026-04-26): reading state \u2208 {None, reading,\ndone, excluded}. The legacy `queued` bucket has been retired \u2014\nmembership of the reading list IS `reading`. Reading state stays\nindependent from library membership: marking reading does not\nsave, saving does not mark reading.",
         "operationId": "get_reading_queue_api_v1_library_reading_queue_get",
         "security": [
           {
@@ -10874,7 +10472,7 @@
           "library-import"
         ],
         "summary": "List Zotero collections",
-        "description": "Fetch Zotero collections via POST to avoid API key in query strings.\n\nPOST-only by design (43.3): the deleted GET wrapper took the API key as a\nquery parameter and PERSISTED it via `_resolve_zotero_api_key` → `set_secret`\n— a secret written from a URL on a read verb. The frontend only ever called\nthis POST; persisting the key belongs to the request body, not a query\nstring.",
+        "description": "Fetch Zotero collections via POST to avoid API key in query strings.\n\nPOST-only by design (43.3): the deleted GET wrapper took the API key as a\nquery parameter and PERSISTED it via `_resolve_zotero_api_key` \u2192 `set_secret`\n\u2014 a secret written from a URL on a read verb. The frontend only ever called\nthis POST; persisting the key belongs to the request body, not a query\nstring.",
         "operationId": "list_zotero_collections_post_endpoint_api_v1_library_import_zotero_collections_post",
         "security": [
           {
@@ -11297,7 +10895,7 @@
           "library-import"
         ],
         "summary": "Search online sources (OpenAlex + S2 + Crossref + arXiv + bioRxiv)",
-        "description": "Return a list of papers matching the query across all enabled discovery sources, ranked by query relevance (cross-source RRF + query-text match — search-engine semantics). Results are cross-source deduplicated (canonical triple) and each is decorated with `in_library`, `paper_id`, `sources` (provenance chip), `relevance`, and a personal `like_score` for the why-chips. No writes.",
+        "description": "Return a list of papers matching the query across all enabled discovery sources, ranked by query relevance (cross-source RRF + query-text match \u2014 search-engine semantics). Results are cross-source deduplicated (canonical triple) and each is decorated with `in_library`, `paper_id`, `sources` (provenance chip), `relevance`, and a personal `like_score` for the why-chips. No writes.",
         "operationId": "online_source_search_api_v1_library_import_search_post",
         "security": [
           {
@@ -11435,7 +11033,7 @@
           "library-import"
         ],
         "summary": "Top-cited paper titles for a set of OpenAlex authors",
-        "description": "Returns `{openalex_id: [titles]}` — the N most-cited works per author (one small OpenAlex /works call each, run concurrently). Split from the author-search endpoint so it can be fetched non-blocking: the search cards render immediately and the titles fill in after. Pure read.",
+        "description": "Returns `{openalex_id: [titles]}` \u2014 the N most-cited works per author (one small OpenAlex /works call each, run concurrently). Split from the author-search endpoint so it can be fetched non-blocking: the search cards render immediately and the titles fill in after. Pure read.",
         "operationId": "author_top_cited_works_api_v1_library_import_search_authors_top_works_post",
         "security": [
           {
@@ -11501,7 +11099,7 @@
           "library-import"
         ],
         "summary": "Streaming variant of /import/search (NDJSON, per-source events)",
-        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons → partial results → final query-relevance-ranked list incrementally. Each newline-delimited JSON object carries a `type` field — `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
+        "description": "Same fan-out as `/import/search` but yields per-source events as each lane returns so the UI can render skeletons \u2192 partial results \u2192 final query-relevance-ranked list incrementally. Each newline-delimited JSON object carries a `type` field \u2014 `source_pending`, `source_partial`, `source_timeout`, `source_error`, or `final`.",
         "operationId": "online_source_search_stream_api_v1_library_import_search_stream_post",
         "security": [
           {
@@ -11567,7 +11165,7 @@
           "library-import"
         ],
         "summary": "Save an online search result with the add/like/love/dislike contract",
-        "description": "Resolves one OpenAlex work and applies the shared `3/4/5/1` rating contract. add/like/love land in Library with `added_from='online_search'`; dislike writes a negative feedback event and marks the paper dismissed (unless it's already in Library — then the library entry is preserved and only the signal is recorded).",
+        "description": "Resolves one OpenAlex work and applies the shared `3/4/5/1` rating contract. add/like/love land in Library with `added_from='online_search'`; dislike writes a negative feedback event and marks the paper dismissed (unless it's already in Library \u2014 then the library entry is preserved and only the signal is recorded).",
         "operationId": "online_source_search_save_api_v1_library_import_search_save_post",
         "security": [
           {
@@ -12211,7 +11809,7 @@
           "alerts"
         ],
         "summary": "Apply a suggested alert automation",
-        "description": "Materialize one template suggestion: create its rule and digest atomically.\n\nThe template payload is recomputed server-side from ``template_key`` (the\nclient never sends rule/alert bodies), and both inserts share one\ntransaction — no orphan rule when the digest insert fails. 404 when the\nkey no longer resolves (already applied, or the source stopped qualifying).",
+        "description": "Materialize one template suggestion: create its rule and digest atomically.\n\nThe template payload is recomputed server-side from ``template_key`` (the\nclient never sends rule/alert bodies), and both inserts share one\ntransaction \u2014 no orphan rule when the digest insert fails. 404 when the\nkey no longer resolves (already applied, or the source stopped qualifying).",
         "operationId": "apply_alert_template_api_v1_alerts_templates__template_key__apply_post",
         "security": [
           {
@@ -14302,7 +13900,7 @@
           "feed"
         ],
         "summary": "Autocomplete OpenAlex journals/venues for a journal monitor",
-        "description": "Search OpenAlex sources (journals) by name for the journal-follow UI.\n\nPure read — no DB access. Defined BEFORE the dynamic ``/monitors/{id}``\nroutes so the literal path is not captured as a monitor id. ``?search=``\nis the paid OpenAlex cost class, so this is only ever called interactively\nfrom the follow UI, never by a background job.",
+        "description": "Search OpenAlex sources (journals) by name for the journal-follow UI.\n\nPure read \u2014 no DB access. Defined BEFORE the dynamic ``/monitors/{id}``\nroutes so the literal path is not captured as a monitor id. ``?search=``\nis the paid OpenAlex cost class, so this is only ever called interactively\nfrom the follow UI, never by a background job.",
         "operationId": "venue_search_api_v1_feed_monitors_venue_search_get",
         "security": [
           {
@@ -15839,7 +15437,7 @@
           "insights"
         ],
         "summary": "Papers behind an Insights figure (drilldown)",
-        "description": "Paginated paper list for ONE Insights figure — a graph cluster, or a topic / journal / institution / year / source bar. Pure read; rows are the standard Publication shape.",
+        "description": "Paginated paper list for ONE Insights figure \u2014 a graph cluster, or a topic / journal / institution / year / source bar. Pure read; rows are the standard Publication shape.",
         "operationId": "get_insights_papers_api_v1_insights_papers_get",
         "security": [
           {
@@ -15864,10 +15462,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "the figure's value (cluster id, topic name, …); ignored for 'all'",
+              "description": "the figure's value (cluster id, topic name, \u2026); ignored for 'all'",
               "title": "Filter Value"
             },
-            "description": "the figure's value (cluster id, topic name, …); ignored for 'all'"
+            "description": "the figure's value (cluster id, topic name, \u2026); ignored for 'all'"
           },
           {
             "name": "scope",
@@ -15875,11 +15473,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "library | corpus — only affects cluster",
+              "description": "library | corpus \u2014 only affects cluster",
               "default": "library",
               "title": "Scope"
             },
-            "description": "library | corpus — only affects cluster"
+            "description": "library | corpus \u2014 only affects cluster"
           },
           {
             "name": "limit",
@@ -15953,7 +15551,7 @@
           "insights"
         ],
         "summary": "Canonical corpus data-health snapshot",
-        "description": "The single source of truth for corpus data-health (task 24, Pillar 1). Returns uniform dimension records — each with a count, severity, a plain-language explanation/impact, and the fix actions — so every surface (Health page, needs-attention, operational status) renders the same numbers and guidance. Served via the materialised-view layer (<1s cached read, background rebuild on change; no external calls).",
+        "description": "The single source of truth for corpus data-health (task 24, Pillar 1). Returns uniform dimension records \u2014 each with a count, severity, a plain-language explanation/impact, and the fix actions \u2014 so every surface (Health page, needs-attention, operational status) renders the same numbers and guidance. Served via the materialised-view layer (<1s cached read, background rebuild on change; no external calls).",
         "operationId": "get_corpus_health_api_v1_insights_health_get",
         "security": [
           {
@@ -16453,7 +16051,7 @@
           "health"
         ],
         "summary": "Recompute a maintenance op's pending count + ETA for chosen params",
-        "description": "Cheap recompute of just ``candidates_pending`` + ``eta`` for a given ``scope`` / ``dry_run`` — lets the UI refresh the ETA when the user changes a control without re-listing every operation.",
+        "description": "Cheap recompute of just ``candidates_pending`` + ``eta`` for a given ``scope`` / ``dry_run`` \u2014 lets the UI refresh the ETA when the user changes a control without re-listing every operation.",
         "operationId": "estimate_operation_api_v1_health_operations__key__estimate_get",
         "security": [
           {
@@ -16581,7 +16179,7 @@
           "health"
         ],
         "summary": "Run a maintenance task now",
-        "description": "Schedule one bounded run (trigger_source='user'). Idempotent — returns the in-flight job if the same operation is already running. An optional body restricts the run to specific paper ids.",
+        "description": "Schedule one bounded run (trigger_source='user'). Idempotent \u2014 returns the in-flight job if the same operation is already running. An optional body restricts the run to specific paper ids.",
         "operationId": "run_operation_api_v1_health_operations__key__run_post",
         "security": [
           {
@@ -16794,7 +16392,7 @@
           "health"
         ],
         "summary": "Dump all backend thread stacks (diagnostic)",
-        "description": "Read-only diagnostic for write-lock stalls: returns every live thread's name + current stack so the holder of the SQLite writer (or the process writer gate) can be identified while reads still flow. No DB access — usable even when the writer is wedged.",
+        "description": "Read-only diagnostic for write-lock stalls: returns every live thread's name + current stack so the holder of the SQLite writer (or the process writer gate) can be identified while reads still flow. No DB access \u2014 usable even when the writer is wedged.",
         "operationId": "dump_thread_stacks_api_v1_health_threads_get",
         "responses": {
           "200": {
@@ -17068,7 +16666,7 @@
           "library-management"
         ],
         "summary": "Delete every cached embedding so they can be re-fetched",
-        "description": "Wipes `publication_embeddings`, `author_centroids`, and `publication_embedding_fetch_status` so the next AI run / S2 backfill repopulates them from scratch. Synchronous (small tables, < 1 s). Library papers, followed authors, lenses, feedback events, collections, tags, and the corpus are preserved — only the vector caches and their per-paper fetch markers are removed.",
+        "description": "Wipes `publication_embeddings`, `author_centroids`, and `publication_embedding_fetch_status` so the next AI run / S2 backfill repopulates them from scratch. Synchronous (small tables, < 1 s). Library papers, followed authors, lenses, feedback events, collections, tags, and the corpus are preserved \u2014 only the vector caches and their per-paper fetch markers are removed.",
         "operationId": "reset_embeddings_api_v1_library_mgmt_embeddings_reset_post",
         "security": [
           {
@@ -18429,7 +18027,7 @@
           "graphs"
         ],
         "summary": "Get Paper Map",
-        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, resolution 1.0) are served via the materialised-view\nlayer: cache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations (incl. a non-default cluster_resolution) bypass the\ncache and build inline — those are rare, ad-hoc views where caching every\nvariant would be wasteful.",
+        "description": "Get paper map visualization data.\n\nDefault options (cluster labels, cluster colour, citation size, edges\non, resolution 1.0) are served via the materialised-view\nlayer: cache hit returns instantly, fingerprint mismatch enqueues a\nbackground rebuild and serves the prior payload meanwhile. Custom\noption combinations (incl. a non-default cluster_resolution) bypass the\ncache and build inline \u2014 those are rare, ad-hoc views where caching every\nvariant would be wasteful.",
         "operationId": "get_paper_map_api_v1_graphs_paper_map_get",
         "security": [
           {
@@ -18722,7 +18320,7 @@
           "graphs"
         ],
         "summary": "Describe Region",
-        "description": "Characterise an arbitrary set of papers by its dominant vocabulary — the\nread behind selecting a region on the frontier map (task 47 §8, \"Directions\").\n\nPOST only because the body carries up to ~300 paper ids; it is a **pure read**\n(verified by the GET-purity suite). Reuses the SAME c-TF-IDF labeler the\ncluster labels use — no second TF-IDF. Returns the region's label, top terms,\nthree sample titles, honest membership counts (library / current suggestions /\nseen), and a `sufficient` flag (false below 5 papers → the UI shows \"too few\npapers to characterize\" and disables actions).",
+        "description": "Characterise an arbitrary set of papers by its dominant vocabulary \u2014 the\nread behind selecting a region on the frontier map (task 47 \u00a78, \"Directions\").\n\nPOST only because the body carries up to ~300 paper ids; it is a **pure read**\n(verified by the GET-purity suite). Reuses the SAME c-TF-IDF labeler the\ncluster labels use \u2014 no second TF-IDF. Returns the region's label, top terms,\nthree sample titles, honest membership counts (library / current suggestions /\nseen), and a `sufficient` flag (false below 5 papers \u2192 the UI shows \"too few\npapers to characterize\" and disables actions).",
         "operationId": "describe_region_api_v1_graphs_region_describe_post",
         "security": [
           {
@@ -18788,7 +18386,7 @@
           "graphs"
         ],
         "summary": "Get Author Network",
-        "description": "Get author network visualization data.\n\nThe default (resolution 1.0, pure-semantic layout) is served from the\nmaterialised view. A non-default cluster_resolution OR a fused layout (a\nnon-zero co-authorship / bib-coupling weight) is a variant — served from the\nSAME durable, proportionally-invalidated cache as the paper map (task #20):\nbuild once, reuse across restarts, rebuild only when a real proportion of the\nunderlying papers has changed. The build itself is a pure read (no\npublication-layout persistence), mirroring the paper map (I-2).",
+        "description": "Get author network visualization data.\n\nThe default (resolution 1.0, pure-semantic layout) is served from the\nmaterialised view. A non-default cluster_resolution OR a fused layout (a\nnon-zero co-authorship / bib-coupling weight) is a variant \u2014 served from the\nSAME durable, proportionally-invalidated cache as the paper map (task #20):\nbuild once, reuse across restarts, rebuild only when a real proportion of the\nunderlying papers has changed. The build itself is a pure read (no\npublication-layout persistence), mirroring the paper map (I-2).",
         "operationId": "get_author_network_api_v1_graphs_author_network_get",
         "security": [
           {
@@ -18926,7 +18524,7 @@
           "graphs"
         ],
         "summary": "Get Signal Field",
-        "description": "The SPACE-OWNED preference field over the corpus substrate.\n\nOne valence per signal-carrying paper, at its substrate coordinates —\nindependent of which dots any view renders (user call 2026-07-25: the\nstats of the space belong to the space; toggling layers must never\nchange the terrain). Every map host splats THIS field for its Heat\nmode, so Discovery and the Map page show the same landscape.\n\nThe valence hierarchy and every weight live in ONE place:\n`alma.core.signal_valence` (strongest user signal wins; engine\nevidence at reduced authority; no-signal papers carry\nVALENCE_NO_SIGNAL so EVERY substrate point has a value — the\nterrain has no holes, user call 2026-07-25).\n\nPure read; the substrate is the durable corpus layout.",
+        "description": "The SPACE-OWNED preference field over the corpus substrate.\n\nOne valence per signal-carrying paper, at its substrate coordinates \u2014\nindependent of which dots any view renders (user call 2026-07-25: the\nstats of the space belong to the space; toggling layers must never\nchange the terrain). Every map host splats THIS field for its Heat\nmode, so Discovery and the Map page show the same landscape.\n\nThe valence hierarchy and every weight live in ONE place:\n`alma.core.signal_valence` (strongest user signal wins; engine\nevidence at reduced authority; no-signal papers carry\nVALENCE_NO_SIGNAL so EVERY substrate point has a value \u2014 the\nterrain has no holes, user call 2026-07-25).\n\nPure read; the substrate is the durable corpus layout.",
         "operationId": "get_signal_field_api_v1_graphs_signal_field_get",
         "security": [
           {
@@ -18982,7 +18580,7 @@
           "graphs"
         ],
         "summary": "Get Author Field",
-        "description": "The LIVE preference + score field for the author map.\n\nThe author analogue of `/graphs/signal-field`, and deliberately built from\nthe SAME contract: an author's valence is the mean `paper_valence` over the\nin-scope papers of theirs you have an opinion about. So \"how do I feel about\nthis author\" is derived from \"how do I feel about their papers\" — one owner\nof the weights (`alma.core.signal_valence`), no second scale to keep in sync.\n\nTwo reasons this is an endpoint rather than a field baked into the network\npayload (user catch 2026-07-26 — \"terrain is all yellow and no scores\"):\n\n* **Live.** The author network is a materialized view; the score baked into\n  it goes stale the moment Discovery re-scores, which greyed the dots and\n  flattened the terrain exactly like the paper map's baked score did.\n* **Coverage.** The old terrain used the mean recommendation score alone and\n  substituted 0 for every author without one — in corpus scope that is ~90%\n  of them, and a flood of hard zeros diluted the splat's local mean to\n  nothing: uniform yellow. Valence covers every author carrying ANY signal\n  (saved / rated / dismissed / scored), and authors with NO signal are\n  returned with `v: null` so the host can omit them from the splat instead\n  of drowning it. Pale paper where you have no opinion is the honest render.\n\nKeyed by author id (the OpenAlex id, as the network's nodes are) rather than\nby coordinates: unlike the paper substrate there is no off-view author to\naccount for — the author map always draws every author in scope — so an\nid-keyed field is view-independent for exactly the same reason.\n\nPure read.",
+        "description": "The LIVE preference + score field for the author map.\n\nThe author analogue of `/graphs/signal-field`, and deliberately built from\nthe SAME contract: an author's valence is the mean `paper_valence` over the\nin-scope papers of theirs you have an opinion about. So \"how do I feel about\nthis author\" is derived from \"how do I feel about their papers\" \u2014 one owner\nof the weights (`alma.core.signal_valence`), no second scale to keep in sync.\n\nTwo reasons this is an endpoint rather than a field baked into the network\npayload (user catch 2026-07-26 \u2014 \"terrain is all yellow and no scores\"):\n\n* **Live.** The author network is a materialized view; the score baked into\n  it goes stale the moment Discovery re-scores, which greyed the dots and\n  flattened the terrain exactly like the paper map's baked score did.\n* **Coverage.** The old terrain used the mean recommendation score alone and\n  substituted 0 for every author without one \u2014 in corpus scope that is ~90%\n  of them, and a flood of hard zeros diluted the splat's local mean to\n  nothing: uniform yellow. Valence covers every author carrying ANY signal\n  (saved / rated / dismissed / scored), and authors with NO signal are\n  returned with `v: null` so the host can omit them from the splat instead\n  of drowning it. Pale paper where you have no opinion is the honest render.\n\nKeyed by author id (the OpenAlex id, as the network's nodes are) rather than\nby coordinates: unlike the paper substrate there is no off-view author to\naccount for \u2014 the author map always draws every author in scope \u2014 so an\nid-keyed field is view-independent for exactly the same reason.\n\nPure read.",
         "operationId": "get_author_field_api_v1_graphs_author_field_get",
         "security": [
           {
@@ -19050,7 +18648,7 @@
           "graphs"
         ],
         "summary": "Refresh Cluster Labels",
-        "description": "Regenerate representative cluster labels for one graph + scope.\n\nRuns in the Activity envelope so the UI can track per-cluster\nprogress without blocking the GET path. The GET route picks up\ncached labels from `graph_cluster_labels` on the next refresh —\nthis endpoint invalidates `graph_cache` at the end to force that\nrebuild.",
+        "description": "Regenerate representative cluster labels for one graph + scope.\n\nRuns in the Activity envelope so the UI can track per-cluster\nprogress without blocking the GET path. The GET route picks up\ncached labels from `graph_cluster_labels` on the next refresh \u2014\nthis endpoint invalidates `graph_cache` at the end to force that\nrebuild.",
         "operationId": "refresh_cluster_labels_api_v1_graphs_cluster_labels_refresh_post",
         "security": [
           {
@@ -19130,11 +18728,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "library (default) or corpus — the scope to rebuild",
+              "description": "library (default) or corpus \u2014 the scope to rebuild",
               "default": "library",
               "title": "Scope"
             },
-            "description": "library (default) or corpus — the scope to rebuild"
+            "description": "library (default) or corpus \u2014 the scope to rebuild"
           },
           {
             "name": "background",
@@ -20140,7 +19738,7 @@
           "feedback"
         ],
         "summary": "Reset learned feedback state",
-        "description": "Wipes every table that encodes user-derived feedback signal — raw feedback events, per-lens aggregates, author dismissals, author centroids, and cached author suggestion buckets — and clears `recommendations.user_action` so past actions no longer count as evidence. Saved Library papers, followed authors, lenses, and the corpus itself are preserved.",
+        "description": "Wipes every table that encodes user-derived feedback signal \u2014 raw feedback events, per-lens aggregates, author dismissals, author centroids, and cached author suggestion buckets \u2014 and clears `recommendations.user_action` so past actions no longer count as evidence. Saved Library papers, followed authors, lenses, and the corpus itself are preserved.",
         "operationId": "reset_feedback_learning_api_v1_feedback_reset_post",
         "security": [
           {
@@ -20894,7 +20492,7 @@
           "extension"
         ],
         "summary": "Save the paper open in the browser into ALMa",
-        "description": "Resolves the scraped paper (DOI → OpenAlex preferred, scraped metadata as fallback) and applies the shared add/like/love → 3/4/5 contract via the canonical save helper, stamped `added_from='browser_extension'`. `destination='reading_list'` additionally lands the paper on the reading list.",
+        "description": "Resolves the scraped paper (DOI \u2192 OpenAlex preferred, scraped metadata as fallback) and applies the shared add/like/love \u2192 3/4/5 contract via the canonical save helper, stamped `added_from='browser_extension'`. `destination='reading_list'` additionally lands the paper on the reading list.",
         "operationId": "save_from_extension_api_v1_extension_save_post",
         "security": [
           {
@@ -20957,7 +20555,7 @@
           "extension"
         ],
         "summary": "Check membership + resolve a paper's metadata (read-only)",
-        "description": "Resolves the scraped identifiers against the local corpus and reports membership ('already in Library / Reading list'). Returns the title/authors/year/journal from the local row when present; with `resolve=true` it also fetches them from OpenAlex when the paper isn't local yet (so a PDF's title can be shown before saving). Pure read — never writes.",
+        "description": "Resolves the scraped identifiers against the local corpus and reports membership ('already in Library / Reading list'). Returns the title/authors/year/journal from the local row when present; with `resolve=true` it also fetches them from OpenAlex when the paper isn't local yet (so a PDF's title can be shown before saving). Pure read \u2014 never writes.",
         "operationId": "lookup_from_extension_api_v1_extension_lookup_post",
         "security": [
           {
@@ -21311,7 +20909,7 @@
           "onboarding"
         ],
         "summary": "Complete Onboarding",
-        "description": "Mark onboarding done so the gate stops showing, then start the\nMANDATORY convergence chain (audit 39 finding #4): the coordinator walks\nthe maintenance registry's dependency order — identity → metadata →\nvectors → local embeddings → centroids → reference graph → cluster\nlabels → topic normalization — until nothing actionable remains, so the\nfresh library ends healthy, not \"queued\". Its `auto:onboarding_complete`\ntrigger is user-facing (never yields to the idle gate) and survives\nrestarts via the orphan-resume path.",
+        "description": "Mark onboarding done so the gate stops showing, then start the\nMANDATORY convergence chain (audit 39 finding #4): the coordinator walks\nthe maintenance registry's dependency order \u2014 identity \u2192 metadata \u2192\nvectors \u2192 local embeddings \u2192 centroids \u2192 reference graph \u2192 cluster\nlabels \u2192 topic normalization \u2014 until nothing actionable remains, so the\nfresh library ends healthy, not \"queued\". Its `auto:onboarding_complete`\ntrigger is user-facing (never yields to the idle gate) and survives\nrestarts via the orphan-resume path.",
         "operationId": "complete_onboarding_api_v1_onboarding_complete_post",
         "security": [
           {
@@ -21363,7 +20961,7 @@
           "onboarding"
         ],
         "summary": "Reset Onboarding",
-        "description": "Clear the completed flag so Settings → Restart re-shows the flow.",
+        "description": "Clear the completed flag so Settings \u2192 Restart re-shows the flow.",
         "operationId": "reset_onboarding_api_v1_onboarding_reset_post",
         "security": [
           {
@@ -21415,7 +21013,7 @@
           "onboarding"
         ],
         "summary": "Resolve Owner Identity",
-        "description": "Resolve an ORCID or OpenAlex id to a profile for the confirm card.\n\nRead-only — no follow, no write. The frontend shows the resolved name +\naffiliation + works count, then calls ``/ingest-owner`` on confirm.",
+        "description": "Resolve an ORCID or OpenAlex id to a profile for the confirm card.\n\nRead-only \u2014 no follow, no write. The frontend shows the resolved name +\naffiliation + works count, then calls ``/ingest-owner`` on confirm.",
         "operationId": "resolve_owner_identity_api_v1_onboarding_resolve_owner_post",
         "security": [
           {
@@ -21484,7 +21082,7 @@
           "onboarding"
         ],
         "summary": "Ingest Owner",
-        "description": "Follow the user's own author profile + schedule the full backfill.\n\nReuses the canonical follow path (``apply_follow_state`` +\n``schedule_followed_author_historical_backfill``) so all three follow\ntables and the deep-refresh job behave exactly as a normal follow — then\nmarks the row as the single owner. The owner's papers are promoted to the\nLibrary by ``/promote-owner-papers`` once the backfill has landed them.",
+        "description": "Follow the user's own author profile + schedule the full backfill.\n\nReuses the canonical follow path (``apply_follow_state`` +\n``schedule_followed_author_historical_backfill``) so all three follow\ntables and the deep-refresh job behave exactly as a normal follow \u2014 then\nmarks the row as the single owner. The owner's papers are promoted to the\nLibrary by ``/promote-owner-papers`` once the backfill has landed them.",
         "operationId": "ingest_owner_api_v1_onboarding_ingest_owner_post",
         "security": [
           {
@@ -23216,7 +22814,7 @@
           "label"
         ],
         "title": "AuthorSuggestionSignal",
-        "description": "One piece of evidence backing an author suggestion.\n\nT7 (2026-04-24) — replaces the single opaque `suggestion_type`\nlabel with a priority-ordered list of concrete evidence chips.\n`label` is the user-facing string; `kind` is a stable machine\ntag for analytics / future targeting. `count` / `value` /\n`subject` are optional numeric / string facets the UI can use\nfor tooltip-rich rendering."
+        "description": "One piece of evidence backing an author suggestion.\n\nT7 (2026-04-24) \u2014 replaces the single opaque `suggestion_type`\nlabel with a priority-ordered list of concrete evidence chips.\n`label` is the user-facing string; `kind` is a stable machine\ntag for analytics / future targeting. `count` / `value` /\n`subject` are optional numeric / string facets the UI can use\nfor tooltip-rich rendering."
       },
       "AuthorTopWorksRequest": {
         "properties": {
@@ -23290,7 +22888,7 @@
         },
         "type": "object",
         "title": "BackfillAuthorWorksRequest",
-        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs — useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
+        "description": "Trigger a full works + vectors backfill for one author or the batch.\n\nWhen `author_openalex_id` is null the runner enumerates every\nresolved corpus author whose `author_centroids` row is missing or\nolder than 14 days. Set `full_refetch=True` to bypass the\n`local >= declared` shortcut on per-author runs \u2014 useful when\nOpenAlex reshuffles counts and the shortcut would cache stale\ncoverage."
       },
       "BibtexTextImportRequest": {
         "properties": {
@@ -24577,7 +24175,7 @@
           "action": {
             "type": "string",
             "title": "Action",
-            "description": "add | like | love → 3/4/5 stars",
+            "description": "add | like | love \u2192 3/4/5 stars",
             "default": "add"
           },
           "destination": {
@@ -24809,7 +24407,7 @@
               }
             ],
             "title": "Source Id",
-            "description": "Resolved OpenAlex source id (S...) — REQUIRED for monitor_type='venue' (resolve via /feed/monitors/venue-search)"
+            "description": "Resolved OpenAlex source id (S...) \u2014 REQUIRED for monitor_type='venue' (resolve via /feed/monitors/venue-search)"
           },
           "filter_keywords": {
             "items": {
@@ -24901,7 +24499,7 @@
         },
         "type": "object",
         "title": "FeedSettings",
-        "description": "Opt-in auto-refresh settings for the feed inbox.\n\nPersisted in the shared ``discovery_settings`` KV store under the\n``schedule.feed_refresh_*`` keys. The Feed page toggle drives\n``auto_refresh_enabled``; the interval lives in Settings. Default OFF — the\nperiodic job registers only when enabled AND interval > 0."
+        "description": "Opt-in auto-refresh settings for the feed inbox.\n\nPersisted in the shared ``discovery_settings`` KV store under the\n``schedule.feed_refresh_*`` keys. The Feed page toggle drives\n``auto_refresh_enabled``; the interval lives in Settings. Default OFF \u2014 the\nperiodic job registers only when enabled AND interval > 0."
       },
       "FollowAuthorRequest": {
         "properties": {
@@ -24931,7 +24529,7 @@
           "author_id"
         ],
         "title": "FollowAuthorRequest",
-        "description": "Request model for following an author.\n\n``author_id`` accepts any author reference the canonical resolver\nunderstands (local ``authors.id`` or an OpenAlex author id — the row is\ncreated when missing). ``name`` is the display name to stamp on a row\ncreated this way; without it the row would be named after the raw id\nuntil the historical backfill hydrates it."
+        "description": "Request model for following an author.\n\n``author_id`` accepts any author reference the canonical resolver\nunderstands (local ``authors.id`` or an OpenAlex author id \u2014 the row is\ncreated when missing). ``name`` is the display name to stamp on a row\ncreated this way; without it the row would be named after the raw id\nuntil the historical backfill hydrates it."
       },
       "FollowedAuthorResponse": {
         "properties": {
@@ -24994,7 +24592,7 @@
         },
         "type": "object",
         "title": "GovernanceSettings",
-        "description": "Background-ops governance knobs (task 37) — Settings → Data & system.\n\nKV-backed in the shared `discovery_settings` store; the shipped constants are\nthe defaults. The gate reads `idle_wait_minutes`; the per-sweep reserve + the\nHealth budget read `reserved_api_calls`."
+        "description": "Background-ops governance knobs (task 37) \u2014 Settings \u2192 Data & system.\n\nKV-backed in the shared `discovery_settings` store; the shipped constants are\nthe defaults. The gate reads `idle_wait_minutes`; the per-sweep reserve + the\nHealth budget read `reserved_api_calls`."
       },
       "GraphData": {
         "properties": {
@@ -25311,7 +24909,7 @@
           },
           "action": {
             "type": "string",
-            "pattern": "^(fetch|notify|fetch_and_notify)$",
+            "pattern": "^(fetch)$",
             "title": "Action"
           },
           "plugin_name": {
@@ -25801,7 +25399,7 @@
         },
         "type": "object",
         "title": "MaintenanceConfigRequest",
-        "description": "Partial update — only provided fields change."
+        "description": "Partial update \u2014 only provided fields change."
       },
       "ManualAddRequest": {
         "properties": {
@@ -26386,7 +25984,7 @@
           "action"
         ],
         "title": "PaperActionRequest",
-        "description": "One user action on one paper, from whichever surface raised it.\n\n`save` is accepted as Discovery's spelling of `add`. `defer` is the Inbox\n✕ — leaves the Inbox for `tracked` writing no rating and no feedback event,\ndeliberately NOT `dismiss` (the global hide). See docs/concepts/inbox.md."
+        "description": "One user action on one paper, from whichever surface raised it.\n\n`save` is accepted as Discovery's spelling of `add`. `defer` is the Inbox\n\u2715 \u2014 leaves the Inbox for `tracked` writing no rating and no feedback event,\ndeliberately NOT `dismiss` (the global hide). See docs/concepts/inbox.md."
       },
       "PaperActionResponse": {
         "properties": {
@@ -26803,21 +26401,6 @@
         ],
         "title": "PickAffiliationRequest"
       },
-      "PluginConfigUpdate": {
-        "properties": {
-          "config": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Config"
-          }
-        },
-        "type": "object",
-        "required": [
-          "config"
-        ],
-        "title": "PluginConfigUpdate",
-        "description": "Request model for updating plugin configuration."
-      },
       "PluginInfo": {
         "properties": {
           "name": {
@@ -26841,9 +26424,27 @@
             "type": "object",
             "title": "Config Schema"
           },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Capabilities",
+            "default": []
+          },
           "is_configured": {
             "type": "boolean",
             "title": "Is Configured"
+          },
+          "can_send": {
+            "type": "boolean",
+            "title": "Can Send",
+            "default": false
+          },
+          "can_receive": {
+            "type": "boolean",
+            "title": "Can Receive",
+            "default": false
           },
           "is_healthy": {
             "anyOf": [
@@ -26867,7 +26468,7 @@
           "is_configured"
         ],
         "title": "PluginInfo",
-        "description": "Response model for plugin information."
+        "description": "Response model for one delivery channel.\n\n`capabilities` is the directions this channel supports \u2014 `send` (ALMa posts\nto it) and/or `receive` (it feeds the Inbox). `can_send` / `can_receive` say\nwhether each of those is CONFIGURED right now, which is a different\nquestion: a Slack token with a posting channel and no capture channel can\nsend and not receive."
       },
       "ProfileRequest": {
         "properties": {
@@ -27120,7 +26721,7 @@
           "score"
         ],
         "title": "RecommendationExplainResponse",
-        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope. Different ranker versions emit different signal\ntaxonomies — the legacy 10-signal layout\n(``source_relevance``, ``topic_score``, ``text_similarity``, …,\n``usefulness_boost``), the v2 retrieval-channel layout\n(``lexical``, ``vector``), and various raw-diagnostic fields — and a\nhardcoded Pydantic model silently dropped every v2 key via\n``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live\nDB. The route returns the stored breakdown exactly as scoring wrote\nit, annotated with descriptions for known signal names; the frontend\niterates keys generically and renders the ones it recognises (see\n``components/shared/PaperCard.tsx::SIGNAL_META``)."
+        "description": "Detailed explanation of a recommendation's score.\n\n``breakdown`` is an opaque ``Dict[str, Any]`` rather than a typed\nPydantic envelope. Different ranker versions emit different signal\ntaxonomies \u2014 the legacy 10-signal layout\n(``source_relevance``, ``topic_score``, ``text_similarity``, \u2026,\n``usefulness_boost``), the v2 retrieval-channel layout\n(``lexical``, ``vector``), and various raw-diagnostic fields \u2014 and a\nhardcoded Pydantic model silently dropped every v2 key via\n``extra='ignore'``, rendering 48 / 201 rows as all-nulls on the live\nDB. The route returns the stored breakdown exactly as scoring wrote\nit, annotated with descriptions for known signal names; the frontend\niterates keys generically and renders the ones it recognises (see\n``components/shared/PaperCard.tsx::SIGNAL_META``)."
       },
       "RecommendationResponse": {
         "properties": {
@@ -27317,7 +26918,7 @@
         },
         "type": "object",
         "title": "RefreshAuthorNetworkRequest",
-        "description": "Trigger the two network author-suggestion refresh runners.\n\n`force=True` re-runs both even if their caches are fresh; by\ndefault stale/missing caches are the only ones refreshed\n(fresh caches are left alone — cheap no-op)."
+        "description": "Trigger the two network author-suggestion refresh runners.\n\n`force=True` re-runs both even if their caches are fresh; by\ndefault stale/missing caches are the only ones refreshed\n(fresh caches are left alone \u2014 cheap no-op)."
       },
       "RegionDescribeRequest": {
         "properties": {
@@ -27353,7 +26954,7 @@
               }
             ],
             "title": "Suggestion Bucket",
-            "description": "Originating rail bucket (library_core / cited_by_high_signal / adjacent / semantic_similar / openalex_related / s2_related). Optional — used by outcome calibration to reweight per-bucket scoring; NULL is fine for non-rail rejections."
+            "description": "Originating rail bucket (library_core / cited_by_high_signal / adjacent / semantic_similar / openalex_related / s2_related). Optional \u2014 used by outcome calibration to reweight per-bucket scoring; NULL is fine for non-rail rejections."
           }
         },
         "type": "object",
@@ -27393,7 +26994,7 @@
           "choice"
         ],
         "title": "ResolveConflictRequest",
-        "description": "Body for `POST /authors/conflicts/{conflict_id}/resolve`.\n`choice` = which side wins ('primary' or 'alt'). When 'alt' wins,\nthe primary author row's column gets overwritten with the alt's\nvalue before the conflict is marked resolved. `dismiss` skips\nboth — the conflict goes away without changing the row."
+        "description": "Body for `POST /authors/conflicts/{conflict_id}/resolve`.\n`choice` = which side wins ('primary' or 'alt'). When 'alt' wins,\nthe primary author row's column gets overwritten with the alt's\nvalue before the conflict is marked resolved. `dismiss` skips\nboth \u2014 the conflict goes away without changing the row."
       },
       "ResolveIdentifiersRequest": {
         "properties": {
@@ -27619,45 +27220,6 @@
         "title": "SemanticPaperSearchRequest",
         "description": "Explicit semantic paper search request."
       },
-      "SendPublicationsRequest": {
-        "properties": {
-          "plugin_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Plugin Name"
-          },
-          "target": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/PublicationSendItem"
-            },
-            "type": "array",
-            "title": "Items"
-          }
-        },
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "title": "SendPublicationsRequest",
-        "description": "Request to send a previewed list of publications via a plugin."
-      },
       "SetIdentifiersRequest": {
         "properties": {
           "orcid": {
@@ -27682,7 +27244,7 @@
               }
             ],
             "title": "Openalex Id",
-            "description": "OpenAlex author ID (A1234… or full URL)"
+            "description": "OpenAlex author ID (A1234\u2026 or full URL)"
           },
           "scholar_id": {
             "anyOf": [
@@ -27771,18 +27333,6 @@
             ],
             "title": "Database",
             "description": "Relative path to the unified scholar database"
-          },
-          "slack_config_path": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Slack Config Path",
-            "description": "Relative path to Slack plugin config file (INI)"
           },
           "slack_token": {
             "anyOf": [
@@ -27916,7 +27466,7 @@
               }
             ],
             "title": "Openalex Api Key",
-            "description": "OpenAlex API key (required — get one free at openalex.org/settings/api)"
+            "description": "OpenAlex API key (required \u2014 get one free at openalex.org/settings/api)"
           },
           "semantic_scholar_api_key": {
             "anyOf": [
@@ -27928,7 +27478,7 @@
               }
             ],
             "title": "Semantic Scholar Api Key",
-            "description": "Semantic Scholar API key (strongly recommended — avoids shared-pool 429s)"
+            "description": "Semantic Scholar API key (strongly recommended \u2014 avoids shared-pool 429s)"
           },
           "id_resolution_semantic_scholar_enabled": {
             "anyOf": [
@@ -27979,7 +27529,7 @@
               }
             ],
             "title": "Id Resolution Scholar Scrape Manual Enabled",
-            "description": "Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default — D14)",
+            "description": "Allow manual Google Scholar scraping from the Authors UI (opt-in, off by default \u2014 D14)",
             "default": false
           }
         },

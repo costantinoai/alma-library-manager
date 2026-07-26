@@ -1,20 +1,28 @@
-"""Slack plugin implementation.
+"""Slack as an outbound messaging plugin — a thin face over the one transport.
 
-This module contains the SlackPlugin class which implements the MessagingPlugin
-interface for sending messages to Slack channels and direct messages.
+This class used to be a SECOND Slack client: its own `requests` calls to
+``auth.test`` / ``conversations.list`` / ``users.list`` / ``chat.postMessage``,
+its own name→ID caches, its own token handling — running in the same process as
+:class:`alma.slack.client.SlackNotifier`, which does all of that with
+``slack_sdk``. Two transports meant two caches, two error vocabularies, and a
+credential that had to be kept in two places to feed both.
+
+Now there is one transport. This class supplies the *plugin* half — identity,
+config schema, and the ``MessagingPlugin`` send/test seam that the channel
+registry advertises — and delegates every byte on the wire to the notifier.
+
+Delegation is per call, not per instance: :func:`get_slack_notifier` reads the
+current configuration each time, so a token changed in Settings takes effect on
+the next send instead of on the next process restart.
 """
 
 import logging
 from typing import Any
 
-import requests
-
 from alma.plugins.base import (
-    Author,
     MessagingPlugin,
     PluginConfigError,
     PluginConnectionError,
-    Publication,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,30 +31,14 @@ logger = logging.getLogger(__name__)
 class SlackPlugin(MessagingPlugin):
     """Slack messaging plugin.
 
-    This plugin sends formatted messages to Slack channels or direct messages.
-    It supports both channel names and user names as targets.
-
     Configuration:
         api_token (str): Slack Bot API token (starts with 'xoxb-')
         default_channel (str, optional): Default channel or user name
 
     Example:
-        >>> config = {
-        ...     'api_token': 'replace-with-real-slack-token',
-        ...     'default_channel': 'general'
-        ... }
-        >>> plugin = SlackPlugin(config)
+        >>> plugin = SlackPlugin({'api_token': 'xoxb-…', 'default_channel': 'general'})
         >>> plugin.send_message("Hello!", "general")
     """
-
-    def __init__(self, config: dict[str, Any]):
-        super().__init__(config)
-        # Cache: user-supplied name → resolved Slack ID. Avoids re-listing
-        # the whole workspace on every send within a single process lifetime
-        # (mirrors SlackNotifier._resolved_channel_cache in alma.slack.client).
-        # IDs are stable; a process restart clears the cache.
-        self._resolved_channel_cache: dict[str, str] = {}
-        self._resolved_user_cache: dict[str, str] = {}
 
     # Plugin metadata
     @property
@@ -59,7 +51,7 @@ class SlackPlugin(MessagingPlugin):
 
     @property
     def version(self) -> str:
-        return "1.0.0"
+        return "2.0.0"
 
     @property
     def description(self) -> str:
@@ -79,8 +71,6 @@ class SlackPlugin(MessagingPlugin):
             raise PluginConfigError(
                 "api_token must be a valid Slack bot token (starts with 'xoxb-')"
             )
-
-        logger.debug(f"Slack plugin initialized with token: {token[:10]}...")
 
     def get_config_schema(self) -> dict[str, Any]:
         """Return JSON schema for Slack configuration."""
@@ -102,288 +92,34 @@ class SlackPlugin(MessagingPlugin):
             },
         }
 
+    def _notifier(self):
+        """The single Slack transport, built from the CURRENT configuration."""
+        from alma.slack.client import get_slack_notifier
+
+        return get_slack_notifier()
+
     def test_connection(self) -> bool:
-        """Test Slack API connection.
-
-        Returns:
-            True if connection succeeds, False otherwise
-        """
-        try:
-            # Use auth.test endpoint to verify the token
-            url = "https://slack.com/api/auth.test"
-            headers = {"Authorization": f"Bearer {self.config['api_token']}"}
-
-            response = requests.get(url, headers=headers, timeout=10).json()
-
-            success = response.get("ok", False)
-            self.record_test_result(success)
-
-            if success:
-                logger.info(f"Slack connection test passed for team: {response.get('team')}")
-            else:
-                logger.warning(f"Slack connection test failed: {response.get('error')}")
-
-            return success
-
-        except Exception as e:
-            logger.error(f"Slack connection test error: {e}")
-            self.record_test_result(False)
-            return False
+        """Verify the workspace accepts our token (``auth.test``)."""
+        success = self._notifier().check_auth()
+        self.record_test_result(success)
+        return success
 
     def send_message(self, message: str, target: str) -> bool:
-        """Send a message to a Slack channel or user.
+        """Send an already-rendered message to a Slack channel or user.
 
         Args:
             message: The message to send (pre-formatted)
-            target: Channel name (without #) or user name
+            target: Channel name, ``#name``, Slack ID, or user display name
 
         Returns:
-            True if message was sent successfully, False otherwise
+            True if the message was sent, False otherwise
 
         Raises:
-            PluginConnectionError: If unable to connect to Slack API
+            PluginConnectionError: If the transport has no usable token
         """
-        token = self.config["api_token"]
-
-        # Try to resolve as channel first
-        channel_id = self._get_channel_id_by_name(target, token)
-        if channel_id:
-            return self._send_message_to_channel(channel_id, message, token)
-
-        # Try to resolve as user
-        user_id = self._get_user_id_by_name(target, token)
-        if user_id:
-            dm_channel_id = self._open_im_channel(user_id, token)
-            if dm_channel_id:
-                return self._send_message_to_channel(dm_channel_id, message, token)
-
-        # Final fallback: attempt to send using target as-is (useful for tests/envs)
         try:
-            if self._send_message_to_channel(target, message, token):
-                return True
-        except Exception:
-            pass
-
-        # Neither found
-        logger.error(f"'{target}' is not a valid channel or user in this Slack workspace")
-        return False
-
-    def format_publications(self, publications: list[Publication]) -> str:
-        """Format publications for Slack.
-
-        Args:
-            publications: List of publications to format
-
-        Returns:
-            Slack-formatted message string
-        """
-        if not publications:
-            return "No new publications since my last check."
-
-        # Remove duplicates by title
-        seen_titles = set()
-        unique_pubs = []
-        for pub in publications:
-            if pub.title not in seen_titles:
-                seen_titles.add(pub.title)
-                unique_pubs.append(pub)
-
-        # Format each publication
-        formatted = ["List of publications since my last check:\n"]
-        for pub in unique_pubs:
-            formatted.append(self._format_single_publication(pub))
-
-        return "\n".join(formatted)
-
-    def format_authors(self, authors: list[Author]) -> str:
-        """Format authors list for Slack.
-
-        Args:
-            authors: List of authors to format
-
-        Returns:
-            Slack-formatted author list
-        """
-        # Sort alphabetically
-        sorted_authors = sorted(authors, key=lambda a: a.name.lower())
-
-        # Format with Scholar IDs
-        formatted = "\n".join([
-            f"\t{author.name},\t\tGoogle Scholar ID: {author.scholar_id}"
-            for author in sorted_authors
-        ])
-
-        return f"List of monitored authors:\n```{formatted}```"
-
-    def format_test_message(self, message: str = "This is a test message") -> str:
-        """Format a test message for Slack.
-
-        Args:
-            message: The test message content
-
-        Returns:
-            Slack-formatted test message
-        """
-        width = len(message) + 2
-        border = "#" * width
-        return f"```\n{border}\n#{message}#\n{border}```"
-
-    # Private helper methods adapted from slack_bot.py
-
-    def _format_single_publication(self, pub: Publication) -> str:
-        """Format a single publication for Slack."""
-        details = []
-        details.append("-" * 50)
-        details.append("")
-
-        # Title as clickable link
-        title = f"*<{pub.pub_url}|{pub.title}>*"
-        details.append(title)
-
-        # Authors (abbreviated if > 4)
-        authors = pub.authors.split(",")
-        if len(authors) < 5:
-            details.append(f"Authors: {pub.authors}")
-        else:
-            details.append(
-                f"Authors: {authors[0]}, [+{len(authors)-2}], {authors[-1]}"
-            )
-
-        details.append(f"Journal: {pub.journal}")
-        details.append("")
-        details.append(f"Abstract: _{pub.abstract}_")
-        details.append("")
-
-        return "\n".join(details)
-
-    def _get_channel_id_by_name(self, channel_name: str, token: str) -> str | None:
-        """Get channel ID by name."""
-        cached = self._resolved_channel_cache.get(channel_name)
-        if cached:
-            return cached
-
-        url = "https://slack.com/api/conversations.list"
-        headers = {"Authorization": f"Bearer {token}"}
-        params = {
-            "types": "public_channel,private_channel",
-            "limit": 1000,
-        }
-
-        while True:
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=10).json()
-
-                if not response.get("ok"):
-                    logger.warning(f"Failed to list channels: {response.get('error')}")
-                    return None
-
-                for channel in response.get("channels", []):
-                    if channel.get("name") == channel_name:
-                        channel_id = channel.get("id")
-                        if channel_id:
-                            self._resolved_channel_cache[channel_name] = channel_id
-                        return channel_id
-
-                # Handle pagination
-                cursor = response.get("response_metadata", {}).get("next_cursor")
-                if cursor:
-                    params["cursor"] = cursor
-                else:
-                    break
-
-            except Exception as e:
-                logger.error(f"Error listing channels: {e}")
-                return None
-
-        return None
-
-    def _get_user_id_by_name(self, user_name: str, token: str) -> str | None:
-        """Get user ID by name."""
-        cached = self._resolved_user_cache.get(user_name)
-        if cached:
-            return cached
-
-        url = "https://slack.com/api/users.list"
-        headers = {"Authorization": f"Bearer {token}"}
-        params = {"limit": 1000}
-
-        while True:
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=10).json()
-
-                if not response.get("ok"):
-                    logger.warning(f"Failed to list users: {response.get('error')}")
-                    return None
-
-                for member in response.get("members", []):
-                    user_handle = member.get("name", "")
-                    real_name = member.get("real_name", "")
-
-                    if user_handle == user_name or real_name == user_name:
-                        user_id = member.get("id")
-                        if user_id:
-                            self._resolved_user_cache[user_name] = user_id
-                        return user_id
-
-                # Handle pagination
-                cursor = response.get("response_metadata", {}).get("next_cursor")
-                if cursor:
-                    params["cursor"] = cursor
-                else:
-                    break
-
-            except Exception as e:
-                logger.error(f"Error listing users: {e}")
-                return None
-
-        return None
-
-    def _open_im_channel(self, user_id: str, token: str) -> str | None:
-        """Open or retrieve a DM channel with a user."""
-        url = "https://slack.com/api/conversations.open"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        data = {"users": user_id}
-
-        try:
-            response = requests.post(url, headers=headers, json=data, timeout=10).json()
-
-            if not response.get("ok"):
-                logger.warning(f"Error opening DM for user {user_id}: {response}")
-                return None
-
-            return response.get("channel", {}).get("id")
-
-        except Exception as e:
-            logger.error(f"Error opening DM channel: {e}")
-            return None
-
-    def _send_message_to_channel(
-        self, channel_id: str, message: str, token: str
-    ) -> bool:
-        """Send message to a specific channel ID."""
-        url = "https://slack.com/api/chat.postMessage"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        data = {"channel": channel_id, "text": message}
-
-        try:
-            response = requests.post(url, headers=headers, json=data, timeout=10).json()
-
-            if not response.get("ok"):
-                logger.warning(
-                    f"Sending message to {channel_id} failed. "
-                    f"Error: {response.get('error')}"
-                )
-                return False
-
-            logger.debug(f"Message successfully sent to {channel_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-            raise PluginConnectionError(f"Failed to send message: {e}")
+            return self._notifier().post_text(target, message)
+        except RuntimeError as exc:
+            # The notifier raises RuntimeError when it holds no token at all.
+            # Everything else it reports as False, and so do we.
+            raise PluginConnectionError(f"Failed to send message: {exc}") from exc

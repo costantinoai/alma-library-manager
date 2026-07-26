@@ -646,7 +646,7 @@ export function SystemStatusCards() {
     const badSources = erroredSources.filter(isFreshError)
     const staleSources = erroredSources.filter((s) => !isFreshError(s))
     const disabledSources = summary?.disabled_sources ?? op?.disabled_sources?.length ?? 0
-    const unhealthyPlugins = summary?.unhealthy_plugins ?? 0
+    const halfConfiguredChannels = summary?.misconfigured_channels ?? 0
     const configuredPlugins = (op?.plugins ?? []).filter((p) => p.is_configured).length
     const failedJobs = summary?.recent_failed_operations_24h ?? 0
 
@@ -849,7 +849,7 @@ export function SystemStatusCards() {
             ownerPage: 'settings',
             ownerParams: { anchor: 'channels' },
           },
-          { count: unhealthyPlugins, countLabel: 'unhealthy', healthyLabel: `${configuredPlugins} configured` },
+          { count: halfConfiguredChannels, countLabel: 'half set up', healthyLabel: `${configuredPlugins} configured` },
         ),
       )
     }

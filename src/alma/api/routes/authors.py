@@ -49,7 +49,6 @@ from alma.core.identifier_resolution import (
     scholar_url_for_id,
 )
 from alma.core.operations import OperationOutcome, OperationRunner
-from alma.core.redaction import redact_sensitive_text
 from alma.core.resolution import (
     get_author_sample_titles as _shared_get_author_sample_titles,
 )
@@ -66,12 +65,10 @@ from alma.core.utils import (
     normalize_doi,
     normalize_orcid,
     repair_display_text,
-    to_publication_dataclass,
 )
 from alma.openalex.client import _normalize_openalex_author_id as _norm_oaid
 from alma.openalex.client import resolve_openalex_candidates_from_scholar as _resolve_oa
 from alma.openalex.client import upsert_papers as _upsert_pubs
-from alma.plugins.helpers import get_slack_plugin
 
 logger = logging.getLogger(__name__)
 
@@ -6016,117 +6013,3 @@ def save_preview_publications(
         return {"success": True, "author_id": author_id, "saved": count}
     except Exception as e:
         raise_internal(f"Failed saving preview publications for author {author_id}", e)
-
-
-@router.post(
-    "/{author_id}/fetch-and-send",
-    summary="Fetch and send for author (Activity-backed)",
-    description="Queue a background job that fetches latest publications for an author "
-                "and sends them via the configured Slack plugin. Returns an Activity envelope.",
-)
-def fetch_and_send_author(
-    author_id: str,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Schedule a background fetch-and-send for the given author."""
-    from alma.api.scheduler import (
-        activity_envelope,
-        find_active_job,
-        schedule_immediate,
-        set_job_status,
-    )
-
-    row = db.execute("SELECT name FROM authors WHERE id=?", (author_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Author not found")
-    author_name = row["name"]
-
-    # Validate Slack plugin synchronously so the caller gets 400 immediately
-    # when the integration is not configured.
-    try:
-        get_slack_plugin(required=True)
-    except RuntimeError as exc:
-        logger.warning(
-            "Fetch & send unavailable for %s: %s",
-            author_id,
-            redact_sensitive_text(str(exc)),
-        )
-        raise HTTPException(status_code=400, detail="Slack plugin is not configured") from exc
-
-    from_year = get_fetch_year()
-    operation_key = f"authors.fetch_and_send:{author_id}"
-    existing = find_active_job(operation_key)
-    if existing:
-        return activity_envelope(
-            str(existing.get("job_id") or ""),
-            status="already_running",
-            operation_key=operation_key,
-            message="Fetch-and-send already running for this author",
-        )
-
-    job_id = f"author_fetch_send_{uuid.uuid4().hex[:10]}"
-    set_job_status(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        trigger_source="user",
-        started_at=datetime.now().isoformat(),
-        message=f"Fetching and sending for {author_name}",
-    )
-
-    def _runner():
-        try:
-            pubs = fetch_publications_by_id(
-                author_id,
-                output_folder=_data_dir(),
-                args=SimpleNamespace(update_cache=False, test_fetching=False),
-                from_year=from_year,
-            ) or []
-            # Re-resolve the plugin inside the worker so config changes between
-            # queueing and execution are respected, and so the worker doesn't
-            # reuse a plugin instance created on the request thread.
-            plugin, config = get_slack_plugin(required=True)
-            publications = [to_publication_dataclass(p) for p in pubs]
-            message = plugin.format_publications(publications)
-            target = config.get("default_channel") or config.get("channel", "")
-            ok = plugin.send_message(message, target)
-            if not ok:
-                raise RuntimeError("Plugin returned failure from send_message")
-            logger.info(
-                "Fetch & send completed for %s: %d pubs",
-                author_id,
-                len(publications),
-            )
-            set_job_status(
-                job_id,
-                status="completed",
-                finished_at=datetime.now().isoformat(),
-                processed=len(publications),
-                total=len(publications),
-                message=f"Sent {len(publications)} publications for {author_name}",
-                result={
-                    "success": True,
-                    "author_id": author_id,
-                    "sent_count": len(publications),
-                },
-            )
-        except Exception as exc:  # pragma: no cover - runner crash path
-            logger.error(
-                "Fetch & send runner failed for author %s: %s", author_id, exc
-            )
-            set_job_status(
-                job_id,
-                status="failed",
-                finished_at=datetime.now().isoformat(),
-                message=f"Fetch & send failed for {author_name}",
-                error=str(exc),
-            )
-
-    schedule_immediate(job_id, _runner)
-    return activity_envelope(
-        job_id,
-        status="queued",
-        operation_key=operation_key,
-        message=f"Queued fetch-and-send for {author_name}",
-    )
