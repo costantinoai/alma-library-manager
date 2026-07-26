@@ -3114,6 +3114,15 @@ def list_author_suggestions(
     # library_core still sees external suggestions. Surplus is
     # pruned by the final trim.
     network_slot_cap = max(2, (limit + 2) // 3)
+    # Local evidence for a network candidate is read LIVE, exactly as the
+    # library_core / adjacent buckets read theirs. It used to be hardcoded
+    # (`sample_titles: []`, `local_paper_count: 0`) because the network buckets
+    # were assumed to have no local corpus — but `authors.seed_thin_suggestions`
+    # exists precisely to give them one, and against a hardcoded [] the seeded
+    # papers could never reach the card. That made the seed repair unable to
+    # achieve its own stated goal for the buckets it targets (2026-07-26).
+    from alma.application.author_backfill import count_local_papers_for_author
+
     for bucket_source, bucket_reader in (
         ("openalex_related", _oa_rel),
         ("s2_related", _s2_rel),
@@ -3159,12 +3168,12 @@ def list_author_suggestions(
                     "score": round(bucket_score, 1),
                     "shared_paper_count": int(row.get("seed_cooccurrence") or 0),
                     "shared_followed_count": 0,
-                    "local_paper_count": 0,
+                    "local_paper_count": count_local_papers_for_author(db, oid),
                     "recent_paper_count": 0,
                     "shared_followed_authors": [],
                     "shared_topics": list(row.get("topics") or [])[:6],
                     "shared_venues": list(row.get("venues") or [])[:4],
-                    "sample_titles": [],
+                    "sample_titles": _sample_titles_for_openalex_author(db, oid),
                     "negative_signal": float(row.get("negative_signal") or 0.0),
                     "last_removed_at": row.get("last_removed_at"),
                 }
