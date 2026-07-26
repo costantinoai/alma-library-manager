@@ -1516,7 +1516,11 @@ def _rebuild_graphs_impl(
         if job_id:
             add_job_log(job_id, f"Failed rebuilding author_network: {e}", level="ERROR", step="author_network")
 
-    summary = {"rebuilt": rebuilt, "count": len(rebuilt)}
+    summary = {
+        "rebuilt": rebuilt,
+        "count": len(rebuilt),
+        "message": f"Rebuilt {len(rebuilt)} {scope.label()} graph view(s)",
+    }
     if job_id:
         add_job_log(job_id, f"Graph rebuild completed: {len(rebuilt)} rebuilt", step="done", data=summary)
     return summary

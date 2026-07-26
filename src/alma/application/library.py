@@ -1152,6 +1152,96 @@ def undo_paper_feedback(
     }
 
 
+PAPER_TRIAGE_ACTIONS = frozenset({"add", "like", "love", "dislike", "dismiss", "undo"})
+_PAPER_TRIAGE_RATINGS = {"add": 3, "like": 4, "love": 5}
+
+
+def apply_corpus_paper_feedback(
+    db: sqlite3.Connection,
+    paper_id: str,
+    action: str,
+    *,
+    source_surface: str,
+) -> dict:
+    """Apply D6 triage to any corpus paper through one application primitive.
+
+    Feed and Discovery own richer recommendation/feed-row mutations. Generic
+    corpus surfaces (Map, paper details, onboarding) share this path so
+    membership, rating, signal events, and cross-surface reconciliation cannot
+    drift. The caller owns the write transaction.
+    """
+
+    root_id = _action_root(db, paper_id) or ""
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in PAPER_TRIAGE_ACTIONS:
+        raise ValueError(f"Unknown action: {normalized_action}")
+    if not root_id or db.execute(
+        "SELECT 1 FROM papers WHERE id = ? LIMIT 1",
+        (root_id,),
+    ).fetchone() is None:
+        raise LookupError("Paper not found")
+
+    if normalized_action == "undo":
+        result = undo_paper_feedback(db, root_id)
+        return {
+            "paper_id": root_id,
+            "action": "undo",
+            "status": result.get("status"),
+            "rating": result.get("rating"),
+        }
+
+    if normalized_action in _PAPER_TRIAGE_RATINGS:
+        rating = _PAPER_TRIAGE_RATINGS[normalized_action]
+        add_to_library(
+            db,
+            root_id,
+            rating=rating,
+            added_from=source_surface,
+        )
+        record_paper_feedback(
+            db,
+            root_id,
+            action=normalized_action,
+            rating=rating,
+            source_surface=source_surface,
+        )
+    elif normalized_action == "dislike":
+        sink_disliked_paper(db, root_id)
+        record_paper_feedback(
+            db,
+            root_id,
+            action="dislike",
+            rating=DISLIKE_RATING,
+            source_surface=source_surface,
+        )
+    else:
+        dismiss_paper(db, root_id)
+        record_paper_feedback(
+            db,
+            root_id,
+            action="dismiss",
+            rating=DISLIKE_RATING,
+            source_surface=source_surface,
+        )
+
+    sync_surface_resolution(
+        db,
+        root_id,
+        action=normalized_action,
+        source_surface=source_surface,
+    )
+    row = db.execute(
+        "SELECT status, rating FROM papers WHERE id = ?",
+        (root_id,),
+    ).fetchone()
+    return {
+        "paper_id": root_id,
+        "action": normalized_action,
+        "status": str(row["status"]) if row and row["status"] is not None else None,
+        "rating": int(row["rating"]) if row and row["rating"] is not None else None,
+    }
+
+
 def list_papers(
     db: sqlite3.Connection,
     *,

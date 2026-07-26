@@ -8,7 +8,9 @@ import re
 import sqlite3
 import unicodedata
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import timedelta
+from functools import wraps
 
 from alma.application.author_signal import (
     compute_author_signal,
@@ -76,12 +78,54 @@ _PROJECTED_AUTHOR_TAG_SCALE = 4.0
 _PROJECTED_AUTHOR_ADJUSTMENT_CAP = 24.0
 
 
+_schema_tables: ContextVar[tuple[int, frozenset[str]] | None] = ContextVar(
+    "author_schema_tables",
+    default=None,
+)
+
+
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
+    cached = _schema_tables.get()
+    if cached is not None and cached[0] == id(db):
+        return table in cached[1]
     row = db.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         (table,),
     ).fetchone()
     return row is not None
+
+
+def _with_schema_table_cache(func: Callable) -> Callable:
+    """Cache immutable schema presence during one compound read.
+
+    Author suggestion ranking composes many small evidence helpers. Each helper
+    remains safe to call independently on a partial/test schema, but asking
+    ``sqlite_master`` before every helper produced more than a thousand
+    redundant statements per request. The schema cannot change inside this
+    pure read, so load it once in a context-local cache; ContextVar keeps
+    concurrent requests and nested calls isolated without retaining SQLite
+    connection objects globally.
+    """
+
+    @wraps(func)
+    def wrapped(db: sqlite3.Connection, *args, **kwargs):
+        current = _schema_tables.get()
+        if current is not None and current[0] == id(db):
+            return func(db, *args, **kwargs)
+        rows = db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+        tables = frozenset(
+            str(row["name"] if isinstance(row, sqlite3.Row) else row[0])
+            for row in rows
+        )
+        token = _schema_tables.set((id(db), tables))
+        try:
+            return func(db, *args, **kwargs)
+        finally:
+            _schema_tables.reset(token)
+
+    return wrapped
 
 
 def _followed_author_ids(db: sqlite3.Connection) -> set[str]:
@@ -1845,6 +1889,22 @@ def _projected_author_signal_adjustment(
         return 0.0, {}
 
     direct = float(projected.author.get(oid, 0.0)) * _PROJECTED_AUTHOR_DIRECT_SCALE
+    # ``list_author_suggestions`` deliberately requests the author-only signal
+    # projection. Its topic/venue/keyword/tag maps are therefore empty by
+    # contract. Avoid four per-candidate profile queries whose results would be
+    # multiplied against empty maps and contribute exactly zero.
+    if not (projected.topic or projected.venue or projected.keyword or projected.tag):
+        total = max(
+            -_PROJECTED_AUTHOR_ADJUSTMENT_CAP,
+            min(_PROJECTED_AUTHOR_ADJUSTMENT_CAP, direct),
+        )
+        return total, {
+            "author": round(direct, 3),
+            "topic": 0.0,
+            "venue": 0.0,
+            "keyword": 0.0,
+            "tag": 0.0,
+        }
     topic = (
         sum(float(projected.topic.get(term, 0.0)) for term in _candidate_projection_topics(db, oid))
         * _PROJECTED_AUTHOR_TOPIC_SCALE
@@ -2507,6 +2567,7 @@ def _record_consensus(
             return
 
 
+@_with_schema_table_cache
 def list_author_suggestions(
     db: sqlite3.Connection,
     *,

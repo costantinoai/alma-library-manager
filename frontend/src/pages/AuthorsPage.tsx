@@ -516,7 +516,10 @@ export function AuthorsPage() {
     )
     const topicTally = new Map<string, number>()
     for (const node of members) {
-      const label = typeof node.cluster_label === 'string' ? node.cluster_label : ''
+      const label =
+        typeof node.metadata?.cluster_label === 'string'
+          ? node.metadata.cluster_label
+          : ''
       if (label) topicTally.set(label, (topicTally.get(label) ?? 0) + 1)
     }
     const topics = [...topicTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
@@ -1158,7 +1161,7 @@ export function AuthorsPage() {
                             : ''}
                         </span>
                         {followedKeys.has(key) ? (
-                          <StatusBadge tone="success" size="sm">
+                          <StatusBadge tone="positive" size="sm">
                             Followed
                           </StatusBadge>
                         ) : suggestionForNode(node) ? (

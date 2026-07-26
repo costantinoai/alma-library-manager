@@ -431,7 +431,9 @@ def list_all_alt_openalex_ids(db: sqlite3.Connection) -> set[str]:
     Used by `list_author_suggestions` to extend its `followed_ids`
     filter so already-merged alts never resurface in the rail.
     """
-    ensure_alt_identifiers_table(db)
+    # Pure read: migrations and merge mutations own schema creation. On a
+    # partial/fresh schema there cannot be recorded aliases, so the correct
+    # result is the empty set rather than a CREATE TABLE attempt from a GET.
     try:
         rows = db.execute(
             "SELECT alt_openalex_id FROM author_alt_identifiers"

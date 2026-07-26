@@ -4733,6 +4733,25 @@ export function onboardingPaperFeedback(
   })
 }
 
+/** Canonical paper triage for corpus surfaces outside Feed/Discovery.
+ *
+ * The source is explicit so feedback provenance reflects where the user acted;
+ * onboarding retains its compatibility route but shares the backend primitive.
+ */
+export function corpusPaperFeedback(
+  paperId: string,
+  action: OnboardingPaperAction,
+  sourceSurface: 'map' | 'papers' = 'papers',
+): Promise<OnboardingPaperFeedbackResult> {
+  return api.post<OnboardingPaperFeedbackResult>(
+    `/papers/${encodeURIComponent(paperId)}/feedback`,
+    {
+      action,
+      source_surface: sourceSurface,
+    },
+  )
+}
+
 export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all'
 
 /**

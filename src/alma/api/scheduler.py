@@ -2509,17 +2509,24 @@ def run_job(job_id: str) -> bool:
 
 
 def get_job_status(job_id: str) -> dict | None:
-    """Get the latest status dict for a job."""
+    """Get the latest in-memory OR durable status dict for a job.
+
+    Process-isolated graph workers write phase progress through their own
+    scheduler module instance. The API process therefore must compare its local
+    snapshot with SQLite instead of returning local state unconditionally;
+    otherwise Activity stays frozen on the pre-spawn "queued/running" message
+    until the parent supervisor writes the terminal status.
+    """
     with _job_lock:
-        status = _job_status.get(job_id)
-    if status:
-        return status
+        status = dict(_job_status.get(job_id) or {})
     db_status = _load_job_status_from_db(job_id)
-    if db_status:
+    if db_status and str(db_status.get("updated_at") or "") >= str(
+        status.get("updated_at") or ""
+    ):
         with _job_lock:
             _job_status[job_id] = dict(db_status)
         return db_status
-    return None
+    return status or None
 
 
 def find_active_job(operation_key: str) -> dict | None:

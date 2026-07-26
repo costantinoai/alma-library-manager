@@ -31,8 +31,8 @@ shared space:
 | | means |
 |---|---|
 | **Filled dot** | Yours — you follow them, or they co-authored a paper you saved. A **dashed ring** marks the followed ones specifically. |
-| **Hollow dot** | Currently suggested to you — the same suggestions as the rail below, shown where they actually sit relative to your people. |
-| **Faint dot** | Everyone else in scope: context, not a claim. |
+| **Gold outline** | Currently suggested to you — the exact same snapshot and evidence as the rail below, independent of fill or cluster colour. |
+| **Hollow / faint dot** | Other eligible corpus authors: context, not a claim. |
 
 **Scope** switches between the authors of papers you saved and every
 tracked paper. **Colour** shows communities (clusters) or the engine's
@@ -43,12 +43,21 @@ map's terrain uses. Authors you have no signal on leave the paper bare
 rather than flattening the whole picture toward neutral.
 
 There are **no link lines**: on an author map adjacency already *is*
-collaboration (co-authorship helps build the layout), so drawing the
-links again would only restate position and bury the dots.
+semantic similarity, and drawing a dense collaboration graph would bury the
+dots. Each author sits at the centroid of their papers on the shared paper
+substrate; communities are clustered over those centroids.
 
-An author with no embedded paper has no semantic position, so they are
-**left off and counted** in the legend rather than parked somewhere
-arbitrary — see [seeding a suggestion's evidence](#seeding-a-suggestions-evidence).
+An author needs at least two papers already placed on the corpus substrate.
+Thinner profiles are **left off and counted** in the legend rather than parked
+somewhere arbitrary — see [seeding a suggestion's
+evidence](#seeding-a-suggestions-evidence).
+
+Clicking a dot opens quick profile/follow actions first; publication,
+community, score, and suggestion evidence are progressively disclosed. The
+two-column drilldown below the map expands the selected author and community.
+**Select region** summarizes a lassoed community from its visible nodes and
+can follow every eligible, not-yet-followed member. See [Semantic
+maps](maps.md) for the shared interaction and rebuild lifecycle.
 
 ## Adding an author
 

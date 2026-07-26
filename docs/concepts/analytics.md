@@ -183,9 +183,9 @@ Both maps also read membership on the **same three channels**: a
 saved a paper from), a **hollow** dot is being suggested to you, and a
 **faint** dot is context. One common space, so "who is mine and who is
 new" reads identically wherever you meet it. Anything that cannot be
-placed is never faked into position: an author with no embedded paper
-has no semantic location, so the Author Map omits them and says how
-many in the legend. To force a fresh layout
+placed is never faked into position: an author needs at least two papers
+already placed on the corpus substrate, so the Author Map omits thinner
+profiles and says how many in the legend. To force a fresh layout
 right now, the **Rebuild graphs** button still works; custom knob
 combinations (a different cluster detail, a fused layout) build in
 the background too — the map shows "Building this view…" and appears

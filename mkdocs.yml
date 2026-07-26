@@ -126,6 +126,7 @@ nav:
       - Discovery: concepts/discovery.md
       - Lenses: concepts/lenses.md
       - Authors: concepts/authors.md
+      - Semantic maps: concepts/maps.md
       - Analytics: concepts/analytics.md
       - Health: concepts/health.md
       - Alerts: concepts/alerts.md

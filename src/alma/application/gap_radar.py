@@ -94,35 +94,38 @@ def get_missing_author_feedback_state(
     conn: sqlite3.Connection,
     openalex_id: str,
 ) -> dict[str, Any]:
-    ensure_gap_feedback_tables(conn)
     normalized = _normalize_openalex_author_id(openalex_id)
+    empty_state = {
+        "openalex_id": normalized,
+        "score": 0.0,
+        "suppressed": False,
+        "consecutive_removes": 0,
+        "last_removed_at": None,
+    }
     if not normalized:
-        return {
-            "openalex_id": "",
-            "score": 0.0,
-            "suppressed": False,
-            "consecutive_removes": 0,
-            "last_removed_at": None,
-        }
+        return empty_state
 
-    rows = conn.execute(
-        """
-        SELECT action, signal_value, created_at
-        FROM missing_author_feedback
-        WHERE openalex_id = ?
-        ORDER BY created_at DESC
-        LIMIT 24
-        """,
-        (normalized,),
-    ).fetchall()
+    # Pure read: application startup/migrations own schema creation. This
+    # reader is also used by GET /authors/suggestions, where the former
+    # CREATE TABLE/INDEX guards ran once per candidate and attempted writes on
+    # a read path. A partial/fresh schema simply has no feedback yet.
+    try:
+        rows = conn.execute(
+            """
+            SELECT action, signal_value, created_at
+            FROM missing_author_feedback
+            WHERE openalex_id = ?
+            ORDER BY created_at DESC
+            LIMIT 24
+            """,
+            (normalized,),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return empty_state
+        raise
     if not rows:
-        return {
-            "openalex_id": normalized,
-            "score": 0.0,
-            "suppressed": False,
-            "consecutive_removes": 0,
-            "last_removed_at": None,
-        }
+        return empty_state
 
     now = _utcnow()
     score = 0.0
@@ -239,4 +242,3 @@ def clear_missing_author_feedback(
     if not normalized:
         return
     conn.execute("DELETE FROM missing_author_feedback WHERE openalex_id = ?", (normalized,))
-

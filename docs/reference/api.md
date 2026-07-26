@@ -241,12 +241,13 @@ parameters and response shapes.
 | `GET` | `/insights/diagnostics` | Composed payload — assembles all eight diagnostic sections from cache. Backwards-compatible with pre-split clients. |
 | `GET` | `/insights/diagnostics/sections/{section}` | One of the eight diagnostics sections (`feed`, `discovery`, `ai`, `authors`, `alerts`, `feedback`, `operational`, `evaluation`). Each section is a fingerprint-keyed materialised view; response carries `stale` / `rebuilding` / `computed_at`. The frontend uses these to stream cards in independently with per-card skeletons. |
 | `GET` | `/insights/discovery/branch-action` | Branch-level engagement |
-| `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options served from cache; custom options bypass cache. SWR flags ride inside `metadata`. `prefetch=true` makes the read speculative: a cache miss reports `building` **without** enqueuing a layout build, so a sidebar hover can warm the cache but never start one. |
-| `GET` | `/graphs/author-network` | The Author Map: authors placed by what they write about, clustered into research communities. Cached. Ships **no edges** — co-authorship and bibliographic coupling shape the layout, so adjacency already encodes them. Authors with no embedded paper are omitted and counted in `metadata.omitted_unplaced`. Accepts `prefetch=true` with the same read-only meaning as `/graphs/paper-map`. |
+| `GET` | `/graphs/paper-map` | 2D SPECTER2 projection + clusters. Default options are pure reads of the stored layout; custom options use a durable bounded variant cache and queue process-isolated computation on a miss. `prefetch=true` makes the read speculative: a cache miss reports `building` **without** enqueuing a layout build, so a sidebar hover can inspect cache state but never start work. |
+| `GET` | `/graphs/author-network` | The Author Map: each eligible author is placed at the centroid of at least two of their papers on the corpus substrate, then the 2D centroids are density-clustered into research communities. Cached and process-built; ships **no edges**. Authors without two placed papers are omitted and counted in `metadata.omitted_unplaced`. Accepts `prefetch=true` with the same read-only meaning as `/graphs/paper-map`. |
 | `GET` | `/graphs/signal-field` | Space-owned preference field over the corpus substrate: one valence per paper at its layout coordinates, plus its live 0–100 score. Feeds every paper map's Terrain overlay and Score colouring. Pure read. |
 | `GET` | `/graphs/author-field` | The Author Map's live field, keyed by author id: mean `paper_valence` over the papers of theirs you have a signal on (`v: null` when none), plus their mean live score. Same `signal_valence` weights as `/graphs/signal-field`. Pure read. |
 | `POST` | `/graphs/cluster-labels/refresh` | Re-label paper-map clusters. |
-| `POST` | `/graphs/rebuild` | Force a full rebuild of all graph caches (re-cluster + re-project). |
+| `POST` | `/graphs/rebuild` | Queue a process-isolated local rebuild for one scope. Keeps the last-good layout readable until replacement; does not perform remote reference enrichment. |
+| `POST` | `/graphs/reference-backfill` | Queue OpenAlex reference enrichment independently of layout recomputation. |
 | `GET` | `/reports/weekly-brief` | Weekly research brief |
 | `GET` | `/reports/collection-intelligence` | Collection-level report |
 | `GET` | `/reports/topic-drift` | Topic drift report |
@@ -338,6 +339,7 @@ remaining steps rendered as children inside one envelope.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/papers/{id}/details` | Paper detail |
+| `POST` | `/papers/{id}/feedback` | Canonical D6 triage for generic corpus surfaces (`add`, `like`, `love`, `dislike`, `dismiss`, `undo`). `source_surface=map|papers` preserves action provenance; onboarding's compatibility route delegates to the same application primitive. |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |

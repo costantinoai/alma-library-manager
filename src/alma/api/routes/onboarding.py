@@ -131,10 +131,6 @@ class PromoteOwnerResponse(BaseModel):
     promoted: int
 
 
-_PAPER_ACTIONS = {"add", "like", "love", "dislike", "dismiss"}
-_ACTION_RATING = {"add": 3, "like": 4, "love": 5}
-
-
 class PaperFeedbackRequest(BaseModel):
     paper_id: str = Field(min_length=1)
     action: str
@@ -430,66 +426,19 @@ def onboarding_paper_feedback(
       rating 0) AND delete the onboarding-generated signal, so re-clicking an
       applied action toggles it fully off.
     """
-    action = payload.action.strip().lower()
-    if action != "undo" and action not in _PAPER_ACTIONS:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
-
-    paper_id = payload.paper_id.strip()
-    exists = db.execute(
-        "SELECT 1 FROM papers WHERE id = ? LIMIT 1", (paper_id,)
-    ).fetchone()
-    if not exists:
-        raise HTTPException(status_code=404, detail="Paper not found.")
-
-    if action == "undo":
-        # Surface-independent: a paper has one signal, so undo clears it all
-        # (the canonical use-case), not just onboarding-tagged events.
+    try:
         result = run_write_unit(
             db,
-            lambda: library_app.undo_paper_feedback(db, paper_id),
-            label="onboarding_undo_feedback",
+            lambda: library_app.apply_corpus_paper_feedback(
+                db,
+                payload.paper_id,
+                payload.action,
+                source_surface="onboarding",
+            ),
+            label="onboarding_paper_feedback",
         )
-        return PaperFeedbackResponse(
-            paper_id=paper_id,
-            action="undo",
-            status=result.get("status"),
-            rating=result.get("rating"),
-        )
-
-    def _persist() -> None:
-        # One atomic triage unit: membership/sink/dismiss + signal event +
-        # cross-surface reconciliation. add_to_library defers its enrichment
-        # scheduling past the writer gate.
-        if action in _ACTION_RATING:
-            rating = _ACTION_RATING[action]
-            library_app.add_to_library(db, paper_id, rating=rating, added_from="onboarding")
-            library_app.record_paper_feedback(
-                db, paper_id, action=action, rating=rating, source_surface="onboarding"
-            )
-        elif action == "dislike":
-            library_app.sink_disliked_paper(db, paper_id)
-            library_app.record_paper_feedback(
-                db, paper_id, action="dislike",
-                rating=library_app.DISLIKE_RATING, source_surface="onboarding",
-            )
-        else:  # dismiss
-            library_app.dismiss_paper(db, paper_id)
-            library_app.record_paper_feedback(
-                db, paper_id, action="dismiss",
-                rating=library_app.DISLIKE_RATING, source_surface="onboarding",
-            )
-        library_app.sync_surface_resolution(
-            db, paper_id, action=action, source_surface="onboarding"
-        )
-
-    run_write_unit(db, _persist, label="onboarding_paper_feedback")
-
-    row = db.execute(
-        "SELECT status, rating FROM papers WHERE id = ?", (paper_id,)
-    ).fetchone()
-    return PaperFeedbackResponse(
-        paper_id=paper_id,
-        action=action,
-        status=str(row["status"]) if row and row["status"] is not None else None,
-        rating=int(row["rating"]) if row and row["rating"] is not None else None,
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PaperFeedbackResponse(**result)

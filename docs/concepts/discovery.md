@@ -377,13 +377,12 @@ them (`PRIOR_STRENGTH = 6.0`, `HALF_LIFE_DAYS = 30`) live in
 They're tuned for "noticeable enough to act on, not so reactive
 that one bad day kills a branch."
 
-## Frontier map view
+## Map panel
 
-Beyond the list / compact / extended layouts, the recommendation list has a
-fourth **Map** view — a 2-D projection of your SPECTER2 semantic space where
-proximity means similarity. It's the actionable version of the corpus graph:
-three layers make "where am I, where's the frontier, what next" spatially
-legible.
+The recommendation list and its map are visible together: the collapsible map
+panel sits above the cards, using the same durable SPECTER2 corpus space as the
+top-level [Map page](maps.md). Proximity means semantic similarity; the three
+layers make “where am I, where is the frontier, what next?” spatially legible.
 
 - **Library** — solid neutral dots: the terrain, the shape of what you've saved.
 - **Suggestions** — the hero layer: the lens's current recommendations, coloured
@@ -391,26 +390,26 @@ legible.
   A suggestion near your library is a natural extension; one far out is a novel
   direction. Suggestions with no abstract yet (no coordinate) are reported as
   "N not placed".
-- **Seen** — faint frontier dots, opt-in ("Show everything I've seen"): the top
-  papers you've encountered but not acted on, nearest your library centroid,
-  with an honest cap ("showing X nearest of Y seen"). `dismissed`/`removed`
-  papers never appear.
+- **Context** — faint corpus dots that keep the surrounding research landscape
+  visible without claiming they are recommendations. `dismissed`/`removed`
+  papers never become hero suggestions.
 
 The map is fully connected to the rest of Discovery: a **branch legend** chips
-row highlights a branch and dims the others; clicking any node opens the same
-paper detail panel the list uses, so Save / Dismiss write the same real rows and
-the map refetches. Pan and zoom to explore; the coordinates come from the
-corpus-scope layout (built once and cached — a short "building the layout" state
-shows on first use).
+row highlights a branch and dims the others. Clicking a suggestion opens a
+compact anchored paper card with its internal score and quick triage actions;
+TLDR/cluster/neighbour context is progressively disclosed. A dot click never
+scrolls the list—**Go to paper** is the explicit bridge. Pan, zoom, display
+knobs, and the last-good layout survive navigation; preference Terrain updates
+after an action without rebuilding coordinates.
 
 The **branch legend** does more than highlight: each chip can boost or mute
 its branch inline, writing the same `branch_controls` Branch Studio writes —
 one state, two views. A **Branches / Clusters** switch recolours the map by
-corpus cluster instead of by branch (never both at once, per 47-H: two
+corpus cluster instead of by branch (never both at once: two
 colourings on one scatter would lie about which structure you're reading). When
-a lens has seeds, the **seen layer is ranked against that lens's centroid**
-rather than the whole library — the legend says which it used. After an
-Explore-direction refresh, recommendations that weren't in the previous set
+a lens has seeds, recommendation placement still uses the shared corpus
+coordinates while branch identity remains a view-only colour. After an
+Explore-direction refresh, recommendations that were not in the previous set
 carry a dashed halo, so the loop is visible end to end.
 
 An opt-in **Citation links** toggle overlays the citation fabric — coupling
@@ -452,8 +451,8 @@ carries the selected paper ids).
 
 ### Citation fabric on the corpus graph
 
-The same coupling and co-citation layers ship on the Analytics paper map
-(**Library › Analytics › Map**) as filterable edge layers alongside the semantic
+The same coupling and co-citation layers ship on the top-level **Map** page as
+filterable edge layers alongside the semantic
 and co-authorship layers. A **Citation influence** slider (Layout basis) blends
 those structural signals into the node *positions* at library scale; the panel
 also reports honest citation-edge coverage — "citation edges cover N% of the

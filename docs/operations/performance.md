@@ -15,6 +15,7 @@ range that doesn't make the UI feel sluggish.
 |---|---|---|
 | **Discovery lens refresh** (canonical lens, ~330 saved papers) | external retrieval lane (parallel, 12 workers) is the dominant floor (~30 s) | Multi-source retrieval, ranking, branch clustering. After the perf wave (wider lane pool, batched seed/author fetches, deferred hydration) the in-process work is small; the irreducible cost is the rate-limited external network lane. |
 | **Page-mount reads** (`/library/saved`, `/feed`, `/authors`) | < 1 s P95 | Stays responsive even during a concurrent refresh. |
+| **Author suggestions** (30 rows, warm network snapshot) | < 2.5 s HTTP | Pure local ranking read; opening Authors never refreshes the network. Current corpus: 1.87 s HTTP / 0.59 s ranking core. |
 | **Detail-panel reads** (`/papers/{id}`, prior / derivative works) | < 500 ms P95 | Mostly cached. |
 | **Activity poll** (`/api/v1/activity`) | < 200 ms | Used for the live status of background jobs. |
 | **Frontend tsc check** | < 30 s | Useful as a build sanity check. |
@@ -123,32 +124,37 @@ Source: `frontend/src/pages/DiscoveryPage.tsx`,
 
 ## Cached read aggregates (materialised views)
 
-Insights and the three graph endpoints are served from a fingerprint-
-keyed cache (`materialized_views` table; see
-`src/alma/application/materialized_views.py`). On every GET, a tiny
-SQL query computes a content fingerprint of the view's inputs (paper
-counts, last-update timestamps, embedding count, active model). If
-the fingerprint matches the cached row, the GET returns in <10 ms.
-If it doesn't match, the cached payload is returned immediately with
-`stale: true, rebuilding: true`, and a background rebuild is enqueued
-under the view's `operation_key` (e.g.
-`materialize.graph.paper_map.library`, deduped via the scheduler). The
-frontend shows a "Refreshing…" pill and auto-refetches when the
-rebuild completes (`useOperationToasts` invalidates the matching
-React Query roots).
+Insights and graph aggregates are stored in the `materialized_views`
+table (see `src/alma/application/materialized_views.py`). Insights
+views use fingerprint-keyed stale-while-revalidate reads. Graph GETs
+are even narrower: they only read a completed stored payload;
+embedding-drift/version/age checks belong to the idle-gated six-hour
+layout-maintenance job. A missing user-requested graph queues one
+deduplicated build and answers `202`; speculative navigation prefetch
+never queues compute.
+
+Graph clustering and projection run in a separate Python worker
+process. The API keeps serving Home, Suggestions, and the last-good
+paper/author layouts while it computes; only the completed payload is
+published. Advanced option combinations use the same process boundary
+and a durable bounded variant cache. `useOperationToasts` invalidates
+the matching React Query roots when the Activity job completes.
 
 | View | Build cost (cold) | Triggers a rebuild |
 |---|---|---|
 | `insights:overview` | ~30 ms | Library paper add/edit, recommendations churn, follow change, embedding-model change |
-| `graph:paper_map:library` | seconds-to-minutes | Library paper add/edit, embedding count change, embedding-model change |
-| `graph:paper_map:corpus` | tens of seconds | Same, corpus-wide |
-| `graph:author_network:library` | seconds | Library paper add/edit, follow change |
-| `graph:author_network:corpus` | tens of seconds | Same, corpus-wide |
+| `graph:paper_map:library` | seconds | Scheduled embedding drift/version/age gate or explicit rebuild |
+| `graph:paper_map:corpus` | tens of seconds | Same, corpus-wide; owns the one paper substrate |
+| `graph:author_network:library` | sub-second to seconds | Scheduled gate or explicit rebuild; aggregates paper-substrate coordinates |
+| `graph:author_network:corpus` | seconds | Same, corpus-wide |
 | `graph:topic_map` | ~hundreds of ms | Any paper change |
 
 Explicit "Rebuild graphs" (`POST /graphs/rebuild`) and the cluster-
 label refresh job bypass the fingerprint check and force a fresh
-build.
+build in the graph worker process. The old substrate is retained until
+the replacement exists. Layout rebuild is local compute only; OpenAlex
+reference enrichment is the separate `/graphs/reference-backfill`
+operation.
 
 ## Database size
 

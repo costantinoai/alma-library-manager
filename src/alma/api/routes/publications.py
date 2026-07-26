@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -39,6 +40,18 @@ class SemanticPaperSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Short semantic search query")
     scope: str = Field("library", description="Search scope: library | all")
     limit: int = Field(20, ge=1, le=100, description="Maximum semantic results")
+
+
+class CorpusPaperFeedbackRequest(BaseModel):
+    action: Literal["add", "like", "love", "dislike", "dismiss", "undo"]
+    source_surface: Literal["map", "papers"] = "papers"
+
+
+class CorpusPaperFeedbackResponse(BaseModel):
+    paper_id: str
+    action: str
+    status: str | None = None
+    rating: int | None = None
 
 
 @router.get(
@@ -707,6 +720,41 @@ def get_publication_stats(
 
     except Exception as e:
         raise_internal("Failed to retrieve paper statistics", e)
+
+
+@router.post(
+    "/{paper_id}/feedback",
+    response_model=CorpusPaperFeedbackResponse,
+    summary="Apply paper feedback from a generic corpus surface",
+    description=(
+        "Canonical D6 triage for Map and paper-detail surfaces. Applies the "
+        "membership/rating/signal mutation atomically and records the real "
+        "source surface. Onboarding's legacy route delegates to the same "
+        "application primitive."
+    ),
+)
+def apply_corpus_paper_feedback(
+    paper_id: str,
+    payload: CorpusPaperFeedbackRequest,
+    pub_db: sqlite3.Connection = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    try:
+        result = run_write_unit(
+            pub_db,
+            lambda: library_app.apply_corpus_paper_feedback(
+                pub_db,
+                paper_id,
+                payload.action,
+                source_surface=payload.source_surface,
+            ),
+            label=f"{payload.source_surface}_paper_feedback",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return CorpusPaperFeedbackResponse(**result)
 
 
 @router.put(
