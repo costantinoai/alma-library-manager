@@ -10,7 +10,8 @@
     "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e:maps": "node e2e/map-region-selection.spec.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
