@@ -514,6 +514,7 @@ def score_candidate(
     preloaded_preference_profile: dict[str, Any] | None = None,
     topic_provider: Any = _PROVIDER_UNSET,
     citation_fabric: dict[str, Any] | None = None,
+    lab_ctx: dict[str, Any] | None = None,
 ) -> tuple[float, dict[str, Any]]:
     """Score a candidate paper using 10 weighted signals (+ bounded bonuses).
 
@@ -953,8 +954,25 @@ def score_candidate(
         coupling_strength * coupling_bonus_max
         + cocitation_strength * cocitation_bonus_max
     )
+
+    # Signal Lab bonus (task 54, D20): same bounded-ADDITIVE pattern as the
+    # citation-fabric nudge. `lab_ctx` is loaded once per scoring pass by the
+    # caller (None unless the lab weights are promoted off 0.0 AND a fitted
+    # model exists), so at the default weights this block contributes exactly
+    # 0.0 and adds no breakdown keys — byte-identical to a lab-less build.
+    lab_bonus = 0.0
+    if lab_ctx is not None:
+        from alma.application.signal_lab.scoring_terms import compute_lab_adjustments
+
+        lab_offset_raw, lab_utility_raw = compute_lab_adjustments(
+            candidate_embedding, lab_ctx
+        )
+        lab_bonus = (
+            lab_ctx["w_offset"] * lab_offset_raw
+            + lab_ctx["w_utility"] * lab_utility_raw
+        )
     score_pre_dismissal = min(
-        _MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus + citation_bonus
+        _MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus + citation_bonus + lab_bonus
     )
 
     # Negative paper-signal cluster penalty — function/breakdown names retain
@@ -1026,6 +1044,10 @@ def score_candidate(
     breakdown["coupling_strength"] = round(coupling_strength, 4)
     breakdown["cocitation_strength"] = round(cocitation_strength, 4)
     breakdown["citation_bonus"] = round(float(citation_bonus), 4)
+    if lab_ctx is not None:
+        breakdown["lab_region_offset_raw"] = round(float(lab_offset_raw), 4)
+        breakdown["lab_utility_raw"] = round(float(lab_utility_raw), 4)
+        breakdown["lab_bonus"] = round(float(lab_bonus), 4)
     if cf.get("coupling_count"):
         breakdown["coupling_count"] = int(cf.get("coupling_count") or 0)
         if cf.get("coupling_partner_id"):

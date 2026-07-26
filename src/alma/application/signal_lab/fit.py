@@ -111,6 +111,8 @@ def fit_model(
     vectors: dict[str, np.ndarray],
     paper_regions: dict[str, int],
     prior: np.ndarray | None,
+    gamma_start: float = GAMMA_START,
+    override_min_votes: int = OVERRIDE_MIN_VOTES,
 ) -> dict[str, Any]:
     """Fit every head from scratch. Pure — no I/O, no clock, no randomness
     beyond seeds derived from round ids (so identical inputs ⇒ identical
@@ -147,7 +149,7 @@ def fit_model(
     prior_unit = _unit_or_none(prior)
     offsets = _fit_region_offsets(train_prefs, paper_regions)
     utility, ensemble = _fit_utility(train_prefs, vectors, prior_unit)
-    overrides = _fit_overrides(votes)
+    overrides = _fit_overrides(votes, min_votes=override_min_votes)
     holdout = _holdout_metrics(
         holdout_prefs, vectors, paper_regions, prior_unit, offsets, utility
     )
@@ -155,7 +157,7 @@ def fit_model(
     return {
         "fit_version": SIGNAL_LAB_FIT_VERSION,
         "policy_version": SIGNAL_LAB_POLICY_VERSION,
-        "gamma": GAMMA_START,
+        "gamma": gamma_start,
         "counts": {
             "rounds": len(rounds),
             "answered": answered,
@@ -257,12 +259,14 @@ def _fit_utility(
     return point, ensemble
 
 
-def _fit_overrides(votes: dict[str, dict[int, int]]) -> dict[str, dict[str, int]]:
+def _fit_overrides(
+    votes: dict[str, dict[int, int]], *, min_votes: int = OVERRIDE_MIN_VOTES
+) -> dict[str, dict[str, int]]:
     """Region overrides for papers with enough consistent boundary votes."""
     out: dict[str, dict[str, int]] = {}
     for pid, per_region in votes.items():
         region, n = max(per_region.items(), key=lambda kv: kv[1])
-        if n >= OVERRIDE_MIN_VOTES and n > sum(per_region.values()) - n:
+        if n >= min_votes and n > sum(per_region.values()) - n:
             out[pid] = {"region_id": int(region), "votes": int(n)}
     return out
 
@@ -391,8 +395,17 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
     except sqlite3.OperationalError:
         pass
 
+    from alma.application.signal_lab import lab_tuning
+
+    tuning = lab_tuning(conn)
     return fit_model(
-        rounds, games=games, vectors=vectors, paper_regions=paper_regions, prior=prior
+        rounds,
+        games=games,
+        vectors=vectors,
+        paper_regions=paper_regions,
+        prior=prior,
+        gamma_start=tuning["gamma_start"],
+        override_min_votes=tuning["override_min_votes"],
     )
 
 

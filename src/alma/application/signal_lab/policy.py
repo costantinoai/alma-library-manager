@@ -274,13 +274,14 @@ def build_round(
     from alma.application import materialized_views as mv
     from alma.application import super_regions as sr
     from alma.application.graph_substrate import load_vectors_by_id
+    from alma.application.signal_lab import lab_tuning
     from alma.application.signal_lab.fit import (
-        GAMMA_START,
         MODEL_VIEW_KEY,
         decode_head_vector,
     )
     from alma.discovery.similarity import get_active_embedding_model
 
+    tuning = lab_tuning(conn)
     rng = rng or np.random.default_rng()
     stored = mv.get_stored(conn, sr.VIEW_KEY)
     if stored is None:
@@ -289,18 +290,18 @@ def build_round(
     if not payload.get("regions"):
         return None
 
-    gamma = GAMMA_START
+    gamma = tuning["gamma_start"]
     ensemble: list[np.ndarray] = []
     model_stored = mv.get_stored(conn, MODEL_VIEW_KEY)
     if model_stored is not None:
         model_payload = model_stored["payload"]
-        gamma = float(model_payload.get("gamma") or GAMMA_START)
+        gamma = float(model_payload.get("gamma") or tuning["gamma_start"])
         ensemble = [
             decode_head_vector(b) for b in model_payload.get("ensemble_b64") or []
         ]
 
     rings = sr.compute_rings(conn, payload)
-    uncertainty, staleness = _region_staleness_and_uncertainty(conn)
+    uncertainty, staleness = _region_staleness_and_uncertainty(conn, tuning["coverage_target"])
     weights = region_weights(
         payload, rings, gamma=gamma, uncertainty=uncertainty, staleness=staleness
     )
@@ -309,7 +310,7 @@ def build_round(
     # A sampled region can have a thin judgeable pool; retry a few times
     # before declaring the round unavailable.
     for _ in range(6):
-        choice = choose_region(weights, rings, rng)
+        choice = choose_region(weights, rings, rng, epsilon=tuning["epsilon"])
         if choice is None:
             return None
         pool = load_region_pool(conn, payload, choice.region_id, model=model)

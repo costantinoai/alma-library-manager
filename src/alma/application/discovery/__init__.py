@@ -965,10 +965,14 @@ def refresh_lens_recommendations(
     # ScoringContext instead of passed as ~19 loose arguments.
     phase_started = perf_counter()
     signal_names = SIGNAL_NAMES
+    from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
+
+    lab_ctx = load_lab_scoring_context(db, scoring_settings)
     _scoring_aggregates = score_candidates(
         merged,
         ScoringContext(
             db=db,
+            lab_ctx=lab_ctx,
             profile=profile,
             scoring_settings=scoring_settings,
             positive_centroid=positive_centroid,

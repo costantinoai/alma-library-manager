@@ -69,6 +69,7 @@ class ScoringContext:
     calibration_source: Any
     calibration_branch_mode: Any
     calibration_branch_id: Any
+    lab_ctx: Any = None  # Signal Lab scoring context (task 54); None ⇒ lab off
 
 
 @dataclass
@@ -186,6 +187,7 @@ def score_candidates(merged: dict, ctx: ScoringContext) -> ScoringAggregates:
             preloaded_preference_profile=preloaded_preference_profile,
             topic_provider=_topic_provider,
             citation_fabric=citation_fabric_map.get(key),
+            lab_ctx=ctx.lab_ctx,
         )
         candidate["score"] = final_score
         # Fold retrieval provenance ("why this paper surfaced") into the

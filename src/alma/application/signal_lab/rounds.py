@@ -33,9 +33,9 @@ HOLDOUT_PERCENT = 15
 REFIT_EVERY_N_ROUNDS = 5
 
 
-def _holdout_stamp(game_id: str, shown: list[str]) -> bool:
+def _holdout_stamp(game_id: str, shown: list[str], percent: int = HOLDOUT_PERCENT) -> bool:
     digest = hashlib.sha1(f"{game_id}|{'|'.join(shown)}".encode()).hexdigest()
-    return int(digest[:8], 16) % 100 < HOLDOUT_PERCENT
+    return int(digest[:8], 16) % 100 < percent
 
 
 def record_answer(
@@ -60,6 +60,10 @@ def record_answer(
     if not shown:
         raise ValueError("a round must show at least one paper")
 
+    from alma.application.signal_lab import lab_tuning
+
+    tuning = lab_tuning(db)
+
     def _unit() -> int:
         cur = db.execute(
             """
@@ -80,17 +84,17 @@ def record_answer(
                 json.dumps(answer) if answer is not None else None,
                 1 if skipped else 0,
                 reaction_ms,
-                1 if _holdout_stamp(game_id, shown) else 0,
+                1 if _holdout_stamp(game_id, shown, tuning["holdout_percent"]) else 0,
             ),
         )
         return int(cur.lastrowid or 0)
 
     round_id = run_write_unit(db, _unit, label="signal_lab.answer")
-    _maybe_enqueue_refit(db)
+    _maybe_enqueue_refit(db, every=tuning["refit_every_rounds"])
     return round_id
 
 
-def _maybe_enqueue_refit(db: sqlite3.Connection) -> None:
+def _maybe_enqueue_refit(db: sqlite3.Connection, *, every: int = REFIT_EVERY_N_ROUNDS) -> None:
     """Debounced model refit — deferred past this thread's write lock.
 
     ``enqueue_rebuild`` persists job state on the scheduler's own connection;
@@ -107,7 +111,7 @@ def _maybe_enqueue_refit(db: sqlite3.Connection) -> None:
         )
     except sqlite3.OperationalError:
         return
-    if n == 0 or n % REFIT_EVERY_N_ROUNDS != 0:
+    if n == 0 or n % max(1, every) != 0:
         return
 
     def _enqueue() -> None:

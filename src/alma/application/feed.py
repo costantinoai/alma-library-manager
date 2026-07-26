@@ -1429,6 +1429,12 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
     # ── Build preference profile (topics, author/journal affinity, feedback) ──
     preference_profile = compute_preference_profile(db, positive_pubs, negative_pubs, settings)
 
+    # Signal Lab context — loaded ONCE per scan; None until the lab weights
+    # are promoted off 0.0 (task 54, D20).
+    from alma.application.signal_lab.scoring_terms import load_lab_scoring_context
+
+    lab_ctx = load_lab_scoring_context(db, settings)
+
     # ── Embedding centroids ──
     pos_ids = [p["id"] for p in positive_pubs if p.get("id")]
     neg_ids = [p["id"] for p in negative_pubs if p.get("id")]
@@ -1524,6 +1530,7 @@ def score_feed_items(db: sqlite3.Connection, *, ctx=None) -> int:
                 negative_texts,
                 conn=db,
                 settings=settings,
+                lab_ctx=lab_ctx,
             )
 
             signal_value = max(0, min(100, int(round(score))))

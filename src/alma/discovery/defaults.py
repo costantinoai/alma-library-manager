@@ -17,6 +17,26 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.feedback_adj": "0.10",
     "weights.preference_affinity": "0.10",
     "weights.usefulness_boost": "0.06",
+    # Signal Lab heads (task 54, D20). BOTH default 0.0 — promoted manually,
+    # per head, only on stage-1 held-out + churn evidence. At 0.0 the lab
+    # context is never even loaded and scoring is byte-identical to a
+    # lab-less build.
+    "weights.lab_region_offset": "0.0",
+    "weights.lab_utility": "0.0",
+    # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
+    # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
+    # epsilon: ring-uniform exploration share — the self-confirmation guard.
+    # coverage_target: answered rounds/region before its uncertainty relaxes
+    #   (stage-0 empirical: error plateaus at 20, not 10).
+    # refit_every_rounds: model-refit debounce on the answer path.
+    # holdout_percent: rounds reserved for evaluation, stamped at creation.
+    # override_min_votes: consistent boundary votes before a region override.
+    "signal_lab.gamma_start": "0.35",
+    "signal_lab.epsilon": "0.20",
+    "signal_lab.coverage_target": "20",
+    "signal_lab.refit_every_rounds": "5",
+    "signal_lab.holdout_percent": "15",
+    "signal_lab.override_min_votes": "3",
     # Citation-fabric bonuses (task 47 §7): bounded ADDITIVE nudges (not weights)
     # for candidates that share citation structure with the loved/saved set —
     # coupling (shared references) + co-citation (shared citers). Each scales its

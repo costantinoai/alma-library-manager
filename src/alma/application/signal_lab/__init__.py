@@ -38,3 +38,29 @@ def get_game(game_id: str) -> MiniGame:
         if game.id == game_id:
             return game
     raise KeyError(f"unknown signal-lab game: {game_id!r}")
+
+
+def lab_tuning(conn) -> dict:
+    """The lab's tunable numbers, resolved settings-over-defaults. ONE parser.
+
+    Every knob lives in ``DISCOVERY_SETTINGS_DEFAULTS`` under ``signal_lab.*``
+    (task 54): right defaults, tunable from Settings without a code change.
+    """
+    from alma.application.discovery.lens_crud import read_settings
+
+    s = read_settings(conn)
+
+    def _f(key: str, fallback: float) -> float:
+        try:
+            return float(s.get(key, fallback))
+        except (TypeError, ValueError):
+            return fallback
+
+    return {
+        "gamma_start": _f("signal_lab.gamma_start", 0.35),
+        "epsilon": _f("signal_lab.epsilon", 0.20),
+        "coverage_target": max(1, int(_f("signal_lab.coverage_target", 20))),
+        "refit_every_rounds": max(1, int(_f("signal_lab.refit_every_rounds", 5))),
+        "holdout_percent": min(50, max(0, int(_f("signal_lab.holdout_percent", 15)))),
+        "override_min_votes": max(1, int(_f("signal_lab.override_min_votes", 3))),
+    }
