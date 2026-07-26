@@ -138,6 +138,22 @@ parameters and response shapes.
 | `POST` | `/library-mgmt/embeddings/reset` | Delete only embedding artifacts (`publication_embeddings`, `author_centroids`, embedding fetch markers) so vectors can be re-fetched/recomputed |
 | `POST` | `/library-mgmt/reset` | Wipe DB (dangerous; confirms) |
 
+### Inbox capture
+
+Papers you send yourself from another device. The sweep normally runs on a
+timer; these exist so the loop is observable and forceable. See
+[Inbox](../concepts/inbox.md).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/inbox/status` | Is a channel configured, what is waiting, what failed (pure read) |
+| `POST` | `/inbox/sweep` | Poll the capture channels now. Idempotent — messages are keyed `(channel, external_id)`, so pressing twice cannot duplicate a paper. 400 when no channel is configured. |
+
+Triage uses the canonical paper-action route: `POST /papers/{id}/action` with
+`{"action": "defer", "surface": "inbox"}` for the ✕ (leaves the Inbox writing no
+rating and no feedback event), or `add` / `like` / `love` / `dislike` for the
+rest.
+
 ### Feed
 
 | Method | Path | Purpose |
@@ -146,10 +162,7 @@ parameters and response shapes.
 | `GET` | `/feed/status` | Refresh status plus latest-fetch `new_count` |
 | `POST` | `/feed/refresh` | Trigger a refresh (Activity) |
 | `POST` | `/feed/bulk-action` | Bulk save / dislike |
-| `POST` | `/feed/{id}/add` | Save a Feed paper |
-| `POST` | `/feed/{id}/like` | Save with rating 4 |
-| `POST` | `/feed/{id}/love` | Save with rating 5 |
-| `POST` | `/feed/{id}/dislike` | Negative signal (paper stays visible) |
+| — | *(single-item actions)* | Use `POST /papers/{id}/action` with `surface=feed`, `scope_ref=<feed item id>`. |
 | `GET` `POST` `PUT` `DELETE` | `/feed/monitors[/…]` | Monitor CRUD |
 | `POST` | `/feed/monitors/{id}/refresh` | Refresh one monitor |
 
@@ -167,7 +180,7 @@ parameters and response shapes.
 | `POST` | `/discovery/recommendations/{id}/read` | Add to Reading list |
 | `POST` | `/discovery/recommendations/{id}/like` | Rate positively (`rating=4` like, `rating=5` love); stays visible |
 | `POST` | `/discovery/recommendations/{id}/dislike` | Rate 1 + negative signal; stays visible |
-| `POST` | `/discovery/recommendations/{id}/dismiss` | Hide suggestion + long-cooldown negative signal |
+| `POST` | `/discovery/recommendations/{id}/dismiss` | Hide this lens suggestion; no preference signal |
 | `POST` | `/discovery/recommendations/{id}/seen` | Mark seen |
 | `GET` | `/discovery/recommendations/{id}/explain` | Score breakdown |
 | `POST` | `/discovery/similar` | "Find papers like these" |
@@ -339,7 +352,7 @@ remaining steps rendered as children inside one envelope.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/papers/{id}/details` | Paper detail |
-| `POST` | `/papers/{id}/feedback` | Canonical D6 triage for generic corpus surfaces (`add`, `like`, `love`, `dislike`, `dismiss`, `undo`). `source_surface=map|papers` preserves action provenance; onboarding's compatibility route delegates to the same application primitive. |
+| `POST` | `/papers/{id}/action` | **THE paper-action route.** Every surface — Feed, Discovery, Inbox, Map, Library, onboarding — applies `add`/`save`, `like`, `love`, `dislike`, `dismiss`, `defer`, `read`, `undo` here, so "what does Like mean" has one answer. `surface` records where the user acted. `surface=feed\|discovery` additionally require `scope_ref` (the feed item / recommendation id): they settle THAT row, so a dismiss in one lens never mutes the paper in another. Response carries the shared `status`/`rating` plus the adapter's own echo under `surface_result`. |
 | `GET` | `/papers/stats` | Top topics / journals / institutions |
 | `GET` | `/papers/{id}/prior-works` | Papers this paper cites |
 | `GET` | `/papers/{id}/derivative-works` | Papers that cite this one |

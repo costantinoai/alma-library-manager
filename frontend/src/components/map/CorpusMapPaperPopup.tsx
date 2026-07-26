@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   addPaperToCollections,
-  corpusPaperFeedback,
+  applyPaperAction,
   getPaperById,
   updateReadingStatus,
   type OnboardingPaperAction,
@@ -55,8 +55,8 @@ export function CorpusMapPaperPopup({
   }
 
   const feedbackMutation = useMutation({
-    mutationFn: (action: Exclude<OnboardingPaperAction, 'dismiss' | 'undo'>) =>
-      corpusPaperFeedback(paperId, action, 'map'),
+    mutationFn: (action: Exclude<OnboardingPaperAction, 'dismiss' | 'defer' | 'undo'>) =>
+      applyPaperAction(paperId, action, { surface: 'map' }),
     onSuccess: async (_result, action) => {
       const messages: Record<typeof action, string> = {
         add: 'Saved to Library.',

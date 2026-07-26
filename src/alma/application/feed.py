@@ -45,6 +45,7 @@ from alma.core.utils import (
 
 from . import feed_monitors as monitor_app
 from . import library as library_app
+from . import paper_actions
 
 logger = logging.getLogger(__name__)
 
@@ -1236,38 +1237,21 @@ def apply_feed_action(
         # path (record_feedback used to commit, then this function committed
         # again). `add_to_library` defers its enrichment scheduling past the
         # gate, and `record_feedback` (the shared engine) no longer commits.
-        if action in {"add", "like", "love"}:
-            target_rating = {"add": 3, "like": 4, "love": 5}[action]
-            current_rating_row = db.execute(
-                "SELECT rating FROM papers WHERE id = ?",
-                (paper_id,),
-            ).fetchone()
-            current_rating = int((current_rating_row["rating"] if current_rating_row else 0) or 0)
-            # Monotonic upgrade — never downgrade a paper already rated higher.
-            next_rating = max(current_rating, target_rating)
-            if action == "add" and collection_ids:
-                library_app.save_paper_to_collections(
-                    db,
-                    paper_id,
-                    collection_ids,
-                    rating=next_rating,
-                    added_from="feed",
-                )
-            else:
-                library_app.add_to_library(
-                    db,
-                    paper_id,
-                    rating=next_rating,
-                    added_from="feed",
-                )
-        elif action == "dislike":
-            library_app.sink_disliked_paper(db, paper_id)
+        if action in {"add", "like", "love", "dislike"}:
+            # Membership + rating go through the ONE owner of the rating
+            # contract, so a Feed like and a Discovery like cannot drift apart.
+            # Feed keeps its own event recording below — the monitor provenance
+            # it carries is genuinely Feed-specific.
+            paper_actions.apply_valence(
+                db,
+                paper_id,
+                action,
+                added_from="feed",
+                collection_ids=collection_ids if action == "add" else None,
+            )
         elif action == "dismiss":
-            # Dismiss is signal-only: no Library membership change and — unlike
-            # `dislike` — no hard rating=1 stamp on the paper. The only corpus
-            # effect is the small negative feedback event recorded below; the
-            # paper is hidden from the inbox forever via the `dismissed` resting
-            # status set at the end of this unit.
+            # Dismiss is Feed-local visibility only. Unlike `dislike`, it
+            # carries no preference signal and changes no paper state.
             pass
 
         library_app.sync_surface_resolution(
@@ -1277,42 +1261,39 @@ def apply_feed_action(
             source_surface="feed",
         )
 
-        # Record the signal through the shared engine. Best-effort: a failure
-        # here must not lose the user's membership/triage action, so it is
-        # logged and swallowed (same intent as before the migration).
-        try:
-            from alma.services.signal_lab import record_feedback
+        # Preference actions go through the shared engine. Dismiss deliberately
+        # writes no event: it is visibility, not an opinion about the paper.
+        if action != "dismiss":
+            try:
+                from alma.services.signal_lab import record_feedback
 
-            score_breakdown = feed_item.get("score_breakdown") or {}
-            if not isinstance(score_breakdown, dict):
-                score_breakdown = {}
-            record_feedback(
-                db,
-                event_type="feed_action",
-                entity_type="publication",
-                entity_id=paper_id,
-                value={
-                    "action": action,
-                    "rating": {"add": 3, "like": 4, "love": 5, "dislike": 1}.get(action),
-                    # `dismiss` is a small (-1) negative signal with no rating
-                    # stamp — lighter than an explicit `dislike` (which also
-                    # sets the star rating to 1).
-                    "signal_value": {"add": 0, "like": 1, "love": 2, "dislike": -1, "dismiss": -1}.get(action, 0),
-                },
-                context={
-                    "mode": "feed",
-                    "surface": "feed",
-                    "feed_item_id": feed_item_id,
-                    "paper_id": paper_id,
-                    "monitor_id": feed_item.get("monitor_id"),
-                    "monitor_type": feed_item.get("monitor_type"),
-                    "source_type": score_breakdown.get("source_type") or feed_item.get("monitor_type"),
-                    "source_key": score_breakdown.get("source_key") or feed_item.get("monitor_label") or feed_item.get("author_id"),
-                    "acted_at": now,
-                },
-            )
-        except Exception as exc:
-            logger.debug("Feed action feedback recording failed for %s: %s", feed_item_id, exc)
+                score_breakdown = feed_item.get("score_breakdown") or {}
+                if not isinstance(score_breakdown, dict):
+                    score_breakdown = {}
+                record_feedback(
+                    db,
+                    event_type="feed_action",
+                    entity_type="publication",
+                    entity_id=paper_id,
+                    value={
+                        "action": action,
+                        "rating": paper_actions.ACTION_RATINGS.get(action),
+                        "signal_value": paper_actions.ACTION_SIGNAL_VALUES.get(action, 0),
+                    },
+                    context={
+                        "mode": "feed",
+                        "surface": "feed",
+                        "feed_item_id": feed_item_id,
+                        "paper_id": paper_id,
+                        "monitor_id": feed_item.get("monitor_id"),
+                        "monitor_type": feed_item.get("monitor_type"),
+                        "source_type": score_breakdown.get("source_type") or feed_item.get("monitor_type"),
+                        "source_key": score_breakdown.get("source_key") or feed_item.get("monitor_label") or feed_item.get("author_id"),
+                        "acted_at": now,
+                    },
+                )
+            except Exception as exc:
+                logger.debug("Feed action feedback recording failed for %s: %s", feed_item_id, exc)
 
         # `dismiss` settles every feed row for this paper to the `dismissed`
         # resting status so `list_feed_items` drops it from the inbox for good;
@@ -1337,14 +1318,11 @@ def apply_feed_action(
 
 
 def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
-    """Reverse a Feed ``dismiss``: restore the paper to the inbox and drop the
-    small negative signal the dismissal recorded.
+    """Reverse a Feed ``dismiss`` and restore the paper to the inbox.
 
-    Mirrors the connector's ``undo_from_extension`` precedent — it deletes the
-    feedback event the action wrote rather than surgically un-applying the
-    derived ``preference_profiles`` delta (an aggregate that decays and is
-    recomputed over time). Every dismissed feed row for the paper is restored
-    to ``new`` so the card reappears in the chronological inbox.
+    Dismiss writes no preference event, so undo changes visibility only. Every
+    dismissed feed row for the paper is restored to ``new`` so the card
+    reappears in the chronological inbox.
 
     Returns ``None`` when the feed item no longer exists.
     """
@@ -1358,7 +1336,6 @@ def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
     paper_id = row["paper_id"]
 
     def _persist() -> None:
-        # One atomic unit: restore inbox visibility + drop the negative signal.
         # Restore visibility: every `dismissed` row for this paper goes back to
         # `new` (dismiss had overwritten all of them, so the prior per-row
         # status is unrecoverable — `new` is the honest untriaged default).
@@ -1371,24 +1348,6 @@ def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
             """,
             (paper_id,),
         )
-
-        # Drop the small negative signal — the most recent feed dismiss event
-        # for this paper. The action lives in the event's `value` JSON.
-        if _table_exists(db, "feedback_events"):
-            db.execute(
-                """
-                DELETE FROM feedback_events
-                WHERE id = (
-                    SELECT id FROM feedback_events
-                    WHERE entity_type = 'publication' AND entity_id = ?
-                      AND event_type = 'feed_action'
-                      AND value LIKE '%"action": "dismiss"%'
-                    ORDER BY created_at DESC, rowid DESC
-                    LIMIT 1
-                )
-                """,
-                (paper_id,),
-            )
 
     run_write_unit(db, _persist, label="feed_undo_dismiss")
     return {

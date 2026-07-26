@@ -11,7 +11,7 @@ import {
 import { errorToast } from '@/hooks/useToast'
 import {
   listPapers,
-  onboardingPaperFeedback,
+  applyPaperAction,
   undoPaperFeedback,
   type Publication,
 } from '@/api/client'
@@ -87,7 +87,7 @@ export function StepReact({ next, back }: StepContext) {
     inFlight.current.add(paperId)
     try {
       if (undoAspect) await undoPaperFeedback(paperId, undoAspect)
-      else await onboardingPaperFeedback(paperId, kind)
+      else await applyPaperAction(paperId, kind, { surface: 'onboarding' })
       void invalidateAfterPaperMutation(qc)
     } catch {
       // Roll back to the pre-click state and tell the user.

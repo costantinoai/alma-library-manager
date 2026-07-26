@@ -7,11 +7,8 @@ import { RevealItem, RevealList } from '@/components/ui/reveal'
 import { invalidateAfterPaperMutation } from '@/lib/queryHelpers'
 import { errorToast } from '@/hooks/useToast'
 import {
-  dislikeRecommendation,
-  dismissRecommendation,
-  likeRecommendation,
+  applyPaperAction,
   listLensRecommendations,
-  saveRecommendation,
   undoPaperFeedback,
   type LensRecommendation,
 } from '@/api/client'
@@ -83,12 +80,11 @@ export function StepTriage({ state, next, back }: StepContext) {
 
     inFlight.current.add(recId)
     try {
+      // One route for every action. `scopeRef` is the recommendation id:
+      // Discovery settles THAT row, so a dismiss here cannot mute the paper
+      // in another lens.
       if (undoAspect) await undoPaperFeedback(paperId, undoAspect)
-      else if (kind === 'add') await saveRecommendation(recId)
-      else if (kind === 'like') await likeRecommendation(recId, 4)
-      else if (kind === 'love') await likeRecommendation(recId, 5)
-      else if (kind === 'dislike') await dislikeRecommendation(recId)
-      else await dismissRecommendation(recId)
+      else await applyPaperAction(paperId, kind, { surface: 'discovery', scopeRef: recId })
 
       void invalidateAfterPaperMutation(qc, state.lensId ?? undefined)
     } catch {

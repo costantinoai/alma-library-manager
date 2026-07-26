@@ -21,14 +21,9 @@ import {
 } from 'lucide-react'
 
 import {
-  feedAdd,
+  applyPaperAction,
   feedBulkAction,
-  feedDislike,
   getApiErrorMessage,
-  feedDismiss,
-  feedUndoDismiss,
-  feedLike,
-  feedLove,
   getFeedStatus,
   getFeedSettings,
   getPaperById,
@@ -167,7 +162,7 @@ function actionLabel(action: FeedAction): string {
     case 'like': return 'Saved to Library with a +1 preference signal'
     case 'love': return 'Saved to Library with a +2 preference signal'
     case 'dislike': return 'Recorded a -1 signal and kept the paper out of Library'
-    case 'dismiss': return 'Hidden from Feed and recorded a small negative signal'
+    case 'dismiss': return 'Hidden from Feed'
   }
 }
 
@@ -432,10 +427,12 @@ export function FeedPage() {
       ['reading-queue'],
     )
 
-  // Reverses a single dismiss (restores the card + drops the negative
-  // signal). Wired to the transient "Undo" button on the dismiss toast.
+  // Reverses a single dismiss (restores the card). Wired to the transient
+  // "Undo" button on the dismiss toast.
   const undoDismissMutation = useMutation({
-    mutationFn: ({ id }: { id: string }) => feedUndoDismiss(id),
+    // `scopeRef` is the feed item — undo restores THAT row's visibility.
+    mutationFn: ({ id, paperId }: { id: string; paperId: string }) =>
+      applyPaperAction(paperId, 'undo', { surface: 'feed', scopeRef: id }),
     onSuccess: async () => {
       await invalidateFeedAction()
       toast({ title: 'Dismissal undone', description: 'The paper is back in your Feed.' })
@@ -446,13 +443,25 @@ export function FeedPage() {
   const undoMutation = usePaperUndo()
 
   const actionMutation = useMutation({
-    mutationFn: async ({ id, action, collectionIds }: { id: string; action: FeedAction; collectionIds?: string[] }) => {
-      if (action === 'add') return feedAdd(id, collectionIds)
-      if (action === 'like') return feedLike(id)
-      if (action === 'love') return feedLove(id)
-      if (action === 'dismiss') return feedDismiss(id)
-      return feedDislike(id)
-    },
+    // One route for every Feed action. `scopeRef` is the feed item id: Feed
+    // settles THAT row, so a dismiss here hides the card without touching the
+    // paper's standing anywhere else.
+    mutationFn: async ({
+      id,
+      paperId,
+      action,
+      collectionIds,
+    }: {
+      id: string
+      paperId: string
+      action: FeedAction
+      collectionIds?: string[]
+    }) =>
+      applyPaperAction(paperId, action, {
+        surface: 'feed',
+        scopeRef: id,
+        collectionIds,
+      }),
     onSuccess: async (_data, vars) => {
       await invalidateFeedAction()
       // Dismiss is the one "forever" action, so it carries a transient Undo
@@ -461,7 +470,7 @@ export function FeedPage() {
         toast({
           title: 'Dismissed from Feed',
           description: 'Hidden from your Feed with a small negative signal.',
-          action: { label: 'Undo', onClick: () => undoDismissMutation.mutate({ id: vars.id }) },
+          action: { label: 'Undo', onClick: () => undoDismissMutation.mutate({ id: vars.id, paperId: vars.paperId }) },
         })
         return
       }
@@ -812,7 +821,7 @@ export function FeedPage() {
         <ul className="ml-4 list-disc space-y-1">
           <li><span className="font-medium text-alma-900">Add / Like / Love</span> — saves the paper to your Library (Love rates it 5★).</li>
           <li><span className="font-medium text-alma-900">Dislike</span> — a negative signal to Discovery, but the paper <span className="font-medium">stays in the Feed</span> so the inbox keeps its chronological record.</li>
-          <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> and sends a small negative signal. You can undo a dismiss right after.</li>
+          <li><span className="font-medium text-alma-900">Dismiss</span> — <span className="font-medium">hides the paper from the Feed for good</span> without changing your preference signal. You can undo it right after.</li>
         </ul>
       </ConceptCallout>
 
@@ -1175,18 +1184,18 @@ export function FeedPage() {
                   onAdd={() =>
                     isSaved && item.paper_id
                       ? removeFromLibraryMutation.mutate({ paperId: item.paper_id })
-                      : actionMutation.mutate({ id: item.id, action: 'add' })
+                      : actionMutation.mutate({ id: item.id, paperId: item.paper_id, action: 'add' })
                   }
-                  onLike={() => actionMutation.mutate({ id: item.id, action: 'like' })}
-                  onLove={() => actionMutation.mutate({ id: item.id, action: 'love' })}
-                  onDislike={() => actionMutation.mutate({ id: item.id, action: 'dislike' })}
-                  onDismiss={() => actionMutation.mutate({ id: item.id, action: 'dismiss' })}
+                  onLike={() => actionMutation.mutate({ id: item.id, paperId: item.paper_id, action: 'like' })}
+                  onLove={() => actionMutation.mutate({ id: item.id, paperId: item.paper_id, action: 'love' })}
+                  onDislike={() => actionMutation.mutate({ id: item.id, paperId: item.paper_id, action: 'dislike' })}
+                  onDismiss={() => actionMutation.mutate({ id: item.id, paperId: item.paper_id, action: 'dismiss' })}
                   onUndo={(aspect) => item.paper_id && undoMutation.mutate({ paperId: item.paper_id, aspect })}
                   onAddToCollections={async (collectionIds) => {
-                    await actionMutation.mutateAsync({ id: item.id, action: 'add', collectionIds })
+                    await actionMutation.mutateAsync({ id: item.id, paperId: item.paper_id, action: 'add', collectionIds })
                   }}
                   dismissLabel="Dismiss"
-                  dismissTitle="Dismiss — hide from Feed forever and send a small negative signal"
+                  dismissTitle="Dismiss — hide from Feed forever"
                   dislikeTitle="Negative signal — keeps the paper visible in Feed"
                   actionDisabled={
                     /* U-6: disable only THIS card while its own action is

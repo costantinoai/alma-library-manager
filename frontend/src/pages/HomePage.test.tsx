@@ -1,14 +1,22 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { HomePage } from './HomePage'
 import type { HomeBrief } from '@/api/client'
 
 const getHomeBrief = vi.fn()
+const applyPaperAction = vi.fn().mockResolvedValue({})
 
-vi.mock('@/api/client', () => ({
+// PARTIAL mock: the Inbox renders real `PaperCard`s, which pull in
+// `AddToCollectionMenu` → `listCollections`. A whole-module mock silently
+// blanks every export those children need, so keep the originals and override
+// only what this test drives.
+vi.mock('@/api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/client')>()),
   getHomeBrief: (...args: unknown[]) => getHomeBrief(...args),
+  applyPaperAction: (...args: unknown[]) => applyPaperAction(...args),
+  listCollections: () => Promise.resolve([]),
 }))
 
 const QUIET: HomeBrief = {
@@ -27,11 +35,13 @@ const QUIET: HomeBrief = {
   },
   highlights: [],
   reading: { total: 0, items: [] },
+  inbox: { total: 0, items: [] },
   attention: {
     imports_pending: 0,
     monitors_need_resolution: 0,
     author_decisions: 0,
     critical_health: 0,
+    inbox_unresolved: 0,
   },
 }
 
@@ -119,6 +129,94 @@ describe('HomePage', () => {
     expect(screen.getByText('Last 7 days')).toBeInTheDocument()
   })
 
+  it('scores a Discovery highlight and explains why every highlight is there', async () => {
+    getHomeBrief.mockResolvedValue({
+      ...QUIET,
+      highlights: [
+        {
+          kind: 'discovery_paper',
+          period: 'today',
+          paper: { id: 'disc-1', title: 'A scored match' },
+          reason: { kind: 'lens', label: 'Top match from Methods' },
+          lens_id: 'lens-1',
+          lens_name: 'Methods',
+          score: 77,
+        },
+        {
+          kind: 'feed_paper',
+          period: 'today',
+          paper: { id: 'feed-1', title: 'An unscored monitor hit' },
+          reason: { kind: 'author', label: 'From followed author Ada Lovelace' },
+          monitor_id: 'm1',
+          monitor_type: 'author',
+        },
+      ],
+    })
+    renderHome()
+
+    // The scored highlight shows its number; the unscored one shows none
+    // rather than a fabricated placeholder.
+    expect(await screen.findByText('77')).toBeInTheDocument()
+    const explainers = screen.getAllByRole('button', { name: 'Why this paper is here' })
+    expect(explainers).toHaveLength(2)
+
+    fireEvent.click(explainers[0])
+    expect(await screen.findByText(/scores 77 of 100 against that lens/)).toBeInTheDocument()
+  })
+
+  it('shows the Inbox only when papers are waiting, and hides it when empty', async () => {
+    // A capture queue notifies; it never nags. An empty Inbox must not render
+    // a section at all (I-22, "saved means saved").
+    getHomeBrief.mockResolvedValue(QUIET)
+    const { unmount } = renderHome()
+    expect(await screen.findByText(/Your workspace is quiet/)).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Inbox' })).not.toBeInTheDocument()
+    unmount()
+
+    getHomeBrief.mockResolvedValue({
+      ...QUIET,
+      inbox: {
+        total: 2,
+        items: [
+          { id: 'i1', title: 'Sent from my phone', authors: 'Ada Lovelace' },
+          { id: 'i2', title: 'Another capture' },
+        ],
+      },
+    })
+    renderHome()
+
+    expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeInTheDocument()
+    expect(
+      screen.getByText(/2 papers waiting for a decision/),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Sent from my phone')).toBeInTheDocument()
+  })
+
+  it('triages an Inbox paper in place, and the X defers without an opinion', async () => {
+    // Home is the Inbox's owning surface, so triage happens here — the one
+    // deliberate exception to Home being navigation-only.
+    getHomeBrief.mockResolvedValue({
+      ...QUIET,
+      inbox: {
+        total: 1,
+        items: [{ id: 'i1', title: 'Sent from my phone', authors: 'Ada Lovelace' }],
+      },
+    })
+    renderHome()
+    expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeInTheDocument()
+
+    // The X is `defer`, NOT `dismiss`: leaving the Inbox is the absence of a
+    // verdict, so it must never travel as the global hide.
+    // Accessible name comes from `dismissTitle` (ActionButton sets aria-label
+    // from title), so assert on the wording the user actually hears.
+    fireEvent.click(screen.getByRole('button', { name: /Remove from Inbox/i }))
+    // `mutate` dispatches asynchronously — wait for the call rather than
+    // racing react-query's scheduler.
+    await waitFor(() =>
+      expect(applyPaperAction).toHaveBeenCalledWith('i1', 'defer', { surface: 'inbox' }),
+    )
+  })
+
   it('shows reading continuity and only nonzero attention rows', async () => {
     getHomeBrief.mockResolvedValue({
       ...QUIET,
@@ -131,11 +229,14 @@ describe('HomePage', () => {
         monitors_need_resolution: 0,
         author_decisions: 1,
         critical_health: 0,
+        inbox_unresolved: 0,
       },
     })
     renderHome()
 
-    expect(await screen.findByText('Continue reading')).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: 'Reading list' }),
+    ).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Continue this paper/ })).toHaveAttribute(
       'href',
       '#/library?tab=reading&paper=p1',
@@ -145,11 +246,30 @@ describe('HomePage', () => {
     expect(screen.queryByText(/monitor needs relinking/)).not.toBeInTheDocument()
   })
 
+  // Collapsed sections show whole rows of the MEASURED grid. Under jsdom no
+  // width is ever reported, so the grid renders at its 3-column fallback →
+  // 2 rows = 6 tiles.
+  it('caps the reading list at whole rows and expands the rest in place', async () => {
+    const items = Array.from({ length: 9 }, (_, index) => ({
+      id: `r${index}`,
+      title: `Reading paper ${index}`,
+    }))
+    getHomeBrief.mockResolvedValue({ ...QUIET, reading: { total: 9, items } })
+    renderHome()
+
+    expect(await screen.findByText('Reading paper 5')).toBeInTheDocument()
+    expect(screen.queryByText('Reading paper 6')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show 3 more' }))
+    expect(screen.getByText('Reading paper 8')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Show \d+ more/ })).not.toBeInTheDocument()
+  })
+
   it('keeps a truthful quiet state and provides navigation-only workflow shortcuts', async () => {
     getHomeBrief.mockResolvedValue(QUIET)
     renderHome()
     expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
-    expect(screen.getByText(/No noteworthy research arrived/)).toBeInTheDocument()
+    expect(screen.getByText(/No new research arrived/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /Find papers/ }))

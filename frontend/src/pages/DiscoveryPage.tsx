@@ -30,20 +30,16 @@ import {
   discoverSimilar,
   deleteLens,
   reorderLenses,
-  dislikeRecommendation,
-  dismissRecommendation,
+  applyPaperAction,
   explainRecommendation,
   getApiErrorMessage,
   getDiscoveryStatus,
   getDiscoverySettings,
   updateDiscoverySettings,
-  likeRecommendation,
   getPaperById,
   listLensRecommendations,
   listLenses,
   markLensSeen,
-  readRecommendation,
-  saveRecommendation,
   refreshLens,
   updateLens,
   type CustomDirection,
@@ -534,9 +530,24 @@ export function DiscoveryPage() {
     ])
   }
 
+  /** Every Discovery action goes through the one canonical route.
+   *  `scopeRef` is the recommendation id — Discovery settles THAT row, so a
+   *  dismiss here can never mute the paper in another lens. */
+  type RecAction = { recId: string; paperId: string }
+  const recAction = (
+    { recId, paperId }: RecAction,
+    action: 'add' | 'like' | 'love' | 'dislike' | 'dismiss' | 'read',
+    collectionIds?: string[],
+  ) =>
+    applyPaperAction(paperId, action, {
+      surface: 'discovery',
+      scopeRef: recId,
+      collectionIds,
+    })
+
   const dismissMutation = useMutation({
-    mutationFn: dismissRecommendation,
-    onMutate: (recId) => {
+    mutationFn: (vars: RecAction) => recAction(vars, 'dismiss'),
+    onMutate: ({ recId }: RecAction) => {
       markDismissed(recId)
     },
     onSuccess: () => {
@@ -551,7 +562,7 @@ export function DiscoveryPage() {
         ),
       ])
     },
-    onError: (error, recId) => {
+    onError: (error, { recId }: RecAction) => {
       setDismissedIds((previous) => {
         const next = new Set(previous)
         next.delete(recId)
@@ -562,8 +573,8 @@ export function DiscoveryPage() {
   })
 
   const likeMutation = useMutation({
-    mutationFn: (recId: string) => likeRecommendation(recId, 4),
-    onMutate: (recId) =>
+    mutationFn: (vars: RecAction) => recAction(vars, 'like'),
+    onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 4 }),
       ),
@@ -578,13 +589,13 @@ export function DiscoveryPage() {
   })
 
   const addMutation = useMutation({
-    mutationFn: (recId: string) =>
-      saveRecommendation(
-        recId,
-        undefined,
+    mutationFn: (vars: RecAction) =>
+      recAction(
+        vars,
+        'add',
         selectedLensCollectionId ? [selectedLensCollectionId] : undefined,
       ),
-    onMutate: (recId) =>
+    onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(
           rec,
@@ -619,8 +630,8 @@ export function DiscoveryPage() {
   // Feature A: add a recommendation to Library AND file it into one or more
   // chosen collections in a single action (the AddToCollectionMenu on the card).
   const addToCollectionsMutation = useMutation({
-    mutationFn: ({ recId, collectionIds }: { recId: string; collectionIds: string[] }) =>
-      saveRecommendation(recId, undefined, collectionIds),
+    mutationFn: ({ recId, paperId, collectionIds }: RecAction & { collectionIds: string[] }) =>
+      recAction({ recId, paperId }, 'add', collectionIds),
     onMutate: ({ recId }) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(
@@ -651,8 +662,8 @@ export function DiscoveryPage() {
   })
 
   const loveMutation = useMutation({
-    mutationFn: (recId: string) => likeRecommendation(recId, 5),
-    onMutate: (recId) =>
+    mutationFn: (vars: RecAction) => recAction(vars, 'love'),
+    onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 5 }),
       ),
@@ -669,8 +680,8 @@ export function DiscoveryPage() {
   // Dislike is a rating/signal only. It does not hide the card; Dismiss is
   // the explicit "hide this suggestion" action.
   const dislikeMutation = useMutation({
-    mutationFn: dislikeRecommendation,
-    onMutate: (recId) =>
+    mutationFn: (vars: RecAction) => recAction(vars, 'dislike'),
+    onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(rec, { rating: 1 }),
       ),
@@ -690,8 +701,8 @@ export function DiscoveryPage() {
   // and flips to a checked "Queued" state; only Dismiss removes a card
   // from Discovery. The refetch re-reads the rec's reading_status.
   const queueMutation = useMutation({
-    mutationFn: (recId: string) => readRecommendation(recId),
-    onMutate: (recId) =>
+    mutationFn: (vars: RecAction) => recAction(vars, 'read'),
+    onMutate: ({ recId }: RecAction) =>
       patchRecommendationCaches(queryClient, selectedLensId, recId, (rec) =>
         patchRecommendationPaper(
           rec,
@@ -807,15 +818,16 @@ export function DiscoveryPage() {
   }
 
   // U-6: only the card whose action is in-flight should disable, not all 50.
-  // Every rec mutation takes the rec id as its sole argument, so the in-flight
-  // mutation's `.variables` is exactly that id.
+  // Every rec mutation now carries `{recId, paperId}` (the canonical route needs
+  // the paper in the path and the rec as its scope), so read `.variables.recId`
+  // rather than casting the whole variable to a string.
   const pendingRecId =
-    (dismissMutation.isPending && (dismissMutation.variables as string)) ||
-    (likeMutation.isPending && (likeMutation.variables as string)) ||
-    (addMutation.isPending && (addMutation.variables as string)) ||
-    (loveMutation.isPending && (loveMutation.variables as string)) ||
-    (dislikeMutation.isPending && (dislikeMutation.variables as string)) ||
-    (queueMutation.isPending && (queueMutation.variables as string)) ||
+    (dismissMutation.isPending && dismissMutation.variables?.recId) ||
+    (likeMutation.isPending && likeMutation.variables?.recId) ||
+    (addMutation.isPending && addMutation.variables?.recId) ||
+    (loveMutation.isPending && loveMutation.variables?.recId) ||
+    (dislikeMutation.isPending && dislikeMutation.variables?.recId) ||
+    (queueMutation.isPending && queueMutation.variables?.recId) ||
     (addToCollectionsMutation.isPending && addToCollectionsMutation.variables?.recId) ||
     null
   const pendingUndoPaperId =
@@ -1148,7 +1160,7 @@ export function DiscoveryPage() {
         </p>
         <p>
           <span className="font-medium text-alma-900">Signals</span> are the feedback loop: what you
-          save, like, and dismiss reshapes the next refresh. <span className="font-medium">Lens
+          save, like, and dislike reshapes the next refresh. <span className="font-medium">Lens
           performance</span> shows how your signals are landing.
         </p>
       </ConceptCallout>
@@ -1335,7 +1347,7 @@ export function DiscoveryPage() {
                       description={
                         <>
                           A snapshot of what this lens has learned to pull toward. Built from the
-                          papers you've saved, liked, and dismissed, plus followed authors and
+                          papers you've saved, liked, and disliked, plus followed authors and
                           topics you've engaged with. Discovery uses it to <em>pre-filter</em>
                           candidates <strong>before</strong> ranking — so if a lens keeps surfacing
                           irrelevant papers, adjusting this profile (e.g. refining topics) is usually
@@ -1418,7 +1430,7 @@ export function DiscoveryPage() {
                         pushGroups
                       ) : (
                         <p className="text-[11px] text-slate-500">
-                          Nothing suppressed yet. Dismissing a paper teaches this side.
+                          Nothing suppressed yet. Disliking a paper teaches this side.
                         </p>
                       )}
                     </SubPanel>
@@ -1536,7 +1548,7 @@ export function DiscoveryPage() {
                   <strong>Colour modes:</strong> Branches shows who found what; Clusters shows the
                   corpus topics; Year is a recency ramp. <strong>Terrain is the preference
                   field</strong> — an overlay you can combine with any colouring, built from ALL
-                  your signals (ratings, saves, dismissals, engine scores) over the whole space.
+                  your signals (ratings, saves, removals, engine scores) over the whole space.
                   It belongs to the space, not the view: hiding a layer never changes the terrain,
                   so a red valley stays red even when its dots are hidden.
                 </p>
@@ -1585,17 +1597,18 @@ export function DiscoveryPage() {
                         close()
                         goToRecommendation(node.paper_id)
                       }}
-                      onAdd={() => addMutation.mutate(rec.id)}
-                      onLike={() => likeMutation.mutate(rec.id)}
-                      onLove={() => loveMutation.mutate(rec.id)}
-                      onDislike={() => dislikeMutation.mutate(rec.id)}
-                      onQueue={() => queueMutation.mutate(rec.id)}
+                      onAdd={() => addMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                      onLike={() => likeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                      onLove={() => loveMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                      onDislike={() => dislikeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                      onQueue={() => queueMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
                       onUndo={(aspect) =>
                         undoMutation.mutate({ paperId: rec.paper_id, aspect })
                       }
                       onAddToCollections={async (collectionIds) => {
                         await addToCollectionsMutation.mutateAsync({
                           recId: rec.id,
+                          paperId: rec.paper_id,
                           collectionIds,
                         })
                       }}
@@ -1784,12 +1797,12 @@ export function DiscoveryPage() {
                     setSelectedPaper(paper)
                     setDetailOpen(true)
                   }}
-                  onDismiss={() => dismissMutation.mutate(rec.id)}
-                  onAdd={() => addMutation.mutate(rec.id)}
-                  onLike={() => likeMutation.mutate(rec.id)}
-                  onLove={() => loveMutation.mutate(rec.id)}
-                  onDislike={() => dislikeMutation.mutate(rec.id)}
-                  onQueue={() => queueMutation.mutate(rec.id)}
+                  onDismiss={() => dismissMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onAdd={() => addMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onLike={() => likeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onLove={() => loveMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onDislike={() => dislikeMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
+                  onQueue={() => queueMutation.mutate({ recId: rec.id, paperId: rec.paper_id })}
                   onUndo={(aspect) => rec.paper_id && undoMutation.mutate({ paperId: rec.paper_id, aspect })}
                   onPivot={() => navigateTo('discovery', {
                     seed: cardPaper.id,
@@ -1800,7 +1813,7 @@ export function DiscoveryPage() {
                     pendingUndoPaperId === rec.paper_id
                   }
                   onAddToCollections={async (collectionIds) => {
-                    await addToCollectionsMutation.mutateAsync({ recId: rec.id, collectionIds })
+                    await addToCollectionsMutation.mutateAsync({ recId: rec.id, paperId: rec.paper_id, collectionIds })
                   }}
                   defaultCollectionIds={selectedLensCollectionId ? [selectedLensCollectionId] : undefined}
                   reaction={deriveDiscoveryReaction(rec)}

@@ -42,16 +42,39 @@ class SemanticPaperSearchRequest(BaseModel):
     limit: int = Field(20, ge=1, le=100, description="Maximum semantic results")
 
 
-class CorpusPaperFeedbackRequest(BaseModel):
-    action: Literal["add", "like", "love", "dislike", "dismiss", "undo"]
-    source_surface: Literal["map", "papers"] = "papers"
+class PaperActionRequest(BaseModel):
+    """One user action on one paper, from whichever surface raised it.
+
+    `save` is accepted as Discovery's spelling of `add`. `defer` is the Inbox
+    ✕ — leaves the Inbox for `tracked` writing no rating and no feedback event,
+    deliberately NOT `dismiss` (the global hide). See docs/concepts/inbox.md.
+    """
+
+    action: Literal[
+        "add", "save", "like", "love", "dislike",
+        "dismiss", "defer", "read", "seen", "undo",
+    ]
+    surface: Literal[
+        "feed", "discovery", "inbox", "map", "papers", "library", "onboarding"
+    ] = "papers"
+    #: The surface's OWN row id — feed item / recommendation. Required for
+    #: `feed` and `discovery`, which settle that row rather than the paper
+    #: globally; ignored elsewhere.
+    scope_ref: str | None = None
+    collection_ids: list[str] | None = None
+    #: Which dimension `undo` reverses (membership / rating / reading / all).
+    undo_aspect: Literal["membership", "rating", "reading", "all"] = "all"
 
 
-class CorpusPaperFeedbackResponse(BaseModel):
-    paper_id: str
+class PaperActionResponse(BaseModel):
+    paper_id: str | None = None
     action: str
+    surface: str
     status: str | None = None
     rating: int | None = None
+    #: Whatever the surface adapter reported (settled feed row, recommendation
+    #: stamp, undo detail). Opaque to the generic contract.
+    surface_result: dict | None = None
 
 
 @router.get(
@@ -723,38 +746,46 @@ def get_publication_stats(
 
 
 @router.post(
-    "/{paper_id}/feedback",
-    response_model=CorpusPaperFeedbackResponse,
-    summary="Apply paper feedback from a generic corpus surface",
+    "/{paper_id}/action",
+    response_model=PaperActionResponse,
+    summary="Apply a user action to a paper (the canonical triage route)",
     description=(
-        "Canonical D6 triage for Map and paper-detail surfaces. Applies the "
-        "membership/rating/signal mutation atomically and records the real "
-        "source surface. Onboarding's legacy route delegates to the same "
-        "application primitive."
+        "THE route for every paper action, from every surface. Feed, Discovery, "
+        "Inbox, Map, Library and onboarding all come through here, so 'what "
+        "does Like mean' has exactly one answer.\n\n"
+        "Pass `surface` so feedback provenance reflects where the user acted. "
+        "`feed` and `discovery` additionally require `scope_ref` — their own "
+        "row id — because they settle that row rather than the paper globally: "
+        "dismissing in one lens must not mute the paper in another."
     ),
 )
-def apply_corpus_paper_feedback(
+def apply_paper_action_route(
     paper_id: str,
-    payload: CorpusPaperFeedbackRequest,
+    payload: PaperActionRequest,
     pub_db: sqlite3.Connection = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    from alma.application import paper_actions
+
     try:
         result = run_write_unit(
             pub_db,
-            lambda: library_app.apply_corpus_paper_feedback(
+            lambda: paper_actions.apply_paper_action(
                 pub_db,
                 paper_id,
                 payload.action,
-                source_surface=payload.source_surface,
+                surface=payload.surface,
+                scope_ref=payload.scope_ref,
+                collection_ids=payload.collection_ids,
+                undo_aspect=payload.undo_aspect,
             ),
-            label=f"{payload.source_surface}_paper_feedback",
+            label=f"{payload.surface}_paper_action",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return CorpusPaperFeedbackResponse(**result)
+    return PaperActionResponse(**result)
 
 
 @router.put(

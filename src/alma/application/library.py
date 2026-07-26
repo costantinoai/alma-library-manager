@@ -10,6 +10,7 @@ import re
 import sqlite3
 import uuid
 
+from alma.application import paper_actions
 from alma.core.components import resolve_component
 from alma.core.paper_groups import (
     absorb_paper_group,
@@ -24,6 +25,13 @@ from alma.core.utils import normalize_doi, normalize_title_key, resolve_existing
 logger = logging.getLogger(__name__)
 
 TRACKED_STATUS = "tracked"
+#: D13 — the capture buffer between `tracked` and `library`. Papers you sent
+#: yourself from another device (Slack today, any channel that honours
+#: `application/inbox_schema.py`) land here awaiting triage. Full corpus
+#: citizens — enriched, embedded, mapped — but scoped OUT of every preference
+#: query (all of which key on `library`), so an untriaged capture cannot move
+#: Discovery. Owned by `application/paper_actions.py`; see docs/concepts/inbox.md.
+INBOX_STATUS = "inbox"
 LIBRARY_STATUS = "library"
 DISMISSED_STATUS = "dismissed"
 REMOVED_STATUS = "removed"
@@ -667,39 +675,72 @@ def update_paper(db: sqlite3.Connection, paper_id: str, **kwargs) -> bool:
     return cursor.rowcount > 0
 
 
-def reading_preview(db: sqlite3.Connection, *, limit: int = 3) -> dict:
-    """Compact owner-consistent projection of the active Reading List.
+def _newest_first_preview(
+    db: sqlite3.Connection,
+    *,
+    predicate: str,
+    limit: int,
+) -> dict:
+    """Total + newest-added page of standalone papers matching ``predicate``.
 
-    Reading state is orthogonal to Library membership (D2), so this deliberately
-    does not require ``status='library'``. Ordering matches
-    ``GET /library/reading-queue``: the model has no dedicated
-    ``reading_started_at`` timestamp, making added/created time the only honest
-    stable ordering signal.
+    ``predicate`` is a parameterless SQL fragment over the ``p`` alias — the
+    single shared shape behind every Home preview list, so the "what counts as
+    newest" rule (added → created → publication date) is written once. The
+    model has no per-state timestamp, making added/created time the only
+    honest stable ordering signal.
     """
+    where = f"{predicate} AND {standalone_paper_sql('p')}"
     total_row = db.execute(
-        f"""
-        SELECT COUNT(*) AS c
-        FROM papers p
-        WHERE p.reading_status = 'reading'
-          AND {standalone_paper_sql('p')}
-        """
+        f"SELECT COUNT(*) AS c FROM papers p WHERE {where}"
     ).fetchone()
     rows = db.execute(
         f"""
         SELECT p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
-               p.url, p.doi, p.status
+               p.url, p.doi, p.status,
+               COALESCE(p.added_at, p.created_at) AS added_at
         FROM papers p
-        WHERE p.reading_status = 'reading'
-          AND {standalone_paper_sql('p')}
+        WHERE {where}
         ORDER BY COALESCE(p.added_at, p.created_at, p.publication_date, '') DESC
         LIMIT ?
         """,
-        (max(1, min(int(limit), 20)),),
+        (max(1, min(int(limit), 50)),),
     ).fetchall()
     return {
         "total": int((total_row["c"] if total_row else 0) or 0),
         "items": [dict(row) for row in rows],
     }
+
+
+def inbox_preview(db: sqlite3.Connection, *, limit: int = 10) -> dict:
+    """Compact projection of the Inbox bucket (``status='inbox'``) for Home.
+
+    The Inbox is a BUFFER, not a shelf: these are papers you sent yourself and
+    have not triaged. Newest first, because a capture you made this morning is
+    the one you are most likely to act on.
+
+    Home renders this section only when the total is non-zero, so an empty Inbox
+    disappears rather than nagging — a capture queue is a notification, not a
+    chore list (I-22, "saved means saved").
+    """
+    return _newest_first_preview(
+        db,
+        predicate=f"p.status = '{INBOX_STATUS}'",
+        limit=limit,
+    )
+
+
+def reading_preview(db: sqlite3.Connection, *, limit: int = 3) -> dict:
+    """Compact owner-consistent projection of the active Reading List.
+
+    Reading state is orthogonal to Library membership (D2), so this deliberately
+    does not require ``status='library'``. Ordering matches
+    ``GET /library/reading-queue``.
+    """
+    return _newest_first_preview(
+        db,
+        predicate="p.reading_status = 'reading'",
+        limit=limit,
+    )
 
 
 def delete_paper(db: sqlite3.Connection, paper_id: str) -> bool:
@@ -797,14 +838,19 @@ def add_to_library(
 
 
 def dismiss_paper(db: sqlite3.Connection, paper_id: str) -> bool:
-    """Dismiss a paper (hide from feed/discovery, not in library)."""
+    """Globally hide a paper without changing the user's rating.
+
+    Dismissal is visibility, not valence (D6 amended 2026-07-26). A prior
+    explicit like/dislike remains an honest preference signal; an unrated
+    paper stays unrated.
+    """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return False
     now = utcnow().isoformat()
     cursor = db.execute(
-        "UPDATE papers SET status = ?, rating = ?, updated_at = ? WHERE id = ?",
-        (DISMISSED_STATUS, DISLIKE_RATING, now, paper_id),
+        "UPDATE papers SET status = ?, updated_at = ? WHERE id = ?",
+        (DISMISSED_STATUS, now, paper_id),
     )
     if cursor.rowcount > 0:
         # Cascade GC: this paper was the only "live" reason some of
@@ -950,30 +996,34 @@ def sync_surface_resolution(
     action: str,
     source_surface: str,
 ) -> None:
-    """Resolve matching feed and discovery rows for one paper after a user action.
+    """Reconcile membership/visibility across surfaces after a paper action.
 
-    This keeps Feed, Discovery, and Library aligned so the same paper does not
-    remain actionable on one surface after being accepted or dismissed on another.
+    Preference actions never resolve a recommendation: Like/Love/Dislike must
+    keep its card visible (D6). A surface-owned Dismiss is also local — Feed
+    settles its own rows and Discovery settles one lens row. Only a generic
+    corpus Dismiss is the global hide represented by ``papers.status``.
     """
     paper_id = _action_root(db, paper_id) or ""
     if not paper_id:
         return
 
     now = utcnow().isoformat()
-    recommendation_action = {
+    scoped_dismiss = action == "dismiss" and source_surface in {"feed", "discovery"}
+    recommendation_action = None if scoped_dismiss else {
         "add": "save",
         "save": "save",
-        "like": "like",
-        "love": "like",
+        # Generic Like/Love currently promote the paper to Library; `save`
+        # keeps the latest Discovery card visible while recording that fact.
+        "like": "save",
+        "love": "save",
         "dismiss": "dismiss",
-        "dislike": "dismiss",
     }.get(action)
-    feed_status = {
+    feed_status = None if scoped_dismiss else {
         "add": "add",
         "save": "add",
         "like": "like",
         "love": "love",
-        "dismiss": "dislike",
+        "dismiss": "dismissed",
         "dislike": "dislike",
     }.get(action)
 
@@ -1009,10 +1059,12 @@ def sync_surface_resolution(
                 (recommendation_action, now, paper_id),
             )
 
-            signal_value = -1 if recommendation_action == "dismiss" else 1
+            signal_value = 1
             if action == "love":
                 signal_value = 2
-            if source_surface != "discovery":
+            # Dismiss is a visibility stamp only. Likes/saves may still teach
+            # each affected lens; Discovery itself records its signal locally.
+            if action != "dismiss" and source_surface != "discovery":
                 try:
                     from alma.application.discovery import record_lens_signal
 
@@ -1066,9 +1118,9 @@ def undo_paper_feedback(
     *aspect* being toggled off (the user's rule: "each button press must undo
     only what that button did"):
 
-    - ``membership`` — Save/Saved: row back to ``tracked`` + delete the
-      save/dismiss signal events + reset feed/recommendation resolution. Rating
-      and reading state are left untouched.
+    - ``membership`` — Save/Saved/hidden: row back to ``tracked`` + delete
+      membership events + reset feed/recommendation resolution. Rating and
+      reading state are left untouched.
     - ``rating`` — Like / Love / Dislike: clear ``papers.rating`` + delete the
       like/love/dislike/rate signal events. Membership and reading are kept.
     - ``reading`` — Queue/Queued: clear ``papers.reading_status`` only.
@@ -1092,7 +1144,7 @@ def undo_paper_feedback(
             (now, paper_id, LIBRARY_STATUS, DISMISSED_STATUS, REMOVED_STATUS),
         )
         _delete_feedback_actions(db, paper_id, _MEMBERSHIP_ACTIONS)
-        # The save/dismiss resolved feed + recommendation rows; make them
+        # The save/global-hide resolved feed + recommendation rows; make them
         # actionable again now that the paper is no longer a member.
         if _table_exists(db, "feed_items"):
             db.execute("UPDATE feed_items SET status = 'new' WHERE paper_id = ?", (paper_id,))
@@ -1142,8 +1194,9 @@ def undo_paper_feedback(
     }
 
 
-PAPER_TRIAGE_ACTIONS = frozenset({"add", "like", "love", "dislike", "dismiss", "undo"})
-_PAPER_TRIAGE_RATINGS = {"add": 3, "like": 4, "love": 5}
+PAPER_TRIAGE_ACTIONS = frozenset(
+    {"add", "like", "love", "dislike", "dismiss", "defer", "undo"}
+)
 
 
 def apply_corpus_paper_feedback(
@@ -1180,39 +1233,42 @@ def apply_corpus_paper_feedback(
             "rating": result.get("rating"),
         }
 
-    if normalized_action in _PAPER_TRIAGE_RATINGS:
-        rating = _PAPER_TRIAGE_RATINGS[normalized_action]
-        add_to_library(
-            db,
-            root_id,
-            rating=rating,
-            added_from=source_surface,
+    if normalized_action == "defer":
+        # The Inbox X button: "I saw this, no action for it." Returns the paper
+        # to `tracked` and writes NOTHING else — no rating, no feedback event,
+        # and no `sync_surface_resolution`, because leaving the Inbox says
+        # nothing to Feed or Discovery about the paper.
+        #
+        # Distinct from `dismiss` (the global hide) on purpose: deferring is not
+        # a verdict, it is the absence of one. Returns early so it can never
+        # pick up the reconciliation the other branches share.
+        from alma.application.paper_actions import defer_from_inbox
+
+        defer_from_inbox(db, root_id)
+        row = db.execute(
+            "SELECT status, rating FROM papers WHERE id = ?", (root_id,)
+        ).fetchone()
+        return {
+            "paper_id": root_id,
+            "action": "defer",
+            "status": str(row["status"]) if row and row["status"] is not None else None,
+            "rating": int(row["rating"]) if row and row["rating"] is not None else None,
+        }
+
+    if normalized_action in paper_actions.VALENCE_ACTIONS:
+        # Membership + rating through the ONE owner of the rating contract.
+        applied = paper_actions.apply_valence(
+            db, root_id, normalized_action, added_from=source_surface
         )
         record_paper_feedback(
             db,
             root_id,
             action=normalized_action,
-            rating=rating,
-            source_surface=source_surface,
-        )
-    elif normalized_action == "dislike":
-        sink_disliked_paper(db, root_id)
-        record_paper_feedback(
-            db,
-            root_id,
-            action="dislike",
-            rating=DISLIKE_RATING,
+            rating=applied["rating"],
             source_surface=source_surface,
         )
     else:
         dismiss_paper(db, root_id)
-        record_paper_feedback(
-            db,
-            root_id,
-            action="dismiss",
-            rating=DISLIKE_RATING,
-            source_surface=source_surface,
-        )
 
     sync_surface_resolution(
         db,

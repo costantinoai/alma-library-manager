@@ -405,40 +405,5 @@ def promote_owner_papers(
 # --------------------------------------------------------------------------- #
 # Paper triage (react to the papers we just fetched)
 # --------------------------------------------------------------------------- #
-@router.post("/paper-feedback", response_model=PaperFeedbackResponse)
-def onboarding_paper_feedback(
-    payload: PaperFeedbackRequest,
-    db: sqlite3.Connection = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    """Apply the D6 triage contract to any corpus paper.
 
-    Fills the gap for paper-level triage from a surface that is neither Feed nor
-    Discovery. Delegates to the canonical library use-cases so ratings stay
-    monotonic and Feed/Discovery rows for the same paper stay reconciled:
 
-    - ``add``  → save (rating 3)
-    - ``like`` → save (rating 4)
-    - ``love`` → save (rating 5)
-    - ``dislike`` → signal only (rating 1, stays in corpus)
-    - ``dismiss`` → hide (status ``dismissed``, rating 1)
-    - ``undo`` → reverse the above: back to a neutral corpus row (tracked,
-      rating 0) AND delete the onboarding-generated signal, so re-clicking an
-      applied action toggles it fully off.
-    """
-    try:
-        result = run_write_unit(
-            db,
-            lambda: library_app.apply_corpus_paper_feedback(
-                db,
-                payload.paper_id,
-                payload.action,
-                source_surface="onboarding",
-            ),
-            label="onboarding_paper_feedback",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return PaperFeedbackResponse(**result)

@@ -8,6 +8,7 @@ import sqlite3
 from urllib.parse import parse_qs, urlparse
 
 from alma.application import library as library_app
+from alma.application import paper_actions
 from alma.application.feed import _upsert_candidate_paper
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_write import run_write_unit
@@ -872,7 +873,12 @@ def stream_online_sources(
 # Shared action -> rating contract. Matches ``alma.application.feed``.
 # (See CLAUDE.md D6: imports / online-search save must use the same
 # add/like/love/dislike -> 3/4/5/1 mapping Feed and Discovery do.)
-_ONLINE_SEARCH_ACTION_RATINGS = {"add": 3, "like": 4, "love": 5, "dislike": 1}
+# The rating contract has ONE owner. This module keeps its own bespoke
+# `add_to_library` call (it forwards `default_reading_status` /
+# `override_added_from`, which the connector needs), but the action→stars map
+# itself must not be a fourth copy: a Find-and-add "Like" and a Feed "Like"
+# have to mean the same thing forever.
+_ONLINE_SEARCH_ACTION_RATINGS = paper_actions.ACTION_RATINGS
 
 
 def _resolve_work_from_inputs(
@@ -933,6 +939,40 @@ def resolve_work_metadata(
         "doi": n.get("doi") or "",
         "openalex_id": n.get("openalex_id") or "",
     }
+
+
+def resolve_work_for_ingest(
+    *,
+    openalex_id: str | None = None,
+    doi: str | None = None,
+    link: str | None = None,
+    title: str | None = None,
+) -> tuple[dict | None, str]:
+    """Resolve a work to its FULL normalized form — READ ONLY (no DB, no writes).
+
+    The ingest-shaped sibling of :func:`resolve_work_metadata`, which returns a
+    deliberately compact display dict. Callers that intend to *land* the paper
+    need everything `_normalize_work` produces (abstract, url, topics,
+    publication_date, cited_by_count …) so they can hand it straight to
+    ``_upsert_single_paper``.
+
+    Exists so the Inbox capture pipeline
+    (:mod:`alma.application.inbound_capture`) can resolve a paper WITHOUT
+    reaching for the private ``_resolve_work_from_inputs`` and without going
+    through :func:`save_online_search_result` — the latter applies the
+    add/like/love RATING contract and lands the paper in the Library, which is
+    the wrong destination for a capture that has not been triaged yet.
+
+    Returns ``(normalized_work | None, match_source)``. ``match_source`` names
+    which input resolved it (``openalex_id`` / ``doi`` / a search source /
+    ``not_found``) so the caller can record how confident the match is.
+    """
+    raw_work, source = _resolve_work_from_inputs(
+        openalex_id=openalex_id, doi=doi, link=link, title=title, query=None
+    )
+    if not raw_work:
+        return None, source
+    return _normalize_work(raw_work), source
 
 
 def save_online_search_result(

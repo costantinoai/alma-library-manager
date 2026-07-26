@@ -753,7 +753,7 @@ export interface AuthorSuggestion {
   consensus_count?: number
   consensus_buckets?: string[]
   /** Signed score adjustment from projected paper feedback (saves /
-   *  ratings / dismisses fanned out via the projection layer). */
+   *  ratings / removals fanned out via the projection layer). */
   paper_signal_adjustment?: number
   /** Per-bucket outcome-calibration multiplier (1.0 = neutral / fresh
    *  DB). Provenance only — already folded into `score`. */
@@ -907,6 +907,10 @@ export interface Settings {
   slack_config_path?: string
   slack_token?: string
   slack_channel?: string
+  /** Channel ALMa POLLS for papers you send yourself. Separate from
+   *  `slack_channel` (where alerts are posted) so capture never re-ingests
+   *  ALMa's own notifications. Empty disables Inbox capture. */
+  slack_inbox_channel?: string
   smtp_host?: string
   smtp_port?: number
   smtp_username?: string
@@ -4123,46 +4127,10 @@ export function onlineImportSave(body: {
   return api.post('/library/import/search/save', body)
 }
 
-export function saveRecommendation(
-  recId: string,
-  rating?: number,
-  collectionIds?: string[],
-): Promise<{ id: string; save: boolean }> {
-  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/save`, {
-    rating,
-    collection_ids: collectionIds && collectionIds.length > 0 ? collectionIds : undefined,
-  })
-}
 
-export function likeRecommendation(
-  recId: string,
-  rating = 4,
-): Promise<{ id: string; like: boolean }> {
-  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/like`, {
-    rating,
-  })
-}
 
-export function readRecommendation(recId: string): Promise<{ id: string; read: boolean }> {
-  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/read`)
-}
 
-export function dismissRecommendation(recId: string): Promise<{ id: string; dismiss: boolean }> {
-  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/dismiss`)
-}
 
-/**
- * Record a negative signal on a Discovery recommendation without
- * hiding the paper system-wide. Distinct from `dismissRecommendation`:
- *
- * - `dismiss` hides the Discovery suggestion and writes a stronger
- *   negative signal with long cooldown.
- * - `dislike` only writes the feedback event + 1-star rating. The
- *   recommendation stays visible; use Dismiss to hide it.
- */
-export function dislikeRecommendation(recId: string): Promise<{ id: string; dislike: boolean }> {
-  return api.post(`/discovery/recommendations/${encodeURIComponent(recId)}/dislike`)
-}
 
 export function listFeedInbox(params?: {
   status?: FeedItemStatus
@@ -4297,11 +4265,6 @@ export function deleteFeedMonitor(monitorId: string): Promise<{ success: boolean
   return api.delete(`/feed/monitors/${encodeURIComponent(monitorId)}`)
 }
 
-export function feedAdd(feedItemId: string, collectionIds?: string[]): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/add`, {
-    collection_ids: collectionIds ?? [],
-  })
-}
 
 export function addPaperToCollections(
   paperId: string,
@@ -4312,30 +4275,10 @@ export function addPaperToCollections(
   })
 }
 
-export function feedLike(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/like`)
-}
 
-export function feedLove(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/love`)
-}
 
-export function feedDislike(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/dislike`)
-}
 
-/** Dismiss a feed item: hides the paper from the Feed inbox forever and
- *  records a small negative signal in the corpus (no Library change, no
- *  star-rating stamp — lighter than an explicit dislike). */
-export function feedDismiss(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/dismiss`)
-}
 
-/** Undo a feed dismissal: restores the paper to the inbox and removes the
- *  small negative signal the dismiss recorded. Powers the toast "Undo". */
-export function feedUndoDismiss(feedItemId: string): Promise<{ item: FeedInboxItem | null }> {
-  return api.post(`/feed/${encodeURIComponent(feedItemId)}/undo-dismiss`)
-}
 
 export function feedBulkAction(
   feedItemIds: string[],
@@ -4688,7 +4631,16 @@ export interface IngestOwnerResult {
   job_id: string | null
 }
 
-export type OnboardingPaperAction = 'add' | 'like' | 'love' | 'dislike' | 'dismiss' | 'undo'
+/** `defer` is the Inbox X button: leaves the Inbox with no rating and no
+ *  feedback event. Distinct from `dismiss`, which is the global hide. */
+export type OnboardingPaperAction =
+  | 'add'
+  | 'like'
+  | 'love'
+  | 'dislike'
+  | 'dismiss'
+  | 'defer'
+  | 'undo'
 
 export interface OnboardingPaperFeedbackResult {
   paper_id: string
@@ -4723,33 +4675,72 @@ export function promoteOwnerPapers(): Promise<{ promoted: number }> {
   return api.post<{ promoted: number }>('/onboarding/promote-owner-papers')
 }
 
-export function onboardingPaperFeedback(
-  paperId: string,
-  action: OnboardingPaperAction,
-): Promise<OnboardingPaperFeedbackResult> {
-  return api.post<OnboardingPaperFeedbackResult>('/onboarding/paper-feedback', {
-    paper_id: paperId,
-    action,
-  })
+
+/** THE paper-action client. Every surface goes through `POST /papers/{id}/action`.
+ *
+ * `surface` records where the user acted, so feedback provenance is honest.
+ * `feed` and `discovery` MUST pass `scopeRef` — their own row id — because they
+ * settle that row rather than the paper globally: dismissing in one lens must
+ * not mute the paper in another. See docs/concepts/paper-lifecycle.md.
+ */
+export type PaperActionSurface =
+  | 'feed'
+  | 'discovery'
+  | 'inbox'
+  | 'map'
+  | 'papers'
+  | 'library'
+  | 'onboarding'
+
+export interface PaperActionResult {
+  paper_id: string | null
+  action: string
+  surface: string
+  status: string | null
+  rating: number | null
+  surface_result: Record<string, unknown> | null
 }
 
-/** Canonical paper triage for corpus surfaces outside Feed/Discovery.
- *
- * The source is explicit so feedback provenance reflects where the user acted;
- * onboarding retains its compatibility route but shares the backend primitive.
- */
-export function corpusPaperFeedback(
+export function applyPaperAction(
   paperId: string,
-  action: OnboardingPaperAction,
-  sourceSurface: 'map' | 'papers' = 'papers',
-): Promise<OnboardingPaperFeedbackResult> {
-  return api.post<OnboardingPaperFeedbackResult>(
-    `/papers/${encodeURIComponent(paperId)}/feedback`,
+  action: OnboardingPaperAction | 'save' | 'read' | 'seen',
+  options: {
+    surface?: PaperActionSurface
+    scopeRef?: string
+    collectionIds?: string[]
+    undoAspect?: UndoAspect
+  } = {},
+): Promise<PaperActionResult> {
+  return api.post<PaperActionResult>(
+    `/papers/${encodeURIComponent(paperId)}/action`,
     {
       action,
-      source_surface: sourceSurface,
+      surface: options.surface ?? 'papers',
+      scope_ref: options.scopeRef ?? null,
+      collection_ids: options.collectionIds ?? null,
+      undo_aspect: options.undoAspect ?? 'all',
     },
   )
+}
+
+/** Inbox capture status — is a channel configured, what is waiting, what failed. */
+export interface InboxStatus {
+  configured: boolean
+  channels: string[]
+  waiting: number
+  needs_attention: number
+  last_captured_at: string | null
+}
+
+export function getInboxStatus(): Promise<InboxStatus> {
+  return api.get<InboxStatus>('/inbox/status')
+}
+
+/** Poll the capture channels now instead of waiting for the scheduled tick.
+ *  Idempotent — messages already captured are skipped on their
+ *  `(channel, external_id)` key, so pressing twice cannot duplicate a paper. */
+export function sweepInboxNow(): Promise<{ captured: number; channels: unknown[] }> {
+  return api.post<{ captured: number; channels: unknown[] }>('/inbox/sweep')
 }
 
 export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all'
@@ -4811,6 +4802,8 @@ export interface HomePaper {
   url?: string | null
   doi?: string | null
   status?: string | null
+  /** Best available timestamp for reading-list ordering. */
+  added_at?: string | null
 }
 
 export interface HomeHighlight {
@@ -4866,11 +4859,22 @@ export interface HomeBrief {
     total: number
     items: HomePaper[]
   }
+  /** Papers you sent yourself from another device (Slack, …) awaiting triage.
+   *  The section hides itself when `total` is 0 — a capture queue notifies,
+   *  it does not nag. See docs/concepts/inbox.md. */
+  inbox: {
+    total: number
+    items: HomePaper[]
+  }
   attention: {
     imports_pending: number
     monitors_need_resolution: number
     author_decisions: number
     critical_health: number
+    /** Captures that reached ALMa but resolved to no paper (a link with no
+     *  DOI, or an upstream failure). Recorded rather than dropped, so this is
+     *  where they ask for a human. See docs/concepts/inbox.md. */
+    inbox_unresolved: number
   }
 }
 
