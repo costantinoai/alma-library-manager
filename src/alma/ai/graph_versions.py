@@ -123,6 +123,26 @@ CLUSTERING_ALGO_VERSION = "2026.07-6"
 #            local; paper-map payloads also carry corpus-navigation metadata.
 LABELLING_VERSION = "2026.07-8"
 
+# Super-region aggregation (application/super_regions.py, task 54): how the
+# substrate's clusters are agglomerated into the ~32 regions the Signal Lab
+# samples from, the adjacency rule, and the identity-carrying remap. Bump on
+# any change to grouping/adjacency/remap logic so the cached
+# `graph:super_regions` payload rebuilds — its data fingerprint (cluster rows)
+# can't see code fixes.
+# 2026.07-1: initial — average-link cosine agglomeration to ≤32 regions,
+#            mutual-kNN(4) adjacency, cosine≥0.9 greedy identity remap.
+SUPER_REGION_VERSION = "2026.07-1"
+
+# Signal Lab model fit (application/signal_lab/fit.py, task 54): the pure
+# rounds→model recompute — head formulas, shrinkage, holdout metrics, γ gate.
+# Bump on any fit-logic change; the rounds themselves are the data half of the
+# fingerprint. POLICY version covers the round-generation side (sampling
+# weights, ε, BALD scoring) — stamped on each round row AND in the model
+# fingerprint, since a policy change alters what future rounds mean.
+# 2026.07-1: initial (M0 harness; no heads promoted).
+SIGNAL_LAB_FIT_VERSION = "2026.07-1"
+SIGNAL_LAB_POLICY_VERSION = 1
+
 # Insights overview + diagnostics COMPUTATION (insights.py / insights_diagnostics.py):
 # any corrected metric formula (papers-per-author, institution grouping, embedding
 # dimension, the outcome projection swap, removed obsolete semantics). Bump to

@@ -2232,6 +2232,25 @@ def maintain_citation_graph_periodic() -> None:
         add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
 
 
+def _ensure_super_regions_fresh(conn: sqlite3.Connection) -> None:
+    """Freshness owner for ``graph:super_regions`` (task 54).
+
+    Same ownership split as the other graph views: GETs are pure stored
+    reads, so THIS pass keeps the payload current. ``mv.get`` is the whole
+    logic — cheap fingerprint SQL, first-ever build runs synchronously right
+    here (we are already inside a background job), later drift enqueues a
+    deduped background rebuild. The fingerprint tracks the substrate rows
+    only, so idle ticks cost one aggregate SELECT.
+    """
+    try:
+        from alma.application import materialized_views as mv
+        from alma.application import super_regions
+
+        mv.get(conn, super_regions.VIEW_KEY)
+    except Exception as exc:  # noqa: BLE001 — advisory freshness, never sink the pass
+        logger.warning("super_regions freshness check failed: %s", exc)
+
+
 def graph_layout_maintenance_periodic() -> None:
     """Keep the semantic-map substrate + graph MVs fresh in the background.
 
@@ -2278,6 +2297,7 @@ def graph_layout_maintenance_periodic() -> None:
         from alma.core.scope import Scope
 
         placement = place_missing_papers(conn)
+        _ensure_super_regions_fresh(conn)
         if placement.get("placed") or placement.get("outliers"):
             add_job_log(job_id, "Placed new vectors on the substrate", step="placement", data=placement)
 
