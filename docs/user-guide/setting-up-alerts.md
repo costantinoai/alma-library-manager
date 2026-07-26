@@ -9,22 +9,18 @@ Alerts deliver new papers from your monitors to Slack on a schedule
 (or on demand). The whole flow lives inside ALMa — there's no `.env`
 hand-editing.
 
-## 1. Create a Slack bot and grab a token
+## 1. Connect Slack
 
-1. Visit <https://api.slack.com/apps> and create a new app from
-   scratch.
-2. Add a Bot User to the app.
-3. In **OAuth & Permissions**, add scopes:
-   - `chat:write` — required, lets the bot post messages.
-   - `channels:read` and `groups:read` — needed if you want to
-     resolve a channel name (`general`, `#general`).
-   - `users:read` and `im:write` — needed if you want to resolve a
-     user display name (`Andrea Costantino`) and DM yourself.
-4. Install the app to your workspace; copy the **Bot User OAuth
-   Token** (starts with `xoxb-`).
-5. Either invite the bot to the channel you want to post to
-   (`/invite @your-bot` in Slack), or DM yourself — the bot can DM
-   any workspace user it can resolve.
+Register the ALMa app, grant `chat:write`, install it, and save the token:
+
+**→ [Connecting Slack](connecting-slack.md)**
+
+For alerts you need `chat:write`. Add `channels:read` + `groups:read` too if you
+want to name the destination channel rather than paste its ID, and
+`users:read` + `im:write` if you want digests delivered as a DM.
+
+Then invite the bot to the channel you want digests in (`/invite @ALMa`), or
+point ALMa at a user to DM instead.
 
 ## 2. Configure Slack in ALMa
 

@@ -137,6 +137,7 @@ nav:
       - Saving papers: user-guide/saving-papers.md
       - Reading workflow: user-guide/reading-workflow.md
       - Browser connector: user-guide/browser-connector.md
+      - Connecting Slack: user-guide/connecting-slack.md
       - Capturing from your phone: user-guide/capturing-from-your-phone.md
       - Importing from Zotero / BibTeX: user-guide/importing.md
       - Tracking authors: user-guide/tracking-authors.md

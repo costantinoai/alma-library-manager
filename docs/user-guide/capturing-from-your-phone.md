@@ -16,95 +16,100 @@ in ALMa — already in your corpus, already enriched, needing only a decision.
     triage it, and it does **not** influence your recommendations while it
     waits. A link you flick at 8am and discard at noon leaves no trace.
 
-## Setting it up
+## Before you start
 
-Five minutes, once. Do these in order — step 3 fails if you skip the reinstall
-in step 2.
+You need the ALMa Slack app installed in your workspace, with the capture
+scopes, and its token saved in ALMa. That is one page, done once:
 
-### 0. Do you already have an ALMa Slack bot?
+**→ [Connecting Slack](connecting-slack.md)**
 
-If Slack alerts already work for you, yes — skip to step 1.
+Make sure you granted the capture scopes there — `channels:read`, `groups:read`,
+`groups:history`, `reactions:write` (plus `channels:history` if your channel is
+public). If you set Slack up earlier for alerts only, add those scopes now and
+**Reinstall to Workspace**; a scope does nothing until you reinstall.
 
-If not, create one first:
+Two rules that cause most failures, repeated here because they bite hardest in
+this flow:
 
-1. Go to **[api.slack.com/apps](https://api.slack.com/apps)** → **Create New
-   App** → **From scratch**.
-2. Name it `ALMa`, pick your workspace, **Create App**.
-3. Left sidebar → **OAuth & Permissions**. Under **Scopes → Bot Token Scopes**,
-   add `chat:write`.
-4. Top of that page → **Install to Workspace** → **Allow**.
-5. Copy the **Bot User OAuth Token** (starts `xoxb-`).
-6. In ALMa: **Settings → Channels → Slack Bot Token**, paste it, **Save**.
+1. **Scopes take effect only after (re)installing the app.**
+2. **A bot reads only channels it has been added to** — installing it in the
+   workspace grants nothing on its own.
 
-### 1. Create the capture channel
+---
 
-In Slack:
+## Setting up capture
 
-1. **+** next to Channels → **Create a channel**.
-2. Name it `alma-inbox`. Set visibility to **Private**.
-3. Open the channel and type `/invite @ALMa` (use whatever you named the bot),
-   then Enter. **The bot must be a member — it cannot read a channel it hasn't
-   joined.**
+### Step 1 — Create the capture channel and add the bot **to that channel**
 
-Use a channel you use for nothing else: everything posted there is read as a
-capture attempt.
+Now in the **Slack app itself** (not the developer site):
 
-### 2. Add the read scopes and REINSTALL
+1. Click **+** beside **Channels** in the sidebar → **Create a channel**.
+2. **Name**: `alma-inbox`. **Visibility**: **Private**. → **Create**.
+3. Open `#alma-inbox` and send this message in the channel:
 
-1. **[api.slack.com/apps](https://api.slack.com/apps)** → your ALMa app →
-   **OAuth & Permissions**.
-2. Under **Scopes → Bot Token Scopes**, **Add an OAuth Scope** three times:
+        /invite @ALMa
 
-    | Scope | Why it's needed |
-    |---|---|
-    | `groups:history` | Read the messages you post in the private channel |
-    | `groups:read` | Turn the channel name into the id the API needs |
-    | `reactions:write` | React on your message so you can see it landed |
+    Use your bot's actual name if you named the app something else — Slack
+    autocompletes it as you type. If nothing autocompletes, the app is not
+    installed — see [Connecting Slack](connecting-slack.md) step 3.
 
-    Made the channel **public** instead? Use `channels:history` +
-    `channels:read`.
+4. Slack confirms: *"@ALMa was added to #alma-inbox"*.
 
-3. Scroll up → a yellow banner appears → **Reinstall to Workspace** → **Allow**.
+**That invite is the membership that matters.** The bot can now read
+`#alma-inbox` — and still nothing else: not your other channels, not your DMs.
 
-    !!! warning "This step is not optional"
-        Scopes do nothing until the app is reinstalled. Skipping it is the most
-        common reason capture "silently does nothing" — the token is valid, it
-        just isn't allowed to read.
+!!! warning "Use a channel for nothing else"
+    Every message here is treated as a capture attempt. Don't reuse a channel
+    you chat in.
 
-4. The token does **not** change on reinstall, so there is nothing to re-paste
-   in ALMa.
+---
 
-### 3. Point ALMa at the channel
+### Step 2 — Tell ALMa which channel to read
 
-**Settings → Channels → Capture channel (Inbox)** → type `alma-inbox` (no `#`)
-→ **Save**.
+**Settings → Channels → Capture channel (Inbox)** → type `alma-inbox`
+(bare name, **no `#`**) → **Save**.
 
-Leave it empty to turn capture off.
+Empty field = capture off.
 
-!!! note "Why it's a separate field from 'Default Slack Channel'"
-    That one is where ALMa **posts** alerts. If ALMa also *read* it, it would
-    ingest its own notifications as captures. Keep them different channels.
+!!! note "Why this is separate from 'Default Slack Channel'"
+    **Default Slack Channel** is where ALMa **posts** alerts *to*.
+    **Capture channel** is what ALMa **reads** *from*.
+    They must be different: reading the channel it posts into would make ALMa
+    ingest its own alerts as if you had sent them.
 
-### 4. Prove it works, now
+---
 
-1. In Slack, post a paper link into `#alma-inbox`. For example:
+### Step 3 — Prove it works
+
+1. In Slack, post a paper link into `#alma-inbox`:
 
         https://doi.org/10.1038/s41586-019-1666-5
 
-2. In ALMa: **Settings → Channels → Check capture channel now** (don't wait for
-   the 5-minute timer).
-3. You should see a toast: *"Captured 1 paper"*.
-4. In Slack, your message now has a 📥 reaction.
-5. Go to **Home** — the paper is in the **Inbox** section.
+2. In ALMa: **Settings → Channels → Check capture channel now** — runs the check
+   immediately instead of waiting up to 5 minutes.
+3. Expect the toast **"Captured 1 paper"**.
+4. In Slack, your message now shows a 📥 reaction.
+5. Open **Home** — the paper is in the **Inbox** section.
 
-If instead you get *"No capture channel is configured"*, step 3 didn't save. If
-you get a permissions error, step 2's reinstall was skipped.
+**If something else happened:**
+
+| What you saw | Cause | Fix |
+|---|---|---|
+| *"No capture channel is configured"* | Step 2 didn't save | Re-enter the name and Save |
+| Error mentioning `not_in_channel` | Bot isn't in the channel | Redo step 1.3 |
+| Error mentioning `missing_scope` | A scope is absent, or the app wasn't reinstalled after you added one | Recheck the scopes in [Connecting Slack](connecting-slack.md), then **Reinstall to Workspace** |
+| Error mentioning `invalid_auth` | Token wrong or regenerated | Re-copy it from [Connecting Slack](connecting-slack.md) step 4 |
+| *"Nothing new to capture"* | ALMa read the channel fine, found no new message | Post the link again, re-check |
+| ❓ instead of 📥 | The link held no identifiable paper | Read ALMa's thread reply |
+
+---
 
 ### From then on
 
 Just post links. ALMa checks every 5 minutes on its own — tune with
 `INBOX_SWEEP_INTERVAL_MINUTES` (see
-[Configuration](../reference/configuration.md#scheduler)).
+[Configuration](../reference/configuration.md#scheduler)); `0` turns the
+automatic check off and leaves only the manual button.
 
 ## Using it
 
