@@ -1,12 +1,11 @@
 import type { HomeTrendPoint } from '@/api/client'
-import { EyebrowLabel } from '@/components/ui/eyebrow-label'
-import { SubPanel } from '@/components/ui/sub-panel'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { HOME_TREND_SERIES } from '@/lib/palette'
 import { cn } from '@/lib/utils'
 
-/** Tallest a column may draw, in px. Short enough to sit on a heading row. */
-const MAX_BAR_HEIGHT = 26
+/** Tallest a column may draw, in px. Matches the strip's numeral height, so
+ *  the chart reads as one more figure in the row rather than a widget. */
+const MAX_BAR_HEIGHT = 28
 /** A day with any inflow still gets a visible stub, so "1" never reads as "0". */
 const MIN_NONZERO_HEIGHT = 3
 
@@ -30,13 +29,16 @@ export interface InflowStripProps {
 }
 
 /**
- * Seven days of inflow, as one small stacked column per day on its own plate.
+ * Seven days of inflow, as the FINAL CELL of Home's scoreboard strip: the bars
+ * sit exactly where the other cells put their numeral, over the same label
+ * treatment, so the week's shape is read as one more figure rather than as a
+ * chart bolted beside the heading (which is how it looked in its own plate).
  *
- * Answers the question the three headline tiles cannot: *is today normal?* A
+ * Answers the question the headline figures cannot: *is today normal?* A
  * zero-Feed morning means nothing on its own and everything next to six busy
  * days. Columns are scaled against the window's own maximum — this is a shape,
- * not a measurement — so the week's total is printed beside the label and every
- * column carries its exact figures on hover.
+ * not a measurement — so the week's total is printed as the cell's number and
+ * every column carries its exact figures on hover.
  *
  * Feed sits at the bottom of each column and Discovery on top, in the same two
  * hues those surfaces wear elsewhere (`HOME_TREND_SERIES`). Today's column is
@@ -46,7 +48,7 @@ export interface InflowStripProps {
  * **Empty days are a baseline tick, not a filled rail.** The first version drew
  * a full-height track behind every column, so a quiet week rendered as seven
  * solid bars — the opposite of the truth, and indistinguishable from a loading
- * skeleton. The recessed plate is what gives the marks presence instead.
+ * skeleton. Presence comes from the printed total beside them instead.
  */
 export function InflowStrip({ trend, className }: InflowStripProps) {
   if (trend.length === 0) return null
@@ -62,13 +64,9 @@ export function InflowStrip({ trend, className }: InflowStripProps) {
   }
 
   return (
-    <SubPanel padded={false} className={cn('shrink-0 space-y-1.5 px-3 py-2', className)}>
-      <div className="flex items-baseline justify-between gap-6">
-        <EyebrowLabel tone="muted">Last 7 days</EyebrowLabel>
-        <span className="font-mono text-xs tabular-nums text-alma-700">{windowTotal}</span>
-      </div>
+    <div className={cn('min-w-0', className)}>
       <div
-        className="flex items-end gap-[3px] border-b border-control-edge pb-px"
+        className="flex items-end gap-[3px]"
         style={{ height: MAX_BAR_HEIGHT }}
         role="img"
         aria-label={
@@ -112,7 +110,13 @@ export function InflowStrip({ trend, className }: InflowStripProps) {
             </Tooltip>
           )
         })}
+        {/* The cell's number, baseline-aligned with the bars it describes. */}
+        <span className="ml-2 self-end font-brand text-[1.75rem] font-normal leading-none tabular-nums text-alma-800">
+          {windowTotal}
+        </span>
       </div>
-    </SubPanel>
+      <p className="mt-1.5 truncate text-xs text-slate-600">in the last 7 days</p>
+      <p className="mt-0.5 text-[11px] text-slate-400">Feed + Discovery</p>
+    </div>
   )
 }

@@ -1,20 +1,19 @@
 /**
- * StatusRow — the app's ONE status-line primitive: a severity badge + a label
- * + an optional right-aligned metric, optionally clickable into a drilldown
- * ("view →").
- *
- * Used by the gaps inside a `RepairCard`, the `DiagnosticsSection` rows, the
- * subsystem lines on Health, and Home's needs-you panel — so a line that says
- * "here is a thing, here is how bad it is, here is where to fix it" reads
- * identically wherever it appears. It sits on the ink ladder
- * (`control-well` + `control-edge`), so it looks the same at any elevation.
+ * StatusRow — the Health page's one status-line primitive: a severity badge +
+ * a label + an optional right-aligned metric, optionally clickable into a
+ * drilldown ("view →"). Shared by the gaps inside a `RepairCard`, the
+ * `DiagnosticsSection` rows, and the subsystem lines — so every status line on
+ * Health reads identically. It sits on the ink ladder (`control-well` +
+ * `control-edge`), so it looks the same at any elevation.
  *
  * `metric` is a caller-supplied node (a count, a coverage bar, "2 degraded", …)
  * so each surface keeps its own metric shape without forking the row.
  *
- * `href` and `onOpen` are alternative destinations: `onOpen` for an in-page
- * drilldown, `href` for another surface. Passing both is a contradiction —
- * `onOpen` wins.
+ * It briefly lived in `components/shared/` for Home's needs-you panel; that
+ * panel is a chip row by user direction, so the promotion had no second
+ * consumer and was reverted rather than left as speculative generality. The
+ * SEVERITY vocabulary it reads stays shared in `lib/severity.ts`, which Home
+ * does use.
  */
 import { StatusBadge } from '@/components/ui/status-badge'
 import { cn } from '@/lib/utils'
@@ -30,14 +29,12 @@ interface StatusRowProps {
   metric?: React.ReactNode
   /** When provided the row becomes a button that opens an in-page drilldown. */
   onOpen?: () => void
-  /** When provided (and `onOpen` is not) the row becomes a link to that route. */
-  href?: string
   /** Native tooltip — used to surface the severity reason (H-7) on hover. */
   title?: string
 }
 
-export function StatusRow({ severity, label, metric, onOpen, href, title }: StatusRowProps) {
-  const clickable = !!onOpen || !!href
+export function StatusRow({ severity, label, metric, onOpen, title }: StatusRowProps) {
+  const clickable = !!onOpen
   const inner = (
     <>
       <StatusBadge tone={dimensionBadgeTone(severity)} size="sm" className="shrink-0 capitalize">
@@ -53,20 +50,17 @@ export function StatusRow({ severity, label, metric, onOpen, href, title }: Stat
     </>
   )
   if (!clickable) return <div className={BASE} title={title}>{inner}</div>
-  const interactive = cn(
-    BASE,
-    'group transition-colors hover:border-control-edge-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
-  )
-  if (onOpen) {
-    return (
-      <button type="button" onClick={onOpen} title={title} className={interactive}>
-        {inner}
-      </button>
-    )
-  }
   return (
-    <a href={href} title={title} className={interactive}>
+    <button
+      type="button"
+      onClick={onOpen}
+      title={title}
+      className={cn(
+        BASE,
+        'group transition-colors hover:border-control-edge-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio',
+      )}
+    >
       {inner}
-    </a>
+    </button>
   )
 }

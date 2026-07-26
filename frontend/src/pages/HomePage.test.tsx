@@ -217,7 +217,7 @@ describe('HomePage', () => {
     )
   })
 
-  it('shows reading continuity, and needs-you rows for nonzero kinds only', async () => {
+  it('shows reading continuity, and attention chips for nonzero kinds only', async () => {
     getHomeBrief.mockResolvedValue({
       ...QUIET,
       reading: {
@@ -241,12 +241,15 @@ describe('HomePage', () => {
       'href',
       '#/library?tab=reading&paper=p1',
     )
-    // Attention rides on the blotter as shared `StatusRow`s ranked by
-    // severity; a kind with a zero count is absent entirely.
-    expect(screen.getByText(/Imports to review/)).toBeInTheDocument()
-    expect(screen.getByText(/Author identity to review/)).toBeInTheDocument()
-    expect(screen.queryByText(/not delivering/i)).not.toBeInTheDocument()
-    expect(screen.queryByText(/Critical health/i)).not.toBeInTheDocument()
+    // Attention rides on the blotter as shared `StatusChip`s ranked by
+    // severity — name on line 1, count on line 2 — and a kind with a zero
+    // count is absent entirely.
+    expect(screen.getByText('Imports')).toBeInTheDocument()
+    expect(screen.getByText('2 to review')).toBeInTheDocument()
+    expect(screen.getByText('Author identities')).toBeInTheDocument()
+    expect(screen.getByText('1 to review')).toBeInTheDocument()
+    expect(screen.queryByText('Feed monitors')).not.toBeInTheDocument()
+    expect(screen.queryByText('Health')).not.toBeInTheDocument()
   })
 
   // Collapsed sections show whole rows of the MEASURED grid. Under jsdom no

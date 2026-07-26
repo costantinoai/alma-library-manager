@@ -50,13 +50,14 @@ for (let i = 0; i < 6; i++) {
 }
 await page.waitForTimeout(1500)
 
+// The rail has no heading of its own by design — assert on a dot's link.
 check(
-  (await page.getByText('Connections', { exact: true }).count()) > 0,
-  'connections rail renders',
+  (await page.getByRole('link', { name: /OpenAlex/ }).count()) > 0,
+  'connections rail renders (a dot per dependency, no heading)',
 )
 check(
   (await page.getByRole('img', { name: /last 7 days|Nothing arrived in the last 7 days/ }).count()) > 0,
-  'inflow strip renders on its plate',
+  'inflow strip renders as a cell of the scoreboard',
 )
 
 const inbox = page.locator('section[aria-labelledby="home-inbox"]')

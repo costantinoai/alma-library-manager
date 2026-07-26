@@ -32,7 +32,7 @@ import {
   type HomePaper,
   type OnboardingPaperAction,
 } from '@/api/client'
-import { AttentionPanel } from '@/components/home/AttentionPanel'
+import { AttentionChips } from '@/components/home/AttentionChips'
 import { ConnectionRail } from '@/components/home/ConnectionRail'
 import { InflowStrip } from '@/components/home/InflowStrip'
 import { PaperActionBar } from '@/components/discovery/PaperActionBar'
@@ -344,46 +344,107 @@ export function HomePage() {
               </Button>
             </div>
           </div>
-          {/* The wordmark's own gold rule, separating the masthead from the
-              instruments below it — the blotter reads as a printed page head
-              rather than a card with a title. */}
+          {/* ONE slim status line, tight under the greeting so it reads as part
+              of the hero rather than as the first content band: the machinery
+              ALMa depends on, then whatever wants a decision. Both answer "what
+              is my situation" before a single number is read, and neither
+              deserves a heading of its own — a dot and a name say it. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <ConnectionRail connections={brief.connections} />
+            {/* One hairline between the two halves of the line: everything left
+                of it is machinery ALMa runs, everything right of it wants a
+                decision from you. Only drawn when both sides exist. */}
+            {attentionTotal > 0 && brief.connections.length > 0 && (
+              <span className="h-3 w-px bg-control-edge" aria-hidden />
+            )}
+            <AttentionChips attention={brief.attention} />
+          </div>
+          {/* The wordmark's own gold rule CLOSES the hero — masthead and its
+              status line above, the day's figures below. It used to sit between
+              the greeting and the line, which pushed the line across a divider
+              and made it read as content rather than as part of the head. */}
           <BrandRule center="diamond" />
-          {/* The machinery, right under the greeting: if capture or a metadata
-              provider is down, every number below this line is smaller than it
-              should be, and nothing else on the page would say so. */}
-          <ConnectionRail connections={brief.connections} />
         </header>
 
         <PageSection
           id="home-activity"
           title="Today in ALMa"
           icon={Sunrise}
-          description="Activity since your local midnight."
-          action={<InflowStrip trend={brief.activity.trend} />}
+          // The strip mixes two scopes on purpose, and each label says which:
+          // three "today" figures, then two standing queues. A desk needs both —
+          // what arrived, and what is still on it.
+          description="What arrived since your local midnight, and what is waiting."
         >
-          <div className="grid gap-3 sm:grid-cols-3">
+          {/* An editorial scoreboard, not a grid of cards: bare figures split by
+              hairlines, with the week's shape as the final cell. Six bordered
+              tiles read as six competing objects and made the eye cross a
+              border per number; the sparkline floating in its own plate beside
+              the heading read as a separate widget rather than part of the
+              same reading. */}
+          <div className="flex flex-wrap items-start gap-y-5 divide-edge-1 sm:divide-x">
             <MetricTile
+              variant="bare"
+              className="basis-1/2 px-0 sm:basis-auto sm:flex-1 sm:pr-5"
               label="new Feed papers"
               value={feed.today}
               // The monitor split is spelled once, by the ribbon under the row —
               // repeating it here as text was the same fact twice.
-              hint="from the sources you monitor"
+              hint="from your sources"
               tone={feed.today > 0 ? 'accent' : 'neutral'}
               onClick={() => navigateTo('feed')}
             />
             <MetricTile
+              variant="bare"
+              className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
               label="new suggestions"
               value={discovery.today}
-              hint={`across ${discovery.lenses_today} ${discovery.lenses_today === 1 ? 'lens' : 'lenses'}`}
+              hint={`today, across ${discovery.lenses_today} ${discovery.lenses_today === 1 ? 'lens' : 'lenses'}`}
               tone={discovery.today > 0 ? 'accent' : 'neutral'}
               onClick={() => navigateTo('discovery')}
             />
             <MetricTile
+              variant="bare"
+              className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
               label="alerts delivered"
               value={alerts.today}
-              hint="successful digest deliveries"
+              hint="successful digests"
               tone={alerts.today > 0 ? 'info' : 'neutral'}
               onClick={() => navigateTo('alerts', { tab: 'history' })}
+            />
+            {/* Two standing queues rather than today-figures. Both are already
+                on the payload — Home was reporting them only as section pills,
+                which you cannot see until you scroll to the section. */}
+            <MetricTile
+              variant="bare"
+              className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
+              label="waiting in Inbox"
+              value={brief.inbox.total}
+              hint="sent by you"
+              tone={brief.inbox.total > 0 ? 'accent' : 'neutral'}
+              // Home OWNS the Inbox, so there is nowhere to navigate to: the
+              // tile scrolls to the section it counts. Only when there IS one —
+              // a click that silently does nothing is worse than no affordance.
+              onClick={
+                brief.inbox.total > 0
+                  ? () =>
+                      document
+                        .getElementById('home-inbox')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  : undefined
+              }
+            />
+            <MetricTile
+              variant="bare"
+              className="basis-1/2 sm:basis-auto sm:flex-1 sm:px-5"
+              label="on your reading list"
+              value={brief.reading.total}
+              hint="currently reading"
+              tone="neutral"
+              onClick={() => navigateTo('library', { tab: 'reading' })}
+            />
+            <InflowStrip
+              trend={brief.activity.trend}
+              className="basis-full sm:basis-auto sm:flex-1 sm:pl-5"
             />
           </div>
           <MonitorMix mix={feed.by_monitor_type} />
@@ -405,10 +466,6 @@ export function HomePage() {
           )}
         </PageSection>
 
-        {/* Obligations land immediately after today's numbers: they are the
-            other half of "what is my situation", and a panel you have to
-            scroll past the research to find is one you will not act on. */}
-        <AttentionPanel attention={brief.attention} />
       </Card>
 
       {/* D13 Inbox — papers you sent yourself from another device, awaiting
@@ -420,6 +477,7 @@ export function HomePage() {
       {brief.inbox.total > 0 && (
         <PageSection
           id="home-inbox"
+          collapsible
           title="Inbox"
           icon={Inbox}
           count={brief.inbox.total}
@@ -467,6 +525,7 @@ export function HomePage() {
 
       <PageSection
         id="home-highlights"
+          collapsible
         title="Picked for you"
         icon={Sparkles}
         count={brief.highlights.length}
@@ -514,6 +573,7 @@ export function HomePage() {
       {brief.reading.total > 0 && (
         <PageSection
           id="home-reading"
+          collapsible
           title="Reading list"
           icon={BookMarked}
           count={brief.reading.total}

@@ -41,3 +41,19 @@ export function severityLabel(severity?: string | null): string {
   if (severity === 'ok') return 'healthy'
   return severity ?? 'unknown'
 }
+
+/**
+ * Status-dot fill for a severity — the at-a-glance mark on a `StatusChip`.
+ *
+ * A dot, not a wash: the chip itself is a neutral ink well at every severity,
+ * so the colour lands in one small, high-contrast place instead of tinting the
+ * whole control. Unknown severities take the inert rail ink rather than a
+ * slate fill (see the control-guard rule in `surface-guard.test.ts`).
+ */
+export function severityDot(severity?: string | null): string {
+  if (severity === 'critical') return 'bg-critical-500'
+  if (severity === 'warning') return 'bg-warning-500'
+  if (severity === 'ok') return 'bg-success-500'
+  if (severity === 'info') return 'bg-alma-folio'
+  return 'bg-control-track'
+}

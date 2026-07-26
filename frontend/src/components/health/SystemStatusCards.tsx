@@ -58,6 +58,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { StatusChip } from '@/components/shared/StatusChip'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -65,6 +66,7 @@ import { formatPaperDate } from '@/lib/format'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { cn } from '@/lib/utils'
+import { severityDot } from '@/lib/severity'
 import { dimensionBadgeTone, severityLabel, severityRank } from './healthFormat'
 
 type Severity = 'ok' | 'warning' | 'critical' | 'info'
@@ -366,13 +368,6 @@ function componentOfState(s: OperationalState): string {
 
 // Severity → status-dot color. The dot is the at-a-glance status on each chip —
 // the controlled bit of semantic color (like the ribbon), not decoration.
-const DOT: Record<Severity, string> = {
-  critical: 'bg-critical-500',
-  warning: 'bg-warning-500',
-  info: 'bg-alma-folio',
-  ok: 'bg-success-500',
-}
-
 // Per-component plain-English "what healthy means / how it's configured", shown
 // in the popup when a component has no issues so the user understands the green.
 const HEALTHY_NOTE: Record<string, string> = {
@@ -926,27 +921,23 @@ export function SystemStatusCards() {
         {components.map((c, i) => {
           const Icon = c.icon
           return (
-            <motion.button
+            <motion.div
               key={c.id}
-              type="button"
-              onClick={() => setOpenId(c.id)}
+              className="flex min-w-[150px] flex-1"
               initial={reducedMotion ? false : { opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, ease: 'easeOut', delay: 0.03 * i }}
-              aria-label={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
-              className="group flex min-w-[150px] flex-1 items-start gap-2 rounded-sm border border-control-edge bg-control-well px-3 py-2 text-left transition-colors hover:border-control-edge-strong hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
             >
-              <Icon className="mt-0.5 h-4 w-4 shrink-0 text-alma-500" />
-              <span className="min-w-0 flex-1">
-                {/* Line 1 — component name + status dot. */}
-                <span className="flex items-center gap-1.5">
-                  <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[c.severity])} />
-                  <span className="truncate text-sm font-medium text-alma-800">{c.name}</span>
-                </span>
-                {/* Line 2 — the metric. */}
-                <span className="mt-0.5 block truncate text-xs tabular-nums text-slate-500">{c.metric}</span>
-              </span>
-            </motion.button>
+              <StatusChip
+                className="flex-1"
+                icon={Icon}
+                severity={c.severity}
+                name={c.name}
+                metric={c.metric}
+                onClick={() => setOpenId(c.id)}
+                ariaLabel={`${c.name}: ${severityLabel(c.severity)} — ${c.metric}`}
+              />
+            </motion.div>
           )
         })}
       </div>
@@ -984,7 +975,7 @@ export function SystemStatusCards() {
                           className="rounded-sm border border-[var(--color-border)] bg-surface-2 px-3 py-2.5"
                         >
                           <p className="flex items-center gap-2 text-sm font-medium text-alma-800">
-                            <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[(state.severity as Severity) ?? 'warning'])} />
+                            <span className={cn('h-2 w-2 shrink-0 rounded-full', severityDot(state.severity ?? 'warning'))} />
                             {state.label}
                           </p>
                           {state.detail ? <p className="mt-1 pl-4 text-xs leading-relaxed text-slate-500">{state.detail}</p> : null}
@@ -1013,7 +1004,7 @@ export function SystemStatusCards() {
                               <div key={row.key} className="px-3 py-2.5">
                                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
                                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                                    <span className={cn('h-2 w-2 shrink-0 rounded-full', DOT[row.severity])} />
+                                    <span className={cn('h-2 w-2 shrink-0 rounded-full', severityDot(row.severity))} />
                                     <span className="truncate text-sm font-medium text-alma-800">{row.name}</span>
                                   </span>
                                   <span className="flex shrink-0 flex-wrap gap-1.5">

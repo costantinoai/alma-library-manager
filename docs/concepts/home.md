@@ -17,35 +17,57 @@ counts or consumes unread state.
 The page has two halves, and the split is meaning, not decoration:
 
 - **The blotter** — one raised panel at the top carrying your whole *situation*:
-  the greeting and date, the two workflow shortcuts, the Connections rail,
-  today's numbers, and everything that needs a decision. It is the pad you work
-  on, and it is always the same shape.
+  the greeting and date, the two workflow shortcuts, one slim status line, and
+  today's figures. It is the pad you work on, and it is always the same shape.
 - **The desk** — the research itself, as loose sheets below: Inbox, Picked for
-  you, Reading list. Each is a grid of paper tiles.
+  you, Reading list. Each is its own **collapsible block** — fold away what
+  isn't today's business and the rest comes up to meet you.
 
 Reading order follows urgency: what is my situation (blotter) → what did I send
 myself (Inbox) → what did ALMa find (Picked for you) → what am I already
 reading.
 
+## The status line
+
+One slim line under the greeting, with no heading of its own, carrying two
+groups split by a hairline:
+
+- **left — the machinery**: one dot per outside dependency (see
+  [Connections](#connections) below);
+- **right — what wants you**: one chip per pending decision (see
+  [Needs you](#needs-you)).
+
+Both answer "what is my situation" before a single number is read, and a dot with
+a name says it without a label announcing it. Every item links to the surface
+that owns the fix. A chip that would read zero is absent, so the line's own
+length is information.
+
 ## Today in ALMa
 
-Three stable figures report activity since local midnight:
+An editorial **scoreboard** — bare figures split by hairlines, not a grid of
+boxes. Six cells, and each label says its own scope, because the row mixes
+today's arrivals with what is standing on the desk:
 
-| Figure | Links to |
-|---|---|
-| **new Feed papers** (distinct papers, split by source type) | [Feed](feed.md) |
-| **new suggestions** across active lenses | [Discovery](discovery.md) |
-| **alerts delivered successfully** | Alerts → History |
+| Figure | Scope | Links to |
+|---|---|---|
+| **new Feed papers** (distinct papers) | today | [Feed](feed.md) |
+| **new suggestions** across active lenses | today | [Discovery](discovery.md) |
+| **alerts delivered successfully** | today | Alerts → History |
+| **waiting in Inbox** | now | scrolls to the Inbox below |
+| **on your reading list** | now | Library → Reading |
+| **in the last 7 days** | the week | — |
+
+The last cell is the **inflow chart**: one small stacked column per local day,
+Feed at the base and Discovery above it, with the week's total set as the cell's
+number and the exact figures on hover. It sits where the other cells put their
+numeral, so the week's shape reads as one more figure rather than a chart bolted
+on beside the heading. A zero-Feed morning means nothing on its own and
+everything next to six busy days; empty days are a tick on the baseline, because
+the absence is the information.
 
 A **monitor-mix ribbon** under the row splits today's Feed intake across
 authors / journals / other, so you can tell an author-driven day from a
 journal-driven one at a glance. It renders only when something arrived.
-
-Beside the heading, a **7-day inflow strip** puts today in context: one small
-column per local day, Feed at the base and Discovery above it, with the exact
-figures on hover. A zero-Feed morning means nothing on its own and everything
-next to six busy days. Empty days show a tick on the baseline rather than a
-bar — the absence is the information.
 
 Older, still-unreviewed Feed and Discovery items appear separately as
 **carryover**. Carryover clears only when you visit the owning Feed or
@@ -123,8 +145,8 @@ half-row.
 
 ## Connections
 
-A rail under the greeting carries one dot per outside dependency ALMa needs
-while you are not looking. **Everything is named by its real name** — the
+The left half of the status line carries one dot per outside dependency ALMa
+needs while you are not looking. **Everything is named by its real name** — the
 capture entries come from the channel registry, so you read **Slack**, not an
 abstract "Capture":
 
@@ -146,10 +168,10 @@ These failures are the ones that never announce themselves — a revoked token, 
 rejected key, a provider outage, a missing dependency — and their only symptom
 is a page that quietly stops filling up.
 
-The rail is always present, so its silence is meaningful: you learn where it
-lives while everything is green, which is the only way you will notice the day
-one turns red. A failing connection also states itself in words, says what you
-are losing, and links to the fix.
+The dots are always present, so their silence is meaningful: you learn where they
+live while everything is green, which is the only way you will notice the day one
+turns red. A failing connection also states itself in words below the line, says
+what you are losing, and links to the fix.
 
 States are read from the **operation ledger** — the recorded outcome of every
 job that actually talked to that provider — not from a live probe, because Home
@@ -161,10 +183,10 @@ run stopped, not that the provider answered. Live re-probing lives in
 
 ## Needs you
 
-A recessed panel on the blotter, directly under today's numbers — the other
-half of "what is my situation". It appears only for user-fixable decisions or
-blockers, ordered by severity rather than by which part of ALMa raised them —
-something broken and staying broken outranks a queue that is merely waiting:
+The right half of the status line — the other half of "what is my situation".
+Chips appear only for user-fixable decisions or blockers, ordered by severity
+rather than by which part of ALMa raised them, so something broken and staying
+broken outranks a queue that is merely waiting:
 
 - actionable critical Health findings;
 - Feed monitors that need relinking (a broken monitor silently stops
@@ -175,9 +197,10 @@ something broken and staying broken outranks a queue that is merely waiting:
 - author identities that need a decision;
 - imported papers that need review.
 
-Each row is the same status line [Health](health.md) uses for a failing
-dimension — severity badge, what it is, how many, where to fix it — so a line
-that means "something needs you" reads identically on both pages.
+Each chip is the same one [Health](health.md) uses in its system-status band —
+a severity dot, what it is, and how many — in a slimmer weight, so a
+component-and-its-state reads identically on both pages. No heading announces
+them: a chip reading "Health · 1 critical issue" already says it.
 
 Routine background work and healthy-state reassurance stay off Home.
 
