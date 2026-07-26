@@ -63,8 +63,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "from_year": None,
     "slack_channel": None,
     # Inbound capture channel for the Inbox (D13). None = capture OFF.
-    # Separate from `slack_channel` (outbound alerts) on purpose: polling the
-    # channel ALMa posts to would re-ingest its own notifications.
+    # Separate FIELD from `slack_channel` (outbound alerts) because they are
+    # opposite directions, not because they must differ: the poller skips any
+    # message with a `bot_id`, so pointing both at one channel is safe. A
+    # dedicated channel is simply nicer — digests bury the links you send.
     "slack_inbox_channel": None,
     "id_resolution_semantic_scholar_enabled": True,
     "id_resolution_orcid_enabled": True,

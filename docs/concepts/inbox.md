@@ -161,7 +161,9 @@ invited costs one habit change and keeps the token narrow.
 
 Capture stays **off** until a channel is nominated, and it is deliberately a
 separate setting from the alert channel: polling the channel ALMa *posts* to
-would re-ingest its own notifications.
+would bury your captures under digests. It is not a technical requirement —
+the poller skips messages carrying a `bot_id`, so ALMa cannot re-read its own
+alerts.
 
 ### What you see on your phone
 

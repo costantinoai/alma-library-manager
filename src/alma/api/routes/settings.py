@@ -214,10 +214,11 @@ class SettingsModel(BaseModel):
     # Slack notification settings
     slack_token: str | None = Field(None, description="Slack Bot User OAuth Token")
     slack_channel: str | None = Field(None, description="Default Slack channel for notifications")
-    # Inbox capture (INBOUND) — deliberately a SEPARATE channel from
-    # `slack_channel`, which is where alerts are POSTED. Polling the channel
-    # ALMa writes to would re-ingest its own notifications as captures. Empty
-    # = capture off. See docs/concepts/inbox.md.
+    # Inbox capture (INBOUND) — a separate FIELD from `slack_channel`
+    # (outbound alerts) because they are opposite directions. They MAY point at
+    # the same channel: the poller skips messages with a `bot_id`, so ALMa never
+    # re-reads its own alerts. A dedicated channel is just cleaner. Empty =
+    # capture off. See docs/concepts/inbox.md.
     slack_inbox_channel: str | None = Field(
         None,
         description=(

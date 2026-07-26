@@ -20,9 +20,13 @@ which can read your entire Slack — a much broader credential for a personal
 tool. A private channel the bot is invited to costs one habit change and keeps
 the token narrow.
 
-Required bot scopes, on top of the `chat:write` alerts already use:
-``groups:history`` + ``groups:read`` (private channel) or ``channels:history`` +
-``channels:read`` (public), and ``reactions:write`` for the receipt.
+Required bot scopes, on top of the ``chat:write`` alerts already use:
+``groups:history`` (private channel) or ``channels:history`` (public),
+``reactions:write`` for the receipt, and BOTH ``channels:read`` +
+``groups:read`` — :meth:`SlackNotifier.resolve_channel_id` lists
+``types="public_channel,private_channel"`` in one call, so Slack rejects it with
+``missing_scope`` unless both are granted. Passing a channel ID (``C…``) instead
+of a name skips the listing and needs neither.
 """
 
 from __future__ import annotations
@@ -37,9 +41,13 @@ logger = logging.getLogger(__name__)
 CHANNEL_NAME = "slack"
 
 #: Settings key holding the channel to poll (name or Slack ID). Capture stays
-#: OFF until this is set — deliberately separate from `slack_channel`, which is
-#: where alerts are POSTED. Reading your alert channel back in would re-ingest
-#: ALMa's own notifications.
+#: OFF until this is set.
+#:
+#: A separate key from `slack_channel` (where alerts are POSTED) because they
+#: are opposite directions — NOT because they must differ. `fetch()` skips any
+#: message carrying a `bot_id`, so ALMa can never re-read its own alerts even
+#: when both point at one channel. A dedicated capture channel is still the
+#: better default: digests are frequent and would bury the links you send.
 SETTING_INBOX_CHANNEL = "slack_inbox_channel"
 
 #: Emoji receipt per outcome. The point of the reaction is that the loop closes

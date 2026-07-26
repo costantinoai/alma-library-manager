@@ -168,12 +168,14 @@ export function ChannelsCard({ formData, onFormDataChange }: ChannelsCardProps) 
             name="slack_channel"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Default Slack Channel</FormLabel>
+                <FormLabel>Send alerts to</FormLabel>
                 <FormControl>
                   <Input placeholder="#publications" {...field} />
                 </FormControl>
                 <FormDescription>
-                  Channel where publication notifications will be posted.
+                  <strong>Outgoing.</strong> ALMa posts new-paper digests here.
+                  Accepts a channel name, a person&apos;s display name (delivers
+                  a DM), or a Slack ID.
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -185,18 +187,21 @@ export function ChannelsCard({ formData, onFormDataChange }: ChannelsCardProps) 
             name="slack_inbox_channel"
             render={({ field }) => (
               <FormItem>
-                <FormLabel>Capture channel (Inbox)</FormLabel>
+                <FormLabel>Capture papers from</FormLabel>
                 <FormControl>
                   <Input placeholder="alma-inbox" {...field} />
                 </FormControl>
                 <FormDescription>
-                  A private channel ALMa <strong>reads</strong>: send a paper
-                  link here from your phone and it lands in your Inbox on Home.
-                  Invite the bot, and add the <code>groups:history</code>,{' '}
-                  <code>groups:read</code> and <code>reactions:write</code>{' '}
-                  scopes. Keep it separate from the channel above — polling the
-                  one ALMa posts to would re-read its own notifications. Leave
-                  empty to turn capture off.
+                  <strong>Incoming.</strong> Post a paper link in this channel
+                  from your phone and it lands in your Inbox on Home. Invite the
+                  bot to the channel first, and grant{' '}
+                  <code>channels:read</code>, <code>groups:read</code>,{' '}
+                  <code>groups:history</code> and <code>reactions:write</code>.
+                  Empty turns capture off.
+                  <br />
+                  A dedicated channel works best — ALMa ignores its own posts, so
+                  reusing the alert channel is safe, but digests will bury the
+                  links you send.
                 </FormDescription>
                 <FormMessage />
               </FormItem>

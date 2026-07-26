@@ -74,8 +74,10 @@ Empty field = capture off.
 !!! note "Why this is separate from 'Default Slack Channel'"
     **Default Slack Channel** is where ALMa **posts** alerts *to*.
     **Capture channel** is what ALMa **reads** *from*.
-    They must be different: reading the channel it posts into would make ALMa
-    ingest its own alerts as if you had sent them.
+    They can be the same channel — the poller skips any message carrying a
+    `bot_id`, so ALMa never re-reads its own alerts. A dedicated capture channel
+    is still better: digests are long and frequent, and they bury the links you
+    send.
 
 ---
 
