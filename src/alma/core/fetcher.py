@@ -32,6 +32,7 @@ from alma.core.paper_groups import (
     resolve_paper_root_id,
 )
 from alma.core.paper_updates import fill_only_update_paper
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.core.utils import generate_paper_id
 
@@ -106,10 +107,10 @@ def _init_db(db_path: str) -> sqlite3.Connection:
         sqlite3.Connection: Open connection to the database.
     """
 
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn = sqlite3.connect(db_path, timeout=SQLITE_CONNECT_TIMEOUT_S)
     # Wait for the single SQLite writer rather than erroring instantly under
     # contention (mirrors alma.api.deps.open_db_connection).
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     conn.execute(
         """CREATE TABLE IF NOT EXISTS papers (
                 id TEXT PRIMARY KEY,

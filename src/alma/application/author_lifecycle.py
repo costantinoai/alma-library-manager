@@ -285,7 +285,7 @@ def soft_remove_author(
         except Exception:
             logger.debug("Audit log for soft-remove failed for %s", aid, exc_info=True)
 
-    run_after_gate_release(_audit)
+    run_after_gate_release(_audit, conn=db, label="soft_remove_author audit")
     return True
 
 

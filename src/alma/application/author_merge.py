@@ -813,7 +813,7 @@ def merge_author_profiles(
             except Exception as exc:
                 logger.debug("author hydration sweep skip after merge %s: %s", primary_id, exc)
 
-    run_after_gate_release(_post_commit)
+    run_after_gate_release(_post_commit, conn=db, label="author_merge post-commit")
     return summary
 
 

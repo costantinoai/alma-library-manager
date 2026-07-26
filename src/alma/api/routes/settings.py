@@ -62,6 +62,7 @@ from alma.core.secrets import (
     mask_secret,
     set_secret,
 )
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.openalex.http import get_client as get_openalex_client
 from alma.openalex.http import reset_client as reset_openalex_client
@@ -387,9 +388,9 @@ def export_data_snapshot():
 
     dump: dict[str, list[dict]] = {}
     try:
-        conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=30.0)
+        conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=30000")
+        apply_busy_timeout(conn)
         try:
             for table in data_tables:
                 try:
@@ -480,9 +481,9 @@ def update_settings(payload: SettingsModel):
         def _ensure_db(resolved_path: Path):
             try:
                 resolved_path.parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(str(resolved_path), timeout=30.0)
+                conn = sqlite3.connect(str(resolved_path), timeout=SQLITE_CONNECT_TIMEOUT_S)
                 try:
-                    conn.execute("PRAGMA busy_timeout=30000")
+                    apply_busy_timeout(conn)
                     conn.execute("SELECT 1").fetchone()
                 finally:
                     conn.close()

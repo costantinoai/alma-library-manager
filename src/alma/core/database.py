@@ -10,6 +10,8 @@ import os
 import shutil
 import sqlite3
 
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
+
 # Scholarly is optional (used only for Google Scholar backend). Avoid importing
 # it as a hard dependency at module import time to keep OpenAlex-only flows
 # working without the package installed.
@@ -21,7 +23,9 @@ except Exception:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 
-def connect_scholar_db(path: str, *, timeout: float = 30.0) -> sqlite3.Connection:
+def connect_scholar_db(
+    path: str, *, timeout: float = SQLITE_CONNECT_TIMEOUT_S
+) -> sqlite3.Connection:
     """Open a scholar.db connection FROM A PATH, with the app's row contract.
 
     The one factory for code that receives a database *path* instead of a live
@@ -38,7 +42,7 @@ def connect_scholar_db(path: str, *, timeout: float = 30.0) -> sqlite3.Connectio
     """
     conn = sqlite3.connect(path, timeout=timeout)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     return conn
 
 

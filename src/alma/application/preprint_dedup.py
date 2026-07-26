@@ -45,6 +45,7 @@ from alma.core.paper_groups import (
     resolve_paper_root_id,
 )
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.utils import normalize_title_key
 
 logger = logging.getLogger(__name__)
@@ -291,12 +292,12 @@ def run_preprint_dedup(
         except Exception:
             logger.debug("log_step failed on %s", step, exc_info=True)
 
-    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
+    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S)
     conn.row_factory = _sqlite3.Row
     # This runner merges/deletes rows; it must wait for the single SQLite
     # writer like every other lane instead of failing instantly on a lock.
     # Mirrors the contract in alma.api.deps.open_db_connection.
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -423,9 +424,9 @@ def run_duplicate_identity_collapse(
         except Exception:
             logger.debug("log_step failed on %s", step, exc_info=True)
 
-    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
+    conn = _sqlite3.connect(db_path, check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S)
     conn.row_factory = _sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")

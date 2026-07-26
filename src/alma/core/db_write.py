@@ -35,6 +35,19 @@ Usage::
 
     result = run_write_unit(db, _unit, label="follow_author")
 
+Side effects that write through a SECOND connection (job scheduling, Activity
+rows) need one of the two guards, because a second connection cannot take the
+write lock while this thread holds it:
+
+* :func:`run_after_gate_release` — caller side. Defers past the enclosing
+  unit's commit, or commits the caller's ungated transaction first. It takes
+  the caller's connection because **an open transaction, not the gate, is the
+  hazard** (2026-07-26 audit; see ``tasks/lessons.md``).
+* :func:`run_gated_or_deferred` — callee side, for a writer that owns its own
+  connection. Makes the writer queue on the gate instead of busy-polling
+  SQLite, so a call site that forgets the guard degrades to a wait, not a
+  dropped row.
+
 The unit function performs writes on an open connection and returns a
 value; ``run_write_unit`` wraps it in gate → rollback → BEGIN IMMEDIATE →
 unit → commit, retried via :func:`alma.core.db_retry.run_with_lock_retry`.
@@ -77,33 +90,109 @@ def gate_held_by_current_thread() -> bool:
     return bool(getattr(_GATE_STATE, "held", False))
 
 
-def run_after_gate_release(fn: Callable[[], None]) -> None:
-    """Run ``fn`` now — or, if this thread holds the writer gate, defer it
-    until the gate (and the SQLite write lock) is released.
-
-    Why this exists: job scheduling (``schedule_with_envelope`` →
-    ``find_active_job`` / ``set_job_status`` / ``add_job_log``) persists
-    Activity state through the scheduler's OWN connection. Called from
-    inside an open write transaction, that second connection blocks on the
-    very write lock the calling thread holds — a same-thread self-deadlock
-    that only "resolves" via busy-timeout failures (caught live 2026-06-05
-    via /health/threads: ``_upsert_single_paper`` scheduling a hydration
-    sweep from inside a gated works-upsert section). Wrapping the
-    scheduling call in this function keeps call sites unchanged while
-    moving the scheduler write to just after commit.
-
-    Errors from deferred callbacks are logged, never raised — they are
-    fire-and-forget side effects (job scheduling), and the write unit they
-    rode on has already committed.
-    """
-    if not gate_held_by_current_thread():
-        fn()
-        return
+def _defer(fn: Callable[[], None]) -> None:
+    """Queue ``fn`` on this thread's post-gate-release stack."""
     queue = getattr(_GATE_STATE, "deferred", None)
     if queue is None:
         queue = []
         _GATE_STATE.deferred = queue
     queue.append(fn)
+
+
+def run_after_gate_release(
+    fn: Callable[[], None],
+    *,
+    conn: sqlite3.Connection,
+    label: str = "deferred callback",
+) -> None:
+    """Run ``fn`` only once THIS thread's SQLite write lock is released.
+
+    ``fn`` is a side effect that writes through a **second connection** — job
+    scheduling (``schedule_with_envelope`` → ``find_active_job`` /
+    ``set_job_status`` / ``add_job_log``) persists Activity state on the
+    scheduler's own connection. A second connection cannot take the write lock
+    while this thread still holds it, so firing ``fn`` too early does not fail
+    fast: it busy-waits for the whole ``busy_timeout`` and then drops the row.
+
+    There are TWO ways this thread can be holding the write lock, and both are
+    checked here — the second one is why ``conn`` is a required argument:
+
+    1. **The process writer gate is held by this thread** — we are inside a
+       :func:`run_write_unit` / :func:`write_section`. Defer ``fn`` to the
+       drain that runs right after the unit commits. (Caught live 2026-06-05
+       via /health/threads: ``_upsert_single_paper`` scheduling a hydration
+       sweep from inside a gated works-upsert section.)
+    2. **An open transaction on the caller's own connection**, with no gate
+       held. A writer that bypasses the gate — a legacy standalone helper, the
+       importer's ``_create_library_paper`` path, a route writing straight on
+       its request connection — leaves the gate FREE, so the gate check alone
+       says "safe to run now" while ``conn`` still owns the write lock. That is
+       the general form of the ``enqueue_pending_hydration`` defect
+       (2026-07-26): 5 s of busy-wait per Activity write, then a dropped row.
+       There is no commit hook to defer past in this case, and the staged rows
+       must be durable before the second connection acts on them anyway, so we
+       commit ``conn`` (with lock retry) and then run ``fn``.
+
+    The gate check comes first: inside a gated unit the enclosing unit owns the
+    commit, so we must never commit here (it would break the unit's atomicity
+    and downgrade its ``BEGIN IMMEDIATE`` — see :func:`commit_unless_gated`).
+
+    Args:
+        fn: fire-and-forget side effect that writes on another connection.
+        conn: the caller's connection — the one that may be holding the write
+            lock. Required: passing it is what makes case 2 detectable.
+        label: short description for commit-retry log lines.
+
+    Errors from deferred callbacks are logged, never raised — they are
+    fire-and-forget side effects, and the write unit they rode on has already
+    committed.
+    """
+    if gate_held_by_current_thread():
+        _defer(fn)
+        return
+    if conn.in_transaction:
+        # Ungated caller with staged, uncommitted writes. Close the window
+        # before the second connection needs the lock. (A caller that wants
+        # atomicity across the side effect should be using run_write_unit —
+        # then branch 1 handles it and nothing commits early.)
+        logger.debug(
+            "%s: committing the caller's ungated transaction before running a "
+            "second-connection side effect",
+            label,
+        )
+        commit_with_retry(conn, label=label)
+    fn()
+
+
+def run_gated_or_deferred(fn: Callable[[], None], *, label: str) -> None:
+    """Run ``fn`` — a self-contained write on its OWN connection — under the
+    process writer gate, or defer it if this thread already holds the gate.
+
+    The counterpart to :func:`run_after_gate_release` for the *callee* side.
+    ``run_after_gate_release`` fixes call sites one by one; this fixes the
+    writer itself, so a site that forgets the wrapper still queues instead of
+    busy-polling.
+
+    Used by the scheduler's Activity persistence (``operation_status`` /
+    ``operation_logs``). Those writes used to bypass the gate deliberately
+    (task-29 §8.2) and rely on ``BEGIN IMMEDIATE`` + ``busy_timeout`` to
+    serialize. That is a *busy-poll*, not a queue: when another writer held the
+    lock for longer than the timeout the row was silently dropped, and when the
+    holder was THIS thread it could never be released in time at all. Routing
+    through the same gate makes the wait cooperative and bounded by the actual
+    holder, and makes the self-hold case (defer) structurally impossible to
+    deadlock.
+
+    ``fn`` must open and commit its own connection and must not touch the
+    caller's — the gate serializes writers, it does not share transactions.
+    """
+    if gate_held_by_current_thread():
+        # Writing a second connection now would deadlock against the write
+        # lock this thread holds. The drain fires right after the commit.
+        _defer(fn)
+        return
+    with _writer_gate(label):
+        fn()
 
 
 def _drain_deferred() -> None:
@@ -116,6 +205,44 @@ def _drain_deferred() -> None:
             fn()
         except Exception:
             logger.warning("deferred post-gate callback failed", exc_info=True)
+
+
+# Gate waits longer than this are logged so sustained contention shows up
+# in the server log instead of presenting as intermittent mystery latency.
+_GATE_WAIT_LOG_THRESHOLD_S = 0.25
+
+
+@contextmanager
+def _writer_gate(label: str) -> Iterator[None]:
+    """Hold the process writer gate for the duration of the block.
+
+    The one place the gate is acquired: marks the thread as holder (so nested
+    helpers can detect it), clears deferred side effects if the block failed
+    (their write rolled back, so scheduling a job for rows that no longer exist
+    would be wrong), and drains them once the gate — and with it the SQLite
+    write lock — is released.
+    """
+    waited_from = time.monotonic()
+    try:
+        with _WRITER_GATE:
+            waited = time.monotonic() - waited_from
+            if waited > _GATE_WAIT_LOG_THRESHOLD_S:
+                logger.warning(
+                    "%s waited %.0fms for the writer gate — sustained waits mean "
+                    "a long write unit upstream (check background runner batches)",
+                    label,
+                    waited * 1000,
+                )
+            _GATE_STATE.held = True
+            try:
+                yield
+            finally:
+                _GATE_STATE.held = False
+    except BaseException:
+        _GATE_STATE.deferred = []
+        raise
+    _drain_deferred()
+
 
 def commit_unless_gated(conn: sqlite3.Connection, *, label: str = "db write") -> None:
     """Caller-owns-transaction commit for SHARED write helpers.
@@ -158,11 +285,6 @@ def commit_unless_gated(conn: sqlite3.Connection, *, label: str = "db write") ->
         )
         return
     commit_with_retry(conn, label=label)
-
-
-# Gate waits longer than this are logged so sustained contention shows up
-# in the server log instead of presenting as intermittent mystery latency.
-_GATE_WAIT_LOG_THRESHOLD_S = 0.25
 
 
 def run_write_unit(
@@ -211,32 +333,13 @@ def run_write_unit(
             conn.rollback()
             raise
 
-    waited_from = time.monotonic()
-    try:
-        with _WRITER_GATE:
-            waited = time.monotonic() - waited_from
-            if waited > _GATE_WAIT_LOG_THRESHOLD_S:
-                logger.warning(
-                    "%s waited %.0fms for the writer gate — sustained waits mean "
-                    "a long write unit upstream (check background runner batches)",
-                    label,
-                    waited * 1000,
-                )
-            _GATE_STATE.held = True
-            try:
-                result = run_with_lock_retry(
-                    _transaction, attempts=attempts, base_delay=base_delay, label=label
-                )
-            finally:
-                _GATE_STATE.held = False
-    except BaseException:
-        # The unit failed and rolled back — its deferred side effects
-        # (job scheduling for rows that no longer exist) must not fire.
-        _GATE_STATE.deferred = []
-        raise
-    # Deferred side effects (job scheduling etc.) run with the gate and the
-    # SQLite write lock both released — see run_after_gate_release.
-    _drain_deferred()
+    # `_writer_gate` owns the gate, the holder flag, and the deferred-callback
+    # lifecycle: side effects fire only after commit + release, and are dropped
+    # if the unit rolled back. See run_after_gate_release.
+    with _writer_gate(label):
+        result = run_with_lock_retry(
+            _transaction, attempts=attempts, base_delay=base_delay, label=label
+        )
     return result
 
 
@@ -273,33 +376,12 @@ def write_section(
     holds both the gate and the SQLite write lock across the slow work,
     which is precisely the starvation this module exists to prevent.
     """
-    waited_from = time.monotonic()
-    try:
-        with _WRITER_GATE:
-            waited = time.monotonic() - waited_from
-            if waited > _GATE_WAIT_LOG_THRESHOLD_S:
-                logger.warning(
-                    "%s waited %.0fms for the writer gate — sustained waits mean "
-                    "a long write unit upstream (check background runner batches)",
-                    label,
-                    waited * 1000,
-                )
-            _GATE_STATE.held = True
-            try:
-                conn.rollback()
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    yield conn
-                    conn.commit()
-                except BaseException:
-                    conn.rollback()
-                    raise
-            finally:
-                _GATE_STATE.held = False
-    except BaseException:
-        # Section failed and rolled back — drop its deferred side effects.
-        _GATE_STATE.deferred = []
-        raise
-    # Job scheduling etc. deferred from inside the section runs only now,
-    # with the gate and the SQLite write lock released.
-    _drain_deferred()
+    with _writer_gate(label):
+        conn.rollback()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise

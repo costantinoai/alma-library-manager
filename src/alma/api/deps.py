@@ -34,6 +34,7 @@ from alma.config import (
     get_db_path,
 )
 from alma.core.migrations import apply_pending_migrations, stamp_schema_version
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.discovery.defaults import DISCOVERY_SETTINGS_DEFAULTS
 from alma.plugins.registry import PluginRegistry, get_global_registry
 
@@ -297,7 +298,7 @@ def init_db_schema() -> None:
             # `PRAGMA incremental_vacuum` daily to release freed pages.
             conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=30000")
+            apply_busy_timeout(conn)
             conn.execute("PRAGMA foreign_keys=ON")
 
             # Versioned migrations bring any pre-existing older DB to the
@@ -1459,10 +1460,10 @@ def open_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(
         _db_path(),
         check_same_thread=False,
-        timeout=30.0,
+        timeout=SQLITE_CONNECT_TIMEOUT_S,
     )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()
     resolved = (mode[0] if mode else "") or ""
     if resolved.lower() != "wal":

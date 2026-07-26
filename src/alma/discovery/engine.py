@@ -41,6 +41,7 @@ from alma.core.paper_groups import (
 )
 from alma.core.paper_updates import fill_only_update_paper
 from alma.core.sql_helpers import standalone_paper_sql
+from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 from alma.core.time import utcnow
 from alma.core.utils import candidate_dedup_key, normalize_doi, resolve_existing_paper_id
 from alma.discovery import openalex_related
@@ -60,9 +61,9 @@ DEFAULTS: dict[str, str] = dict(DISCOVERY_SETTINGS_DEFAULTS)
 
 def connect(db_path: str) -> sqlite3.Connection:
     """Open a SQLite connection with row-factory enabled."""
-    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
+    conn = sqlite3.connect(db_path, check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=30000")
+    apply_busy_timeout(conn)
     # Re-assert WAL (persisted in the header, but cheap to confirm) so this
     # lane matches the canonical contract in alma.api.deps.open_db_connection
     # and never silently runs against a rollback-journal DB.

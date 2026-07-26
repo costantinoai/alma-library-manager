@@ -778,31 +778,21 @@ def add_to_library(
         (*params, paper_id),
     )
     if cursor.rowcount > 0 and _needs_enrichment(db, paper_id):
-        from alma.core.db_write import (
-            commit_unless_gated,
-            gate_held_by_current_thread,
-            run_after_gate_release,
-        )
+        from alma.core.db_write import run_after_gate_release
 
-        if gate_held_by_current_thread():
-            # Called inside a `run_write_unit`: committing here would break
-            # the caller's atomic write unit, and scheduling through the
-            # scheduler's OWN connection while we hold the writer lock is a
-            # same-thread self-deadlock (SQLite write discipline rule #3).
-            # Defer the scheduling to post-commit, when the row is durable
-            # and the writer gate is released. Same shape as
-            # `enqueue_pending_hydration`.
-            run_after_gate_release(
-                lambda pid=paper_id: _schedule_paper_enrichment(pid)
-            )
-        else:
-            # Legacy non-unit caller (feed accept / discovery lens save /
-            # importer): keep the commit-then-schedule contract so the
-            # enrichment job's independent connection sees the latest row.
-            # commit_unless_gated takes the standalone (retried) path here
-            # since the gate is not held.
-            commit_unless_gated(db, label="add_to_library")
-            _schedule_paper_enrichment(paper_id)
+        # Both cases the hand-rolled branch used to cover are now the
+        # primitive's job: inside a `run_write_unit` the scheduling defers past
+        # the commit (scheduling through the scheduler's OWN connection while
+        # we hold the writer lock is a same-thread self-deadlock — SQLite write
+        # discipline rule #3); on a legacy non-unit caller (feed accept /
+        # discovery lens save / importer) it commits `db` first, keeping the
+        # commit-then-schedule contract so the enrichment job's independent
+        # connection sees the latest row.
+        run_after_gate_release(
+            lambda pid=paper_id: _schedule_paper_enrichment(pid),
+            conn=db,
+            label="add_to_library",
+        )
     return cursor.rowcount > 0
 
 

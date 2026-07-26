@@ -3369,5 +3369,15 @@ def enqueue_pending_hydration(
             except Exception as exc:
                 logger.debug("auto schedule_pending_hydration_sweep skipped: %s", exc)
 
-        run_after_gate_release(_schedule)
+        # The ledger INSERTs above are STILL UNCOMMITTED on `conn`. Handing the
+        # connection to `run_after_gate_release` is what makes that safe: inside
+        # a gated unit it defers `_schedule` past the commit; on the importer's
+        # standalone `_create_library_paper` path (no gate held, open implicit
+        # txn) it commits `conn` first, so the write lock is free before the
+        # envelope's Activity write needs it on the scheduler's own connection.
+        # Without that, `_schedule` fired against our uncommitted rows, blocked
+        # until `busy_timeout` expired, logged "database is locked" and DROPPED
+        # the row — every Activity write in the ensuing sweep paid the same 5 s,
+        # which is why `test_importer_create_paper_parity` took ~310 s.
+        run_after_gate_release(_schedule, conn=conn, label="enqueue_pending_hydration")
     return queued

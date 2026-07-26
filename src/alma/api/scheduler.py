@@ -174,15 +174,22 @@ def kill_job_thread(job_id: str) -> bool:
 def _activity_conn() -> sqlite3.Connection:
     """Open a connection to the unified DB for durable activity persistence."""
     from alma.config import get_db_path
+    from alma.core.sqlite_config import SQLITE_CONNECT_TIMEOUT_S, apply_busy_timeout
 
     # Activity status/log writes are lightweight but must not vanish under
-    # write contention: a 250ms timeout (the old value) dropped job-status
+    # write contention: a 250ms timeout (the original value) dropped job-status
     # rows whenever a foreground transaction held the writer, leaving stuck
-    # "in progress" pills AND emitting "database is locked" log noise. 5s is
-    # still short enough to stay responsive but rides out a normal burst.
-    conn = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=5.0)
+    # "in progress" pills AND emitting "database is locked" log noise. The
+    # replacement 5 s was the same bug with a longer fuse — it still expired,
+    # and still dropped the row (measured 2026-07-26: 5 s per Activity write
+    # behind an ungated open transaction). Intra-process contention is now
+    # handled by the writer gate in `_run_activity_write`, so this timeout is
+    # only the cross-process belt and takes the one canonical value.
+    conn = sqlite3.connect(
+        str(get_db_path()), check_same_thread=False, timeout=SQLITE_CONNECT_TIMEOUT_S
+    )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
+    apply_busy_timeout(conn)
     # BEGIN IMMEDIATE for every Activity WRITE (task-29 §8.2 "Activity writes
     # bypass the writer gate"). Activity status/log persistence used the default
     # DEFERRED transaction: under WAL a DEFERRED txn starts as a reader and, if
@@ -196,6 +203,73 @@ def _activity_conn() -> sqlite3.Connection:
     # read-only use never takes the write lock.
     conn.isolation_level = "IMMEDIATE"
     return conn
+
+
+# An Activity write that already holds the writer gate should be sub-millisecond.
+# Anything past this means an ungated connection holds the write lock.
+_ACTIVITY_WRITE_STALL_S = 0.5
+
+
+def _run_activity_write(
+    unit: Callable[[sqlite3.Connection], None], *, label: str
+) -> None:
+    """Run one Activity (`operation_status` / `operation_logs`) write under the
+    process writer gate.
+
+    Activity writes deliberately bypassed the gate (task-29 §8.2) and relied on
+    ``BEGIN IMMEDIATE`` + ``busy_timeout`` to serialize against the rest of the
+    app. That is a busy-poll, not a queue, and it has two failure modes the
+    owner's "the database should NEVER be locked" requirement rules out:
+
+    * another thread holds the write lock for longer than ``busy_timeout`` →
+      the row is dropped and only a DEBUG line records it;
+    * **this** thread holds it (we are inside a write unit) → the lock can
+      never be released in time, so the wait is guaranteed to be wasted.
+
+    :func:`alma.core.db_write.run_gated_or_deferred` fixes both: the wait
+    becomes a cooperative queue bounded by the actual holder, and the
+    self-hold case defers to just after the holder's commit instead of
+    deadlocking against itself.
+
+    Failures are still swallowed — an audit line must never fail a user action
+    — but at WARNING, not DEBUG. A lost Activity row is a defect to be seen
+    (CLAUDE.md: "no silent failures"), and after this change it should not
+    happen at all.
+    """
+    from alma.core.db_write import run_gated_or_deferred
+
+    def _write() -> None:
+        started = time.monotonic()
+        try:
+            conn = _activity_conn()
+            try:
+                unit(conn)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("Activity write dropped (%s)", label, exc_info=True)
+            return
+        # The gate already serialized us against every writer that respects it,
+        # and the gate's own wait is logged separately. So a slow write here
+        # means the lock is held by a connection OUTSIDE the gate — the residual
+        # form of the hazard in `run_after_gate_release`: some caller on this
+        # process has an open, ungated transaction. There is no way to detect
+        # the offending connection from here (sqlite3.Connection is not
+        # weak-referenceable, so a registry would leak), so surface the symptom
+        # loudly instead of letting it read as mystery latency.
+        elapsed = time.monotonic() - started
+        if elapsed > _ACTIVITY_WRITE_STALL_S:
+            logger.warning(
+                "Activity write (%s) took %.0fms despite holding the writer gate — "
+                "another connection is holding the SQLite write lock outside the "
+                "gate. See tasks/lessons.md → 'The write-lock hazard is the OPEN "
+                "TRANSACTION, not the gate'.",
+                label,
+                elapsed * 1000,
+            )
+
+    run_gated_or_deferred(_write, label=f"activity:{label}")
 
 
 def _json_dumps_safe(value: object) -> str:
@@ -272,82 +346,73 @@ def _persist_job_status(job_id: str, status: dict) -> None:
     metadata_json = _json_dumps_safe(metadata) if metadata else None
     cancel_requested = 1 if status.get("cancel_requested") else 0
 
-    try:
-        conn = _activity_conn()
-        try:
-            conn.execute(
-                """
-                INSERT INTO operation_status (
-                    job_id, status, message, error, started_at, finished_at, updated_at,
-                    processed, total, current_author, operation_key, trigger_source,
-                    cancel_requested, result_json, metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(job_id) DO UPDATE SET
-                    status = excluded.status,
-                    message = excluded.message,
-                    error = excluded.error,
-                    started_at = COALESCE(operation_status.started_at, excluded.started_at),
-                    finished_at = excluded.finished_at,
-                    updated_at = excluded.updated_at,
-                    processed = excluded.processed,
-                    total = excluded.total,
-                    current_author = excluded.current_author,
-                    operation_key = COALESCE(excluded.operation_key, operation_status.operation_key),
-                    trigger_source = COALESCE(excluded.trigger_source, operation_status.trigger_source),
-                    cancel_requested = excluded.cancel_requested,
-                    result_json = excluded.result_json,
-                    metadata_json = excluded.metadata_json
-                """,
-                (
-                    job_id,
-                    str(status.get("status") or ""),
-                    status.get("message"),
-                    status.get("error"),
-                    status.get("started_at"),
-                    status.get("finished_at"),
-                    status.get("updated_at") or utcnow().isoformat(),
-                    status.get("processed"),
-                    status.get("total"),
-                    status.get("current_author"),
-                    status.get("operation_key"),
-                    status.get("trigger_source"),
-                    cancel_requested,
-                    result_json,
-                    metadata_json,
-                ),
+    def _write(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT INTO operation_status (
+                job_id, status, message, error, started_at, finished_at, updated_at,
+                processed, total, current_author, operation_key, trigger_source,
+                cancel_requested, result_json, metadata_json
             )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.debug("Could not persist operation status for %s: %s", job_id, exc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                status = excluded.status,
+                message = excluded.message,
+                error = excluded.error,
+                started_at = COALESCE(operation_status.started_at, excluded.started_at),
+                finished_at = excluded.finished_at,
+                updated_at = excluded.updated_at,
+                processed = excluded.processed,
+                total = excluded.total,
+                current_author = excluded.current_author,
+                operation_key = COALESCE(excluded.operation_key, operation_status.operation_key),
+                trigger_source = COALESCE(excluded.trigger_source, operation_status.trigger_source),
+                cancel_requested = excluded.cancel_requested,
+                result_json = excluded.result_json,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                job_id,
+                str(status.get("status") or ""),
+                status.get("message"),
+                status.get("error"),
+                status.get("started_at"),
+                status.get("finished_at"),
+                status.get("updated_at") or utcnow().isoformat(),
+                status.get("processed"),
+                status.get("total"),
+                status.get("current_author"),
+                status.get("operation_key"),
+                status.get("trigger_source"),
+                cancel_requested,
+                result_json,
+                metadata_json,
+            ),
+        )
+
+    _run_activity_write(_write, label=f"operation_status {job_id}")
 
 
 def _persist_job_log(entry: dict) -> None:
     """Persist one operation log row into operation_logs."""
-    try:
-        conn = _activity_conn()
-        try:
-            conn.execute(
-                """
-                INSERT INTO operation_logs (job_id, timestamp, level, step, message, data_json)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    entry.get("job_id"),
-                    entry.get("timestamp") or utcnow().isoformat(),
-                    entry.get("level") or "INFO",
-                    entry.get("step"),
-                    entry.get("message") or "",
-                    _json_dumps_safe(entry.get("data") or {}),
-                ),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as exc:
-        logger.debug("Could not persist operation log for %s: %s", entry.get("job_id"), exc)
+
+    def _write(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT INTO operation_logs (job_id, timestamp, level, step, message, data_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry.get("job_id"),
+                entry.get("timestamp") or utcnow().isoformat(),
+                entry.get("level") or "INFO",
+                entry.get("step"),
+                entry.get("message") or "",
+                _json_dumps_safe(entry.get("data") or {}),
+            ),
+        )
+
+    _run_activity_write(_write, label=f"operation_logs {entry.get('job_id')}")
 
 
 def _row_to_status(row: sqlite3.Row) -> dict:
@@ -580,17 +645,19 @@ def _load_job_logs_page_from_db(
 
 
 def _dismiss_job_from_db(job_id: str) -> bool:
-    try:
-        conn = _activity_conn()
-        try:
-            c1 = conn.execute("DELETE FROM operation_status WHERE job_id = ?", (job_id,))
-            c2 = conn.execute("DELETE FROM operation_logs WHERE job_id = ?", (job_id,))
-            conn.commit()
-            return (c1.rowcount or 0) > 0 or (c2.rowcount or 0) > 0
-        finally:
-            conn.close()
-    except Exception:
-        return False
+    deleted = False
+
+    def _write(conn: sqlite3.Connection) -> None:
+        nonlocal deleted
+        c1 = conn.execute("DELETE FROM operation_status WHERE job_id = ?", (job_id,))
+        c2 = conn.execute("DELETE FROM operation_logs WHERE job_id = ?", (job_id,))
+        deleted = (c1.rowcount or 0) > 0 or (c2.rowcount or 0) > 0
+
+    # Dismiss is a foreground user action, never called from inside a write
+    # unit, so `_run_activity_write` runs it inline under the gate and
+    # `deleted` is set by the time we read it.
+    _run_activity_write(_write, label=f"dismiss {job_id}")
+    return deleted
 
 # ---------------------------------------------------------------------------
 # Environment configuration helpers
@@ -1009,7 +1076,7 @@ def _reap_closure(job: dict) -> tuple[str, str, int]:
     return (_ORPHAN_REAP_MESSAGE, _ORPHAN_REAP_ERROR, 0)
 
 
-def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
+def _reap_orphan_jobs_now(stale_after_seconds: int = 300) -> int:
     """Mark jobs abandoned across a process restart as ``cancelled``.
 
     Worker threads do not survive a backend restart, so any ``operation_status``
@@ -1127,6 +1194,31 @@ def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
     except Exception as exc:
         logger.debug("Orphan job sweep failed: %s", exc)
         return 0
+
+
+def reap_orphan_jobs(stale_after_seconds: int = 300) -> int:
+    """Gated wrapper around the orphan sweep — see `_reap_orphan_jobs_now`.
+
+    The sweep reads `operation_status` and then UPDATEs it on its own
+    connection, so it is a writer like any other and must queue on the process
+    writer gate rather than race the write lock via `busy_timeout`.
+
+    When this thread already holds the gate (the sweep is reachable from
+    `find_active_job`, which the scheduling path calls) the write is deferred
+    past the caller's commit and this call reports 0 — honest, since nothing
+    has been reaped *yet*. Callers use the count for logging only, and the
+    sweep is idempotent: the next call closes whatever is still stale.
+    """
+    reaped = 0
+
+    def _sweep() -> None:
+        nonlocal reaped
+        reaped = _reap_orphan_jobs_now(stale_after_seconds)
+
+    from alma.core.db_write import run_gated_or_deferred
+
+    run_gated_or_deferred(_sweep, label="reap_orphan_jobs")
+    return reaped
 
 
 def setup_scheduler() -> None:
