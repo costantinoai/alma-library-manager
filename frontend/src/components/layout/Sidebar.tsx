@@ -43,12 +43,15 @@ interface NavGroup {
   items: NavItem[]
 }
 
+// Home is the landing page — the desk every group is read FROM, not one
+// surface among the Explore siblings. It sits above the grouped nav, outside
+// any section, so "go back to the desk" is always the first row.
+const homeItem: NavItem = { id: 'home', label: 'Home', icon: House }
+
 const navGroups: NavGroup[] = [
   {
     label: 'Explore',
     items: [
-      // Home is the landing page: what arrived, what needs you.
-      { id: 'home', label: 'Home', icon: House },
       { id: 'feed', label: 'Feed', icon: Newspaper },
       { id: 'discovery', label: 'Discovery', icon: Sparkles },
       // Task 50 M3 (50-A): the corpus map is a first-class Explore surface.
@@ -73,6 +76,62 @@ const navGroups: NavGroup[] = [
     ],
   },
 ]
+
+interface NavRowProps {
+  item: NavItem
+  isActive: boolean
+  badge: number
+  collapsed: boolean
+  onActivate: (page: Page) => void
+  onPrefetch?: (page: Page) => void
+}
+
+/** One navigation row. Shared by the ungrouped Home row and every group item
+ *  so the two can never drift in chrome, badge, or active treatment. */
+function NavRow({ item, isActive, badge, collapsed, onActivate, onPrefetch }: NavRowProps) {
+  return (
+    <button
+      onPointerEnter={() => onPrefetch?.(item.id)}
+      onFocus={() => onPrefetch?.(item.id)}
+      onClick={() => onActivate(item.id)}
+      title={collapsed ? item.label : undefined}
+      aria-label={collapsed ? item.label : undefined}
+      className={cn(
+        // Base row sits on the cardstock cover. Hover lifts a faint white
+        // tint (cardstock catching light); active state uses a Folio-blue
+        // overlay so the cardstock fibre reads through the tint, and a 3px
+        // Folio-blue ribbon on the left echoes the bookmark in the mark.
+        'group relative flex w-full items-center rounded-sm py-2.5 text-sm font-medium transition-colors',
+        collapsed ? 'lg:justify-center lg:gap-0 lg:px-2 gap-3 px-3' : 'gap-3 px-3',
+        isActive
+          ? 'bg-[rgb(30_91_134_/_0.32)] text-alma-cream'
+          : 'text-alma-200 hover:bg-surface-4/[0.04] hover:text-alma-cream',
+      )}
+    >
+      {isActive && (
+        <span
+          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-alma-folio"
+          aria-hidden
+        />
+      )}
+      <item.icon className="h-5 w-5 shrink-0" />
+      <span className={cn(collapsed && 'lg:hidden')}>{item.label}</span>
+      {badge > 0 && !collapsed && (
+        <span className="ml-auto rounded-full bg-alma-folio px-1.5 py-0.5 text-[10px] font-medium text-alma-cream">
+          {badge}
+        </span>
+      )}
+      {badge > 0 && collapsed && (
+        // Collapsed: badge becomes a tiny dot top-right of the icon so the
+        // count cue isn't lost.
+        <span
+          className="absolute right-1.5 top-1.5 hidden h-1.5 w-1.5 rounded-full bg-alma-folio lg:block"
+          aria-label={`${badge} new papers`}
+        />
+      )}
+    </button>
+  )
+}
 
 interface SidebarProps {
   currentPage: Page
@@ -104,6 +163,12 @@ export function Sidebar({
     staleTime: 60_000,
     refetchInterval: 300_000,
   })
+
+  // Navigating always closes the mobile drawer — one behaviour for every row.
+  const handleActivate = (page: Page) => {
+    onNavigate(page)
+    onClose()
+  }
 
   return (
     <>
@@ -190,6 +255,18 @@ export function Sidebar({
 
         {/* Navigation */}
         <nav className={cn('flex-1 overflow-y-auto py-4 transition-[padding] duration-200', collapsed ? 'px-2 lg:px-2' : 'px-3')}>
+          {/* Ungrouped landing row, separated from the groups by the same
+              inner-binding hairline the footer uses. */}
+          <div className="mb-4 space-y-1 border-b border-alma-700/70 pb-4">
+            <NavRow
+              item={homeItem}
+              isActive={currentPage === homeItem.id}
+              badge={bootstrap ? getNavBadgeCount(homeItem.id, bootstrap) : 0}
+              collapsed={collapsed}
+              onActivate={handleActivate}
+              onPrefetch={onPrefetch}
+            />
+          </div>
           <div className="space-y-5">
             {navGroups.map((group) => (
               <div key={group.label} className="space-y-1">
@@ -199,58 +276,17 @@ export function Sidebar({
                 >
                   {group.label}
                 </EyebrowLabel>
-                {group.items.map((item) => {
-                  const isActive = currentPage === item.id
-                  const badge = bootstrap ? getNavBadgeCount(item.id, bootstrap) : 0
-                  return (
-                    <button
-                      key={item.id}
-                      onPointerEnter={() => onPrefetch?.(item.id)}
-                      onFocus={() => onPrefetch?.(item.id)}
-                      onClick={() => {
-                        onNavigate(item.id)
-                        onClose()
-                      }}
-                      title={collapsed ? item.label : undefined}
-                      aria-label={collapsed ? item.label : undefined}
-                      className={cn(
-                        // Base row sits on the cardstock cover. Hover
-                        // lifts a faint white tint (cardstock catching
-                        // light); active state uses a Folio-blue overlay so
-                        // the cardstock fibre reads through the tint,
-                        // and a 3px Folio-blue ribbon on the left echoes
-                        // the bookmark in the ALMa mark itself.
-                        'group relative flex w-full items-center rounded-sm py-2.5 text-sm font-medium transition-colors',
-                        collapsed ? 'lg:justify-center lg:gap-0 lg:px-2 gap-3 px-3' : 'gap-3 px-3',
-                        isActive
-                          ? 'bg-[rgb(30_91_134_/_0.32)] text-alma-cream'
-                          : 'text-alma-200 hover:bg-surface-4/[0.04] hover:text-alma-cream',
-                      )}
-                    >
-                      {isActive && (
-                        <span
-                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-alma-folio"
-                          aria-hidden
-                        />
-                      )}
-                      <item.icon className="h-5 w-5 shrink-0" />
-                      <span className={cn(collapsed && 'lg:hidden')}>{item.label}</span>
-                      {badge > 0 && !collapsed && (
-                        <span className="ml-auto rounded-full bg-alma-folio px-1.5 py-0.5 text-[10px] font-medium text-alma-cream">
-                          {badge}
-                        </span>
-                      )}
-                      {badge > 0 && collapsed && (
-                        // Collapsed: badge becomes a tiny dot top-right of
-                        // the icon so the count cue isn't lost.
-                        <span
-                          className="absolute right-1.5 top-1.5 hidden h-1.5 w-1.5 rounded-full bg-alma-folio lg:block"
-                          aria-label={`${badge} new papers`}
-                        />
-                      )}
-                    </button>
-                  )
-                })}
+                {group.items.map((item) => (
+                  <NavRow
+                    key={item.id}
+                    item={item}
+                    isActive={currentPage === item.id}
+                    badge={bootstrap ? getNavBadgeCount(item.id, bootstrap) : 0}
+                    collapsed={collapsed}
+                    onActivate={handleActivate}
+                    onPrefetch={onPrefetch}
+                  />
+                ))}
               </div>
             ))}
           </div>

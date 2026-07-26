@@ -103,7 +103,7 @@ and rendering.
 
 ```bash
 cd frontend
-npx tsc --noEmit
+npm run typecheck
 ```
 
 Strict mode, no errors expected. Run after any change to
@@ -126,7 +126,7 @@ Catches Vite-level errors (missing imports, broken aliases) that
 | **Unit** | pytest / Vitest | Pure-function logic. Fast, isolated. |
 | **Integration** | pytest + `client`/`db` fixture | Route + DB + side effects. Most ALMa tests live here. |
 | **Live load** | Activity → Operations UI | Perf budgets, interaction patterns, shape verification — driven against a running instance. |
-| **Type check** | `npx tsc --noEmit` | After any frontend change. |
+| **Type check** | `npm run typecheck` | After any frontend change. Bare `tsc --noEmit` checks nothing — `tsconfig.json` is references-only. |
 
 ## Conventions
 

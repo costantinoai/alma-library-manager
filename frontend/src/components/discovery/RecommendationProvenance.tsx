@@ -24,7 +24,7 @@ export interface ProvenanceSignals {
   sharedAuthorsCount?: number | null
   sharedAuthorsSample?: string | null
   /** True when the candidate's embedding landed close to a
-   *  dismissed / disliked / removed seed. Rendered as a warning-tone
+   *  disliked / removed seed. Rendered as a warning-tone
    *  chip so the user can weigh the hit. */
   negativeHit?: number | null
   /** Normalised 0..1 final score — distinct from the 0-100 ScoreBar
@@ -36,9 +36,9 @@ export interface ProvenanceSignals {
    *  a "Suggested by N sources" chip when N ≥ 2. */
   consensusCount?: number | null
   /** Signed projected-feedback adjustment in [-1, 1]: net pull from
-   *  the user's saved / dismissed papers, their authors, topics,
+   *  the user's saved / disliked / removed papers, their authors, topics,
    *  venues, etc. Positive → "matches what you keep"; negative →
-   *  "near things you've dismissed". Rendered only when the
+   *  "near things you've rejected". Rendered only when the
    *  magnitude clears a small noise floor. */
   projectedFeedbackRaw?: number | null
   /** Citation fabric (task 47 §7). Number of references this candidate shares
@@ -128,7 +128,7 @@ function buildChips(signals: ProvenanceSignals): Chip[] {
   }
   // (Consensus chip moved to lead position above.)
   // Projected feedback: the signed pull from the user's per-paper
-  // history (saves / ratings / dismisses → authors / topics / venues
+  // history (saves / ratings / removals → authors / topics / venues
   // / keywords / tags / semantic + citation neighbours). Threshold of
   // 0.05 keeps the chip silent when the signal is essentially zero.
   if (

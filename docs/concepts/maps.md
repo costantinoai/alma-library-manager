@@ -45,7 +45,7 @@ The exact legend varies by host, but the channels do not:
 | Dashed halo | A secondary fact such as followed/new, never a replacement colour |
 | Colour | The selected grouping or score mode |
 | Size | The selected magnitude, such as citations or publication count |
-| Terrain | A smoothed live preference field from likes, loves, dislikes, saves, and dismissals |
+| Terrain | A smoothed live preference field from likes, loves, dislikes, saves, removals, and engine scores |
 
 Cluster words and place names share one collision-aware label pass. Advanced
 controls tune cluster detail, dot size, dot opacity, word size, and words per

@@ -89,7 +89,7 @@ fall-back.
 Monitors generate the **Feed** (chronological, deterministic). Saving
 from the Feed grows the **Library** (curated, organised). Discovery
 recommends papers adjacent to the Library (probabilistic, ranked).
-Every save, rating, dismissal, and tracked interaction strengthens the
+Every save, rating, removal, and tracked interaction strengthens the
 feedback loop that tunes Discovery over time. **Insights** projects the
 Library into charts and a clustered SPECTER2 graph. **Alerts** turns
 rules into Slack digests.

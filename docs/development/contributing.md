@@ -94,7 +94,7 @@ black --check .
 
 # frontend (if you touched it)
 cd frontend
-npx tsc --noEmit
+npm run typecheck
 npm run build
 cd ..
 ```

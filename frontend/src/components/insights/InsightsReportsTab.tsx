@@ -116,7 +116,7 @@ export function InsightsReportsTab({
     {
       // I-31: sample sizes behind the comparison, so a delta is read with its N.
       id: 'evidence',
-      header: 'n (liked/dism.)',
+      header: 'n (+ / −)',
       size: 120,
       enableSorting: false,
       meta: { cellOverflow: 'none' },
@@ -339,7 +339,7 @@ export function InsightsReportsTab({
           icon={ArrowUpDown}
           accent="text-warning-500"
           title="Signal Impact"
-          description="Which scoring signals differentiate liked from dismissed papers"
+          description="Which scoring signals differentiate positive from negative paper outcomes"
           action={
             <Button
               size="sm"

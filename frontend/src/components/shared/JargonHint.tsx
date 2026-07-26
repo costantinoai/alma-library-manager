@@ -15,6 +15,8 @@ interface JargonHintProps {
   side?: React.ComponentProps<typeof PopoverContent>['side']
   /** Popover alignment — defaults to start. */
   align?: React.ComponentProps<typeof PopoverContent>['align']
+  /** Override the trigger's aria-label when "Learn about X" doesn't read right. */
+  ariaLabel?: string
 }
 
 /**
@@ -24,13 +26,20 @@ interface JargonHintProps {
  * "Exploration Temperature" mean. Clicking anywhere outside the popover, or
  * pressing Escape, dismisses it — no manual overlay wiring.
  */
-export function JargonHint({ title, description, className, side = 'top', align = 'start' }: JargonHintProps) {
+export function JargonHint({
+  title,
+  description,
+  className,
+  side = 'top',
+  align = 'start',
+  ariaLabel,
+}: JargonHintProps) {
   return (
     <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={`Learn about ${title}`}
+          aria-label={ariaLabel ?? `Learn about ${title}`}
           className={cn(
             'inline-flex size-4 shrink-0 items-center justify-center rounded-full text-slate-400 transition-colors',
             'hover:bg-control-quiet hover:text-slate-600',

@@ -439,7 +439,7 @@ export function FrontierMap({
               ? 'border-accent-edge bg-accent-soft text-alma-folio'
               : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
           )}
-          title="Preference terrain — the space-owned signal field (all your ratings, saves, dismissals + engine scores) washed under the dots. Composes with any grouping; the same whatever layers are shown (view only)"
+          title="Preference terrain — the space-owned signal field (all your ratings, saves, removals + engine scores) washed under the dots. Composes with any grouping; the same whatever layers are shown (view only)"
         >
           <Mountain className="h-3.5 w-3.5" />
           Terrain

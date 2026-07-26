@@ -145,7 +145,7 @@ export function SuggestedAuthorCard({
               <SignalChip
                 kind={suggestion.paper_signal_adjustment > 0 ? 'taste-match' : 'taste-avoid'}
                 className="uppercase tracking-wide"
-                title="Net pull from your saved + dismissed papers in this area"
+                title="Net pull from your saved, rated, and removed papers in this area"
               >
                 {suggestion.paper_signal_adjustment > 0
                   ? `+${suggestion.paper_signal_adjustment.toFixed(1)} from saves`

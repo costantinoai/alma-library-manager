@@ -50,7 +50,7 @@ other.
   feed.
 * **Discovery.** A recommender that ranks papers against the
   actual taste signal in the library. Every save, like, love,
-  dismiss, and remove is a labelled training point.
+  dislike, and remove is a labelled training point; dismiss is visibility.
   Recommendations are pushed across the *branches* of the library
   so the results don't collapse onto whichever topic was fed in
   most recently.
@@ -95,7 +95,7 @@ What's underneath is mostly off-the-shelf:
 * Library insights: clusters of what was actually read, the
   source mix, the temporal shape of the collection, gaps where
   neighbouring work isn't represented.
-* A ranker tuned by save / like / love / dismiss / remove. The
+* A ranker tuned by save / like / love / dislike / remove. The
   same actions that organise the library are the ones that train
   discovery; the controls that drive it (lens weights, source
   mix, recency tilt) are exposed rather than hidden.
@@ -124,7 +124,7 @@ BibTeX or JSON. The library is portable in both directions.
 
 A paper's state is two orthogonal axes, never overloaded into one
 status. **Membership** tracks how a paper relates to your library
-(tracked → library, or dismissed / removed as negative signal).
+(tracked → library, dismissed as visibility, or removed as a negative signal).
 **Reading** tracks where it sits in your workflow (unread → reading →
 done, or excluded). Every user action maps to exactly one canonical
 transition, and removal is a soft signal Discovery reads — nothing is

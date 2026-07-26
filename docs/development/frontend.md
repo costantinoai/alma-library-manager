@@ -162,7 +162,8 @@ the Python integration suite against the backend.
 ```bash
 cd frontend
 npm run test                 # Vitest, single run
-npx tsc --noEmit             # type check (strict mode)
+npm run typecheck            # type check (strict). NOT bare `tsc --noEmit`:
+                             # tsconfig.json is references-only and checks nothing.
 npm run build                # full Vite production build
 ```
 

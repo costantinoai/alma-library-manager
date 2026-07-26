@@ -15,7 +15,7 @@ export const FEED_TOUR: TourStep[] = [
   {
     target: '[data-tour="feed-card"]',
     title: 'React as you read',
-    body: 'Save a paper to your library, like it to teach the ranker, or dismiss it to hide it. Every action is signal.',
+    body: 'Save a paper to your library, like it to teach the ranker, or dismiss it to hide it. Preference and visibility stay separate.',
   },
   {
     target: '[data-tour="feed-monitors"]',

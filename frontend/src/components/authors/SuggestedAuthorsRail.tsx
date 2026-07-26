@@ -21,7 +21,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useElementWidth } from '@/hooks/useElementWidth'
+import { useMeasuredGrid } from '@/hooks/useMeasuredGrid'
 import { invalidateQueries } from '@/lib/queryHelpers'
 import { useToast, errorToast } from '@/hooks/useToast'
 import {
@@ -122,18 +122,16 @@ export function SuggestedAuthorsRail({
   // Measured container → column count → visible caps. The inline
   // `gridTemplateColumns` below renders exactly `columns` tracks, so the
   // measurement and the layout can never drift apart.
-  const [sectionRef, sectionWidth] = useElementWidth<HTMLElement>()
-  const columns = useMemo(() => {
-    if (sectionWidth == null || sectionWidth <= 0) return FALLBACK_COLUMNS
-    return Math.max(
-      1,
-      Math.min(MAX_COLUMNS, Math.floor((sectionWidth + GRID_GAP) / (MIN_CARD_WIDTH + GRID_GAP))),
-    )
-  }, [sectionWidth])
-  const gridStyle = useMemo(
-    () => ({ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }),
-    [columns],
-  )
+  const {
+    ref: sectionRef,
+    columns,
+    style: gridStyle,
+  } = useMeasuredGrid<HTMLElement>({
+    minItemWidth: MIN_CARD_WIDTH,
+    gap: GRID_GAP,
+    maxColumns: MAX_COLUMNS,
+    fallbackColumns: FALLBACK_COLUMNS,
+  })
 
   // ── Acted-on set + sequential mutation queue ─────────────────────
   // The acted-on set is the primary defense against the "card bounces

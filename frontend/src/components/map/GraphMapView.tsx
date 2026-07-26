@@ -432,8 +432,8 @@ export function GraphMapView({
           onClick={() => setShowTerrain((s) => !s)}
           title={
             isPaperMap
-              ? 'Preference terrain — the space-owned signal field (ratings, saves, dismissals + engine scores) washed under the dots. Composes with any colouring; the same whatever layers are shown (view-only)'
-              : 'Preference terrain — each author carries the mean signal of the papers of theirs you have an opinion on (saves, ratings, dismissals + engine scores), washed under the dots. Authors you have no signal on leave the paper bare. Composes with any colouring (view-only)'
+              ? 'Preference terrain — the space-owned signal field (ratings, saves, removals + engine scores) washed under the dots. Composes with any colouring; the same whatever layers are shown (view-only)'
+              : 'Preference terrain — each author carries the mean signal of the papers of theirs you have an opinion on (saves, ratings, removals + engine scores), washed under the dots. Authors you have no signal on leave the paper bare. Composes with any colouring (view-only)'
           }
         >
           <Mountain className="h-3.5 w-3.5" />

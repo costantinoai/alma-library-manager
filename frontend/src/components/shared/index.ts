@@ -5,6 +5,8 @@ export { ListControlBar, type ListControlBarProps, type ListViewOption } from '.
 export { MetricTile, type MetricTileTone, type MetricTileProps } from './MetricTile'
 export { PaperCard, type PaperCardPaper, type ScoreSignal } from './PaperCard'
 export { PaperHoverCard } from './PaperHoverCard'
+export { PaperTile, type PaperTileProps } from './PaperTile'
+export { PaperTileGrid, type PaperTileGridProps } from './PaperTileGrid'
 export { RefreshRunningBanner } from './RefreshRunningBanner'
 export { SectionHeader } from './SectionHeader'
 export { SignalChip, type SignalChipProps } from './SignalChip'

@@ -73,7 +73,7 @@ export function invalidateAfterPaperMutation(
     ['reading-queue'],
     // Layout coordinates are durable, but membership and the live preference
     // fields are not. Active map hosts refetch these immediately after any
-    // save/rating/dismiss/remove/undo, so Terrain and Score change without a
+    // save/rating/remove/undo, so Terrain and Score change without a
     // layout rebuild.
     ['graph'],
     ['frontier'],

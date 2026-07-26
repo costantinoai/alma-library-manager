@@ -37,7 +37,7 @@ shared space:
 **Scope** switches between the authors of papers you saved and every
 tracked paper. **Colour** shows communities (clusters) or the engine's
 score; the **Terrain** overlay washes the space by how you actually feel
-about each author's papers — saves, ratings and dismissals first, engine
+about each author's papers — saves, ratings and removals first, engine
 score as weaker evidence, on the [same weights](analytics.md) the paper
 map's terrain uses. Authors you have no signal on leave the paper bare
 rather than flattening the whole picture toward neutral.
@@ -257,8 +257,8 @@ fake. The buckets that confirmed appear in the suggestion's
 
 **4. Paper-feedback projection.** Your paper actions also move
 author suggestions. A liked or loved paper boosts its authors,
-co-authors, topics, venues, keywords, and tags. A disliked,
-dismissed, or low-rated paper lowers those same connected signals.
+co-authors, topics, venues, keywords, and tags. A disliked, removed,
+or low-rated paper lowers those same connected signals.
 The effect is capped and explainable as `paper_signal_adjustment`,
 so one paper can nudge a candidate up or down without overwhelming
 strong direct evidence from the buckets above.
@@ -309,7 +309,7 @@ events accumulate.
 | **Save a paper to Library** | Adds the paper's co-authors to the `library_core` bucket. |
 | **Rate a Library paper 5★** | Triples the weight of every co-author on that paper; doubly amplifies first / last authors. |
 | **Rate a Library paper 1-2★** | Shrinks the weight of those co-authors (0.2× / 0.5×). The paper still feeds the model — it just barely contributes. |
-| **Like / Love / Dismiss / Dislike a paper** | Projects a signed ranking signal to the paper's authors, topics, venue, keywords, and tags. This can bump related author suggestions up or down. |
+| **Like / Love / Dislike / remove a paper** | Projects a signed ranking signal to the paper's authors, topics, venue, keywords, and tags. Paper Dismiss changes visibility only. |
 | **Follow an author** | Removes them from suggestions; their followed status seeds the network buckets on next refresh and adds positive author-profile signal to Discovery ranking. |
 | **Dismiss / remove a suggested author** | (a) Suppresses that author for 250+ days. (b) Adds their topic / venue / coauthor / institution profile to the dismissal cluster — future similar candidates lose up to 30 points. (c) Adds negative author-profile signal to Discovery ranking. |
 | **Refresh network buckets** | Fetches fresh `openalex_related` and `s2_related` candidates from OpenAlex / S2 and writes them to the cache. The next rail visit reads them. |
