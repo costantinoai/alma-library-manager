@@ -4950,3 +4950,37 @@ export function getHomeBrief(timezone = Intl.DateTimeFormat().resolvedOptions().
 export function markFeedSeen(): Promise<{ last_seen_at: string }> {
   return api.post<{ last_seen_at: string }>('/feed/seen', {})
 }
+
+// ── Signal Lab (task 54, D20) ────────────────────────────────────────────────
+
+export interface SignalLabModelSummary {
+  ready: boolean
+  computed_at?: string
+  counts?: {
+    rounds: number
+    answered: number
+    skipped: number
+    unknown_game_rounds: number
+    train_prefs: number
+    holdout_prefs: number
+  }
+  gamma?: number
+  holdout?: {
+    pairs: number
+    prior_accuracy: number | null
+    offsets_accuracy: number | null
+    utility_accuracy: number | null
+  }
+  region_offsets?: Record<string, number>
+  overrides?: number
+}
+
+export function getSignalLabModel(): Promise<SignalLabModelSummary> {
+  return api.get<SignalLabModelSummary>('/signal-lab/model')
+}
+
+/** Purge every Signal Lab round + everything derived (D20: total, irreversible).
+ * Library, ratings, and the always-on feedback history are untouched. */
+export function purgeSignalLab(): Promise<{ status: string; rounds_deleted: number }> {
+  return api.post<{ status: string; rounds_deleted: number }>('/signal-lab/purge', {})
+}

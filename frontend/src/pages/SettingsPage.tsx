@@ -19,6 +19,7 @@ import { DiscoveryWeightsCard } from '@/components/settings/DiscoveryWeightsCard
 import { FeedAutoRefreshCard } from '@/components/settings/FeedAutoRefreshCard'
 import { FeedMonitorTermsCard } from '@/components/settings/FeedMonitorTermsCard'
 import { AIConfigCard } from '@/components/settings/AIConfigCard'
+import { SignalLabCard } from '@/components/settings/SignalLabCard'
 import { DataManagementCard } from '@/components/settings/DataManagementCard'
 import { LibraryManagementCard } from '@/components/settings/LibraryManagementCard'
 import { CorpusExplorerCard } from '@/components/settings/CorpusExplorerCard'
@@ -59,6 +60,7 @@ type AnchorId =
   | 'feed-monitors'
   | 'feed-auto-refresh'
   | 'ai-config'
+  | 'signal-lab'
   | 'background-ops'
   | 'data-management'
   | 'library-management'
@@ -344,6 +346,7 @@ export function SettingsPage() {
             <Anchor id="feed-monitors"><FeedMonitorTermsCard /></Anchor>
             <Anchor id="feed-auto-refresh"><FeedAutoRefreshCard /></Anchor>
             <Anchor id="ai-config"><AIConfigCard /></Anchor>
+            <Anchor id="signal-lab"><SignalLabCard /></Anchor>
           </SettingsSection>
 
           {/* -- Data & system -- */}
