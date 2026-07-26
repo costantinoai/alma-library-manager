@@ -67,17 +67,54 @@ async function lassoTheMiddle() {
   return canvas
 }
 
-for (const host of [
-  { name: 'Map', hash: '#/map', drilldown: /^Region — \d+ papers$/ },
-  { name: 'Authors', hash: '#/authors', drilldown: /^Area — \d+ authors$/ },
-]) {
+/**
+ * The three hosts do NOT share one shape, and the spec must not pretend they do.
+ * Map and Authors pair an on-plate card with a dense drilldown below; Discovery
+ * is popover-only, because adopting a direction navigates rather than expands.
+ * `drilldown: null` records that difference instead of hiding it.
+ */
+const HOSTS = [
+  {
+    name: 'Map',
+    hash: '#/map',
+    toggle: /select region/i,
+    action: null,
+    drilldown: /^Region — \d+ papers$/,
+  },
+  {
+    name: 'Authors',
+    hash: '#/authors',
+    toggle: /select region/i,
+    action: /^Follow \d+$/,
+    drilldown: /^Area — \d+ authors$/,
+  },
+  {
+    name: 'Discovery',
+    hash: '#/discovery',
+    toggle: /select a direction/i,
+    action: /explore this direction/i,
+    drilldown: null,
+  },
+]
+
+for (const host of HOSTS) {
   console.log(`\n=== ${host.name} ===`)
   await page.goto(`${BASE}/${host.hash}`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(6000)
   await dismissTour()
 
-  const toggle = page.getByRole('button', { name: /select region/i }).first()
-  check((await toggle.count()) > 0, `${host.name}: "Select region" control exists`)
+  // A missing lens is a DATA precondition, not a regression. Discovery
+  // auto-selects the first lens (DiscoveryPage:285), so this only trips on a
+  // profile with none — report it as skipped rather than failing, because a
+  // check that cries wolf on empty data stops being read.
+  const noLens = page.getByText(/select a lens to plot its frontier/i).first()
+  if (await noLens.count()) {
+    console.log(`  skip ${host.name}: no lens in this profile — nothing to plot`)
+    continue
+  }
+
+  const toggle = page.getByRole('button', { name: host.toggle }).first()
+  check((await toggle.count()) > 0, `${host.name}: lasso control exists`)
   if (!(await toggle.count())) continue
 
   const canvas = page.locator('canvas').first()
@@ -93,6 +130,19 @@ for (const host of [
 
   const dismiss = page.getByRole('button', { name: /cancel selection/i }).first()
   check((await dismiss.count()) > 0, `${host.name}: on-plate region card appears`)
+
+  if (host.action) {
+    const action = page.getByRole('button', { name: host.action }).first()
+    check(
+      (await action.count()) > 0,
+      `${host.name}: the card carries its primary action`,
+    )
+  }
+
+  if (!host.drilldown) {
+    console.log(`  --   ${host.name}: popover-only host, no drilldown expected`)
+    continue
+  }
 
   const drill = page.getByText(host.drilldown).first()
   const found = (await drill.count()) > 0
