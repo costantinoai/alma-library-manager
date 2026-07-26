@@ -263,6 +263,7 @@ def build_round(
     conn: sqlite3.Connection,
     *,
     k: int = 3,
+    region_mode: str = "within",
     rng: np.random.Generator | None = None,
 ) -> dict | None:
     """Compose one 'within' round: region → pool → BALD triplet.
@@ -309,6 +310,10 @@ def build_round(
     model = get_active_embedding_model(conn)
     # A sampled region can have a thin judgeable pool; retry a few times
     # before declaring the round unavailable.
+    adjacency = {
+        int(a): [int(b) for b in bs]
+        for a, bs in (payload.get("adjacency") or {}).items()
+    }
     for _ in range(6):
         choice = choose_region(weights, rings, rng, epsilon=tuning["epsilon"])
         if choice is None:
@@ -317,6 +322,17 @@ def build_round(
         if len(pool) < max(k, MIN_POOL_FACTOR):
             weights.pop(choice.region_id, None)
             continue
+        if region_mode == "boundary":
+            spec = _boundary_triplet(
+                conn, payload, choice, pool, adjacency, model=model, rng=rng
+            )
+            if spec is None:
+                weights.pop(choice.region_id, None)
+                continue
+            spec["region_version"] = int(payload.get("version") or 1)
+            spec["ring"] = choice.ring
+            spec["explored"] = choice.explored
+            return spec
         vectors = load_vectors_by_id(conn, pool, model)
         shown = select_triplet(pool, vectors, ensemble, rng, k=k)
         if shown is None:
@@ -331,3 +347,64 @@ def build_round(
             "explored": choice.explored,
         }
     return None
+
+
+def _boundary_triplet(
+    conn: sqlite3.Connection,
+    payload: dict,
+    choice: RegionChoice,
+    pool_r: list[str],
+    adjacency: dict[int, list[int]],
+    *,
+    model: str,
+    rng: np.random.Generator,
+) -> dict | None:
+    """Two low-margin papers from region r + one from an adjacent region s.
+
+    Margins are computed HERE, at round time, against the r/s centroid pair
+    only — never precomputed, never stored (task 54 D-1). Low-margin =
+    ambiguous membership = exactly where the boundary question is worth a
+    click.
+    """
+    from alma.application.graph_substrate import assign_with_margin, load_vectors_by_id
+    from alma.application.super_regions import decode_centroid
+
+    neighbours = adjacency.get(choice.region_id) or []
+    if not neighbours:
+        return None
+    pair_region = int(neighbours[int(rng.integers(len(neighbours)))])
+
+    pool_s = load_region_pool(conn, payload, pair_region, model=model)
+    if len(pool_s) < 1 or len(pool_r) < 2:
+        return None
+
+    centroids = {
+        int(region["id"]): decode_centroid(region["centroid_b64"])
+        for region in payload.get("regions", [])
+        if int(region["id"]) in (choice.region_id, pair_region)
+    }
+    if len(centroids) != 2:
+        return None
+
+    vectors = load_vectors_by_id(conn, pool_r + pool_s, model)
+
+    def _low_margin(pool: list[str], n: int) -> list[str]:
+        margins = [
+            (assign_with_margin(vectors[pid], centroids).margin, pid)
+            for pid in pool
+            if pid in vectors
+        ]
+        margins.sort()
+        return [pid for _, pid in margins[:n]]
+
+    from_r = _low_margin(pool_r, 2)
+    from_s = _low_margin(pool_s, 1)
+    if len(from_r) < 2 or len(from_s) < 1:
+        return None
+    shown = from_r + from_s
+    rng.shuffle(shown)
+    return {
+        "shown": shown,
+        "region_id": choice.region_id,
+        "pair_region_id": pair_region,
+    }

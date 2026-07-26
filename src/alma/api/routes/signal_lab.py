@@ -107,7 +107,7 @@ def get_round(game_id: str, db: sqlite3.Connection = Depends(get_db)) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown game {game_id!r}") from exc
 
-    spec = lab_policy.build_round(db, k=game.draw.k)
+    spec = lab_policy.build_round(db, k=game.draw.k, region_mode=game.draw.region_mode)
     if spec is None:
         return {
             "available": False,
@@ -184,7 +184,7 @@ def answer_round(
     if answer is not None:
         # The answer may only reference shown papers — reject junk early so
         # the fit never has to defend against it.
-        for key in ("best", "worst"):
+        for key in ("best", "worst", "odd"):
             value = answer.get(key)
             if value is not None and value not in shown:
                 raise HTTPException(status_code=422, detail=f"{key!r} not in shown set")

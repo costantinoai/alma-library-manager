@@ -122,6 +122,7 @@ nav:
       - Home: concepts/home.md
       - Paper lifecycle: concepts/paper-lifecycle.md
       - Inbox: concepts/inbox.md
+      - Signal Lab: concepts/signal-lab.md
       - Feed: concepts/feed.md
       - Library: concepts/library.md
       - Discovery: concepts/discovery.md

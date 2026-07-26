@@ -5014,7 +5014,7 @@ export function getSignalLabRound(gameId = 'triplet_best_worst'): Promise<Signal
 
 export function answerSignalLabRound(
   gameId: string,
-  body: { token: string; answer: { best?: string; worst?: string } | null; reaction_ms?: number },
+  body: { token: string; answer: { best?: string; worst?: string; odd?: string } | null; reaction_ms?: number },
 ): Promise<{ status: string; round_id: number; skipped: boolean }> {
   return api.post(`/signal-lab/${gameId}/round/answer`, body)
 }

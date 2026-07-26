@@ -28,8 +28,11 @@ def available_games() -> list[MiniGame]:
     from alma.application.signal_lab.games.triplet_best_worst import (
         TRIPLET_BEST_WORST,
     )
+    from alma.application.signal_lab.games.triplet_odd_one_out import (
+        TRIPLET_ODD_ONE_OUT,
+    )
 
-    return [TRIPLET_BEST_WORST]
+    return [TRIPLET_BEST_WORST, TRIPLET_ODD_ONE_OUT]
 
 
 def get_game(game_id: str) -> MiniGame:

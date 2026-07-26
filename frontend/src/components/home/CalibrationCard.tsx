@@ -17,12 +17,21 @@ import { PaperTile } from '@/components/shared/PaperTile'
 import { PaperTileGrid } from '@/components/shared/PaperTileGrid'
 import { StatusBadge } from '@/components/ui/status-badge'
 
-const GAME_ID = 'triplet_best_worst'
 const DISMISS_KEY = 'alma.signal-lab.dismissed-day'
 
+// Alternate rounds: mostly utility (best-worst), a steady share of boundary
+// (odd-one-out) — the one that sharpens neighbourhoods. Deterministic per
+// day so a reload doesn't reroll the game.
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10)
 }
+
+function gameForToday(): string {
+  const day = Number(todayKey().split('-').join(''))
+  return day % 3 === 0 ? 'triplet_odd_one_out' : 'triplet_best_worst'
+}
+
+const GAME_ID = gameForToday()
 
 export function CalibrationCard() {
   const [dismissed, setDismissed] = useState(
@@ -44,7 +53,7 @@ export function CalibrationCard() {
   }, [roundQuery.data])
 
   const answerMutation = useMutation({
-    mutationFn: (answer: { best?: string; worst?: string } | null) =>
+    mutationFn: (answer: { best?: string; worst?: string; odd?: string } | null) =>
       answerSignalLabRound(GAME_ID, {
         token: roundQuery.data?.token ?? '',
         answer,
@@ -58,8 +67,14 @@ export function CalibrationCard() {
   if (dismissed || roundQuery.isError) return null
   if (!roundQuery.data?.available) return null // hidden until the substrate is ready
 
+  const isOddGame = roundQuery.data.options?.includes('odd') ?? false
+
   const pick = (paperId: string) => {
     if (done || answerMutation.isPending) return
+    if (isOddGame) {
+      answerMutation.mutate({ odd: paperId }) // one tap: the misfit
+      return
+    }
     if (best === null) {
       setBest(paperId)
       return
@@ -87,7 +102,11 @@ export function CalibrationCard() {
             ? 'Recorded. Your next model refit folds this in — see Settings → Intelligence → Signal Lab.'
             : 'Skipped — no verdict recorded.'
           : (roundQuery.data.question ?? 'Which would you read first — and which would you skip?') +
-            (best === null ? ' Tap your read first.' : ' Now tap the one you’d skip.')
+            (isOddGame
+              ? ' Tap the misfit.'
+              : best === null
+                ? ' Tap your read first.'
+                : ' Now tap the one you’d skip.')
       }
       action={
         <div className="flex items-center gap-2">
