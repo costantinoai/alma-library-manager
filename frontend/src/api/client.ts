@@ -5018,3 +5018,25 @@ export function answerSignalLabRound(
 ): Promise<{ status: string; round_id: number; skipped: boolean }> {
   return api.post(`/signal-lab/${gameId}/round/answer`, body)
 }
+
+export interface SignalLabEval {
+  ready: boolean
+  holdout?: {
+    pairs: number
+    prior_accuracy: number | null
+    offsets_accuracy: number | null
+    utility_accuracy: number | null
+  }
+  counts?: { rounds: number; answered: number }
+  churn?: {
+    pool: number
+    top_n?: number
+    hypothetical_points?: number
+    entered_top?: number
+    mean_rank_displacement?: number
+  }
+}
+
+export function getSignalLabEval(): Promise<SignalLabEval> {
+  return api.get<SignalLabEval>('/signal-lab/eval')
+}

@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from alma.api.deps import get_db
 from alma.application import materialized_views as mv
 from alma.application import signal_lab as lab
+from alma.application.signal_lab import eval as lab_eval  # noqa: F401 — registers the eval view
 from alma.application.signal_lab import policy as lab_policy
 from alma.application.signal_lab import purge as lab_purge
 from alma.application.signal_lab import rounds as lab_rounds
@@ -223,6 +224,19 @@ def get_model(db: sqlite3.Connection = Depends(get_db)) -> dict:
         "region_offsets": payload.get("region_offsets", {}),
         "overrides": len(payload.get("region_overrides") or {}),
     }
+
+
+@router.get("/eval")
+def get_eval(db: sqlite3.Connection = Depends(get_db)) -> dict:
+    """Stage-1 promotion evidence: held-out accuracy + hypothetical churn.
+
+    Uses ``mv.get`` (fingerprint-driven): first call builds inline (bounded —
+    ≤200 recommendation vectors), later calls serve the cached row and refresh
+    in the background when rounds or the live list change.
+    """
+    from alma.application.signal_lab.eval import EVAL_VIEW_KEY
+
+    return mv.get(db, EVAL_VIEW_KEY)["payload"]
 
 
 @router.post("/purge")

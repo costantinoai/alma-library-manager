@@ -10,7 +10,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FlaskConical, Trash2 } from 'lucide-react'
 
-import { getSignalLabModel, purgeSignalLab } from '@/api/client'
+import { getSignalLabEval, getSignalLabModel, purgeSignalLab } from '@/api/client'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,6 +25,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { SettingsCard } from '@/components/settings/primitives'
 
+function fmtAcc(value: number | null | undefined): string {
+  return value == null ? '—' : `${Math.round(value * 100)}%`
+}
+
 export function SignalLabCard() {
   const queryClient = useQueryClient()
   const [lastPurged, setLastPurged] = useState<number | null>(null)
@@ -33,6 +37,13 @@ export function SignalLabCard() {
     queryKey: ['signal-lab', 'model'],
     queryFn: getSignalLabModel,
     staleTime: 30_000,
+  })
+
+  const evalQuery = useQuery({
+    queryKey: ['signal-lab', 'eval'],
+    queryFn: getSignalLabEval,
+    staleTime: 60_000,
+    enabled: (modelQuery.data?.counts?.answered ?? 0) > 0,
   })
 
   const purgeMutation = useMutation({
@@ -89,6 +100,20 @@ export function SignalLabCard() {
         {lastPurged !== null ? ` Purged ${lastPurged} round${lastPurged === 1 ? '' : 's'}.` : ''}
         {purgeMutation.isError ? ' Purge failed — see backend logs.' : ''}
       </p>
+      {/* Stage-1 promotion evidence (task 54 §6): held-out accuracy per nested
+          head + what a hypothetical promotion would do to the live top-20.
+          Heads are promoted by raising weights.lab_* in discovery settings —
+          one at a time, only when both numbers argue for it. */}
+      {evalQuery.data?.ready && evalQuery.data.holdout && (
+        <p className="text-xs text-slate-500">
+          Held-out accuracy — prior {fmtAcc(evalQuery.data.holdout.prior_accuracy)} · +regions{' '}
+          {fmtAcc(evalQuery.data.holdout.offsets_accuracy)} · +utility{' '}
+          {fmtAcc(evalQuery.data.holdout.utility_accuracy)} ({evalQuery.data.holdout.pairs} pairs).
+          {evalQuery.data.churn?.top_n
+            ? ` If promoted at ${evalQuery.data.churn.hypothetical_points} pts: ${evalQuery.data.churn.entered_top}/${evalQuery.data.churn.top_n} papers would enter the top ${evalQuery.data.churn.top_n}.`
+            : ''}
+        </p>
+      )}
     </SettingsCard>
   )
 }
