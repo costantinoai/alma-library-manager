@@ -69,12 +69,17 @@ class View:
     operation_key:
         APScheduler operation key for dedup.  Concurrent rebuild
         requests collapse to one running job.
+    isolate_build:
+        Run background rebuilds in the graph worker process instead of an
+        APScheduler thread. Graph clustering/projection sets this; ordinary
+        lightweight materialized views keep the thread path.
     """
 
     key: str
     fingerprint_sql: str
     build_fn: Callable[[sqlite3.Connection], dict]
     operation_key: str
+    isolate_build: bool = False
 
 
 _REGISTRY: dict[str, View] = {}
@@ -348,7 +353,12 @@ def stored_meta(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | Non
     }
 
 
-def rebuild(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
+def rebuild(
+    conn: sqlite3.Connection,
+    view_key: str,
+    *,
+    build_fn: Callable[[sqlite3.Connection], dict] | None = None,
+) -> dict[str, Any]:
     """Synchronously rebuild ``view_key`` and persist the new payload.
 
     Used by the user-triggered "Rebuild" action and by the background
@@ -358,7 +368,7 @@ def rebuild(conn: sqlite3.Connection, view_key: str) -> dict[str, Any]:
     """
     view = get_view(view_key)
     fp = _compute_fingerprint(conn, view)
-    return _run_build(conn, view, fingerprint=fp)
+    return _run_build(conn, view, fingerprint=fp, build_fn=build_fn)
 
 
 def enqueue_rebuild(view_key: str) -> str | None:
@@ -480,6 +490,7 @@ def get_or_enqueue_variant(
     make_fingerprint: Callable[[sqlite3.Connection], str],
     is_fresh: Callable[[str], bool],
     job_label: str,
+    process_spec: dict[str, Any] | None = None,
 ) -> dict | None:
     """Async twin of :func:`get_or_build_variant`: NEVER builds inline.
 
@@ -514,6 +525,18 @@ def get_or_enqueue_variant(
     )
 
     def _runner() -> dict:
+        if process_spec is not None:
+            from alma.application.graph_process import run_graph_process
+
+            return run_graph_process(
+                {
+                    **process_spec,
+                    "kind": "variant",
+                    "view_key": view_key,
+                },
+                job_id=job_id,
+            )
+
         from alma.api.deps import open_db_connection
 
         runner_conn = open_db_connection()
@@ -554,6 +577,35 @@ def get_or_enqueue_variant(
         logger.exception("materialized_views: failed to schedule variant build %s", view_key)
         return None
     return None
+
+
+def persist_variant_payload(
+    conn: sqlite3.Connection,
+    *,
+    view_key: str,
+    fingerprint: str,
+    payload: dict,
+    compute_ms: int,
+) -> None:
+    """Atomically publish a completed graph variant and prune old siblings.
+
+    The process worker computes entirely off the API path and calls this only
+    after it has a complete payload. The old row therefore remains readable
+    throughout recomputation; the writer lock covers just this final upsert and
+    bounded prune.
+    """
+
+    def _persist() -> None:
+        _write_row(
+            conn,
+            view_key=view_key,
+            fingerprint=fingerprint,
+            payload=payload,
+            compute_ms=compute_ms,
+        )
+        _prune_variant_rows(conn, _variant_base(view_key), keep=VARIANT_ROWS_PER_BASE)
+
+    run_write_unit(conn, _persist, label=f"mv.variant:{view_key}")
 
 
 def _variant_base(view_key: str) -> str:
@@ -631,6 +683,7 @@ def _run_build(
     view: View,
     *,
     fingerprint: str,
+    build_fn: Callable[[sqlite3.Connection], dict] | None = None,
 ) -> dict:
     """Run the build function and persist its result.
 
@@ -638,7 +691,7 @@ def _run_build(
     logged but never mask a successful build.
     """
     started = perf_counter()
-    payload = view.build_fn(conn)
+    payload = (build_fn or view.build_fn)(conn)
     if not isinstance(payload, dict):
         raise TypeError(
             f"build_fn for {view.key!r} returned {type(payload).__name__}, expected dict"
@@ -702,6 +755,14 @@ def _enqueue_rebuild_internal(
     _set_rebuild_job_id(conn, view.key, job_id)
 
     def _runner() -> dict:
+        if view.isolate_build:
+            from alma.application.graph_process import run_graph_process
+
+            return run_graph_process(
+                {"kind": "registered_view", "view_key": view.key},
+                job_id=job_id,
+            )
+
         from alma.api.deps import open_db_connection
 
         runner_conn = open_db_connection()

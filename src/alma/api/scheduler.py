@@ -2100,7 +2100,12 @@ def graph_layout_maintenance_periodic() -> None:
 
             add_job_log(job_id, f"Rebuilding {view_key} ({stale_reason})", step="rebuild")
             try:
-                mv.rebuild(conn, view_key)
+                from alma.application.graph_process import run_graph_process
+
+                run_graph_process(
+                    {"kind": "registered_view", "view_key": view_key},
+                    job_id=job_id,
+                )
                 with write_section(conn, label="graph layout maintenance: signature"):
                     upsert_setting(
                         conn, f"{_LAYOUT_SIG_KEY_PREFIX}{view_key}", gauge.signature(conn)
