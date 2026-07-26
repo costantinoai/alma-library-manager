@@ -329,15 +329,24 @@ def _run_author_seed_thin(job_id: str, cap: int, target_paper_ids=None, params=N
     a map position, sample titles, and a score.
     """
     from alma.api.deps import _db_path
-    from alma.api.scheduler import add_job_log, set_job_status
+    from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
     from alma.application.authors import seed_thin_suggestion_authors
 
     ctx = _ProgressCtx(job_id, set_job_status, add_job_log)
-    return seed_thin_suggestion_authors(_db_path(), limit=max(1, cap), ctx=ctx)
+    # `cap` bounds the number of authors SEEDED, never the window inspected —
+    # the window is always the same one `count_thin_suggested_authors` counts,
+    # so a small auto chunk drains it across runs instead of re-reading the same
+    # top slice forever. See `SUGGESTION_REVIEW_WINDOW`.
+    return seed_thin_suggestion_authors(
+        _db_path(),
+        max_seeds=max(1, cap),
+        ctx=ctx,
+        is_cancellation_requested=lambda: is_cancellation_requested(job_id),
+    )
 
 
-def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int]:
-    """Under-covered suggested authors, split ``(fixable, exhausted)``.
+def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Under-covered suggested authors, split ``(fixable, exhausted, unvectorized)``.
 
     Counted over the SUGGESTION set rather than all authors on purpose: the
     corpus is full of one-paper co-authors who are nobody's problem. An author
@@ -1022,10 +1031,14 @@ REGISTRY: dict[str, MaintenanceTask] = {
                 "three. Cheap: a single works page per author, not the full "
                 "pagination `author_works` does."
             ),
-            # This one DOES claim its dimension: the population it walks is
-            # exactly the population `authors.unplaceable` counts, so a run
+            # This one DOES claim its dimension: the population it walks is the
+            # seedable subset of what `authors.unplaceable` counts, so a run
             # visibly drives the Health number down (unlike `author_works`,
-            # whose disjoint population made repair counts look stuck).
+            # whose disjoint population made repair counts look stuck). The
+            # remainder of that row is the missing-vector half, which the
+            # embedding chain owns — this task never claims it.
+            # `auto_chunk_size` caps AUTHORS SEEDED per chunk, not the window
+            # inspected, so chunks drain the window instead of re-reading its head.
             health_dimensions=("authors.unplaceable",),
             candidate_path="",
             operation_key="authors.seed_thin_suggestions",

@@ -1744,6 +1744,7 @@ def refresh_author_suggestions_periodic() -> None:
         results["suggestion_seed"] = seed_thin_suggestion_authors(
             str(_db_path()),
             ctx=_PeriodicSuggestionCtx(),
+            is_cancellation_requested=lambda: is_cancellation_requested(job_id),
         )
         set_job_status(
             job_id,

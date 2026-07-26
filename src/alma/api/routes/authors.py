@@ -2077,6 +2077,17 @@ def refresh_author_suggestion_network(
     # suggestions legible — an author with fewer than two local papers has no map
     # dot, no sample titles, and no score, which is why suggestion cards were
     # thinnest exactly where evidence mattered most (user call 2026-07-26).
+    #
+    # It runs AFTER them, not alongside. Seeding is only useful once the
+    # suggestion set is settled: launched concurrently it read the PREVIOUS
+    # suggestions and spent OpenAlex calls on authors the refresh was about to
+    # replace (2026-07-26). The wait is on the ids queued just above; when both
+    # sources were already fresh there is nothing to wait for.
+    refresh_job_ids = [
+        str(entry["job_id"])
+        for entry in jobs
+        if entry.get("status") in ("queued", "already_running") and entry.get("job_id")
+    ]
     seed_operation_key = "authors.seed_thin_suggestions"
     seed_existing = find_active_job(seed_operation_key)
     if seed_existing:
@@ -2100,8 +2111,17 @@ def refresh_author_suggestion_network(
         )
         add_job_log(seed_job_id, seed_msg, step="queued")
 
-        def _seed_runner(job_id_local: str = seed_job_id):
+        def _seed_runner(
+            job_id_local: str = seed_job_id,
+            wait_for: list[str] = refresh_job_ids,
+        ):
+            import time
+
             from alma.api.deps import _db_path
+            from alma.api.scheduler import (
+                get_job_status,
+                is_cancellation_requested,
+            )
             from alma.application.authors import seed_thin_suggestion_authors
 
             class _SeedCtx:
@@ -2114,11 +2134,50 @@ def refresh_author_suggestion_network(
                         total=total,
                     )
 
+            def _wait_for_refreshes() -> None:
+                """Block until every queued refresh job reaches a terminal state.
+
+                Bounded: a refresh that hangs must not strand the seed forever,
+                and seeding against a slightly stale suggestion set is far better
+                than never seeding at all.
+                """
+                if not wait_for:
+                    return
+                terminal = {"completed", "failed", "cancelled", "error", "skipped"}
+                deadline = time.monotonic() + 900  # 15 minutes
+                set_job_status(
+                    job_id_local,
+                    status="running",
+                    message="Waiting for the suggestion refresh to finish",
+                )
+                while time.monotonic() < deadline:
+                    if is_cancellation_requested(job_id_local):
+                        return
+                    pending = [
+                        jid
+                        for jid in wait_for
+                        if str((get_job_status(jid) or {}).get("status") or "").lower()
+                        not in terminal
+                    ]
+                    if not pending:
+                        return
+                    time.sleep(2)
+                add_job_log(
+                    job_id_local,
+                    "Refresh jobs still running after 15 min — seeding the current set anyway",
+                    step="wait_timeout",
+                )
+
             try:
+                _wait_for_refreshes()
                 set_job_status(
                     job_id_local, status="running", message="Seeding suggestion authors"
                 )
-                summary = seed_thin_suggestion_authors(_db_path(), ctx=_SeedCtx())
+                summary = seed_thin_suggestion_authors(
+                    _db_path(),
+                    ctx=_SeedCtx(),
+                    is_cancellation_requested=lambda: is_cancellation_requested(job_id_local),
+                )
                 set_job_status(
                     job_id_local,
                     status="completed",

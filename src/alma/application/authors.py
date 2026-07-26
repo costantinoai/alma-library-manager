@@ -7,6 +7,7 @@ import logging
 import re
 import sqlite3
 import unicodedata
+from collections.abc import Callable
 from datetime import timedelta
 
 from alma.application.author_signal import (
@@ -3595,11 +3596,26 @@ def touch_last_fetched(db: sqlite3.Connection, author_id: str) -> bool:
     return cursor.rowcount > 0
 
 
+SUGGESTION_REVIEW_WINDOW = 30
+"""How many suggestions the seed repair and its Health counter both look at.
+
+ONE constant for both, because the Health number and the repair's population
+must be the same set. They used to disagree: the counter hardcoded 30 while the
+runner took its window from the maintenance `cap`, so an auto chunk of 10 only
+ever re-inspected the top 10 suggestions and positions 11–30 were never seeded —
+`authors.unplaceable` could not reach zero no matter how many times it ran
+(2026-07-26). The per-run cap now bounds how many authors are SEEDED, not how
+many are LOOKED AT, so successive chunks drain the same window.
+"""
+
+
 def seed_thin_suggestion_authors(
     db_path: str,
     *,
-    limit: int = 30,
+    window: int = SUGGESTION_REVIEW_WINDOW,
+    max_seeds: int | None = None,
     ctx: object | None = None,
+    is_cancellation_requested: Callable[[], bool] | None = None,
 ) -> dict:
     """Give every under-covered suggested author enough corpus to be visible.
 
@@ -3621,6 +3637,12 @@ def seed_thin_suggestion_authors(
     Authors added through `POST /authors` do NOT come here: `create_author`
     already queues `schedule_followed_author_historical_backfill`, which
     paginates their entire output — strictly more coverage than a seed.
+
+    `window` is how many suggestions are INSPECTED (always the full
+    `SUGGESTION_REVIEW_WINDOW`, matching the Health counter); `max_seeds` bounds
+    how many under-covered authors are actually fetched for in one run. Keeping
+    them separate is what lets a small auto chunk converge — see
+    `SUGGESTION_REVIEW_WINDOW`.
     """
     from alma.api.deps import open_db_connection
     from alma.application.author_backfill import (
@@ -3643,10 +3665,14 @@ def seed_thin_suggestion_authors(
         "papers_landed": 0,
         "vectors_fetched": 0,
         "failures": 0,
+        # Under-covered authors this run did NOT reach because `max_seeds` cut
+        # it short. Reported so a capped run never reads as "nothing left".
+        "deferred": 0,
+        "cancelled": False,
     }
     conn = open_db_connection()
     try:
-        suggestions = list_author_suggestions(conn, limit=limit)
+        suggestions = list_author_suggestions(conn, limit=window)
         summary["considered"] = len(suggestions)
 
         # Recount locally rather than trusting the payload's `local_paper_count`:
@@ -3661,9 +3687,26 @@ def seed_thin_suggestion_authors(
             if count_local_papers_for_author(conn, openalex_id) < SEED_TARGET_PAPERS:
                 thin.append((openalex_id, str(suggestion.get("name") or openalex_id)))
         summary["thin"] = len(thin)
-        _log("seed_scan", f"{len(thin)} of {len(suggestions)} suggestions are under-covered")
+        # The cap bounds WORK, not the window. Anything past it is deferred to
+        # the next run, which will re-scan the same window and find it still thin.
+        budget = len(thin) if max_seeds is None else max(0, int(max_seeds))
+        if budget < len(thin):
+            summary["deferred"] = len(thin) - budget
+            thin = thin[:budget]
+        _log(
+            "seed_scan",
+            f"{summary['thin']} of {len(suggestions)} suggestions are under-covered"
+            + (f" · {summary['deferred']} deferred to a later run" if summary["deferred"] else ""),
+        )
 
         for index, (openalex_id, name) in enumerate(thin, start=1):
+            # Each author costs an OpenAlex works page plus an S2 vector fetch,
+            # so Cancel must land between authors rather than after the batch.
+            if is_cancellation_requested is not None and is_cancellation_requested():
+                summary["cancelled"] = True
+                summary["deferred"] += len(thin) - index + 1
+                _log("seed_cancelled", f"Cancelled after {index - 1} of {len(thin)} authors")
+                break
             try:
                 result = seed_papers_for_author(conn, openalex_id)
             except Exception as exc:  # noqa: BLE001 — one author must not sink the batch
@@ -3682,19 +3725,21 @@ def seed_thin_suggestion_authors(
                 total=len(thin),
             )
 
-        # The suggestion cache holds the OLD, evidence-free rows. Drop the
-        # affected source slots so the next read rebuilds with the sample titles
-        # these papers just provided — otherwise the cards stay blank until the
-        # cache expires on its own and the work looks like it did nothing.
-        if summary["papers_landed"]:
-            from alma.core.db_write import write_section
-
-            try:
-                with write_section(conn, label="suggestion cache invalidate after seed"):
-                    conn.execute("DELETE FROM author_suggestion_cache")
-            except sqlite3.OperationalError as exc:
-                logger.debug("suggestion cache invalidation skipped: %s", exc)
-
+        # NO cache invalidation here, deliberately. `author_suggestion_cache`
+        # holds the expensive NETWORK candidate payloads (who OpenAlex/S2 relate
+        # to your seeds) — it does not hold local evidence, so seeding papers
+        # cannot staleize it. The evidence the seed produces (sample titles,
+        # local paper count) is read LIVE per candidate in
+        # `list_author_suggestions`, so the cards pick it up on the next read
+        # with no invalidation at all.
+        #
+        # This used to be an unscoped `DELETE FROM author_suggestion_cache`. It
+        # bought nothing and cost a great deal: run from the refresh route it
+        # raced the two `refresh_*_network` jobs and deleted the rows they had
+        # just fetched; run standalone from maintenance or a Health repair it
+        # emptied the network buckets with nothing scheduled to refill them, so
+        # the rail silently lost its new-discovery authors until the next manual
+        # refresh (2026-07-26).
         return summary
     finally:
         conn.close()
