@@ -8,10 +8,9 @@ import type { HomeBrief } from '@/api/client'
 const getHomeBrief = vi.fn()
 const applyPaperAction = vi.fn().mockResolvedValue({})
 
-// PARTIAL mock: the Inbox renders real `PaperCard`s, which pull in
-// `AddToCollectionMenu` → `listCollections`. A whole-module mock silently
-// blanks every export those children need, so keep the originals and override
-// only what this test drives.
+// PARTIAL mock: Home renders real primitives whose children reach for other
+// client exports. A whole-module mock silently blanks every one of them, so
+// keep the originals and override only what this test drives.
 vi.mock('@/api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/client')>()),
   getHomeBrief: (...args: unknown[]) => getHomeBrief(...args),
@@ -32,7 +31,9 @@ const QUIET: HomeBrief = {
     },
     discovery: { today: 0, carryover: 0, lenses_today: 0 },
     alerts: { today: 0 },
+    trend: [],
   },
+  connections: [],
   highlights: [],
   reading: { total: 0, items: [] },
   inbox: { total: 0, items: [] },
@@ -74,6 +75,7 @@ describe('HomePage', () => {
         },
         discovery: { today: 6, carryover: 2, lenses_today: 2 },
         alerts: { today: 1 },
+        trend: [],
       },
     })
     renderHome()
@@ -186,9 +188,7 @@ describe('HomePage', () => {
     renderHome()
 
     expect(await screen.findByRole('heading', { name: 'Inbox' })).toBeInTheDocument()
-    expect(
-      screen.getByText(/2 papers waiting for a decision/),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/waiting for a decision/)).toBeInTheDocument()
     expect(screen.getByText('Sent from my phone')).toBeInTheDocument()
   })
 
@@ -209,7 +209,7 @@ describe('HomePage', () => {
     // verdict, so it must never travel as the global hide.
     // Accessible name comes from `dismissTitle` (ActionButton sets aria-label
     // from title), so assert on the wording the user actually hears.
-    fireEvent.click(screen.getByRole('button', { name: /Remove from Inbox/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Clear from Inbox/i }))
     // `mutate` dispatches asynchronously — wait for the call rather than
     // racing react-query's scheduler.
     await waitFor(() =>
@@ -217,7 +217,7 @@ describe('HomePage', () => {
     )
   })
 
-  it('shows reading continuity and only nonzero attention rows', async () => {
+  it('shows reading continuity, and needs-you rows for nonzero kinds only', async () => {
     getHomeBrief.mockResolvedValue({
       ...QUIET,
       reading: {
@@ -241,9 +241,12 @@ describe('HomePage', () => {
       'href',
       '#/library?tab=reading&paper=p1',
     )
-    expect(screen.getByText(/2 imported papers need review/)).toBeInTheDocument()
-    expect(screen.getByText(/1 author identity needs review/)).toBeInTheDocument()
-    expect(screen.queryByText(/monitor needs relinking/)).not.toBeInTheDocument()
+    // Attention rides on the blotter as shared `StatusRow`s ranked by
+    // severity; a kind with a zero count is absent entirely.
+    expect(screen.getByText(/Imports to review/)).toBeInTheDocument()
+    expect(screen.getByText(/Author identity to review/)).toBeInTheDocument()
+    expect(screen.queryByText(/not delivering/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Critical health/i)).not.toBeInTheDocument()
   })
 
   // Collapsed sections show whole rows of the MEASURED grid. Under jsdom no

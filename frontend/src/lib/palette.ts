@@ -107,6 +107,50 @@ export const MONITOR_TYPE_CHIP: Record<string, string> = {
 export const MONITOR_TYPE_CHIP_FALLBACK = ''
 
 /**
+ * Inbox capture channel → chip classes. IDENTITY colour, same documented
+ * exception and the same wash formula as `MONITOR_TYPE_CHIP` above: the hue
+ * answers *which transport did I flick this from*, never how good the paper is.
+ *
+ * Slack is the only channel today. A new transport registered in
+ * `services/inbox_channels` adds a line here; until it does it falls through to
+ * the shell's neutral, which is honest rather than mislabelled.
+ */
+export const CAPTURE_CHANNEL_CHIP: Record<string, string> = {
+  slack: 'bg-violet-700/10 text-violet-800',
+}
+/** Unknown channel → EMPTY: the shell's neutral tone. */
+export const CAPTURE_CHANNEL_CHIP_FALLBACK = ''
+
+/** Human label for a capture channel id. */
+export const CAPTURE_CHANNEL_LABEL: Record<string, string> = {
+  slack: 'Slack',
+}
+
+/**
+ * Home's inflow strip — one fill per SERIES. Categorical, because "Feed" and
+ * "Discovery" are two sources, not two levels of goodness.
+ *
+ * Deliberately the same two hues those surfaces already wear as Library
+ * provenance chips (`SOURCE_COLORS.feed`, `SOURCE_COLORS.discovery`), so a
+ * colour learned on one page still means the same surface on another.
+ */
+export const HOME_TREND_SERIES = {
+  feed: 'bg-info-500',
+  discovery: 'bg-violet-500',
+} as const
+
+/**
+ * Feed monitor-type mix ribbon on Home. Matches `MONITOR_TYPE_CHIP` above,
+ * as solid fills for a `Meter` segment (a chip wash is too faint for a 6px
+ * rail). `other` has no monitor identity, so it takes the neutral ink.
+ */
+export const MONITOR_MIX_FILL = {
+  authors: 'bg-indigo-500',
+  journals: 'bg-alma-folio',
+  other: 'bg-slate-400',
+} as const
+
+/**
  * Discovery frontier map — the three layers + the branch hue ramp. This is the
  * ONE place SVG node fills are spelled. Neutrals use design tokens (var()); the
  * branch ramp is vivid categorical hues (the recs are the map's hero layer),

@@ -23,6 +23,18 @@ export interface PaperTileProps {
   reason?: ReactNode
   /** Long-form "why am I seeing this", behind an info popover in the footer. */
   explanation?: ReactNode
+  /**
+   * Triage controls for a tile whose surface OWNS the decision — today, only
+   * Home's Inbox (D13), which has no other page to hand a paper off to.
+   *
+   * Rendered as its own strip below the reason footer, above the stretched
+   * title link, so a click lands on the button rather than navigating. Pass a
+   * `PaperActionBar` (compact) rather than loose buttons, so triage looks the
+   * same here as it does on a full `PaperCard`.
+   *
+   * Omit it and the tile stays what it is everywhere else: navigation only.
+   */
+  actions?: ReactNode
   className?: string
 }
 
@@ -41,9 +53,10 @@ export interface PaperTileProps {
  * The title anchor's `::after` covers the card; anything interactive sits
  * above it on `z-10`.
  *
- * Navigation only — Home never mutates paper state; the owning surface does.
- * For a full actionable row (ratings, reactions, score breakdown) use
- * `PaperCard` instead.
+ * Navigation by default — a tile hands the paper to the surface that owns it.
+ * The one exception is the `actions` slot, for a surface that owns the decision
+ * itself and has nowhere to hand it off to (Home's Inbox). For a full row with
+ * ratings, collections and a score breakdown, use `PaperCard` instead.
  */
 export function PaperTile({
   href,
@@ -54,6 +67,7 @@ export function PaperTile({
   score,
   reason,
   explanation,
+  actions,
   className,
 }: PaperTileProps) {
   const hasFooter = Boolean(reason || explanation)
@@ -108,6 +122,15 @@ export function PaperTile({
               className="h-4 w-4 text-slate-400 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-alma-folio motion-reduce:transition-none"
             />
           </div>
+        </div>
+      )}
+      {/* Triage strip. `relative z-10` lifts it above the title link's
+          `::after` overlay — without it every button would be a navigation
+          click. `mt-auto` keeps it pinned to the bottom when there is no
+          reason footer to do that job. */}
+      {actions && (
+        <div className="relative z-10 mt-auto border-t border-edge-1 bg-control-quiet px-3 py-2">
+          {actions}
         </div>
       )}
     </Card>

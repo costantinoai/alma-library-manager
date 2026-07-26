@@ -12,33 +12,48 @@
 import {
   AlertTriangle,
   ArrowRight,
+  BookMarked,
   BookOpen,
   FileSearch,
-  FileUp,
-  HeartPulse,
   Inbox,
-  Radio,
+  Send,
+  Sparkles,
+  Sunrise,
   UserPlus,
-  Users,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   applyPaperAction,
+  getApiErrorMessage,
   getHomeBrief,
+  type HomeBrief,
   type HomeHighlight,
   type HomePaper,
   type OnboardingPaperAction,
 } from '@/api/client'
-import { MetricTile, PaperCard, PaperTile, PaperTileGrid } from '@/components/shared'
+import { AttentionPanel } from '@/components/home/AttentionPanel'
+import { ConnectionRail } from '@/components/home/ConnectionRail'
+import { InflowStrip } from '@/components/home/InflowStrip'
+import { PaperActionBar } from '@/components/discovery/PaperActionBar'
+import { IdentityChip, MetricTile, PaperTile, PaperTileGrid } from '@/components/shared'
 import { Button } from '@/components/ui/button'
+import { BrandRule } from '@/components/ui/brand-rule'
 import { Card } from '@/components/ui/card'
+import { Meter } from '@/components/ui/meter'
 import { PageSection } from '@/components/ui/page-section'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { errorToast, toast } from '@/hooks/useToast'
 import { buildHashRoute, navigateTo } from '@/lib/hashRoute'
-import { formatRelativeShort } from '@/lib/utils'
+import {
+  CAPTURE_CHANNEL_CHIP,
+  CAPTURE_CHANNEL_CHIP_FALLBACK,
+  CAPTURE_CHANNEL_LABEL,
+  MONITOR_MIX_FILL,
+} from '@/lib/palette'
+import { cn, formatRelativeShort } from '@/lib/utils'
 
 function greeting(name: string | null): string {
   if (!name) return 'Your daily brief'
@@ -127,24 +142,6 @@ function addedReason(paper: HomePaper): string | undefined {
   return paper.added_at ? `Added ${formatRelativeShort(paper.added_at)}` : undefined
 }
 
-/** `HomePaper` spells absent fields `null`; `PaperCardPaper` spells them
- *  `undefined`. Convert explicitly rather than casting, so a genuinely missing
- *  field stays visibly missing instead of being asserted away. */
-function toCardPaper(paper: HomePaper) {
-  return {
-    id: paper.id,
-    title: paper.title,
-    authors: paper.authors ?? undefined,
-    year: paper.year ?? null,
-    journal: paper.journal ?? undefined,
-    abstract: paper.abstract ?? undefined,
-    tldr: paper.tldr ?? undefined,
-    url: paper.url ?? undefined,
-    doi: paper.doi ?? undefined,
-    status: paper.status ?? undefined,
-  }
-}
-
 /** A paper section: measured tile grid, whole rows, in-place expansion. */
 function PaperSection({
   papers,
@@ -173,24 +170,84 @@ function PaperSection({
   )
 }
 
-interface AttentionRowProps {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  href: string
+/**
+ * How today's Feed intake splits across monitor kinds.
+ *
+ * A count of 12 says nothing about whether your reading day is author-driven
+ * or journal-driven; this does, in the space of one rail. Rendered only when
+ * something actually arrived — a breakdown of zero is furniture.
+ */
+function MonitorMix({ mix }: { mix: HomeBrief['activity']['feed']['by_monitor_type'] }) {
+  const entries = [
+    { key: 'authors' as const, label: 'authors', value: mix.authors },
+    { key: 'journals' as const, label: 'journals', value: mix.journals },
+    { key: 'other' as const, label: 'other', value: mix.other },
+  ].filter((entry) => entry.value > 0)
+  if (entries.length === 0) return null
+
+  return (
+    <div className="space-y-1.5">
+      <Meter
+        size="xs"
+        segments={entries.map((entry) => ({
+          value: entry.value,
+          fillClassName: MONITOR_MIX_FILL[entry.key],
+        }))}
+        label={`Today's Feed papers by monitor: ${entries
+          .map((entry) => `${entry.value} ${entry.label}`)
+          .join(', ')}`}
+      />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        {entries.map((entry) => (
+          <span key={entry.key} className="flex items-center gap-1.5">
+            <span
+              className={cn('h-1.5 w-1.5 rounded-full', MONITOR_MIX_FILL[entry.key])}
+              aria-hidden
+            />
+            {entry.value} {entry.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }
 
-function AttentionRow({ icon: Icon, label, href }: AttentionRowProps) {
+/**
+ * What each triage verb DID, in the past tense of the button that fired it.
+ *
+ * Deliberately states the outcome rather than "Saved!" — the whole point of
+ * `defer` is that it records no opinion, and a user who cannot tell it apart
+ * from `dislike` will avoid using it.
+ */
+const TRIAGE_CONFIRMATION: Partial<Record<OnboardingPaperAction, string>> = {
+  add: 'Saved to your library',
+  like: 'Liked and saved to your library',
+  love: 'Loved and saved to your library',
+  dislike: 'Noted — you will see less like this',
+  defer: 'Cleared from your Inbox, kept in your corpus',
+}
+
+/** The Inbox tile's eyebrow: which transport this arrived on, and when. */
+function CaptureEyebrow({ paper }: { paper: HomePaper }) {
+  const channel = (paper.capture_channel || '').toLowerCase()
+  const when = paper.captured_at ?? paper.added_at
   return (
-    <a
-      href={href}
-      className="flex items-center justify-between gap-3 border-b border-edge-1 px-4 py-3 text-sm last:border-b-0 hover:bg-control-quiet focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-alma-folio"
-    >
-      <span className="flex min-w-0 items-center gap-2.5 text-alma-800">
-        <Icon className="h-4 w-4 shrink-0 text-warning-700" />
-        <span>{label}</span>
-      </span>
-      <ArrowRight className="h-4 w-4 shrink-0 text-slate-400" />
-    </a>
+    <>
+      {channel && (
+        <IdentityChip
+          icon={Send}
+          chipClassName={CAPTURE_CHANNEL_CHIP[channel] ?? CAPTURE_CHANNEL_CHIP_FALLBACK}
+          title="The channel you sent this from"
+        >
+          {CAPTURE_CHANNEL_LABEL[channel] ?? channel}
+        </IdentityChip>
+      )}
+      {when && (
+        <span className="text-[11px] text-slate-500">
+          Captured {formatRelativeShort(when)}
+        </span>
+      )}
+    </>
   )
 }
 
@@ -202,12 +259,26 @@ export function HomePage() {
     staleTime: 30_000,
   })
 
-  // Inbox triage (D13). `source_surface: 'inbox'` so feedback provenance says
-  // where the user actually acted. Refetching the brief is what makes the card
-  // leave the section: every action moves the paper off `status='inbox'`.
+  // Inbox triage (D13). Every verb goes through the ONE canonical route,
+  // `POST /papers/{id}/action`, with `surface: 'inbox'` so feedback provenance
+  // says where the user actually acted. Refetching the brief is what makes the
+  // tile leave the section: every action moves the paper off `status='inbox'`.
   const triage = useMutation({
     mutationFn: ({ paperId, action }: { paperId: string; action: OnboardingPaperAction }) =>
       applyPaperAction(paperId, action, { surface: 'inbox' }),
+    onSuccess: (_result, { action }) => {
+      toast({ title: TRIAGE_CONFIRMATION[action] ?? 'Done' })
+    },
+    // Without this, a rejected write (a 503 while a background job holds the
+    // writer gate is the realistic one) leaves the tile sitting exactly where
+    // it was, which is indistinguishable from a dead button. Failures are
+    // loud, per "no silent failures".
+    onError: (error) => {
+      errorToast(
+        "Couldn't apply that",
+        `${getApiErrorMessage(error)} The paper is still in your Inbox — try again.`,
+      )
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['home-brief'] }),
   })
   const act = (paperId: string, action: OnboardingPaperAction) => () =>
@@ -243,79 +314,162 @@ export function HomePage() {
   const carryoverTotal = feed.carryover + discovery.carryover
 
   return (
-    <div className="mx-auto max-w-5xl space-y-9 py-2 2xl:max-w-6xl">
-      <header className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="font-brand text-2xl font-semibold text-alma-800 sm:text-[1.75rem]">
-              {greeting(brief.user_name)}
-            </h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {localDate()} · updated {formatRelativeShort(brief.generated_at)}
-            </p>
+    <div className="mx-auto max-w-5xl space-y-8 py-2 2xl:max-w-6xl">
+      {/* THE BLOTTER — one raised panel carrying your whole SITUATION: who you
+          are today, whether the machinery is running, what arrived, and what
+          needs a decision. The research sections below sit directly on the
+          desk as loose sheets, so the page reads as three real depths (desk →
+          blotter → its recessed wells) instead of one flat field of cards.
+          Grouping is semantic, not decorative: status lives on the blotter,
+          papers live on the desk. */}
+      <Card className="space-y-5 p-5 sm:p-6">
+        <header className="space-y-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="font-brand text-2xl font-semibold text-alma-800 sm:text-[1.75rem]">
+                {greeting(brief.user_name)}
+              </h1>
+              <p className="mt-1 text-sm text-slate-500">
+                {localDate()} · updated {formatRelativeShort(brief.generated_at)}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2" aria-label="Start a workflow">
+              <Button size="sm" onClick={() => navigateTo('discovery', { action: 'find' })}>
+                <FileSearch className="h-4 w-4" />
+                Find papers
+              </Button>
+              <Button size="sm" onClick={() => navigateTo('authors', { action: 'follow' })}>
+                <UserPlus className="h-4 w-4" />
+                Follow author
+              </Button>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2" aria-label="Start a workflow">
-            <Button size="sm" onClick={() => navigateTo('discovery', { action: 'find' })}>
-              <FileSearch className="h-4 w-4" />
-              Find papers
-            </Button>
-            <Button size="sm" onClick={() => navigateTo('authors', { action: 'follow' })}>
-              <UserPlus className="h-4 w-4" />
-              Follow author
-            </Button>
-          </div>
-        </div>
-      </header>
+          {/* The wordmark's own gold rule, separating the masthead from the
+              instruments below it — the blotter reads as a printed page head
+              rather than a card with a title. */}
+          <BrandRule center="diamond" />
+          {/* The machinery, right under the greeting: if capture or a metadata
+              provider is down, every number below this line is smaller than it
+              should be, and nothing else on the page would say so. */}
+          <ConnectionRail connections={brief.connections} />
+        </header>
 
-      <PageSection
-        id="home-activity"
-        title="Today in ALMa"
-        description="Activity since your local midnight."
-      >
-        <div className="grid gap-3 sm:grid-cols-3">
-          <MetricTile
-            label="new Feed papers"
-            value={feed.today}
-            hint={`${feed.by_monitor_type.authors} authors · ${feed.by_monitor_type.journals} journals · ${feed.by_monitor_type.other} other`}
-            tone={feed.today > 0 ? 'accent' : 'neutral'}
-            onClick={() => navigateTo('feed')}
+        <PageSection
+          id="home-activity"
+          title="Today in ALMa"
+          icon={Sunrise}
+          description="Activity since your local midnight."
+          action={<InflowStrip trend={brief.activity.trend} />}
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetricTile
+              label="new Feed papers"
+              value={feed.today}
+              // The monitor split is spelled once, by the ribbon under the row —
+              // repeating it here as text was the same fact twice.
+              hint="from the sources you monitor"
+              tone={feed.today > 0 ? 'accent' : 'neutral'}
+              onClick={() => navigateTo('feed')}
+            />
+            <MetricTile
+              label="new suggestions"
+              value={discovery.today}
+              hint={`across ${discovery.lenses_today} ${discovery.lenses_today === 1 ? 'lens' : 'lenses'}`}
+              tone={discovery.today > 0 ? 'accent' : 'neutral'}
+              onClick={() => navigateTo('discovery')}
+            />
+            <MetricTile
+              label="alerts delivered"
+              value={alerts.today}
+              hint="successful digest deliveries"
+              tone={alerts.today > 0 ? 'info' : 'neutral'}
+              onClick={() => navigateTo('alerts', { tab: 'history' })}
+            />
+          </div>
+          <MonitorMix mix={feed.by_monitor_type} />
+          {carryoverTotal > 0 && (
+            <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+              <BookOpen className="h-3.5 w-3.5 text-alma-folio" />
+              <span>
+                Still waiting from earlier:
+                {' '}
+                <a href={buildHashRoute('feed')} className="font-medium text-alma-folio hover:underline">
+                  {feed.carryover} in Feed
+                </a>
+                {' · '}
+                <a href={buildHashRoute('discovery')} className="font-medium text-alma-folio hover:underline">
+                  {discovery.carryover} in Discovery
+                </a>
+              </span>
+            </p>
+          )}
+        </PageSection>
+
+        {/* Obligations land immediately after today's numbers: they are the
+            other half of "what is my situation", and a panel you have to
+            scroll past the research to find is one you will not act on. */}
+        <AttentionPanel attention={brief.attention} />
+      </Card>
+
+      {/* D13 Inbox — papers you sent yourself from another device, awaiting
+          triage. Home IS the Inbox's surface, so there is no "open elsewhere"
+          action. It leads the research sections, ahead of even "Picked for
+          you": what you chose to send yourself outranks anything ALMa chose
+          for you. Renders only when non-empty — a capture queue notifies, it
+          never nags (I-22). */}
+      {brief.inbox.total > 0 && (
+        <PageSection
+          id="home-inbox"
+          title="Inbox"
+          icon={Inbox}
+          count={brief.inbox.total}
+          description="Papers you sent yourself, waiting for a decision."
+        >
+          {/* The same measured tile grid every other section on this page
+              uses, so the Inbox scans as one more shelf on the desk rather
+              than a different kind of list. The tiles carry triage controls
+              because Home OWNS this decision — there is no other page to open
+              an Inbox paper on. */}
+          <PaperTileGrid
+            items={brief.inbox.items}
+            getKey={(paper) => paper.id}
+            collapsedRows={COLLAPSED_ROWS}
+            renderTile={(paper) => (
+              <PaperTile
+                href={buildHashRoute('library', { paper: paper.id })}
+                title={paper.title}
+                byline={paperByline(paper)}
+                excerpt={excerpt(paper)}
+                eyebrow={<CaptureEyebrow paper={paper} />}
+                actions={
+                  <PaperActionBar
+                    compact
+                    showLabels={false}
+                    disabled={triage.isPending}
+                    onAdd={act(paper.id, 'add')}
+                    onLike={act(paper.id, 'like')}
+                    onLove={act(paper.id, 'love')}
+                    onDislike={act(paper.id, 'dislike')}
+                    // The X. `defer` returns the paper to `tracked` writing no
+                    // rating and no feedback event — "I saw it, no action for
+                    // it", NOT a judgement. Relabelled so the button never
+                    // reads as the global hide `dismiss` performs elsewhere.
+                    onDismiss={act(paper.id, 'defer')}
+                    dismissLabel="Not now"
+                    dismissTitle="Clear from Inbox — stays in your corpus, records no opinion"
+                  />
+                }
+              />
+            )}
           />
-          <MetricTile
-            label="new suggestions"
-            value={discovery.today}
-            hint={`across ${discovery.lenses_today} ${discovery.lenses_today === 1 ? 'lens' : 'lenses'}`}
-            tone={discovery.today > 0 ? 'accent' : 'neutral'}
-            onClick={() => navigateTo('discovery')}
-          />
-          <MetricTile
-            label="alerts delivered"
-            value={alerts.today}
-            hint="successful digest deliveries"
-            tone={alerts.today > 0 ? 'info' : 'neutral'}
-            onClick={() => navigateTo('alerts', { tab: 'history' })}
-          />
-        </div>
-        {carryoverTotal > 0 && (
-          <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
-            <BookOpen className="h-3.5 w-3.5 text-alma-folio" />
-            <span>
-              Still waiting from earlier:
-              {' '}
-              <a href={buildHashRoute('feed')} className="font-medium text-alma-folio hover:underline">
-                {feed.carryover} in Feed
-              </a>
-              {' · '}
-              <a href={buildHashRoute('discovery')} className="font-medium text-alma-folio hover:underline">
-                {discovery.carryover} in Discovery
-              </a>
-            </span>
-          </p>
-        )}
-      </PageSection>
+        </PageSection>
+      )}
 
       <PageSection
         id="home-highlights"
         title="Picked for you"
+        icon={Sparkles}
+        count={brief.highlights.length}
         description="New research from your monitored sources and Discovery, with the reason it surfaced."
       >
         {brief.highlights.length > 0 ? (
@@ -357,46 +511,13 @@ export function HomePage() {
         )}
       </PageSection>
 
-      {/* D13 Inbox — papers you sent yourself from another device, awaiting
-          triage. Home IS the Inbox's surface, so there is no "open elsewhere"
-          action. Placed above the reading list because it is the section that
-          wants a decision. Renders only when non-empty: a capture queue
-          notifies, it never nags (I-22). */}
-      {brief.inbox.total > 0 && (
-        <PageSection
-          id="home-inbox"
-          title="Inbox"
-          description={`Sent from your capture channels — ${brief.inbox.total} ${brief.inbox.total === 1 ? 'paper' : 'papers'} waiting for a decision.`}
-        >
-          <div className="space-y-3">
-            {brief.inbox.items.map((paper) => (
-              <PaperCard
-                key={paper.id}
-                paper={toCardPaper(paper)}
-                size="compact"
-                actionDisabled={triage.isPending}
-                onAdd={act(paper.id, 'add')}
-                onLike={act(paper.id, 'like')}
-                onLove={act(paper.id, 'love')}
-                onDislike={act(paper.id, 'dislike')}
-                // The X. `defer` returns the paper to `tracked` writing no
-                // rating and no feedback event — "I saw it, no action for it",
-                // NOT a judgement. Relabelled so the button never reads as the
-                // global hide that `dismiss` performs elsewhere.
-                onDismiss={act(paper.id, 'defer')}
-                dismissLabel="Not now"
-                dismissTitle="Remove from Inbox — stays in your corpus, records no opinion"
-              />
-            ))}
-          </div>
-        </PageSection>
-      )}
-
       {brief.reading.total > 0 && (
         <PageSection
           id="home-reading"
           title="Reading list"
-          description={`Latest added — ${brief.reading.total} ${brief.reading.total === 1 ? 'paper' : 'papers'} in all.`}
+          icon={BookMarked}
+          count={brief.reading.total}
+          description="Latest added, newest first."
           action={
             <Button size="sm" variant="ghost" onClick={() => navigateTo('library', { tab: 'reading' })}>
               Open reading list
@@ -408,52 +529,6 @@ export function HomePage() {
             papers={brief.reading.items}
             hrefFor={(paper) => buildHashRoute('library', { tab: 'reading', paper: paper.id })}
           />
-        </PageSection>
-      )}
-
-      {attentionTotal > 0 && (
-        <PageSection
-          id="home-attention"
-          title="Needs attention"
-          description="Only decisions or blockers that need you."
-        >
-          <Card className="overflow-hidden">
-            {brief.attention.imports_pending > 0 && (
-              <AttentionRow
-                icon={FileUp}
-                label={`${brief.attention.imports_pending} imported ${brief.attention.imports_pending === 1 ? 'paper needs' : 'papers need'} review`}
-                href={buildHashRoute('library', { tab: 'imports' })}
-              />
-            )}
-            {brief.attention.monitors_need_resolution > 0 && (
-              <AttentionRow
-                icon={Radio}
-                label={`${brief.attention.monitors_need_resolution} ${brief.attention.monitors_need_resolution === 1 ? 'monitor needs' : 'monitors need'} relinking`}
-                href={buildHashRoute('settings', { anchor: 'feed-monitors' })}
-              />
-            )}
-            {brief.attention.author_decisions > 0 && (
-              <AttentionRow
-                icon={Users}
-                label={`${brief.attention.author_decisions} author ${brief.attention.author_decisions === 1 ? 'identity needs' : 'identities need'} review`}
-                href={buildHashRoute('authors', { focus: 'needs-attention' })}
-              />
-            )}
-            {brief.attention.inbox_unresolved > 0 && (
-              <AttentionRow
-                icon={Inbox}
-                label={`${brief.attention.inbox_unresolved} captured ${brief.attention.inbox_unresolved === 1 ? 'message' : 'messages'} couldn't be identified`}
-                href={buildHashRoute('settings', { anchor: 'channels' })}
-              />
-            )}
-            {brief.attention.critical_health > 0 && (
-              <AttentionRow
-                icon={HeartPulse}
-                label={`${brief.attention.critical_health} critical health ${brief.attention.critical_health === 1 ? 'issue needs' : 'issues need'} action`}
-                href={buildHashRoute('health')}
-              />
-            )}
-          </Card>
         </PageSection>
       )}
 

@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e:maps": "node e2e/map-region-selection.spec.mjs"
+    "e2e:maps": "node e2e/map-region-selection.spec.mjs",
+    "e2e:home": "node e2e/home-desk.spec.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

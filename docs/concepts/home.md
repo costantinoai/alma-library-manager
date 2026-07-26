@@ -12,6 +12,21 @@ and hands each item to the page that owns it.
 The brief uses the browser's local timezone. Refreshing Home never changes its
 counts or consumes unread state.
 
+## How the page is laid out
+
+The page has two halves, and the split is meaning, not decoration:
+
+- **The blotter** — one raised panel at the top carrying your whole *situation*:
+  the greeting and date, the two workflow shortcuts, the Connections rail,
+  today's numbers, and everything that needs a decision. It is the pad you work
+  on, and it is always the same shape.
+- **The desk** — the research itself, as loose sheets below: Inbox, Picked for
+  you, Reading list. Each is a grid of paper tiles.
+
+Reading order follows urgency: what is my situation (blotter) → what did I send
+myself (Inbox) → what did ALMa find (Picked for you) → what am I already
+reading.
+
 ## Today in ALMa
 
 Three stable figures report activity since local midnight:
@@ -21,6 +36,16 @@ Three stable figures report activity since local midnight:
 | **new Feed papers** (distinct papers, split by source type) | [Feed](feed.md) |
 | **new suggestions** across active lenses | [Discovery](discovery.md) |
 | **alerts delivered successfully** | Alerts → History |
+
+A **monitor-mix ribbon** under the row splits today's Feed intake across
+authors / journals / other, so you can tell an author-driven day from a
+journal-driven one at a glance. It renders only when something arrived.
+
+Beside the heading, a **7-day inflow strip** puts today in context: one small
+column per local day, Feed at the base and Discovery above it, with the exact
+figures on hover. A zero-Feed morning means nothing on its own and everything
+next to six busy days. Empty days show a tick on the baseline rather than a
+bar — the absence is the information.
 
 Older, still-unreviewed Feed and Discovery items appear separately as
 **carryover**. Carryover clears only when you visit the owning Feed or
@@ -65,10 +90,19 @@ honours the capture contract. See [Inbox](inbox.md).
 
 Home is the Inbox's **owning surface**, which makes it the one deliberate
 exception to Home being read-only: triage happens here, because there is
-nowhere else for it to happen. Each card carries the normal actions, plus
-**Not now** (the ✕) which drops the paper out of the Inbox, keeps it in your
-corpus, and records **no opinion at all** — distinct from **Dislike**, which is
-how you tell ALMa a paper is wrong for you.
+nowhere else for it to happen. Captures render as the same measured tiles as
+every other section, each carrying the normal actions plus **Not now** (the ✕),
+which drops the paper out of the Inbox, keeps it in your corpus, and records
+**no opinion at all** — distinct from **Dislike**, which is how you tell ALMa a
+paper is wrong for you. Every button posts to the one canonical action route,
+and every outcome is confirmed by name: "Cleared from your Inbox, kept in your
+corpus" reads differently from "Saved to your library", on purpose.
+
+Each tile shows where the paper came from — a **channel chip** (Slack today)
+and when you sent it. Captures are ordered by **when you sent them**, not by
+when the paper first entered your corpus: a paper your Feed collected two years
+ago, which you re-sent yourself this morning, belongs at the top of the queue it
+just joined.
 
 The section renders only when something is waiting, so an empty Inbox
 disappears rather than nagging. Papers are not meant to accumulate here.
@@ -87,17 +121,63 @@ The section shows two full rows of the measured tile grid while collapsed — up
 to eight tiles on a wide desk and two on a phone — so it never ends on a ragged
 half-row.
 
-## Needs attention
+## Connections
 
-This section appears only for user-fixable decisions or blockers:
+A rail under the greeting carries one dot per outside dependency ALMa needs
+while you are not looking. **Everything is named by its real name** — the
+capture entries come from the channel registry, so you read **Slack**, not an
+abstract "Capture":
 
-- imported papers that need review;
-- Feed monitors that need relinking;
-- author identities that need a decision;
+| Dot | What it means when it goes red |
+|---|---|
+| **Slack** (one per capture channel) | Papers you send yourself stop arriving in your Inbox. |
+| **OpenAlex** | Feed monitors, author refreshes and paper metadata stall. |
+| **Semantic Scholar** | New papers never get vectors, so Discovery stops seeing them. |
+| **SPECTER2** / **OpenAI embeddings** | This machine can't compute vectors at all. |
+
+The last dot is named for the stack that would actually run here, and it is the
+one entry with a real *not set up* state: an environment without the local
+torch/adapters stack (or a hosted key) cannot compute embeddings, and the pill
+says so — papers still get vectors from Semantic Scholar, just not from you.
+Support is checked by looking for the modules, never by importing them: a page
+load must not pay for loading torch.
+
+These failures are the ones that never announce themselves — a revoked token, a
+rejected key, a provider outage, a missing dependency — and their only symptom
+is a page that quietly stops filling up.
+
+The rail is always present, so its silence is meaningful: you learn where it
+lives while everything is green, which is the only way you will notice the day
+one turns red. A failing connection also states itself in words, says what you
+are losing, and links to the fix.
+
+States are read from the **operation ledger** — the recorded outcome of every
+job that actually talked to that provider — not from a live probe, because Home
+is a pure read and should not make a network call per dot to render. So a dot
+claims *"last time we used this, it worked"*, never *"it works right now"*, and
+every tooltip says when. A cancelled job sets no state at all: it proves the
+run stopped, not that the provider answered. Live re-probing lives in
+**Settings → Connections**.
+
+## Needs you
+
+A recessed panel on the blotter, directly under today's numbers — the other
+half of "what is my situation". It appears only for user-fixable decisions or
+blockers, ordered by severity rather than by which part of ALMa raised them —
+something broken and staying broken outranks a queue that is merely waiting:
+
+- actionable critical Health findings;
+- Feed monitors that need relinking (a broken monitor silently stops
+  delivering, so it is a break, not a pending decision);
 - captured messages that resolved to no paper (a link with no DOI, or an
   upstream failure) — recorded rather than dropped, so they ask for a human
   here;
-- actionable critical Health findings.
+- author identities that need a decision;
+- imported papers that need review.
+
+Each row is the same status line [Health](health.md) uses for a failing
+dimension — severity badge, what it is, how many, where to fix it — so a line
+that means "something needs you" reads identically on both pages.
 
 Routine background work and healthy-state reassurance stay off Home.
 
