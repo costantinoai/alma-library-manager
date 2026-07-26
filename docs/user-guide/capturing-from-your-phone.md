@@ -89,7 +89,9 @@ Empty field = capture off.
 
 2. In ALMa: **Settings → Channels → Check capture channel now** — runs the check
    immediately instead of waiting up to 5 minutes.
-3. Expect the toast **"Captured 1 paper"**.
+3. Expect the toast **"Captured 1 paper"**. (With nothing new to capture you
+   get **"Connected to #alma-inbox"** instead — that is also a success, and it
+   confirms the token, scopes, channel and bot membership are all correct.)
 4. In Slack, your message now shows a 📥 reaction.
 5. Open **Home** — the paper is in the **Inbox** section.
 
@@ -101,7 +103,7 @@ Empty field = capture off.
 | Error mentioning `not_in_channel` | Bot isn't in the channel | Redo step 1.3 |
 | Error mentioning `missing_scope` | A scope is absent, or the app wasn't reinstalled after you added one | Recheck the scopes in [Connecting Slack](connecting-slack.md), then **Reinstall to Workspace** |
 | Error mentioning `invalid_auth` | Token wrong or regenerated | Re-copy it from [Connecting Slack](connecting-slack.md) step 4 |
-| *"Nothing new to capture"* | ALMa read the channel fine, found no new message | Post the link again, re-check |
+| *"Connected to #alma-inbox"* | Success — the connection works, there was just nothing new to capture | Nothing to fix; post a link and re-check |
 | ❓ instead of 📥 | The link held no identifiable paper | Read ALMa's thread reply |
 
 ---

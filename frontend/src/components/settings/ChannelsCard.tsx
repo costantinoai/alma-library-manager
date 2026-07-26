@@ -125,13 +125,20 @@ export function ChannelsCard({ formData, onFormDataChange, onSave, saving, saved
     mutationFn: () => sweepInboxNow(),
     onSuccess: (result) => {
       const captured = result?.captured ?? 0
+      // A sweep that captured nothing still proves the connection works, so
+      // say that plainly. "Nothing new" on its own reads like a failure and
+      // sends people off diagnosing a setup that is already correct.
+      const reached = (result?.channels ?? [])
+        .filter((c) => c.reachable)
+        .map((c) => `#${(c.target ?? c.channel).replace(/^#/, '')}`)
+      const where = reached.length ? reached.join(', ') : 'your capture channel'
       toast({
         title: captured
           ? `Captured ${captured} paper${captured === 1 ? '' : 's'}`
-          : 'Nothing new to capture',
+          : `Connected to ${where}`,
         description: captured
-          ? 'They are waiting in your Inbox on Home.'
-          : 'Your capture channel had no unread paper links.',
+          ? `From ${where}. Waiting in your Inbox on Home.`
+          : 'Slack connection works — there were no new paper links to capture.',
       })
     },
     onError: (err) => {

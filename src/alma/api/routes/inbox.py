@@ -122,13 +122,22 @@ def sweep_inbox_now(
             # here would dress a hard error as success — the exact silent
             # failure this endpoint exists to prevent.
             raise SlackChannelError(_explain_channel_error(errors[0]["error"]))
+        # A sweep that captured nothing still PROVED the connection — token,
+        # scopes, channel and bot membership all worked. Say so: "nothing new"
+        # alone reads like a failure the user has to go and diagnose.
+        reached = [
+            str(entry.get("target") or entry.get("channel"))
+            for entry in (result.get("channels") or [])
+            if entry.get("reachable")
+        ]
+        where = ", ".join(f"#{name.lstrip('#')}" for name in reached) or "your channels"
+        if captured:
+            message = f"Captured {captured} paper(s) from {where} — waiting in your Inbox"
+        else:
+            message = f"Connected to {where}. No new links to capture."
         return OperationOutcome(
             status="completed" if captured else "noop",
-            message=(
-                f"Captured {captured} paper(s) to your Inbox"
-                if captured
-                else "No new papers in your capture channels"
-            ),
+            message=message,
             result=result,
         )
 

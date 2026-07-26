@@ -120,6 +120,17 @@ class SlackInboxChannel:
             return False
         return has_token and bool(self._target())
 
+    @property
+    def target(self) -> str:
+        """The channel this adapter reads, for display in status messages.
+
+        Optional across the `InboundChannel` protocol — the sweep falls back to
+        the channel `name` when an adapter has nothing more specific. It exists
+        so "connected, nothing new" can name WHICH channel it reached, which is
+        the difference between a reassuring message and a shrug.
+        """
+        return self._target()
+
     def _resolve_channel_id(self) -> str:
         if self._channel_id is None:
             self._channel_id = self._get_notifier().resolve_channel_id(self._target())

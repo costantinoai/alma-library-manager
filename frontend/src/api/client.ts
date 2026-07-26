@@ -4739,8 +4739,31 @@ export function getInboxStatus(): Promise<InboxStatus> {
 /** Poll the capture channels now instead of waiting for the scheduled tick.
  *  Idempotent — messages already captured are skipped on their
  *  `(channel, external_id)` key, so pressing twice cannot duplicate a paper. */
-export function sweepInboxNow(): Promise<{ captured: number; channels: unknown[] }> {
-  return api.post<{ captured: number; channels: unknown[] }>('/inbox/sweep')
+/** One channel's sweep outcome. `reachable` is the connectivity proof: it is
+ *  true whenever the fetch returned, so a sweep that captured nothing can still
+ *  confirm the token, scopes, channel and bot membership all work. */
+export interface InboxSweepChannel {
+  channel: string
+  /** Which channel was actually read, for display. */
+  target?: string
+  reachable?: boolean
+  fetched?: number
+  resolved?: number
+  duplicate?: number
+  unresolved?: number
+  error?: number
+  skipped_already_seen?: number
+  fetch_error?: string
+}
+
+export interface InboxSweepResult {
+  captured: number
+  channels: InboxSweepChannel[]
+  errors?: { channel: string; error: string }[]
+}
+
+export function sweepInboxNow(): Promise<InboxSweepResult> {
+  return api.post<InboxSweepResult>('/inbox/sweep')
 }
 
 export type UndoAspect = 'membership' | 'rating' | 'reading' | 'all'

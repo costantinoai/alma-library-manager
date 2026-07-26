@@ -48,6 +48,11 @@ def sweep_channel(
     """
     summary: dict[str, Any] = {
         "channel": channel.name,
+        # Which channel we actually reached. A successful sweep that captured
+        # nothing must still prove the connection worked, so the caller can say
+        # "connected to #alma-inbox, nothing new" instead of a bare shrug.
+        "target": str(getattr(channel, "target", "") or channel.name),
+        "reachable": False,
         "fetched": 0,
         "resolved": 0,
         "duplicate": 0,
@@ -64,6 +69,9 @@ def sweep_channel(
         summary["fetch_error"] = str(exc)
         return summary
 
+    # The fetch returned, so the token, scopes, channel and bot membership are
+    # all good — regardless of whether anything new was in there.
+    summary["reachable"] = True
     if limit is not None:
         messages = messages[: max(0, int(limit))]
     summary["fetched"] = len(messages)
