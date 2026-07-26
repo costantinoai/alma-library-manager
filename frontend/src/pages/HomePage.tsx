@@ -466,6 +466,11 @@ export function HomePage() {
 
       </Card>
 
+      {/* Signal Lab calibration — one round per visit (task 54, D20).
+          Sits above the Inbox: a 10-second question, answered before the desk
+          work starts. Renders nothing until the corpus substrate exists. */}
+      <CalibrationCard />
+
       {/* D13 Inbox — papers you sent yourself from another device, awaiting
           triage. Home IS the Inbox's surface, so there is no "open elsewhere"
           action. It leads the research sections, ahead of even "Picked for
@@ -520,10 +525,6 @@ export function HomePage() {
           />
         </PageSection>
       )}
-
-      {/* Signal Lab calibration — one round per visit (task 54, D20).
-          Renders nothing until the corpus substrate exists. */}
-      <CalibrationCard />
 
       <PageSection
         id="home-highlights"
