@@ -113,6 +113,7 @@ def fit_model(
     prior: np.ndarray | None,
     gamma_start: float = GAMMA_START,
     override_min_votes: int = OVERRIDE_MIN_VOTES,
+    coverage_target: int = 20,
 ) -> dict[str, Any]:
     """Fit every head from scratch. Pure — no I/O, no clock, no randomness
     beyond seeds derived from round ids (so identical inputs ⇒ identical
@@ -146,6 +147,7 @@ def fit_model(
                 votes.setdefault(c.paper_id, defaultdict(int))[c.region_id] += 1
             # Sim constraints feed the metric head — M2, gated.
 
+    gamma = _anneal_gamma(rounds, gamma_start, coverage_target)
     prior_unit = _unit_or_none(prior)
     offsets = _fit_region_offsets(train_prefs, paper_regions)
     utility, ensemble = _fit_utility(train_prefs, vectors, prior_unit)
@@ -157,7 +159,7 @@ def fit_model(
     return {
         "fit_version": SIGNAL_LAB_FIT_VERSION,
         "policy_version": SIGNAL_LAB_POLICY_VERSION,
-        "gamma": gamma_start,
+        "gamma": gamma,
         "counts": {
             "rounds": len(rounds),
             "answered": answered,
@@ -172,6 +174,36 @@ def fit_model(
         "region_overrides": overrides,
         "holdout": holdout,
     }
+
+
+def _anneal_gamma(
+    rounds: list[RoundRow], gamma_start: float, coverage_target: int
+) -> float:
+    """Competence-gated ring expansion (task 54 §3), derived purely from rounds.
+
+    γ anneals ×1.25 per fully-covered ring level: ring ≤ k is covered when
+    every region the policy has asked about at those rings holds ≥
+    ``coverage_target`` answered rounds. Derived from history ⇒ purge resets
+    it for free. (Confidence/plateau conditions join in M2 once the eval
+    trend is persisted.)
+    """
+    per: dict[tuple[int, int], int] = {}
+    for rnd in rounds:
+        if rnd.answer is None or rnd.region_id is None or rnd.ring is None:
+            continue
+        key = (int(rnd.ring), int(rnd.region_id))
+        per[key] = per.get(key, 0) + 1
+    if not per:
+        return gamma_start
+    levels = 0
+    ring = 0
+    while True:
+        at_ring = [n for (r, _), n in per.items() if r == ring]
+        if not at_ring or min(at_ring) < coverage_target:
+            break
+        levels += 1
+        ring += 1
+    return float(min(1.0, gamma_start * (1.25 ** levels)))
 
 
 def _fit_region_offsets(
@@ -406,6 +438,7 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         prior=prior,
         gamma_start=tuning["gamma_start"],
         override_min_votes=tuning["override_min_votes"],
+        coverage_target=tuning["coverage_target"],
     )
 
 

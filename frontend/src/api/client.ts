@@ -3431,6 +3431,11 @@ export interface FrontierResponse {
   /** Which centroid ranked the seen layer: the lens's own seeds, or the
    *  whole library when the lens has none. The legend states it. */
   seen_ranked_by?: 'lens' | 'library'
+  /** Cluster id → hue rank over the WHOLE corpus substrate. A cluster's colour
+   *  identifies which region of the space it is, so every host that draws a
+   *  subset of that space reads the same ranking instead of ranking its own
+   *  dots (which gave one cluster a different colour per surface). */
+  cluster_hues?: Record<string, number>
   message?: string
   job_id?: string
 }
@@ -4983,4 +4988,33 @@ export function getSignalLabModel(): Promise<SignalLabModelSummary> {
  * Library, ratings, and the always-on feedback history are untouched. */
 export function purgeSignalLab(): Promise<{ status: string; rounds_deleted: number }> {
   return api.post<{ status: string; rounds_deleted: number }>('/signal-lab/purge', {})
+}
+
+export interface SignalLabRoundPaper {
+  id: string
+  title: string
+  authors: string | null
+  year: number | null
+  journal: string | null
+  summary: string
+}
+
+export interface SignalLabRound {
+  available: boolean
+  reason?: string
+  question?: string
+  options?: string[]
+  papers?: SignalLabRoundPaper[]
+  token?: string
+}
+
+export function getSignalLabRound(gameId = 'triplet_best_worst'): Promise<SignalLabRound> {
+  return api.get<SignalLabRound>(`/signal-lab/${gameId}/round`)
+}
+
+export function answerSignalLabRound(
+  gameId: string,
+  body: { token: string; answer: { best?: string; worst?: string } | null; reaction_ms?: number },
+): Promise<{ status: string; round_id: number; skipped: boolean }> {
+  return api.post(`/signal-lab/${gameId}/round/answer`, body)
 }

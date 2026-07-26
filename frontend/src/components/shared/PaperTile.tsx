@@ -7,8 +7,12 @@ import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
 export interface PaperTileProps {
-  /** Where the tile hands the paper off — always the surface that OWNS it. */
-  href: string
+  /** Where the tile hands the paper off — always the surface that OWNS it.
+   *  Omit ONLY with `onSelect`: a selection tile navigates nowhere. */
+  href?: string
+  /** Selection variant (Signal Lab calibration): the whole tile is one
+   *  stretched BUTTON instead of a link. Mutually exclusive with `href`. */
+  onSelect?: () => void
   title: string
   /** Authors · journal · year, one line. */
   byline?: string | null
@@ -60,6 +64,7 @@ export interface PaperTileProps {
  */
 export function PaperTile({
   href,
+  onSelect,
   title,
   byline,
   excerpt,
@@ -87,12 +92,22 @@ export function PaperTile({
           </div>
         )}
         <h3 className="font-brand text-sm font-semibold leading-snug text-alma-800">
-          <a
-            href={href}
-            className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
-          >
-            {title}
-          </a>
+          {onSelect ? (
+            <button
+              type="button"
+              onClick={onSelect}
+              className="line-clamp-3 text-left rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+            >
+              {title}
+            </button>
+          ) : (
+            <a
+              href={href}
+              className="line-clamp-3 rounded-sm transition-colors after:absolute after:inset-0 after:content-[''] group-hover:text-alma-folio focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-alma-folio"
+            >
+              {title}
+            </a>
+          )}
         </h3>
         {byline && <p className="line-clamp-1 text-xs text-slate-500">{byline}</p>}
         {excerpt && (

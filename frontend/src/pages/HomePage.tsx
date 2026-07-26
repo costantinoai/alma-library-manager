@@ -42,6 +42,7 @@ import { BrandRule } from '@/components/ui/brand-rule'
 import { Card } from '@/components/ui/card'
 import { Meter } from '@/components/ui/meter'
 import { PageSection } from '@/components/ui/page-section'
+import { CalibrationCard } from '@/components/home/CalibrationCard'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -344,25 +345,7 @@ export function HomePage() {
               </Button>
             </div>
           </div>
-          {/* ONE slim status line, tight under the greeting so it reads as part
-              of the hero rather than as the first content band: the machinery
-              ALMa depends on, then whatever wants a decision. Both answer "what
-              is my situation" before a single number is read, and neither
-              deserves a heading of its own — a dot and a name say it. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-            <ConnectionRail connections={brief.connections} />
-            {/* One hairline between the two halves of the line: everything left
-                of it is machinery ALMa runs, everything right of it wants a
-                decision from you. Only drawn when both sides exist. */}
-            {attentionTotal > 0 && brief.connections.length > 0 && (
-              <span className="h-3 w-px bg-control-edge" aria-hidden />
-            )}
-            <AttentionChips attention={brief.attention} />
-          </div>
-          {/* The wordmark's own gold rule CLOSES the hero — masthead and its
-              status line above, the day's figures below. It used to sit between
-              the greeting and the line, which pushed the line across a divider
-              and made it read as content rather than as part of the head. */}
+          {/* The wordmark's own gold rule closes the masthead. */}
           <BrandRule center="diamond" />
         </header>
 
@@ -448,6 +431,21 @@ export function HomePage() {
             />
           </div>
           <MonitorMix mix={feed.by_monitor_type} />
+          {/* The status line sits UNDER the figures because that is what it is
+              FOR: it says why they read the way they do — which machinery
+              produced them and how recently — and then what wants a decision.
+              Above the numbers it was preamble; here it is the footnote the
+              numbers need. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-edge-1 pt-3">
+            <ConnectionRail connections={brief.connections} />
+            {/* One hairline between the two halves: everything left of it is
+                machinery ALMa runs, everything right of it wants a decision
+                from you. Only drawn when both sides exist. */}
+            {attentionTotal > 0 && brief.connections.length > 0 && (
+              <span className="h-3 w-px bg-control-edge" aria-hidden />
+            )}
+            <AttentionChips attention={brief.attention} />
+          </div>
           {carryoverTotal > 0 && (
             <p className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
               <BookOpen className="h-3.5 w-3.5 text-alma-folio" />
@@ -522,6 +520,10 @@ export function HomePage() {
           />
         </PageSection>
       )}
+
+      {/* Signal Lab calibration — one round per visit (task 54, D20).
+          Renders nothing until the corpus substrate exists. */}
+      <CalibrationCard />
 
       <PageSection
         id="home-highlights"
