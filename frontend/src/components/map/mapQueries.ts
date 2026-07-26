@@ -84,14 +84,23 @@ export function graphQueryOptions(
   queryClient: QueryClient,
   endpoint: 'paper-map' | 'author-network',
   params: Record<string, string>,
+  /**
+   * Speculative warm-up (sidebar hover). Sends `prefetch=true`, which the route
+   * honours by reporting `building` WITHOUT enqueuing a layout build: brushing a
+   * nav item must never start minutes of background clustering the user never
+   * asked for. It is deliberately NOT part of the query key — a prefetch and the
+   * page's own read address the same cache entry, which is the entire point.
+   */
+  options?: { prefetch?: boolean },
 ) {
   const qs = canonicalParams(params)
+  const requestQs = options?.prefetch ? `${qs}&prefetch=true` : qs
   const queryKey = graphQueryKey(endpoint, params)
   return queryOptions({
     queryKey,
     queryFn: async () => {
       const incoming = await api.get<GraphData | MapBuildStatus>(
-        `/graphs/${endpoint}?${qs}`,
+        `/graphs/${endpoint}?${requestQs}`,
       )
       return retainReadyMapPayload(
         queryClient.getQueryData<MapQueryResult<GraphData>>(queryKey),
@@ -203,6 +212,7 @@ export function prefetchMapPage(
         queryClient,
         'paper-map',
         paperMapParams({ scope, resolution, blend }),
+        { prefetch: true },
       ),
     )
   }
@@ -218,10 +228,12 @@ export function prefetchMapPage(
     AUTHOR_MAP_DEFAULTS.resolution,
   )
   return queryClient.prefetchQuery(
-    graphQueryOptions(queryClient, 'author-network', {
-      scope,
-      cluster_resolution: resolution.toFixed(1),
-    }),
+    graphQueryOptions(
+      queryClient,
+      'author-network',
+      { scope, cluster_resolution: resolution.toFixed(1) },
+      { prefetch: true },
+    ),
   )
 }
 

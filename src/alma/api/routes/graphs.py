@@ -281,6 +281,8 @@ def _serve_graph_variant(
     scope: Scope,
     build_fn: "Callable[[sqlite3.Connection], dict]",
     job_label: str,
+    process_spec: dict[str, Any] | None = None,
+    prefetch: bool = False,
 ) -> GraphData | None:
     """Serve a graph variant from the durable cache, or enqueue its build.
 
@@ -292,6 +294,13 @@ def _serve_graph_variant(
     ``None`` so the route answers 202 and the client polls.
     """
     variant_key = _variant_view_key(base_view_key, options)
+    if prefetch and mv.get_stored(conn, variant_key) is None:
+        # A speculative warm-up must never START a variant build. A variant is a
+        # full re-cluster/re-layout (the >200 s author-network case), and the
+        # sidebar prefetch fires on hover — with a non-default blend saved in
+        # sessionStorage, brushing the nav item would have queued exactly that
+        # (finding C-9, 2026-07-26). Nothing cached, nothing to warm: 202.
+        return None
     gauge = _paper_scope_gauge(conn, scope)
     payload = mv.get_or_enqueue_variant(
         conn,
@@ -300,6 +309,7 @@ def _serve_graph_variant(
         make_fingerprint=lambda c: _paper_scope_gauge(c, scope).signature(c),
         is_fresh=lambda stored: gauge.is_fresh(conn, stored),
         job_label=job_label,
+        process_spec=process_spec,
     )
     if payload is None:
         return None
@@ -337,6 +347,85 @@ def _layout_freshness(conn: sqlite3.Connection, scope: Scope, computed_at: str) 
     return {"computed_at": computed_at, "new_vectors_since_build": new_since}
 
 
+def _build_graph_variant_payload(
+    conn: sqlite3.Connection,
+    *,
+    graph_type: str,
+    scope: Scope,
+    options: dict[str, Any],
+) -> dict:
+    """Build one graph variant without persisting substrate coordinates.
+
+    This top-level, JSON-parameterized entry point is shared by the request's
+    cache setup and the isolated graph worker. Keeping the child protocol free
+    of closures is what lets every expensive variant execute outside the API
+    process while preserving one canonical implementation.
+    """
+    if graph_type == "author_network":
+        return _build_author_network_payload(
+            conn,
+            scope=scope,
+            cluster_resolution=float(options.get("cluster_resolution") or 1.0),
+            layout_weights={
+                "semantic": float(options.get("w_semantic") or 0.0),
+                "coauthorship": float(options.get("w_coauthorship") or 0.0),
+                "bibliographic_coupling": float(
+                    options.get("w_bibliographic") or 0.0
+                ),
+            },
+        )
+
+    if graph_type != "paper_map":
+        raise ValueError(f"unsupported graph variant type: {graph_type!r}")
+
+    ai_state = _get_graph_ai_state(conn)
+    graph_options = {
+        "label_mode": str(options.get("label_mode") or "cluster"),
+        "color_by": str(options.get("color_by") or "cluster"),
+        "size_by": str(options.get("size_by") or "citations"),
+        "show_edges": bool(options.get("show_edges", True)),
+        "scope": scope,
+        "cluster_resolution": float(
+            options.get("cluster_resolution") or SUBSTRATE_CLUSTER_RESOLUTION
+        ),
+        "layout_weights": {
+            "semantic": float(options.get("w_semantic") or 0.0),
+            "coauthorship": float(options.get("w_coauthorship") or 0.0),
+            "bibliographic_coupling": float(
+                options.get("w_bibliographic") or 0.0
+            ),
+            "co_citation": float(options.get("w_cocitation") or 0.0),
+        },
+    }
+    embeddings = _load_embeddings(conn, scope=scope)
+    if embeddings and len(embeddings) >= 5:
+        result = _build_embedding_paper_map(
+            conn,
+            embeddings,
+            ai_state=ai_state,
+            graph_options=graph_options,
+            persist=False,
+        )
+        # The embedding map omits vector-less papers. Keep that omission
+        # explicit even on a process-built variant.
+        try:
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM papers p WHERE "
+                    f"{scope.paper_filter('p', leading_and=False)}"
+                ).fetchone()[0]
+                or 0
+            )
+            meta = dict(result.metadata or {})
+            meta["vector_coverage"] = {"shown": len(embeddings), "total": total}
+            result.metadata = meta
+        except Exception:
+            logger.debug("paper-map vector-coverage annotation skipped", exc_info=True)
+    else:
+        result = _build_text_paper_map(conn, scope=scope, ai_state=ai_state)
+    return result.model_dump()
+
+
 @router.get("/paper-map", response_model=GraphData)
 def get_paper_map(
     label_mode: str = Query("cluster", description="Label mode: cluster (c-TF-IDF over title text)"),
@@ -349,6 +438,15 @@ def get_paper_map(
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused layout (0 = pure semantic)"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused layout"),
     w_cocitation: float = Query(0.0, ge=0.0, le=1.0, description="Citation influence: co-citation weight in the fused layout (shared citers)"),
+    prefetch: bool = Query(
+        False,
+        description=(
+            "Read-only warm-up. A prefetch NEVER enqueues a layout build: it "
+            "reports 'building' and returns. Set by speculative callers "
+            "(sidebar hover) so brushing a nav item cannot start minutes of "
+            "background work the user never asked for."
+        ),
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get paper map visualization data.
@@ -386,7 +484,11 @@ def get_paper_map(
         if envelope is None:
             return JSONResponse(
                 status_code=202,
-                content={"status": "building", **_enqueue_graph_view_build(view_key)},
+                content=(
+                    {"status": "building", "message": "Building the graph…"}
+                    if prefetch
+                    else {"status": "building", **_enqueue_graph_view_build(view_key)}
+                ),
             )
         graph = _graph_data_from_envelope(envelope)
         # Citation-edge coverage is a cheap live stat, not cached data — compute
@@ -403,52 +505,25 @@ def get_paper_map(
     # #20) so a repeat request (the same slider position, a fused layout you already
     # viewed) returns instantly, AND the cache survives restarts + invalidates once a
     # real proportion of the corpus has changed — not on every paper insert.
+    variant_options = {
+        "label_mode": label_mode,
+        "color_by": color_by,
+        "size_by": size_by,
+        "show_edges": show_edges,
+        "cluster_resolution": cluster_resolution,
+        "w_semantic": w_semantic,
+        "w_coauthorship": w_coauthorship,
+        "w_bibliographic": w_bibliographic,
+        "w_cocitation": w_cocitation,
+    }
+
     def _build_variant(c: sqlite3.Connection) -> dict:
-        ai_state = _get_graph_ai_state(c)
-        graph_options = {
-            "label_mode": label_mode,
-            "color_by": color_by,
-            "size_by": size_by,
-            "show_edges": show_edges,
-            "scope": scope,
-            "cluster_resolution": cluster_resolution,
-            # PROTOTYPE (task 19): fused multi-view layout weights — INDEPENDENT (not
-            # renormalized). {coauth: 0, bib: 0} ⇒ pure semantic (and is_default).
-            "layout_weights": {
-                "semantic": w_semantic,
-                "coauthorship": w_coauthorship,
-                "bibliographic_coupling": w_bibliographic,
-                "co_citation": w_cocitation,
-            },
-        }
-        embeddings = _load_embeddings(c, scope=scope)
-        if embeddings and len(embeddings) >= 5:
-            # I-2: a variant build is a pure read of publication_clusters — build the
-            # layout in-memory and do NOT persist it (the MV rebuild path is the only
-            # writer of the resolution-1.0 incremental layout). Only the variant
-            # PAYLOAD is persisted, to the materialized_views cache.
-            result = _build_embedding_paper_map(
-                c, embeddings, ai_state=ai_state, graph_options=graph_options, persist=False
-            )
-            # F3 (truthful UI, doc 49): the embedding map is built ONLY from
-            # vectored papers, so under partial coverage it silently omits the
-            # vector-less remainder. Annotate shown/total so the frontend can say
-            # "showing X of Y papers (vectored)" instead of looking complete.
-            try:
-                total = int(
-                    c.execute(
-                        f"SELECT COUNT(*) FROM papers p WHERE {scope.paper_filter('p', leading_and=False)}"
-                    ).fetchone()[0]
-                    or 0
-                )
-                meta = dict(result.metadata or {})
-                meta["vector_coverage"] = {"shown": len(embeddings), "total": total}
-                result.metadata = meta
-            except Exception:
-                logger.debug("paper-map vector-coverage annotation skipped", exc_info=True)
-        else:
-            result = _build_text_paper_map(c, scope=scope, ai_state=ai_state)
-        return result.model_dump()
+        return _build_graph_variant_payload(
+            c,
+            graph_type="paper_map",
+            scope=scope,
+            options=variant_options,
+        )
 
     graph = _serve_graph_variant(
         conn,
@@ -460,8 +535,14 @@ def get_paper_map(
             round(w_cocitation, 3),
         ),
         scope=scope,
+        prefetch=prefetch,
         build_fn=_build_variant,
         job_label=f"paper map variant ({scope.label()})",
+        process_spec={
+            "graph_type": "paper_map",
+            "scope": str(scope),
+            "options": variant_options,
+        },
     )
     if graph is None:
         return JSONResponse(
@@ -501,11 +582,16 @@ def _enqueue_corpus_layout_build() -> dict:
     add_job_log(job_id, "Queued corpus layout build for the frontier map", step="queued")
 
     def _runner() -> dict:
-        bg_conn = open_db_connection()
-        try:
-            return _rebuild_graphs_impl(bg_conn, scope=Scope.corpus, job_id=job_id)
-        finally:
-            bg_conn.close()
+        from alma.application.graph_process import run_graph_process
+
+        return run_graph_process(
+            {
+                "kind": "full_scope",
+                "scope": str(Scope.corpus),
+                "job_id": job_id,
+            },
+            job_id=job_id,
+        )
 
     schedule_immediate(job_id, _runner)
     return {"job_id": job_id, "message": "Building the semantic layout…"}
@@ -865,6 +951,15 @@ def get_author_network(
     w_semantic: float = Query(1.0, ge=0.0, le=1.0, description="PROTOTYPE: semantic weight in the fused author layout"),
     w_coauthorship: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: co-authorship weight in the fused author layout"),
     w_bibliographic: float = Query(0.0, ge=0.0, le=1.0, description="PROTOTYPE: bibliographic-coupling weight in the fused author layout"),
+    prefetch: bool = Query(
+        False,
+        description=(
+            "Read-only warm-up. A prefetch NEVER enqueues a layout build: it "
+            "reports 'building' and returns. Set by speculative callers "
+            "(sidebar hover) so brushing a nav item cannot start minutes of "
+            "background work the user never asked for."
+        ),
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Get author network visualization data.
@@ -917,20 +1012,27 @@ def get_author_network(
             # the normal background build.
             return JSONResponse(
                 status_code=202,
-                content={"status": "building", **_enqueue_graph_view_build(view_key)},
+                content=(
+                    {"status": "building", "message": "Building the graph…"}
+                    if prefetch
+                    else {"status": "building", **_enqueue_graph_view_build(view_key)}
+                ),
             )
         return _graph_data_from_envelope(envelope)
 
+    variant_options = {
+        "cluster_resolution": cluster_resolution,
+        "w_semantic": w_semantic,
+        "w_coauthorship": w_coauthorship,
+        "w_bibliographic": w_bibliographic,
+    }
+
     def _build_variant(c: sqlite3.Connection) -> dict:
-        return _build_author_network_payload(
+        return _build_graph_variant_payload(
             c,
+            graph_type="author_network",
             scope=scope,
-            cluster_resolution=cluster_resolution,
-            layout_weights={
-                "semantic": w_semantic,
-                "coauthorship": w_coauthorship,
-                "bibliographic_coupling": w_bibliographic,
-            },
+            options=variant_options,
         )
 
     # Same durable cache as the paper map — gauged on embedding-set drift. A
@@ -946,8 +1048,14 @@ def get_author_network(
             round(w_bibliographic, 3),
         ),
         scope=scope,
+        prefetch=prefetch,
         build_fn=_build_variant,
         job_label=f"author network variant ({scope.label()})",
+        process_spec={
+            "graph_type": "author_network",
+            "scope": str(scope),
+            "options": variant_options,
+        },
     )
     if graph is None:
         return JSONResponse(
@@ -1318,26 +1426,23 @@ def _build_author_network_payload(
 def _rebuild_graphs_impl(
     conn: sqlite3.Connection, *, scope: Scope = Scope.library, job_id: str | None = None
 ) -> dict:
-    """Rebuild the graph caches for ``scope`` phase-by-phase.
+    """Rebuild the graph caches for ``scope`` without invalidating live reads.
 
-    Each phase (clear / reference backfill / paper_map / author_network)
-    commits before the next one begins, so the SQLite writer lock is released
-    between phases. Before this change the whole rebuild ran under one implicit
-    transaction and concurrent reads showed p95 of ~3.5s during the job (see
-    ``tasks/10_ACTIVITY_CONCURRENCY.md``).
+    The caller runs this whole function in the isolated graph process. Existing
+    materialized payloads and substrate rows stay available until their
+    replacements are complete; only short final writes touch SQLite.
 
     I-3: paper_map + author_network rebuild the view for the requested
     ``scope`` (not a hardcoded ``:library``), so clicking "Rebuild" while
     viewing Corpus actually refreshes the Corpus graph the user is looking at.
     """
     from alma.api.scheduler import add_job_log, is_cancellation_requested, set_job_status
-    from alma.openalex.client import backfill_missing_publication_references
 
     def _cancelled() -> bool:
         return bool(job_id and is_cancellation_requested(job_id))
 
     rebuilt: list[str] = []
-    phases = ["clear_cache", "reference_backfill", "paper_map", "author_network"]
+    phases = ["clear_cache", "paper_map", "author_network"]
     total_phases = len(phases)
 
     def _mark_progress(phase_idx: int, phase_name: str) -> None:
@@ -1351,70 +1456,44 @@ def _rebuild_graphs_impl(
             message=f"Rebuilding graphs: {phase_name}",
         )
 
-    # Each phase owns its own gated write window — phase 1's `write_section`
-    # here, then the reference backfill, `mv.rebuild`, and the cluster persist
-    # each gate their own writes. So the writer lock is released between phases
-    # with no cross-phase commit of a held transaction (the old `_flush`).
-
-    # Phase 1: clear cache. Short local write, gated so it can't hold the writer
-    # lock across the remote reference backfill that follows.
+    # Phase 1: clear only the retired graph_cache. Never delete the live
+    # publication substrate before a replacement exists: Authors, Suggestions,
+    # Home, and the maps read those coordinates while this job runs.
     _mark_progress(0, "clear_cache")
     try:
         with write_section(conn, label="graphs rebuild: clear_cache"):
             conn.execute("DELETE FROM graph_cache")
-            # Force a full RE-CLUSTER for this scope: drop its cached
-            # publication_clusters layout so the paper_map phase re-runs
-            # cluster_publications with the CURRENT algorithm. Without this the
-            # incremental path reused the stale cached layout (I-7), so a clustering
-            # change (I-5: eom / no-forced-K) never reached the rebuilt map — i.e.
-            # "Rebuild" didn't actually re-cluster. I-1: the cache is now scope-keyed,
-            # so we clear exactly this scope's rows (no papers join needed).
-            conn.execute(
-                "DELETE FROM publication_clusters WHERE scope = ?", (str(scope),)
-            )
         if job_id:
-            add_job_log(job_id, "Cleared graph cache + scope layout (forces full recluster)", step="clear_cache")
+            add_job_log(
+                job_id,
+                "Cleared legacy graph cache; retained the live substrate",
+                step="clear_cache",
+            )
     except sqlite3.OperationalError:
         if job_id:
             add_job_log(job_id, "Graph cache table missing; skipping clear step", step="clear_cache")
 
     if _cancelled():
         if job_id:
-            add_job_log(job_id, "Cancellation requested before reference backfill", step="cancelled")
+            add_job_log(job_id, "Cancellation requested before paper map", step="cancelled")
         return {"rebuilt": rebuilt, "count": 0, "cancelled": True}
 
-    # Phase 2: reference backfill (remote fetches; gates its own write window).
-    _mark_progress(1, "reference_backfill")
-    graph_backfill = {
-        "candidates": 0,
-        "fetched": 0,
-        "papers_updated": 0,
-        "references_inserted": 0,
-    }
-    try:
-        graph_backfill = backfill_missing_publication_references(conn, limit=500)
-        if job_id:
-            add_job_log(job_id, "Backfilled missing publication references", step="reference_backfill", data=graph_backfill)
-    except Exception as e:
-        logger.warning("Failed to backfill publication references before graph rebuild: %s", e)
-        if job_id:
-            add_job_log(job_id, f"Reference backfill failed: {e}", level="WARNING", step="reference_backfill")
-
-    if _cancelled():
-        if job_id:
-            add_job_log(job_id, "Cancellation requested before paper map", step="cancelled")
-        return {"rebuilt": rebuilt, "count": 0, "cancelled": True, "reference_backfill": graph_backfill}
-
-    # Phase 3: paper_map — reads embeddings, runs clustering/projection, and
-    # writes publication_clusters (gated per batch inside `_build_embedding_paper_map`)
-    # plus the materialised-view payload (mv's own gated write). Forced through
-    # `mv.rebuild` (not the GET-side `mv.get`) so the rebuild fires unconditionally
-    # even if the fingerprint happens to match the cached row.
-    _mark_progress(2, "paper_map")
+    # Reference enrichment has its own `/graphs/reference-backfill` job and
+    # maintenance cadence. A layout rebuild is local compute; coupling it to 500
+    # remote fetches made this button unpredictably long and writer-heavy.
+    _mark_progress(1, "paper_map")
     try:
         if job_id:
             add_job_log(job_id, f"Rebuilding paper map ({scope.label()})", step="paper_map")
-        mv.rebuild(conn, scope.view_key("paper_map"))
+        mv.rebuild(
+            conn,
+            scope.view_key("paper_map"),
+            build_fn=lambda c: _build_paper_map_payload(
+                c,
+                scope=str(scope),
+                force_full_rebuild=scope is Scope.corpus,
+            ),
+        )
         rebuilt.append(scope.view_key("paper_map"))
     except Exception as e:
         logger.warning("Failed to rebuild paper_map: %s", e)
@@ -1424,10 +1503,9 @@ def _rebuild_graphs_impl(
     if _cancelled():
         if job_id:
             add_job_log(job_id, "Cancellation requested before author network", step="cancelled")
-        return {"rebuilt": rebuilt, "count": len(rebuilt), "cancelled": True, "reference_backfill": graph_backfill}
+        return {"rebuilt": rebuilt, "count": len(rebuilt), "cancelled": True}
 
-    # Phase 4: author_network
-    _mark_progress(3, "author_network")
+    _mark_progress(2, "author_network")
     try:
         if job_id:
             add_job_log(job_id, f"Rebuilding author network ({scope.label()})", step="author_network")
@@ -1438,7 +1516,7 @@ def _rebuild_graphs_impl(
         if job_id:
             add_job_log(job_id, f"Failed rebuilding author_network: {e}", level="ERROR", step="author_network")
 
-    summary = {"rebuilt": rebuilt, "count": len(rebuilt), "reference_backfill": graph_backfill}
+    summary = {"rebuilt": rebuilt, "count": len(rebuilt)}
     if job_id:
         add_job_log(job_id, f"Graph rebuild completed: {len(rebuilt)} rebuilt", step="done", data=summary)
     return summary
@@ -1616,7 +1694,12 @@ def _cluster_label_refresh_impl(
     # background and the user expects the new labels to be live the next
     # time they look at the graph.
     try:
-        mv.rebuild(conn, view_key)
+        from alma.application.graph_process import run_graph_process
+
+        run_graph_process(
+            {"kind": "registered_view", "view_key": view_key},
+            job_id=job_id,
+        )
     except Exception:
         logger.exception("cluster-label refresh: failed to rebuild %s", view_key)
 
@@ -1917,11 +2000,16 @@ def rebuild_graphs(
     )
 
     def _runner() -> dict:
-        bg_conn = open_db_connection()
-        try:
-            return _rebuild_graphs_impl(bg_conn, scope=scope_obj, job_id=job_id)
-        finally:
-            bg_conn.close()
+        from alma.application.graph_process import run_graph_process
+
+        return run_graph_process(
+            {
+                "kind": "full_scope",
+                "scope": str(scope_obj),
+                "job_id": job_id,
+            },
+            job_id=job_id,
+        )
 
     schedule_immediate(job_id, _runner)
     return activity_envelope(
@@ -2903,6 +2991,7 @@ def _build_embedding_paper_map(
     # Library build, which must assemble from the substrate (the caller
     # ensures the substrate exists first and retries).
     allow_full_rebuild = bool(opts.get("allow_full_rebuild", True))
+    force_full_rebuild = bool(opts.get("force_full_rebuild", False))
 
     def _cosine(a: np.ndarray, b: np.ndarray) -> float:
         na = float(np.linalg.norm(a))
@@ -2998,6 +3087,9 @@ def _build_embedding_paper_map(
         or SUBSTRATE_CLUSTER_RESOLUTION
     )
     if abs(requested_resolution - SUBSTRATE_CLUSTER_RESOLUTION) > 1e-6:
+        stale_ids = list(paper_ids)
+        stable_ids = []
+    if force_full_rebuild:
         stale_ids = list(paper_ids)
         stable_ids = []
 
@@ -3794,7 +3886,12 @@ def _graph_data_from_envelope(envelope: dict) -> GraphData:
     )
 
 
-def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
+def _build_paper_map_payload(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    force_full_rebuild: bool = False,
+) -> dict:
     """Build the default-options paper-map payload (as a dict).
 
     Mirrors the path inside ``get_paper_map`` for default options:
@@ -3817,6 +3914,10 @@ def _build_paper_map_payload(conn: sqlite3.Connection, *, scope: str) -> dict:
         # build. The library build assembles (filters + incremental placement)
         # from the substrate.
         "allow_full_rebuild": scope == SUBSTRATE_SCOPE,
+        # User-triggered Corpus rebuilds must actually refit without deleting
+        # the live substrate first. The old rows stay readable until the fresh
+        # coordinates are persisted in short batches.
+        "force_full_rebuild": force_full_rebuild and scope == SUBSTRATE_SCOPE,
     }
     embeddings = _load_embeddings(conn, scope=scope)
     if embeddings and len(embeddings) >= 5:
@@ -3925,12 +4026,14 @@ mv.register(mv.View(
     fingerprint_sql=with_version(_PAPER_MAP_LIBRARY_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_paper_map_payload(conn, scope="library"),
     operation_key="materialize.graph.paper_map.library",
+    isolate_build=True,
 ))
 mv.register(mv.View(
     key="graph:paper_map:corpus",
     fingerprint_sql=with_version(_PAPER_MAP_CORPUS_FP_SQL, *_GRAPH_ML_VERSIONS),
     build_fn=lambda conn: _build_paper_map_payload(conn, scope="corpus"),
     operation_key="materialize.graph.paper_map.corpus",
+    isolate_build=True,
 ))
 mv.register(mv.View(
     key="graph:author_network:library",
@@ -3941,6 +4044,7 @@ mv.register(mv.View(
     ),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="library"),
     operation_key="materialize.graph.author_network.library",
+    isolate_build=True,
 ))
 mv.register(mv.View(
     key="graph:author_network:corpus",
@@ -3951,4 +4055,5 @@ mv.register(mv.View(
     ),
     build_fn=lambda conn: _build_author_network_payload(conn, scope="corpus"),
     operation_key="materialize.graph.author_network.corpus",
+    isolate_build=True,
 ))
