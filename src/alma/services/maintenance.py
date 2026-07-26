@@ -358,18 +358,30 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
     reports "Seeded 0 of N". `author_seed_status` records that verdict once
     (terminal), exactly as `publication_embedding_fetch_status` does for papers
     Semantic Scholar has no vector for.
+
+    ``unvectorized`` is the third, previously invisible, bucket: enough PAPERS to
+    clear the threshold but fewer than two of them embedded and placed on the
+    substrate, so the author is still off the map. Seeding cannot help them —
+    they need vectors — but leaving them out let the Health row go green while
+    the map stayed empty (2026-07-26). The repair's `count_fn` claims only
+    ``fixable``; the dimension reports ``fixable + unvectorized``.
+
+    Exceptions PROPAGATE. `_safe_assess` in `health.py` owns the error path and
+    renders `DIM_ERROR`; swallowing here returned a successful-looking zero and
+    painted a broken measurement green.
     """
     from alma.application.author_backfill import (
         SEED_STATUS_EXHAUSTED,
         SEED_TARGET_PAPERS,
         count_local_papers_for_author,
+        count_placed_papers_for_author,
     )
-    from alma.application.authors import list_author_suggestions
+    from alma.application.authors import (
+        SUGGESTION_REVIEW_WINDOW,
+        list_author_suggestions,
+    )
 
-    try:
-        suggestions = list_author_suggestions(conn, limit=30)
-    except Exception:  # noqa: BLE001 — a health count must never raise
-        return 0, 0
+    suggestions = list_author_suggestions(conn, limit=SUGGESTION_REVIEW_WINDOW)
     try:
         exhausted_ids = {
             str(r[0]).lower()
@@ -381,18 +393,21 @@ def count_thin_suggested_authors(conn: sqlite3.Connection) -> tuple[int, int, in
     except sqlite3.OperationalError:
         exhausted_ids = set()
 
-    fixable = exhausted = 0
+    fixable = exhausted = unvectorized = 0
     for suggestion in suggestions:
         openalex_id = str(suggestion.get("openalex_id") or "").strip()
         if not openalex_id:
             continue
         if count_local_papers_for_author(conn, openalex_id) >= SEED_TARGET_PAPERS:
+            # Enough papers — but placement needs them EMBEDDED and laid out.
+            if count_placed_papers_for_author(conn, openalex_id) < SEED_TARGET_PAPERS:
+                unvectorized += 1
             continue
         if openalex_id.lower() in exhausted_ids:
             exhausted += 1
         else:
             fixable += 1
-    return fixable, exhausted
+    return fixable, exhausted, unvectorized
 
 
 def _count_thin_suggested_authors(conn: sqlite3.Connection, params=None) -> int:

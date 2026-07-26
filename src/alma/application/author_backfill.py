@@ -880,6 +880,41 @@ def count_local_papers_for_author(conn: sqlite3.Connection, openalex_id: str) ->
     return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
 
 
+def count_placed_papers_for_author(conn: sqlite3.Connection, openalex_id: str) -> int:
+    """How many of this author's papers actually sit on the semantic substrate.
+
+    The map's admission rule, per author. `count_local_papers_for_author` counts
+    ROWS; placement needs a paper that is embedded AND laid out — the same join
+    `graphs._author_network_placeable_count` aggregates over every author.
+
+    The two counts differ exactly where the false green lived: seeding lands two
+    papers, the S2 vector fetch returns nothing for them, the row count reaches
+    `SEED_TARGET_PAPERS`, `authors.unplaceable` drops to zero — and the author
+    still has no dot, no score and no way onto the map (2026-07-26).
+    """
+    from alma.application.graph_substrate import SUBSTRATE_SCOPE
+
+    oid = str(openalex_id or "").strip().lower()
+    if not oid:
+        return 0
+    try:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(DISTINCT pa.paper_id) AS n
+            FROM publication_authors pa
+            JOIN papers p ON p.id = pa.paper_id
+            JOIN publication_clusters pc
+              ON pc.paper_id = pa.paper_id AND pc.scope = ?
+            WHERE lower(pa.openalex_id) = ?
+              AND {standalone_paper_sql('p')}
+            """,
+            (SUBSTRATE_SCOPE, oid),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return 0
+    return int(row["n"] if isinstance(row, sqlite3.Row) else (row[0] if row else 0))
+
+
 def seed_papers_for_author(
     conn: sqlite3.Connection,
     author_openalex_id: str,

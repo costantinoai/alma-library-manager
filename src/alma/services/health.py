@@ -1287,19 +1287,25 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
         # silently clipped the count (and attention_total) at the cap.
         return len(list_affiliation_conflicts(conn, limit=None) or [])
 
-    def _count_thin_suggested() -> tuple[int, int]:
-        # Same counter the `author_seed_thin` repair walks, so the Health number
-        # and the repair's population are the same set by construction — a run
-        # visibly drives this row down instead of appearing to do nothing.
-        # Returns (fixable, exhausted): the exhausted half is reported separately
-        # so the row can reach a quiet, converged state.
+    def _count_thin_suggested() -> tuple[int, int, int]:
+        # Same counter the `author_seed_thin` repair walks, so the repair's
+        # population is a subset of this row by construction — a run visibly
+        # drives it down instead of appearing to do nothing.
+        # Returns (fixable, exhausted, unvectorized). `exhausted` is reported
+        # separately so the row can reach a quiet, converged state;
+        # `unvectorized` is folded INTO the headline count because those authors
+        # are just as absent from the map — counting only the seedable ones let
+        # the row go green while the map stayed empty (2026-07-26).
         from alma.services.maintenance import count_thin_suggested_authors
 
         return count_thin_suggested_authors(conn)
 
     merge_conflicts, merge_ok = _safe_assess("author_merge_conflicts", _count_merge_conflicts)
     thin_counts, thin_ok = _safe_assess("author_thin_suggested", _count_thin_suggested)
-    thin_suggested, thin_exhausted = thin_counts if thin_ok else (None, None)
+    thin_fixable, thin_exhausted, thin_unvectorized = (
+        thin_counts if thin_ok else (None, None, None)
+    )
+    thin_suggested = (thin_fixable + thin_unvectorized) if thin_ok else None
     affiliation_conflicts, affil_ok = _safe_assess(
         "author_affiliation_conflicts", _count_affiliation_conflicts
     )
@@ -1393,8 +1399,15 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
             # outstanding) so this row converges to 0 instead of nagging.
             exhausted=thin_exhausted if thin_ok else None,
             explanation=(
-                f"{thin_suggested} currently-suggested authors have fewer than "
-                "two papers in the corpus."
+                f"{thin_suggested} currently-suggested authors are off the author "
+                f"map: {thin_fixable} hold fewer than two papers in the corpus"
+                + (
+                    f", and {thin_unvectorized} hold enough papers but fewer than "
+                    "two with a vector on the layout"
+                    if thin_unvectorized
+                    else ""
+                )
+                + "."
                 + (
                     f" A further {thin_exhausted} can never reach two — OpenAlex "
                     "holds only one work for them."
@@ -1405,9 +1418,11 @@ def assess_authors(conn: sqlite3.Connection) -> dict[str, Any]:
                 else "Couldn't measure suggested-author coverage — see logs."
             ),
             impact=(
-                "Below two papers an author has no position on the author map, no "
-                "sample titles on their suggestion card, and no score — the engine "
-                "recommends them while showing you nothing to judge them on."
+                "Without two PLACED papers an author has no position on the author "
+                "map, no sample titles on their suggestion card, and no score — the "
+                "engine recommends them while showing you nothing to judge them on. "
+                "Seeding fixes the missing-papers half; the missing-vector half "
+                "clears when the embedding chain catches up."
             ),
             repair_task="author_seed_thin",
         ),
@@ -1533,7 +1548,12 @@ _HEALTH_AUTHORS_FINGERPRINT_SQL = """
 # it. Bump whenever `assess_authors` changes shape or meaning.
 # 2026-07-26: added the `authors.unplaceable` dimension (suggested authors the
 #             corpus holds <2 papers for) + its `author_seed_thin` repair.
-_AUTHOR_HEALTH_LOGIC_VERSION = "2026.07-2"
+# 2026.07-3:  `authors.unplaceable` now counts PLACED papers, not paper rows —
+#             authors with two unembedded papers are still off the map, and
+#             counting rows let the row go green while the map stayed empty.
+#             Measurement failures now propagate to DIM_ERROR instead of being
+#             swallowed into a green zero.
+_AUTHOR_HEALTH_LOGIC_VERSION = "2026.07-3"
 
 mv.register(
     mv.View(
