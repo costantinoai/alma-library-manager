@@ -1,4 +1,4 @@
-"""Materialised-view layer for expensive read aggregates.
+"""Materialised-view layer for expensive derived artifacts.
 
 Endpoints like ``/insights`` and ``/graphs/*`` produce JSON payloads that
 are slow to compute (dozens of aggregate SQL queries, embedding scans,
@@ -341,6 +341,35 @@ def get_stored(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None
     )
 
 
+def invalidate(conn: sqlite3.Connection, view_key: str) -> None:
+    """Delete the stored row for ``view_key`` so ``get_stored`` returns ``None``.
+
+    The row-lifecycle complement to ``_write_row``: callers that destroy a
+    view's *inputs* (e.g. Signal Lab purge deleting every round) must also
+    drop the derived payload in the SAME transaction, because consumers on
+    the ``get_stored`` path never check the fingerprint (task 50 ownership
+    split) and would keep serving the stale artifact until an unrelated
+    rebuild happened to land.
+
+    Caller owns the transaction — this is designed to run inside the same
+    ``run_write_unit`` as the input deletion, so evidence and derived
+    artifact vanish atomically. Standalone callers commit via the same
+    ``commit_unless_gated`` discipline as ``_write_row``. Unknown or
+    never-built ``view_key`` is a no-op (idempotent); the key is still
+    resolved through the registry so a typo fails loudly instead of
+    silently no-opping forever.
+    """
+    get_view(view_key)  # loud KeyError on unregistered keys
+    try:
+        conn.execute(
+            "DELETE FROM materialized_views WHERE view_key = ?", (view_key,)
+        )
+    except sqlite3.OperationalError:
+        # Table missing — nothing stored, nothing to invalidate.
+        return
+    commit_unless_gated(conn, label="materialized_views.invalidate")
+
+
 def stored_meta(conn: sqlite3.Connection, view_key: str) -> dict[str, Any] | None:
     """Row metadata (no payload decode) for freshness decisions: ``computed_at``
     + ``fingerprint``, or ``None`` when the view has never been built."""
@@ -502,6 +531,7 @@ def get_or_enqueue_variant(
     is_fresh: Callable[[str], bool],
     job_label: str,
     process_spec: dict[str, Any] | None = None,
+    may_enqueue: Callable[[], bool] | None = None,
 ) -> dict | None:
     """Async twin of :func:`get_or_build_variant`: NEVER builds inline.
 
@@ -512,6 +542,11 @@ def get_or_enqueue_variant(
     ``{status: 'building'}`` and the client polls. ``make_fingerprint`` takes
     the build connection (the request connection is gone by the time the job
     runs).
+
+    ``may_enqueue`` is an optional admission check evaluated just before
+    scheduling. Graph variants pass a single-flight gate so a tuning request
+    cannot start a second expensive fit beside a running one; the caller still
+    answers 202 and the client's next poll enqueues once the machine is free.
     """
     row = _read_row(conn, view_key)
     if row is not None:
@@ -524,6 +559,8 @@ def get_or_enqueue_variant(
     operation_key = f"materialize.variant:{view_key}"
     if find_active_job(operation_key) is not None:
         return None  # already building — client keeps polling
+    if may_enqueue is not None and not may_enqueue():
+        return None  # something heavier is fitting; the next poll retries
 
     job_id = f"materialize_variant_{uuid.uuid4().hex[:8]}"
     set_job_status(
@@ -767,12 +804,25 @@ def _enqueue_rebuild_internal(
 
     def _runner() -> dict:
         if view.isolate_build:
+            from alma.api.deps import open_db_connection
             from alma.application.graph_process import run_graph_process
 
-            return run_graph_process(
+            result = run_graph_process(
                 {"kind": "registered_view", "view_key": view.key},
                 job_id=job_id,
             )
+            # Clear the in-flight marker exactly like the thread path does. It
+            # used to be left set forever on this branch, so `rebuild_job_id`
+            # could not be trusted as evidence that a build was interrupted.
+            done_conn = open_db_connection()
+            try:
+                _set_rebuild_job_id(done_conn, view.key, None)
+            finally:
+                try:
+                    done_conn.close()
+                except Exception:
+                    pass
+            return result
 
         from alma.api.deps import open_db_connection
 
