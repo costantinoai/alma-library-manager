@@ -776,6 +776,13 @@ hits are frequently near-duplicates of each other (OpenAlex lists
 works), and dedup collapses them on landing, so taking exactly N candidates
 would reliably land fewer than N papers."""
 
+_SEED_MAX_PAGES = 4
+"""Cursor pages walked in one seed attempt (≤200 works at `_SEED_SCAN_PER_PAGE`).
+
+Bounds the cost of a pathological author while still being deep enough that
+reaching the end is the NORMAL outcome — which is what lets a genuinely
+un-seedable author be marked terminal instead of retried forever."""
+
 
 def _author_position_in_work(work: dict, openalex_id: str) -> str:
     """This author's `author_position` on this work ("first"/"middle"/"last")."""
@@ -938,6 +945,7 @@ def seed_papers_for_author(
         oid_norm, per_page=_SEED_SCAN_PER_PAGE, sort="cited_by_count:desc"
     )
     candidates = page.get("results") or []
+    next_cursor = page.get("next_cursor")
     # What upstream actually HOLDS for this author. `total` is the OpenAlex
     # result count; the page length is the floor when the meta count is absent.
     declared = page.get("total")
@@ -966,12 +974,6 @@ def seed_papers_for_author(
         _log("seed_fetch", f"No usable works on page 1 for {oid_norm}")
         return summary
 
-    # Already citation-desc from the API, so preserving order preserves rank.
-    first_author = [w for w in candidates if _author_position_in_work(w, oid_norm) == "first"]
-    others = [w for w in candidates if _author_position_in_work(w, oid_norm) != "first"]
-    ordered = first_author + others
-    first_author_ids = {id(w) for w in first_author}
-
     # Land papers until the author CLEARS the threshold, counting what actually
     # landed rather than what we tried. Two distinct ways a candidate yields
     # nothing, both observed on the first live run (2026-07-26):
@@ -984,36 +986,85 @@ def seed_papers_for_author(
     # Pre-seeding `seen_paper_ids` with what they already own makes both cases
     # fall out of the same guard. Without it, Shannon and Hoyer each reported
     # "1 paper landed" and stayed stuck at one paper.
+    #
+    # PAGINATED, because both of those failures consume candidates without
+    # producing coverage. A single page meant an author whose top 50 works all
+    # collapsed stayed short forever: the retryable status invited another run,
+    # and every run re-fetched the identical page-1 and landed nothing again
+    # (finding C-5, 2026-07-26). Walking the cursor also makes exhaustion
+    # PROVABLE — see `catalogue_walked` below.
     needed = target_papers - existing
     now_iso = datetime.now(timezone.utc).isoformat()
     landed: list[str] = []
     seen_paper_ids: set[str] = _existing_paper_ids_for_author(conn, oid_norm)
-    with write_section(conn, label="seed suggestion author papers"):
-        for work in ordered:
-            if len(landed) >= needed:
-                break
-            paper_id, _is_new = _upsert_work(conn, work, now=now_iso)
-            if paper_id is None or paper_id in seen_paper_ids:
-                continue
-            seen_paper_ids.add(paper_id)
-            _ensure_authorship_row(
-                conn,
-                paper_id=paper_id,
-                openalex_id=oid_norm,
-                display_name=str(work.get("authors") or "").split(",")[0].strip(),
-                work=work,
-            )
-            landed.append(paper_id)
-            if id(work) in first_author_ids:
-                summary["first_author_used"] += 1
-            else:
-                summary["topped_up"] += 1
+    pages_read = 0
+    catalogue_walked = False
+
+    while True:
+        pages_read += 1
+        # Already citation-desc from the API, so preserving order preserves rank.
+        first_author = [
+            w for w in candidates if _author_position_in_work(w, oid_norm) == "first"
+        ]
+        others = [w for w in candidates if _author_position_in_work(w, oid_norm) != "first"]
+        ordered = first_author + others
+        first_author_ids = {id(w) for w in first_author}
+
+        with write_section(conn, label="seed suggestion author papers"):
+            for work in ordered:
+                if len(landed) >= needed:
+                    break
+                paper_id, _is_new = _upsert_work(conn, work, now=now_iso)
+                if paper_id is None or paper_id in seen_paper_ids:
+                    continue
+                seen_paper_ids.add(paper_id)
+                _ensure_authorship_row(
+                    conn,
+                    paper_id=paper_id,
+                    openalex_id=oid_norm,
+                    # No fallback name. `_ensure_authorship_row` reads the
+                    # correct display name for THIS author on THIS work out of
+                    # the structured authorships. The old fallback took the
+                    # comma-joined list's FIRST name, which is this author only
+                    # when they are first — precisely not the top-up case this
+                    # branch exists to serve (finding N-1, 2026-07-26).
+                    display_name="",
+                    work=work,
+                )
+                landed.append(paper_id)
+                if id(work) in first_author_ids:
+                    summary["first_author_used"] += 1
+                else:
+                    summary["topped_up"] += 1
+
+        if len(landed) >= needed:
+            break
+        if not next_cursor:
+            # Cursor ran out: we have now SEEN this author's whole catalogue.
+            catalogue_walked = True
+            break
+        if pages_read >= _SEED_MAX_PAGES:
+            break
+        page = openalex_client.fetch_works_page_for_author(
+            oid_norm,
+            per_page=_SEED_SCAN_PER_PAGE,
+            sort="cited_by_count:desc",
+            cursor=next_cursor,
+        )
+        if page.get("error"):
+            break
+        candidates = page.get("results") or []
+        next_cursor = page.get("next_cursor")
+        if not candidates and not next_cursor:
+            catalogue_walked = True
+            break
 
     summary["papers_landed"] = len(landed)
+    summary["pages_read"] = pages_read
     final_local = existing + len(landed)
     _log(
         "seed_papers",
-        f"Landed {len(landed)} paper(s) for {oid_norm} "
+        f"Landed {len(landed)} paper(s) for {oid_norm} over {pages_read} page(s) "
         f"({summary['first_author_used']} first-author, {summary['topped_up']} topped up)",
     )
 
@@ -1029,9 +1080,19 @@ def seed_papers_for_author(
     elif declared_works < target_papers:
         status = SEED_STATUS_EXHAUSTED
         reason = f"OpenAlex holds only {declared_works} work(s) for this author"
+    elif catalogue_walked:
+        # We walked the cursor to its end and STILL could not reach the target.
+        # Upstream's count says it has enough works; every one of them either
+        # dedups onto a paper we already hold or is unusable. Nothing a later
+        # run can do differently, so this is terminal — the honest verdict a
+        # single-page fetch could never reach (C-5).
+        status = SEED_STATUS_EXHAUSTED
+        reason = (
+            f"walked all {declared_works} upstream work(s); none add new coverage"
+        )
     else:
-        # Upstream HAS enough works but they didn't land (dedup collapse, or
-        # unusable rows). Retryable, not terminal — a later run may do better.
+        # Page budget stopped us short of the end of the catalogue. Genuinely
+        # retryable: there are unseen works left.
         status = SEED_STATUS_SEEDED
         reason = "target not reached; upstream has more works to try"
     summary["seed_status"] = status
