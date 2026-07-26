@@ -181,7 +181,14 @@ export function HomePage() {
     )
   }
   if (briefQuery.isError || !briefQuery.data) {
-    return <ErrorState message="Couldn't load your daily brief." />
+    return (
+      <ErrorState
+        message="Couldn't load your daily brief."
+        actionLabel="Try again"
+        actionPending={briefQuery.isFetching}
+        onAction={() => void briefQuery.refetch()}
+      />
+    )
   }
 
   const brief = briefQuery.data

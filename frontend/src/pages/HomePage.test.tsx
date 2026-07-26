@@ -155,4 +155,18 @@ describe('HomePage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Find papers/ }))
     expect(window.location.hash).toBe('#/discovery?action=find')
   })
+
+  it('can recover when the backend becomes ready after the first brief request', async () => {
+    getHomeBrief
+      .mockRejectedValueOnce(new Error('backend starting'))
+      .mockResolvedValueOnce(QUIET)
+    renderHome()
+
+    expect(
+      await screen.findByText("Couldn't load your daily brief."),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
+  })
 })
