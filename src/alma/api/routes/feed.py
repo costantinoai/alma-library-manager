@@ -401,8 +401,15 @@ def _run_feed_action(
     runner = OperationRunner(db)
 
     def _handler(_ctx):
-        result = feed_app.apply_feed_action(
-            db, feed_item_id, action, collection_ids=collection_ids
+        # The adapter no longer opens its own write unit (it is also reached
+        # nested, from the canonical paper-action route), so THIS caller owns
+        # the gate + BEGIN IMMEDIATE + retry.
+        result = run_write_unit(
+            db,
+            lambda: feed_app.apply_feed_action(
+                db, feed_item_id, action, collection_ids=collection_ids
+            ),
+            label="feed_action_route",
         )
         if result is None:
             return OperationOutcome(
@@ -665,10 +672,15 @@ def bulk_feed_action(
     results: list[dict] = []
     for feed_item_id in body.feed_item_ids:
         try:
-            result = feed_app.apply_feed_action(
+            # One unit per item, not one around the loop: a bulk action must
+            # not hold the writer across ten items, and one bad id must not roll
+            # the other nine back.
+            result = run_write_unit(
                 db,
-                str(feed_item_id or "").strip(),
-                body.action,
+                lambda fid=str(feed_item_id or "").strip(): feed_app.apply_feed_action(
+                    db, fid, body.action
+                ),
+                label="feed_action_bulk",
             )
             if result is not None:
                 results.append(result)

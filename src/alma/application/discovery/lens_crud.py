@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from alma.application import library as library_app
-from alma.core.db_write import run_write_unit
+from alma.core.db_write import commit_unless_gated, run_write_unit
 from alma.core.paper_groups import resolve_action_paper_id
 from alma.core.scoring_math import age_decay, clamp
 from alma.core.sql_helpers import standalone_paper_sql
@@ -558,7 +558,13 @@ def mark_recommendation_action(
                 source="recommendation_action",
             )
 
-    run_write_unit(db, _persist, label="discovery_rec_action")
+    # Shared write helper: reachable standalone (its own route) AND nested inside
+    # the canonical paper-action unit (`POST /papers/{id}/action` wraps
+    # `apply_paper_action` in one `run_write_unit`). It therefore must NOT open a
+    # unit of its own — the outermost caller owns the gate, the BEGIN IMMEDIATE
+    # and the retry, and this commits only when it is the standalone one.
+    _persist()
+    commit_unless_gated(db, label="discovery_rec_action")
     return {
         "id": rec_id,
         action: True,

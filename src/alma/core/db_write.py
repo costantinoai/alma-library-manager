@@ -72,10 +72,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# One gate for the whole process. Not an RLock on purpose: a unit that
-# tries to nest another unit is a design error (it would hold the writer
-# across the inner unit's retries) and should deadlock loudly in dev
-# rather than silently serialize twice.
+# One gate for the whole process. Not an RLock on purpose: a unit that tries to
+# nest another unit is a design error — the inner unit would re-`BEGIN
+# IMMEDIATE` on a connection that is already mid-transaction, and the outer unit
+# would hold the writer across the inner one's retries. Nesting is REFUSED (see
+# `_writer_gate`), not permitted.
 _WRITER_GATE = threading.Lock()
 
 # Per-thread flag + deferred-callback stack for run_after_gate_release().
@@ -212,6 +213,10 @@ def _drain_deferred() -> None:
 _GATE_WAIT_LOG_THRESHOLD_S = 0.25
 
 
+class NestedWriteUnitError(RuntimeError):
+    """A write unit tried to open another write unit on the same thread."""
+
+
 @contextmanager
 def _writer_gate(label: str) -> Iterator[None]:
     """Hold the process writer gate for the duration of the block.
@@ -221,7 +226,30 @@ def _writer_gate(label: str) -> Iterator[None]:
     (their write rolled back, so scheduling a job for rows that no longer exist
     would be wrong), and drains them once the gate — and with it the SQLite
     write lock — is released.
+
+    **Nesting is refused, loudly and immediately.** The gate is not an RLock
+    because a unit inside a unit is a design error; the intended consequence was
+    that such code would "deadlock loudly in dev". It does not. A deadlock on a
+    plain `Lock` has no timeout and no traceback: the thread parks forever, the
+    gate is never released, and every later write in the process parks behind it.
+    That is the quietest failure this module can produce — it cost a 900-test
+    suite run and, in the app, one leaked worker thread per Feed/Discovery click
+    (2026-07-26, `POST /papers/{id}/action` → `mark_recommendation_action`).
+
+    So the design decision stands and the *signal* is fixed: same-thread
+    re-entry raises :class:`NestedWriteUnitError` naming the fix, instead of
+    hanging. A shared helper that may run standalone OR nested does not open a
+    unit at all — it writes and calls :func:`commit_unless_gated`.
     """
+    if gate_held_by_current_thread():
+        raise NestedWriteUnitError(
+            f"{label}: this thread is already inside a write unit. A write "
+            "helper that can run standalone OR nested must not open its own "
+            "unit — perform its writes and call `commit_unless_gated(conn, "
+            "label=...)`, letting the outermost caller own the gate, the "
+            "BEGIN IMMEDIATE and the retry."
+        )
+
     waited_from = time.monotonic()
     try:
         with _WRITER_GATE:

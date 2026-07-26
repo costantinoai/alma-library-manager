@@ -18,7 +18,7 @@ from alma.application.feed_query_language import (
 from alma.core.components import resolve_component
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
-from alma.core.db_write import run_write_unit, write_section
+from alma.core.db_write import commit_unless_gated, write_section
 from alma.core.http_sources import (
     openalex_usage_delta,
     openalex_usage_snapshot,
@@ -1308,7 +1308,13 @@ def apply_feed_action(
             (resting_status, paper_id),
         )
 
-    run_write_unit(db, _persist, label="feed_action")
+    # Shared write helper: reachable standalone (its own route) AND nested inside
+    # the canonical paper-action unit (`POST /papers/{id}/action` wraps
+    # `apply_paper_action` in one `run_write_unit`). It therefore must NOT open a
+    # unit of its own — the outermost caller owns the gate, the BEGIN IMMEDIATE
+    # and the retry, and this commits only when it is the standalone one.
+    _persist()
+    commit_unless_gated(db, label="feed_action")
 
     return {
         "feed_item_id": feed_item_id,
@@ -1349,7 +1355,13 @@ def undo_feed_dismiss(db: sqlite3.Connection, feed_item_id: str) -> dict | None:
             (paper_id,),
         )
 
-    run_write_unit(db, _persist, label="feed_undo_dismiss")
+    # Shared write helper: reachable standalone (its own route) AND nested inside
+    # the canonical paper-action unit (`POST /papers/{id}/action` wraps
+    # `apply_paper_action` in one `run_write_unit`). It therefore must NOT open a
+    # unit of its own — the outermost caller owns the gate, the BEGIN IMMEDIATE
+    # and the retry, and this commits only when it is the standalone one.
+    _persist()
+    commit_unless_gated(db, label="feed_undo_dismiss")
     return {
         "feed_item_id": feed_item_id,
         "paper_id": paper_id,

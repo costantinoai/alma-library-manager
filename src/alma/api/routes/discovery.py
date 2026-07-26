@@ -1063,7 +1063,13 @@ def mark_seen(
     runner = OperationRunner(db)
 
     def _handler(_ctx):
-        out = discovery_app.mark_recommendation_action(db, rec_id, "seen")
+        # The adapter is a shared helper now (also reached nested from the
+        # canonical paper-action route), so the caller owns the write unit.
+        out = run_write_unit(
+            db,
+            lambda: discovery_app.mark_recommendation_action(db, rec_id, "seen"),
+            label="discovery_rec_seen",
+        )
         if out is None:
             return OperationOutcome(status="noop", message="Recommendation not found", result={"id": rec_id})
         return OperationOutcome(status="completed", message="Recommendation marked seen", result=out)
