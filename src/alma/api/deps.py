@@ -1197,6 +1197,34 @@ def init_db_schema() -> None:
                 )"""
             )
 
+            # Signal Lab (task 54, D20): ONE durable table for the minigame
+            # layer. Every answered round is one row; the fitted model is a
+            # materialized view derived wholesale from these rows, so
+            # "purge the lab" is DELETE + invalidate — nothing else to clean.
+            # Deliberately NOT feedback_events: that table feeds the
+            # unpurgeable preference_profiles accumulator.
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS signal_lab_rounds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id TEXT NOT NULL,
+                    region_id INTEGER,
+                    pair_region_id INTEGER,
+                    region_version INTEGER,
+                    ring INTEGER,
+                    policy_version INTEGER NOT NULL,
+                    shown_json TEXT NOT NULL,
+                    answer_json TEXT,
+                    skipped INTEGER DEFAULT 0,
+                    reaction_ms INTEGER,
+                    holdout INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT (datetime('now'))
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signal_lab_rounds_game "
+                "ON signal_lab_rounds(game_id, created_at DESC)"
+            )
+
             # ==============================================================
             # SETTINGS + CACHING
             # ==============================================================
