@@ -947,15 +947,23 @@ def seed_papers_for_author(
     if not candidates:
         summary["skipped"] = True
         summary["reason"] = str(page.get("error") or "no_works")
-        # An upstream ERROR is retryable and must NOT be recorded as terminal;
-        # a genuinely empty catalogue is terminal.
-        if not page.get("error"):
+        # Terminality is decided by what OpenAlex HOLDS (`meta.count`), never by
+        # the length of this list. `fetch_works_page_for_author` filters client
+        # side — work types outside its allowlist (dataset, dissertation,
+        # editorial…) and file-looking titles are dropped — so an author with a
+        # full catalogue of filtered-out types arrives here with an empty list
+        # and no error. Stamping that terminal retired seedable authors
+        # permanently (finding B-3, 2026-07-26).
+        #
+        # An upstream ERROR is likewise retryable; only a genuinely empty
+        # catalogue is terminal.
+        if not page.get("error") and declared_works < target_papers:
             _record_seed_attempt(
                 conn, oid_norm, status=SEED_STATUS_EXHAUSTED,
-                declared_works=0, local_papers=existing,
-                reason="OpenAlex returned no works for this author",
+                declared_works=declared_works, local_papers=existing,
+                reason=f"OpenAlex holds only {declared_works} work(s) for this author",
             )
-        _log("seed_fetch", f"No works available for {oid_norm}")
+        _log("seed_fetch", f"No usable works on page 1 for {oid_norm}")
         return summary
 
     # Already citation-desc from the API, so preserving order preserves rank.

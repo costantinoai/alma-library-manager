@@ -2598,7 +2598,12 @@ def list_author_suggestions(
     library_venue_weights = _build_prevalence_weights(_top_venues_for_library(db, limit=8))
     library_topics = set(library_topic_weights.keys())
     library_venues = set(library_venue_weights.keys())
-    projected_paper_signals = load_projected_paper_signals(db)
+    # This ranking consumes only projected author / author-name weights. The
+    # full projection also fans every event across all embedded semantic
+    # neighbours, topics, venues, keywords, tags, and citations (~10 s on the
+    # current corpus) and then discards those maps. Keep the hot suggestion GET
+    # on the purpose-built author-only path; discovery refresh owns the full fanout.
+    projected_paper_signals = load_projected_paper_signals(db, author_only=True)
 
     # Dismissal cluster signature — recently dismissed authors'
     # topic / venue / coauthor / institution profiles. Candidates
