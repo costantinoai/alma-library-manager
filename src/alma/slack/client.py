@@ -96,6 +96,30 @@ class SlackNotifier:
         """Return ``True`` when a Slack token is available."""
         return bool(self._token)
 
+    # ------------------------------------------------------------------
+    # Public accessors for READ paths (Inbox capture)
+    # ------------------------------------------------------------------
+    # This class is the outbound notifier, but it already owns the token, the
+    # WebClient lifecycle and the name→ID cache. The Inbox's Slack channel
+    # adapter reads through these rather than re-resolving a second client, so
+    # there stays exactly one place that knows how to reach the workspace.
+
+    def get_client(self):
+        """The authenticated ``slack_sdk`` WebClient.
+
+        Raises RuntimeError when no token is configured — callers should gate on
+        :meth:`is_configured` first.
+        """
+        return self._get_client()
+
+    def resolve_channel_id(self, target: str) -> str:
+        """Resolve a channel name / ``#name`` / display name to a Slack ID.
+
+        Results are cached on the instance, so a polling loop resolves
+        ``#alma-inbox`` once rather than listing the workspace every sweep.
+        """
+        return self._resolve_target(target)
+
     def resolve_channel(self, channel: str | None = None) -> str:
         """Return the effective channel string, falling back to *default_channel*.
 

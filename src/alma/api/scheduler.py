@@ -674,6 +674,20 @@ def _alert_check_interval_hours() -> int:
         return 1
 
 
+def _inbox_sweep_interval_minutes() -> int:
+    """How often to poll Inbox delivery channels, in minutes (0 = never).
+
+    Five minutes by default: fast enough that a paper sent from a phone is
+    waiting by the time you look, slow enough to stay far inside Slack's rate
+    limits. One `conversations.history` call per channel per sweep, and the
+    runner returns immediately when no channel is configured.
+    """
+    try:
+        return max(0, int(os.getenv("INBOX_SWEEP_INTERVAL_MINUTES", "5")))
+    except (ValueError, TypeError):
+        return 5
+
+
 def _author_refresh_hour() -> int:
     try:
         return int(os.getenv("AUTHOR_REFRESH_HOUR", "3")) % 24
@@ -733,7 +747,8 @@ def _register_interval_job(
     name: str,
     description: str,
     enabled: bool,
-    interval_hours: int,
+    interval_hours: int = 0,
+    interval_minutes: int = 0,
 ) -> bool:
     """Register (or remove) an interval-triggered job from one place.
 
@@ -742,6 +757,11 @@ def _register_interval_job(
     settings change), then re-adds the job ONLY when it is opted in (`enabled`)
     AND has a positive interval. Returns True when the job is now scheduled,
     False when it is left disabled.
+
+    Pass ``interval_minutes`` for sub-hourly work. The Inbox capture sweep is
+    the first such job: a phone capture that took an hour to appear would not
+    feel like a capture at all, so it polls on a minutes cadence. Exactly one of
+    the two should be set; ``interval_minutes`` wins if both are.
     """
     try:
         sched.remove_job(job_id)
@@ -750,10 +770,17 @@ def _register_interval_job(
     with _job_lock:
         _job_meta.pop(job_id, None)
 
-    if enabled and interval_hours > 0:
+    minutes = int(interval_minutes or 0)
+    hours = int(interval_hours or 0)
+    if enabled and (minutes > 0 or hours > 0):
+        trigger = (
+            IntervalTrigger(minutes=minutes)
+            if minutes > 0
+            else IntervalTrigger(hours=hours)
+        )
         sched.add_job(
             func,
-            trigger=IntervalTrigger(hours=interval_hours),
+            trigger=trigger,
             id=job_id,
             name=name,
             replace_existing=True,
@@ -764,7 +791,8 @@ def _register_interval_job(
                 "name": name,
                 "description": description,
             }
-        logger.info("Registered %s job (interval=%dh)", job_id, interval_hours)
+        cadence = f"{minutes}m" if minutes > 0 else f"{hours}h"
+        logger.info("Registered %s job (interval=%s)", job_id, cadence)
         return True
 
     logger.info("%s disabled (auto-refresh opt-in OFF)", job_id)
@@ -1364,6 +1392,25 @@ def setup_scheduler() -> None:
         description=f"Refreshes the feed inbox every {feed_refresh_hours}h",
         enabled=_schedule_flag_enabled("schedule.feed_refresh_enabled"),
         interval_hours=feed_refresh_hours,
+    )
+
+    # -- Inbox capture sweep (interval, minutes) ---------------------------
+    # Polls the delivery channels that feed the Inbox (Slack today). Registered
+    # unconditionally because the runner self-gates on whether any channel is
+    # actually configured — a token-less install polls nothing and logs nothing.
+    # Minutes, not hours: this is the phone→ALMa loop, and latency is the whole
+    # user experience.
+    inbox_sweep_minutes = _inbox_sweep_interval_minutes()
+    _register_interval_job(
+        sched,
+        job_id="inbox_capture_sweep",
+        func=inbox_capture_sweep_periodic,
+        name="Inbox capture sweep",
+        description=(
+            f"Checks your capture channels every {inbox_sweep_minutes}m"
+        ),
+        enabled=inbox_sweep_minutes > 0,
+        interval_minutes=inbox_sweep_minutes,
     )
 
     # -- Citation graph maintenance (interval) -----------------------------
@@ -2002,6 +2049,75 @@ def refresh_recommendations_periodic() -> None:
             error=f"{type(exc).__name__}: {exc}",
         )
         add_job_log(job_id, f"Fatal error: {type(exc).__name__}: {exc}", step="fatal", level="error")
+
+
+def inbox_capture_sweep_periodic() -> None:
+    """Poll every configured Inbox delivery channel (Slack today).
+
+    The phone→ALMa loop: you send a paper to your capture channel, this picks it
+    up and parks it at ``status='inbox'``. Cadence is minutes, not hours — a
+    capture that surfaced an hour later would not read as a capture.
+
+    Uses its own connection and the sweep's gather-then-write path, so it never
+    holds the writer gate across the Slack or OpenAlex round-trips. A no-op when
+    no channel is configured, which is the normal state until the user sets one.
+    """
+    job_id = "periodic_inbox_capture"
+    operation_key = "inbox.capture_sweep"
+    try:
+        from alma.services.inbox_channels import available_channels
+
+        if not available_channels():
+            logger.debug("Inbox capture sweep skipped: no channels configured")
+            return
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Inbox capture sweep skipped: %s", exc)
+        return
+
+    set_job_status(
+        job_id,
+        status="running",
+        trigger_source="scheduler",
+        operation_key=operation_key,
+        started_at=utcnow().isoformat(),
+        message="Checking capture channels",
+    )
+    try:
+        from alma.api.deps import open_db_connection
+        from alma.services.inbox_sweep import run_inbox_sweep
+
+        conn = open_db_connection()
+        try:
+            result = run_inbox_sweep(conn)
+        finally:
+            conn.close()
+
+        captured = int((result or {}).get("captured") or 0)
+        set_job_status(
+            job_id,
+            status="noop" if captured == 0 else "completed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=(
+                "No new papers in your capture channels"
+                if captured == 0
+                else f"Captured {captured} paper(s) to your Inbox"
+            ),
+            result=result,
+        )
+        if captured:
+            logger.info("Inbox capture sweep captured %d paper(s)", captured)
+    except Exception as exc:
+        logger.exception("Fatal error in inbox_capture_sweep_periodic")
+        set_job_status(
+            job_id,
+            status="failed",
+            trigger_source="scheduler",
+            operation_key=operation_key,
+            finished_at=utcnow().isoformat(),
+            message=f"Inbox capture sweep failed: {exc}",
+        )
 
 
 def refresh_feed_inbox_periodic() -> None:

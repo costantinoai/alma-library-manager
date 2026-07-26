@@ -1106,6 +1106,61 @@ def _m_0033_author_seed_status(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m_0034_inbox_messages(conn: sqlite3.Connection) -> None:
+    """Delivery ledger for the channel-agnostic Inbox (2026-07-26).
+
+    The Inbox lets you send a paper to ALMa from anywhere — Slack from your
+    phone today, email or a share sheet later — and have it land in the corpus
+    at `status='inbox'`, waiting for triage. This table records the MESSAGES,
+    never the papers: a resolved capture is an ordinary `papers` row so
+    enrichment, dedup, search and the map all see it at once.
+
+    It exists for three jobs that nothing else can do:
+
+    1. **Idempotency.** Channel delivery is at-least-once — polling twice, or
+       crashing mid-batch, re-delivers. `UNIQUE(channel, external_id)` is what
+       makes re-processing a no-op instead of a duplicate paper.
+    2. **A home for failures.** A message that resolves to no paper has no
+       `papers` row to hang off. Without a row here it would vanish silently,
+       which is precisely what "no silent failures" forbids.
+    3. **The poll cursor.** `MAX(external_id)` per channel is where the next
+       fetch resumes, so the cursor is derived from durable state rather than
+       kept in a settings blob that can drift out of sync with what was
+       actually processed.
+
+    `channel` + `external_id` are deliberately opaque TEXT: Slack's key is a
+    message `ts`, email's is a `Message-ID`. The schema does not care.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS inbox_messages (
+            id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            raw_text TEXT,
+            extracted_json TEXT NOT NULL DEFAULT '{}',
+            outcome TEXT NOT NULL,
+            paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+            error TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(channel, external_id)
+        )
+        """
+    )
+    # The cursor read: "highest external_id I have processed for this channel".
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbox_messages_cursor "
+        "ON inbox_messages(channel, external_id DESC)"
+    )
+    # The review read: "what failed and needs my attention", newest first.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inbox_messages_outcome "
+        "ON inbox_messages(outcome, received_at DESC)"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1140,6 +1195,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (31, "ai_provider_local_when_available", _m_0031_ai_provider_local_when_available),
     (32, "single_corpus_substrate", _m_0032_single_corpus_substrate),
     (33, "author_seed_status", _m_0033_author_seed_status),
+    (34, "inbox_messages", _m_0034_inbox_messages),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.

@@ -93,8 +93,41 @@ port 465.
 | `ALMA_SCHEDULER_WORKERS` | `5` | Max background jobs running at once (1–16). Lower it on a small host (a Raspberry Pi is happy at `1`–`2`) if the app feels sluggish or logs `database is locked`; raise it only if you have spare CPU/GPU. |
 | `AUTHOR_REFRESH_HOUR` | `3` | Hour-of-day (UTC) for nightly author refresh. |
 | `ALERT_CHECK_INTERVAL_HOURS` | `1` | How often the alert dispatcher runs. |
+| `INBOX_SWEEP_INTERVAL_MINUTES` | `5` | How often ALMa polls your [Inbox](../concepts/inbox.md) capture channels. Minutes, not hours — this is the phone→ALMa loop, so latency is the experience. `0` disables the sweep. Costs one API call per configured channel per sweep, and returns immediately when no channel is set up. |
 | `ALMA_DEEP_REFRESH_WORKERS` | `4` | Concurrency for the per-author deep-refresh fan-out (clamped 1–16). |
 | `SCHOLAR_RETRY_DELAYS` | `20,40,60` | Comma-separated retry backoff (seconds) for external fetches. |
+| `ALMA_AUTHOR_SUGGESTION_REFRESH_INTERVAL_HOURS` | `6` | How often suggested authors are recomputed in the background. |
+| `ALMA_HYDRATION_DRAIN_INTERVAL_MINUTES` | `15` | How often the pending-hydration ledger is drained (the sweep that fills missing metadata, abstracts and identifiers). |
+| `ALMA_IDLE_MAINTENANCE_INTERVAL_HOURS` | `1` | How often idle-time maintenance (vacuum, checkpoint, reconciliation) may run. |
+| `ALMA_OPERATION_LOG_RETENTION_DAYS` | unset | Trim `operation_logs` older than N days during maintenance. Unset keeps everything. |
+| `ALMA_BACKUP_RETAIN` | `5` | How many automatic database backups to keep before the oldest is pruned. |
+
+### Paths and profile
+
+Set before start; they decide **where ALMa keeps your data**, so changing one on
+an existing install points it at a different (probably empty) profile.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ALMA_ENV` | `prod` | Profile namespace. `dev` gives an isolated copy so development never touches your real library — `scripts/start-dev.sh` sets it. |
+| `ALMA_CONFIG_DIR` | OS config dir | Directory holding `.env` and `settings.json`. Docker sets it to `/app`. |
+| `ALMA_SETTINGS_PATH` | `<config dir>/settings.json` | Exact settings file. Docker pins it into the data volume so settings survive image upgrades. |
+| `ALMA_DEFAULT_AI_PROVIDER` | auto | Forces the embedding compute provider (`none` / `local` / `openai`) instead of auto-detecting. Defaults to `local` when torch is importable (D19). |
+
+### Slack (legacy env aliases)
+
+Prefer **Settings → Channels**, which writes the secret store. These are read at
+startup for existing installs and Docker `env_file` setups.
+
+| Variable | Purpose |
+|---|---|
+| `SLACK_API_TOKEN` / `SLACK_TOKEN` | Bot User OAuth token (`xoxb-…`). |
+| `SLACK_DEFAULT_CHANNEL` | Channel for outgoing alerts. |
+| `SLACK_CONFIG_PATH` | Path to a plugin config file (`config/slack.config`). |
+
+The **inbound** capture channel has no env alias on purpose — it is set in
+Settings only, so capture cannot be switched on by an environment a user did not
+review. See [Capturing from your phone](../user-guide/capturing-from-your-phone.md).
 
 ### Secrets file
 

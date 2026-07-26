@@ -121,6 +121,7 @@ nav:
       - concepts/index.md
       - Home: concepts/home.md
       - Paper lifecycle: concepts/paper-lifecycle.md
+      - Inbox: concepts/inbox.md
       - Feed: concepts/feed.md
       - Library: concepts/library.md
       - Discovery: concepts/discovery.md
@@ -136,6 +137,7 @@ nav:
       - Saving papers: user-guide/saving-papers.md
       - Reading workflow: user-guide/reading-workflow.md
       - Browser connector: user-guide/browser-connector.md
+      - Capturing from your phone: user-guide/capturing-from-your-phone.md
       - Importing from Zotero / BibTeX: user-guide/importing.md
       - Tracking authors: user-guide/tracking-authors.md
       - Tuning Discovery: user-guide/tuning-discovery.md

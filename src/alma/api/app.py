@@ -36,6 +36,7 @@ from alma.api.routes.graphs import router as graphs_router
 from alma.api.routes.health import router as health_router
 from alma.api.routes.home import router as home_router
 from alma.api.routes.imports import router as imports_router
+from alma.api.routes.inbox import router as inbox_router
 from alma.api.routes.insights import router as insights_router
 from alma.api.routes.lenses import router as lenses_router
 from alma.api.routes.library import router as library_router
@@ -516,6 +517,7 @@ app.include_router(reports_router, prefix="/api/v1/reports", tags=["reports"])
 app.include_router(home_router, prefix="/api/v1/home", tags=["home"])
 app.include_router(bootstrap_router, prefix="/api/v1", tags=["bootstrap"])
 app.include_router(extension_router, prefix="/api/v1/extension", tags=["extension"])
+app.include_router(inbox_router, prefix="/api/v1/inbox", tags=["inbox"])
 app.include_router(onboarding_router, prefix="/api/v1", tags=["onboarding"])
 
 # ============================================================================

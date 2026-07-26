@@ -214,6 +214,17 @@ class SettingsModel(BaseModel):
     # Slack notification settings
     slack_token: str | None = Field(None, description="Slack Bot User OAuth Token")
     slack_channel: str | None = Field(None, description="Default Slack channel for notifications")
+    # Inbox capture (INBOUND) — deliberately a SEPARATE channel from
+    # `slack_channel`, which is where alerts are POSTED. Polling the channel
+    # ALMa writes to would re-ingest its own notifications as captures. Empty
+    # = capture off. See docs/concepts/inbox.md.
+    slack_inbox_channel: str | None = Field(
+        None,
+        description=(
+            "Slack channel ALMa POLLS for papers you send yourself "
+            "(e.g. alma-inbox). Empty disables Inbox capture."
+        ),
+    )
     # Email / SMTP digest channel (sibling of Slack). Add "email" to an alert's
     # channels to receive digests here. Password lives in the secret store.
     smtp_host: str | None = Field(None, description="SMTP server host for email digests")
@@ -337,6 +348,7 @@ def get_settings():
         slack_config_path=raw.get("slack_config_path"),
         slack_token=slack_token_masked,
         slack_channel=raw.get("slack_channel"),
+        slack_inbox_channel=raw.get("slack_inbox_channel"),
         smtp_host=raw.get("smtp_host"),
         smtp_port=int(raw.get("smtp_port", 587) or 587),
         smtp_username=raw.get("smtp_username"),

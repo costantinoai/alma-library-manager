@@ -25,7 +25,14 @@ from alma.services import health as health_service
 
 RECENT_DAYS = 7
 FEED_INBOX_DAYS = 60
-HIGHLIGHT_LIMIT = 3
+# One full tile row on the widest Home grid (4 columns). Fewer is fine —
+# Home never pads a row with filler it can't justify.
+HIGHLIGHT_LIMIT = 4
+# Home can show two complete rows and expands in place to the rest.
+READING_PREVIEW_LIMIT = 10
+#: Same over-fetch rationale as reading: Home shows a couple of rows and
+#: expands in place, so one bounded page avoids a second request.
+INBOX_PREVIEW_LIMIT = 10
 
 
 def _table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -90,6 +97,9 @@ def _paper(row: dict[str, Any]) -> dict[str, Any]:
         "url": row.get("url"),
         "doi": row.get("doi"),
         "status": row.get("status"),
+        # Present only on the reading preview — highlight projections carry
+        # their own period instead. Never fabricated.
+        "added_at": row.get("added_at"),
     }
 
 
@@ -147,11 +157,25 @@ def _attention(db: sqlite3.Connection) -> dict[str, int]:
         ).fetchone()["c"]
         or 0
     )
+    # Captures that reached ALMa but resolved to no paper — a link with no DOI,
+    # or an upstream failure. They are recorded rather than dropped ("no silent
+    # failures"), so this is where they ask for a human. Counted only when the
+    # ledger exists, so a pre-migration DB reports 0 instead of raising.
+    inbox_unresolved = 0
+    if _table_exists(db, "inbox_messages"):
+        inbox_unresolved = int(
+            db.execute(
+                "SELECT COUNT(*) AS c FROM inbox_messages "
+                "WHERE outcome IN ('unresolved', 'error')"
+            ).fetchone()["c"]
+            or 0
+        )
     return {
         "imports_pending": imports_pending,
         "monitors_need_resolution": monitors_need_resolution,
         "author_decisions": author_attention.identity_attention_count(db),
         "critical_health": _critical_health_count(db),
+        "inbox_unresolved": inbox_unresolved,
     }
 
 
@@ -257,6 +281,31 @@ def _select_highlights(
         )
         break
 
+    # Top up to a full row with the next-best Discovery matches. One of each
+    # kind comes first (the balance rule); the remainder goes to the only
+    # bucket that carries an explicit relevance score, so every added tile can
+    # still say why it earned its place.
+    for candidate in discovery_candidates:
+        if len(highlights) >= HIGHLIGHT_LIMIT:
+            break
+        paper_id = str(candidate.get("id") or "")
+        if not paper_id or paper_id in used_papers:
+            continue
+        used_papers.add(paper_id)
+        lens_name = str(candidate.get("lens_name") or "Discovery").strip()
+        highlights.append(
+            {
+                "kind": "discovery_paper",
+                "period": _period(candidate.get("created_at"), day_start),
+                "paper": _paper(candidate),
+                "reason": {"kind": "lens", "label": f"Match from {lens_name}"},
+                "lens_id": candidate.get("lens_id"),
+                "lens_name": lens_name,
+                "recommendation_id": candidate.get("recommendation_id"),
+                "score": candidate.get("score"),
+            }
+        )
+
     return highlights[:HIGHLIGHT_LIMIT]
 
 
@@ -282,7 +331,12 @@ def build_daily_brief(
         day_start=day_start,
         recent_start=recent_start,
     )
-    reading = library_app.reading_preview(db, limit=3)
+    # Over-fetch one bounded page so two measured rows can expand in place
+    # without a second request.
+    reading = library_app.reading_preview(db, limit=READING_PREVIEW_LIMIT)
+    # D13: papers you sent yourself from another device, awaiting triage. Home
+    # is the Inbox's home surface; the section hides itself when empty.
+    inbox = library_app.inbox_preview(db, limit=INBOX_PREVIEW_LIMIT)
     user_row = db.execute(
         "SELECT value FROM discovery_settings WHERE key = 'user.name'"
     ).fetchone()
@@ -314,6 +368,10 @@ def build_daily_brief(
         "reading": {
             "total": int(reading["total"]),
             "items": [_paper(item) for item in reading["items"]],
+        },
+        "inbox": {
+            "total": int(inbox["total"]),
+            "items": [_paper(item) for item in inbox["items"]],
         },
         "attention": _attention(db),
     }

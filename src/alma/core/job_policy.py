@@ -141,6 +141,14 @@ JOB_POLICIES: dict[str, JobPolicy] = {p.namespace: p for p in (
     _p("fetch", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=2),
     _p("onboarding", JobClass.USER_PRODUCT, 10, {_R.NETWORK, _R.DB_WRITER}, sources=("openalex",), max_concurrency=1),
     # ---- Notification / integration ----------------------------------------
+    # Inbox capture (D13): polls delivery channels (Slack today) and lands what
+    # you sent yourself. NOTIFICATION rather than USER_PRODUCT — it is an
+    # integration poll, not something the user is waiting on a page for. Runs on
+    # a minutes cadence, so `max_concurrency=1` and no fan-out: overlapping
+    # sweeps would re-fetch the same window, and the per-message capture is a
+    # short serial gather-then-write. Network (Slack + OpenAlex) and DB writer.
+    _p("inbox", JobClass.NOTIFICATION, 40, {_R.NETWORK, _R.DB_WRITER},
+       sources=("openalex",), max_concurrency=1, fanout_budget=1),
     _p("alerts", JobClass.NOTIFICATION, 40, {_R.DB_WRITER, _R.NETWORK}, max_concurrency=1),
     _p("plugins", JobClass.NOTIFICATION, 40, {_R.NETWORK}, durable=False, max_concurrency=2),
     # ---- Data-management / destructive utilities ---------------------------

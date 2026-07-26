@@ -11,20 +11,48 @@ each other.
 
 ## Membership axis
 
-The `papers.status` column holds one of four mutually-exclusive
+The `papers.status` column holds one of five mutually-exclusive
 values:
 
 | Value | Meaning | UI surfaces |
 |---|---|---|
 | `tracked` | ALMa knows about this paper but you haven't curated it. Default state for anything pulled from a monitor or a backfill. | Feed, Discovery candidates, Corpus Explorer |
+| `inbox` | You **sent this to yourself** from another channel and haven't triaged it. A buffer between `tracked` and `library` — see [Inbox](inbox.md). | Home Inbox section |
 | `library` | You have explicitly **saved** this paper. It is part of your curated collection. | Library tabs |
-| `dismissed` | You explicitly hid this from Discovery. Discovery will not re-suggest it. | Hidden everywhere by default; visible in Corpus Explorer |
+| `dismissed` | The **global hide**: don't surface this anywhere. Visibility only — it carries no opinion (see below). | Hidden everywhere by default; visible in Corpus Explorer |
 | `removed` | You used to have this in your Library and chose to remove it. The row is preserved for provenance and as a negative signal. | Hidden by default; visible in Corpus Explorer |
 
 Removal is a **soft transition**, not a hard delete (
 [why](../vision.md#design-principles)). The row stays so that
 Discovery knows you've explicitly rejected it and so that Insights
 counts stay coherent.
+
+### Colour is valence, membership is not (D6, amended 2026-07-26)
+
+Four verbs move a paper, and they answer **different questions**. The word
+"dismiss" used to answer all of them at once — it set `status='dismissed'`,
+stamped `rating=1` and wrote a negative feedback event — so "I've dealt with
+this" was indistinguishable from "this is bad".
+
+| Verb | Axis | Scope | Writes |
+|---|---|---|---|
+| `save` / `like` / `love` / `dislike` | **valence** | global — one opinion per paper | `rating` + a `feedback_events` row |
+| `dismiss` | **resolution** | **the surface that raised it** | that surface's row only. No rating, no event, no lens signal. |
+| `defer` | **membership** | the Inbox | `inbox` → `tracked`. Nothing else. |
+| `remove` | **membership** | global | `status='removed'` — still a negative (D3) |
+
+Consequences worth knowing:
+
+* **Dismissing in one Discovery lens does not mute the paper in any other.**
+  The cooldown is scoped `WHERE lens_id = ?`; previously one dismiss suppressed
+  the paper everywhere.
+* **`status='dismissed'` carries no valence.** It is the global *hide* — a
+  visibility choice. It is not in `signal_valence.NEGATIVE_STATUSES`, so tidying
+  your surfaces cannot poison a paper's map colour.
+* **Negative opinion is `dislike`.** "Bad and gone" is dislike **plus** dismiss:
+  two verbs, composed deliberately.
+* **`defer` is not a verdict**, it is the absence of one — which is why the
+  Inbox X button cannot reuse `dismiss`.
 
 ## Reading axis
 
@@ -86,13 +114,22 @@ Dislike or a manual rating change can lower it.
 stateDiagram-v2
     direction LR
     [*] --> tracked: monitor / backfill
+    [*] --> inbox: capture (Slack / any channel)
+    tracked --> inbox: capture
+    inbox --> library: Save · Like · Love
+    inbox --> tracked: Defer (the X button)
     tracked --> library: Save · Like · Love
-    tracked --> dismissed: Dismiss
+    tracked --> dismissed: Hide
     library --> removed: Remove from Library
     removed --> library: Re-save
+    removed --> inbox: capture (reconsidering)
     dismissed --> library: Save (overrides)
+    dismissed --> inbox: capture (reconsidering)
     library --> library: Like / Love / rating change
 ```
+
+A capture never demotes a `library` paper — re-sending something you already
+saved is reported as a duplicate and the row is left untouched.
 
 Reading transitions are completely orthogonal to the diagram above.
 
@@ -103,8 +140,11 @@ Reading transitions are completely orthogonal to the diagram above.
   signal but **keeps it visible** (Feed is chronological — it does
   not hide things).
 * **Discovery** shows `tracked` candidates the recommender thinks you
-  haven't seen. Dismissing a Discovery paper writes a negative signal
-  **and** hides it from the lens. Saving it transitions to `library`.
+  haven't seen. Dismissing hides that recommendation in its lens without
+  changing preference. Saving transitions to `library`.
+* **Home** shows the [Inbox](inbox.md) — papers you sent yourself from
+  another channel. Triage moves them to `library`, or the X button
+  (`defer`) drops them back to `tracked` writing no signal at all.
 * **Library** shows `library` papers. Removing transitions to
   `removed`.
 * **Reading list** shows papers with `reading_status='reading'` —

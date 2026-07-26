@@ -558,6 +558,37 @@ def init_db_schema() -> None:
                 "ON author_seed_status(status)"
             )
 
+            # Delivery ledger for the channel-agnostic Inbox (migration 34).
+            # Records MESSAGES, never papers: a resolved capture is an ordinary
+            # `papers` row at `status='inbox'`. Three jobs — idempotency for
+            # at-least-once channel delivery (`UNIQUE(channel, external_id)`),
+            # a durable home for messages that resolved to no paper, and the
+            # poll cursor (`MAX(external_id)` per channel).
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS inbox_messages (
+                    id TEXT PRIMARY KEY,
+                    channel TEXT NOT NULL,
+                    external_id TEXT NOT NULL,
+                    received_at TEXT NOT NULL,
+                    raw_text TEXT,
+                    extracted_json TEXT NOT NULL DEFAULT '{}',
+                    outcome TEXT NOT NULL,
+                    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+                    error TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(channel, external_id)
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inbox_messages_cursor "
+                "ON inbox_messages(channel, external_id DESC)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_inbox_messages_outcome "
+                "ON inbox_messages(outcome, received_at DESC)"
+            )
+
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS author_enrichment_status (
                     author_id TEXT NOT NULL REFERENCES authors(id) ON DELETE CASCADE,
