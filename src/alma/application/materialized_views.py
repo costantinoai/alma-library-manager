@@ -411,6 +411,17 @@ def enqueue_rebuild(view_key: str) -> str | None:
 VARIANT_ROWS_PER_BASE = 32
 
 
+def read_variant_row(conn: sqlite3.Connection, variant_key: str) -> dict | None:
+    """Stored row for a VARIANT key, or None.
+
+    Variant keys are minted per option-tuple and are deliberately NOT in the
+    view registry, so `get_stored` — which resolves the key through
+    `get_view` — raises `KeyError` on them. Callers that only need to know
+    whether a variant is already cached (the read-only prefetch guard) use this.
+    """
+    return _read_row(conn, variant_key)
+
+
 def get_or_build_variant(
     conn: sqlite3.Connection,
     *,

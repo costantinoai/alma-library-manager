@@ -294,7 +294,7 @@ def _serve_graph_variant(
     ``None`` so the route answers 202 and the client polls.
     """
     variant_key = _variant_view_key(base_view_key, options)
-    if prefetch and mv.get_stored(conn, variant_key) is None:
+    if prefetch and mv.read_variant_row(conn, variant_key) is None:
         # A speculative warm-up must never START a variant build. A variant is a
         # full re-cluster/re-layout (the >200 s author-network case), and the
         # sidebar prefetch fires on hover — with a non-default blend saved in
