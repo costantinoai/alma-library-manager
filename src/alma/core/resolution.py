@@ -710,7 +710,7 @@ def _doi_variants(doi_raw: str) -> list[str]:
         raw,
         normalize_doi(raw) or "",
         re.sub(r"^https?://(dx\.)?doi\.org/", "", raw, flags=re.IGNORECASE),
-        re.sub(r"^doi:\\s*", "", raw, flags=re.IGNORECASE),
+        re.sub(r"^doi:\s*", "", raw, flags=re.IGNORECASE),
     ]
     out: list[str] = []
     seen: set[str] = set()
@@ -724,14 +724,25 @@ def _doi_variants(doi_raw: str) -> list[str]:
     return out
 
 
-def _extract_arxiv_id(text: str) -> str | None:
+def extract_arxiv_id(text: str) -> str | None:
+    """First arXiv id in *text* (``2401.12345`` / ``1706.03762v5``), or None.
+
+    THE owner of arXiv id extraction — `library.enrichment` and
+    `application.inbound_capture` both call this rather than keeping their own
+    regexes. `library.enrichment` used to carry a byte-identical copy, and when
+    this one was corrupted (every ``\\d`` written as ``\\\\d``, which in a raw
+    string matches a literal backslash) the duplicate kept working, so nothing
+    surfaced that arXiv resolution here had been dead: `_preprint_hints` handed
+    back an empty ``synthetic_dois`` for every preprint, and the
+    ``10.48550/arXiv.*`` lookup was never attempted. One owner, one regex.
+    """
     raw = (text or "").strip()
     if not raw:
         return None
     patterns = [
-        r"(?:arxiv[:/\\s]+)(\\d{4}\\.\\d{4,5}(?:v\\d+)?)",
-        r"(?:arxiv\\.org/(?:abs|pdf)/)(\\d{4}\\.\\d{4,5}(?:v\\d+)?)",
-        r"\\b(\\d{4}\\.\\d{4,5}(?:v\\d+)?)\\b",
+        r"(?:arxiv[:/\s]+)(\d{4}\.\d{4,5}(?:v\d+)?)",
+        r"(?:arxiv\.org/(?:abs|pdf)/)(\d{4}\.\d{4,5}(?:v\d+)?)",
+        r"\b(\d{4}\.\d{4,5}(?:v\d+)?)\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, raw, flags=re.IGNORECASE)
@@ -740,11 +751,15 @@ def _extract_arxiv_id(text: str) -> str | None:
     return None
 
 
-def _extract_biorxiv_doi(text: str) -> str | None:
+def extract_biorxiv_doi(text: str) -> str | None:
+    """First bioRxiv DOI (``10.1101/...``) in *text*, normalized, or None.
+
+    Public for the same reason as :func:`extract_arxiv_id` — one owner.
+    """
     raw = (text or "").strip()
     if not raw:
         return None
-    match = re.search(r"(10\\.1101/[^\\s/\\\"'<>]+)", raw, flags=re.IGNORECASE)
+    match = re.search(r"(10\.1101/[^\s/\"'<>]+)", raw, flags=re.IGNORECASE)
     if match:
         return normalize_doi(match.group(1))
     return None
@@ -759,8 +774,8 @@ def _preprint_hints(pub: dict[str, Any]) -> dict[str, Any]:
             str(pub.get("journal") or "").strip(),
         ]
     )
-    arxiv_id = _extract_arxiv_id(combined)
-    biorxiv_doi = _extract_biorxiv_doi(combined)
+    arxiv_id = extract_arxiv_id(combined)
+    biorxiv_doi = extract_biorxiv_doi(combined)
     synthetic_dois: list[str] = []
     if arxiv_id:
         synthetic_dois.append(f"10.48550/arXiv.{arxiv_id}")
@@ -775,7 +790,7 @@ def _preprint_hints(pub: dict[str, Any]) -> dict[str, Any]:
 def _author_tokens(authors_raw: str) -> set[str]:
     tokens: set[str] = set()
     for name in [part.strip() for part in (authors_raw or "").split(",") if part.strip()][:8]:
-        pieces = [piece for piece in re.split(r"\\s+", name) if piece]
+        pieces = [piece for piece in re.split(r"\s+", name) if piece]
         if not pieces:
             continue
         tokens.add(pieces[-1].lower())
@@ -824,7 +839,7 @@ def _score_openalex_work_candidate(candidate: dict[str, Any], pub: dict[str, Any
     candidate_tokens: set[str] = set()
     for authorship in (candidate.get("authorships") or [])[:10]:
         author_name = str(((authorship or {}).get("author") or {}).get("display_name") or "").strip()
-        for token in re.split(r"\\s+", author_name):
+        for token in re.split(r"\s+", author_name):
             if token:
                 candidate_tokens.add(token.lower())
     if src_tokens and candidate_tokens:

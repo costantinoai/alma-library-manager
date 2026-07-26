@@ -19,7 +19,11 @@ import requests
 from alma.config import get_api_call_delay
 from alma.core.db_write import write_section
 from alma.core.paper_updates import fill_only_update_paper
-from alma.core.resolution import resolve_paper_openalex_work
+from alma.core.resolution import (
+    extract_arxiv_id,
+    extract_biorxiv_doi,
+    resolve_paper_openalex_work,
+)
 from alma.core.utils import normalize_doi, normalize_orcid
 from alma.core.utils import normalize_text as _normalize_text
 from alma.openalex.client import (
@@ -107,40 +111,19 @@ def _doi_variants(doi_raw: str) -> list[str]:
     return out
 
 
-def _extract_arxiv_id(text: str) -> str | None:
-    s = (text or "").strip()
-    if not s:
-        return None
-    patterns = [
-        r"(?:arxiv[:/\s]+)(\d{4}\.\d{4,5}(?:v\d+)?)",
-        r"(?:arxiv\.org/(?:abs|pdf)/)(\d{4}\.\d{4,5}(?:v\d+)?)",
-        r"\b(\d{4}\.\d{4,5}(?:v\d+)?)\b",
-    ]
-    for pat in patterns:
-        m = re.search(pat, s, flags=re.IGNORECASE)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _extract_biorxiv_doi(text: str) -> str | None:
-    s = (text or "").strip()
-    if not s:
-        return None
-    m = re.search(r"(10\.1101/[^\s/\"'<>]+)", s, flags=re.IGNORECASE)
-    if m:
-        return normalize_doi(m.group(1))
-    return None
-
-
 def _preprint_hints(pub: dict) -> dict:
+    # Extraction lives in `core.resolution` — this module used to carry a
+    # byte-identical copy of both regex helpers. That duplication is exactly
+    # why the core copy could rot unnoticed: its patterns were corrupted to
+    # `\\d`/`\\s` (a literal backslash inside a raw string) and silently
+    # matched nothing, while this copy kept working. One owner now.
     doi = (pub.get("doi") or "").strip()
     url = (pub.get("url") or "").strip()
     title = (pub.get("title") or "").strip()
     journal = (pub.get("journal") or "").strip()
     combined = " ".join([doi, url, title, journal])
-    arxiv_id = _extract_arxiv_id(combined)
-    biorxiv_doi = _extract_biorxiv_doi(combined)
+    arxiv_id = extract_arxiv_id(combined)
+    biorxiv_doi = extract_biorxiv_doi(combined)
     looks_preprint = bool(
         arxiv_id
         or biorxiv_doi
