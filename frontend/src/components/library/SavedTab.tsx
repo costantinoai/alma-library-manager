@@ -39,7 +39,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { PaperCard } from '@/components/shared'
+import { IdentityChip, PaperCard } from '@/components/shared'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import {
   Dialog,
@@ -65,7 +65,7 @@ import {
   invalidateQueries,
 } from '@/lib/queryHelpers'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
-import { cn, formatDate, formatPublicationDate, truncate } from '@/lib/utils'
+import { formatDate, formatPublicationDate, truncate } from '@/lib/utils'
 import { type SavedSortOption } from './types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { SimilarResultsDialog } from './SimilarResultsDialog'
@@ -1025,12 +1025,13 @@ function SavedCompactTable({
         const src = row.original.added_from
         if (!src) return <span className="text-xs text-slate-300">—</span>
         return (
-          <Badge
-            variant="secondary"
-            className={cn('text-[10px]', SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR)}
+          <IdentityChip
+            size="sm"
+            chipClassName={SOURCE_COLORS[src] ?? SOURCE_FALLBACK_COLOR}
+            title="Where this paper came from"
           >
             {SOURCE_LABELS[src] ?? src}
-          </Badge>
+          </IdentityChip>
         )
       },
     },

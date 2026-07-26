@@ -13,7 +13,7 @@
 import { navigateTo } from '@/lib/hashRoute'
 import type { HealthDimension } from '@/api/client'
 import { canDrilldown } from './healthFormat'
-import { StatusRow } from './StatusRow'
+import { StatusRow } from '@/components/shared/StatusRow'
 import { Meter } from '@/components/ui/meter'
 
 export function DimensionStatusRow({ dim, onOpen }: { dim: HealthDimension; onOpen: () => void }) {

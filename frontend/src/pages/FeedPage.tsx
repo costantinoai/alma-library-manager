@@ -43,7 +43,7 @@ import {
 import { PaperDetailPanel } from '@/components/discovery'
 import { PageTour, FEED_TOUR } from '@/components/onboarding'
 import type { PaperReaction } from '@/components/discovery/PaperActionBar'
-import { JargonHint, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
+import { IdentityChip, JargonHint, ListControlBar, PaperCard, RefreshRunningBanner } from '@/components/shared'
 import { Switch } from '@/components/ui/switch'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
 import { DataTable } from '@/components/ui/data-table'
@@ -194,22 +194,18 @@ function MonitorBadge({
   label: string
 }) {
   const type = (monitorType || 'query').toLowerCase()
-  const Icon = MONITOR_TYPE_ICON[type] ?? Search
-  const chip = MONITOR_TYPE_CHIP[type] ?? MONITOR_TYPE_CHIP_FALLBACK
   // Monitor chips are an IDENTITY chip, the documented exception to the
   // valence colour contract (see SignalChip): the hue answers *which monitor
-  // matched*, not how good the match is. They still render through the shared
-  // StatusBadge shell so shape, metrics, and the icon slot stay identical to
-  // every other pill — only the palette differs, and it lives in one place
-  // (`MONITOR_TYPE_CHIP` in lib/palette.ts).
+  // matched*, not how good the match is. `IdentityChip` owns that exception's
+  // one shell; the hues live in `MONITOR_TYPE_CHIP` (lib/palette.ts).
   return (
-    <StatusBadge
-      icon={Icon}
+    <IdentityChip
+      icon={MONITOR_TYPE_ICON[type] ?? Search}
+      chipClassName={MONITOR_TYPE_CHIP[type] ?? MONITOR_TYPE_CHIP_FALLBACK}
       title={formatMonitorTypeLabel(monitorType)}
-      className={cn(chip && 'border-transparent', chip)}
     >
       {label}
-    </StatusBadge>
+    </IdentityChip>
   )
 }
 

@@ -1,29 +1,21 @@
 /**
- * Shared formatting + severity helpers for the Health page.
+ * Health-specific formatting helpers.
  *
- * Severity vocabulary is the canonical one from `alma.services.health`:
- * "ok" | "info" | "warning" | "critical". The shared `severityTone()` in
- * status-badge maps everything non-critical/non-warning to `info`, which is
- * wrong for the healthy "ok" state — so the Health surface uses the explicit
- * maps below (ok → positive / success).
+ * The SEVERITY vocabulary itself (`critical | warning | info | ok`, its rank,
+ * badge tone and label) moved to `lib/severity.ts` when Home started speaking
+ * it too — it was never Health-specific, and a second copy would have been
+ * free to disagree. Re-exported here so existing Health call sites keep one
+ * import, but `lib/severity` is the definition.
  */
 import type { MetricTileTone } from '@/components/shared/MetricTile'
 import type { StatusBadgeTone } from '@/components/ui/status-badge'
 import type { HealthDimension, HealthSnapshot, MaintenanceOperation } from '@/api/client'
 
+import { severityRank } from '@/lib/severity'
+
+export { dimensionBadgeTone, severityLabel, severityRank } from '@/lib/severity'
+
 type Severity = HealthDimension['severity']
-
-const SEVERITY_RANK: Record<string, number> = {
-  critical: 0,
-  warning: 1,
-  info: 2,
-  ok: 3,
-}
-
-/** Lower = surface first. Unknown severities sort last. */
-export function severityRank(severity?: string | null): number {
-  return SEVERITY_RANK[severity ?? ''] ?? 9
-}
 
 /** MetricTile value tone for a severity (healthy "ok" → success/emerald). */
 export function severityMetricTone(severity?: string | null): MetricTileTone {
@@ -31,20 +23,6 @@ export function severityMetricTone(severity?: string | null): MetricTileTone {
   if (severity === 'warning') return 'warning'
   if (severity === 'ok') return 'success'
   return 'info'
-}
-
-/** StatusBadge tone for a dimension severity — maps "ok" → positive (unlike
- * the shared severityTone(), which would render "ok" as info). */
-export function dimensionBadgeTone(severity?: string | null): StatusBadgeTone {
-  if (severity === 'critical') return 'negative'
-  if (severity === 'warning') return 'warning'
-  if (severity === 'ok') return 'positive'
-  return 'info'
-}
-
-export function severityLabel(severity?: string | null): string {
-  if (severity === 'ok') return 'healthy'
-  return severity ?? 'unknown'
 }
 
 /** StatusBadge tone for a maintenance job's last-run status. */
