@@ -101,11 +101,24 @@ class SlackInboxChannel:
             return ""
 
     def is_configured(self) -> bool:
-        """Both a token AND an explicitly nominated channel are required."""
+        """Both a token AND an explicitly nominated channel are required.
+
+        `SlackNotifier.is_configured` is a PROPERTY, not a method — calling it
+        raised `TypeError: 'bool' object is not callable`, which the old bare
+        `except Exception` converted into "not configured". Capture then
+        reported "No capture channel is configured" forever, with a perfectly
+        valid token and channel sitting in Settings.
+
+        Genuine absence (no token, no channel) is still a quiet False — that is
+        opt-in, not an error. Anything ELSE is a bug and is logged loudly rather
+        than disguised as configuration.
+        """
         try:
-            return bool(self._get_notifier().is_configured()) and bool(self._target())
-        except Exception:
+            has_token = bool(self._get_notifier().is_configured)
+        except Exception as exc:
+            logger.warning("Slack capture: could not read the notifier: %s", exc)
             return False
+        return has_token and bool(self._target())
 
     def _resolve_channel_id(self) -> str:
         if self._channel_id is None:
