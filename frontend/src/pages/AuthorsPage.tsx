@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { RevealList, RevealItem } from '@/components/ui/reveal'
-import { Plus, Share2, Users, X } from 'lucide-react'
+import { LassoSelect, Plus, Share2, UserPlus, Users, X } from 'lucide-react'
+
+import { MapRegionCard } from '@/components/map/MapRegionCard'
 
 import {
   api,
@@ -141,6 +143,11 @@ export function AuthorsPage() {
     'wordCount',
     AUTHOR_MAP_DEFAULTS.wordCount,
   )
+  const [networkSelectMode, setNetworkSelectMode] = useState(false)
+  // Region ids only — the shared `/graphs/region/describe` characterisation is a
+  // PAPER vocabulary pass, so the author map derives its own meaning from the
+  // nodes it already holds instead of asking for a description of author ids.
+  const [networkRegionIds, setNetworkRegionIds] = useState<string[] | null>(null)
   const [networkSelected, setNetworkSelected] = useState<GraphNode | null>(null)
   const [networkPayload, setNetworkPayload] = useState<GraphData | null>(null)
   // Do not build the expensive author field in parallel with a missing map.
@@ -489,6 +496,74 @@ export function AuthorsPage() {
     setDetailOpen(true)
   }
 
+  /**
+   * The lassoed author region. Meaning is derived from the nodes the plate
+   * already holds — who they are, how many you already follow, which of them
+   * the engine is offering, and the topics their cluster labels agree on.
+   */
+  const networkRegion = useMemo(() => {
+    if (!networkRegionIds || !networkPayload) return null
+    const ids = new Set(networkRegionIds)
+    const members = networkPayload.nodes.filter((node) => ids.has(node.id))
+    if (members.length === 0) return null
+    const followed = members.filter((node) => followedKeys.has(authorKey(node.id)))
+    const suggested = members.filter((node) => suggestionForNode(node) != null)
+    const notFollowed = members.filter((node) => !followedKeys.has(authorKey(node.id)))
+    const byPubs = [...members].sort(
+      (a, b) =>
+        (typeof b.metadata?.pub_count === 'number' ? b.metadata.pub_count : 0) -
+        (typeof a.metadata?.pub_count === 'number' ? a.metadata.pub_count : 0),
+    )
+    const topicTally = new Map<string, number>()
+    for (const node of members) {
+      const label = typeof node.cluster_label === 'string' ? node.cluster_label : ''
+      if (label) topicTally.set(label, (topicTally.get(label) ?? 0) + 1)
+    }
+    const topics = [...topicTally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
+    return { members, followed, suggested, notFollowed, byPubs, topics }
+  }, [networkRegionIds, networkPayload, followedKeys, suggestionForNode])
+
+  /** Follow every member of the region you do not already follow. */
+  const followRegionMutation = useMutation({
+    mutationFn: async (nodes: GraphNode[]) => {
+      let followedCount = 0
+      const failures: string[] = []
+      for (const node of nodes) {
+        const local = authorsByKey.get(authorKey(node.id))
+        const targetId = local?.id ?? authorKey(node.id)
+        try {
+          await followAuthor(targetId, true, node.name)
+          followedCount += 1
+        } catch {
+          failures.push(node.name)
+        }
+      }
+      return { followedCount, failures }
+    },
+    onSuccess: async ({ followedCount, failures }) => {
+      await invalidateQueries(
+        queryClient,
+        ['authors'],
+        ['library-followed-authors'],
+        ['author-suggestions'],
+      )
+      // Report what actually happened, including the part that did not: a bulk
+      // action that silently drops members is worse than one that refuses.
+      if (failures.length) {
+        errorToast(
+          `Followed ${followedCount}, ${failures.length} failed`,
+          failures.slice(0, 3).join(', ') + (failures.length > 3 ? '…' : ''),
+        )
+        return
+      }
+      toast({
+        title: `Following ${followedCount} author${followedCount === 1 ? '' : 's'}`,
+        description: 'They will contribute to Feed on the next refresh.',
+      })
+    },
+    onError: () => errorToast('Could not follow this region', 'Try again in a moment.'),
+  })
+
   const networkClusters = useMemo(
     () =>
       ((((networkPayload?.metadata ?? {}) as Record<string, unknown>).clusters ??
@@ -747,6 +822,22 @@ export function AuthorsPage() {
                   { value: 'corpus', label: 'Corpus', title: 'Authors across every tracked paper — including suggestions' },
                 ]}
               />
+              <button
+                type="button"
+                onClick={() => {
+                  setNetworkSelectMode((on) => !on)
+                  setNetworkRegionIds(null)
+                }}
+                className={
+                  networkSelectMode
+                    ? 'inline-flex items-center gap-1.5 rounded-sm border border-accent-edge bg-accent-soft px-2.5 py-1 text-xs font-medium text-alma-folio'
+                    : 'inline-flex items-center gap-1.5 rounded-sm border border-control-edge bg-control-well px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-control-quiet'
+                }
+                title="Drag a box around a patch of authors — see who they are, how many you already follow, and follow the rest in one action"
+              >
+                <LassoSelect className="h-3.5 w-3.5" />
+                Select region
+              </button>
               <MapTuningPopover title="Fine tuning — cluster detail, dot size, dot opacity, words">
                 <SliderRow
                   label="Cluster detail"
@@ -795,7 +886,85 @@ export function AuthorsPage() {
           // Popup-primary: selection + cluster focus are the secondary map
           // effect; full detail is an explicit action inside the card.
           onOpenNode={setNetworkSelected}
-          onBackgroundClick={() => setNetworkSelected(null)}
+          onBackgroundClick={() => {
+            setNetworkSelected(null)
+            setNetworkRegionIds(null)
+          }}
+          lassoMode={networkSelectMode}
+          onLasso={(ids) => {
+            setNetworkSelected(null)
+            setNetworkSelectMode(false)
+            setNetworkRegionIds(ids)
+          }}
+          plateOverlay={
+            networkRegion && (
+              <MapRegionCard
+                kind="Area"
+                icon={<LassoSelect className="h-3.5 w-3.5 text-alma-folio" />}
+                count={networkRegion.members.length}
+                onClose={() => setNetworkRegionIds(null)}
+              >
+                <p className="text-sm font-semibold text-alma-800">
+                  {networkRegion.members.length} author
+                  {networkRegion.members.length === 1 ? '' : 's'}
+                </p>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  {networkRegion.followed.length} already followed ·{' '}
+                  {networkRegion.suggested.length} suggested ·{' '}
+                  {networkRegion.notFollowed.length} new to you
+                </p>
+                {networkRegion.topics.length > 0 && (
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {networkRegion.topics.map(([label]) => (
+                      <StatusBadge key={label} tone="neutral" size="sm">
+                        {label}
+                      </StatusBadge>
+                    ))}
+                  </div>
+                )}
+                {networkRegion.byPubs.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {networkRegion.byPubs.slice(0, 3).map((node) => (
+                      <li key={node.id} className="line-clamp-1 text-[11px] text-slate-400">
+                        · {node.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={
+                      networkRegion.notFollowed.length === 0 ||
+                      followRegionMutation.isPending
+                    }
+                    onClick={() => followRegionMutation.mutate(networkRegion.notFollowed)}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm bg-alma-800 px-2.5 py-1.5 text-xs font-medium text-alma-cream hover:bg-alma-900 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={
+                      networkRegion.notFollowed.length === 0
+                        ? 'You already follow everyone in this area'
+                        : 'Follow every author here you do not already follow'
+                    }
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    {followRegionMutation.isPending
+                      ? 'Following…'
+                      : `Follow ${networkRegion.notFollowed.length}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNetworkRegionIds(null)}
+                    className="rounded-sm border border-control-edge bg-control-well px-2.5 py-1.5 text-xs text-slate-600 hover:bg-control-quiet"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  Full member list is in the Area panel below.
+                </p>
+              </MapRegionCard>
+            )
+          }
           // Dashed halo = an author you follow (host-documented meaning).
           nodeHalo={networkNodeHalo}
           hoverCard={(n) => {
@@ -921,6 +1090,90 @@ export function AuthorsPage() {
           }
           height={480}
         />
+
+        {/* Dense area drilldown — the on-plate card answers the gesture, this
+            answers the question. Same two-section shape the Map page uses. */}
+        {networkRegion && (
+          <div className="grid items-start gap-4 border-t border-[var(--color-border)] pt-4 lg:grid-cols-2">
+            <Card>
+              <CardContent className="space-y-3 p-4 text-xs">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-alma-800">
+                    Area — {networkRegion.members.length} authors
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setNetworkRegionIds(null)}
+                    className="rounded-sm p-0.5 text-slate-400 hover:bg-control-quiet hover:text-slate-600"
+                    aria-label="Clear area selection"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <p className="text-slate-500">
+                  {networkRegion.followed.length} you already follow ·{' '}
+                  {networkRegion.suggested.length} currently suggested ·{' '}
+                  {networkRegion.notFollowed.length} new to you
+                </p>
+                {networkRegion.topics.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                      Research communities here
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {networkRegion.topics.map(([label, count]) => (
+                        <StatusBadge key={label} tone="neutral" size="sm">
+                          {label} · {count}
+                        </StatusBadge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="space-y-2 p-4 text-xs">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Members — most published first
+                </p>
+                <ul className="max-h-64 space-y-1 overflow-y-auto">
+                  {networkRegion.byPubs.map((node) => {
+                    const key = authorKey(node.id)
+                    return (
+                      <li
+                        key={node.id}
+                        className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] pb-1 last:border-0"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setNetworkSelected(node)}
+                          className="min-w-0 flex-1 truncate text-left text-alma-800 hover:text-alma-folio"
+                          title="Open this author's card"
+                        >
+                          {node.name}
+                        </button>
+                        <span className="shrink-0 text-slate-400">
+                          {typeof node.metadata?.pub_count === 'number'
+                            ? `${node.metadata.pub_count}p`
+                            : ''}
+                        </span>
+                        {followedKeys.has(key) ? (
+                          <StatusBadge tone="success" size="sm">
+                            Followed
+                          </StatusBadge>
+                        ) : suggestionForNode(node) ? (
+                          <StatusBadge tone="accent" size="sm">
+                            Suggested
+                          </StatusBadge>
+                        ) : null}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {networkSelected && (
           <div className="grid items-start gap-4 border-t border-[var(--color-border)] pt-4 lg:grid-cols-2">

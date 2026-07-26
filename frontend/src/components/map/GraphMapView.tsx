@@ -79,6 +79,9 @@ export interface GraphMapViewProps {
   /** Host slots — extra toolbar controls / legend rows. */
   toolbarExtras?: React.ReactNode
   legendExtras?: React.ReactNode
+  /** Overlays pinned INSIDE the plate (region card). Feedback for a spatial
+   *  gesture belongs where the gesture ended, never below the fold. */
+  plateOverlay?: React.ReactNode
   height?: number
   /** 50-M drill-down hooks (the Map page host): the raw payload for
    *  inspector panels, an accent-ring selection, a cluster FOCUS (everything
@@ -96,7 +99,10 @@ export interface GraphMapViewProps {
   /** Rectangle-select (region) mode — drag selects instead of panning. */
   lassoMode?: boolean
   /** Region selection landed: the node ids under the rectangle. */
-  onLasso?: (ids: string[]) => void
+  /** Lassoed node ids plus the screen anchor of the drag. The anchor used to
+   *  be dropped here, which made an at-gesture region card impossible for
+   *  every GraphMapView host (2026-07-26). */
+  onLasso?: (ids: string[], anchor: { x: number; y: number }) => void
 }
 
 export function GraphMapView({
@@ -112,6 +118,7 @@ export function GraphMapView({
   showLinks = true,
   toolbarExtras,
   legendExtras,
+  plateOverlay,
   height = 560,
   onPayload,
   selectedNodeId,
@@ -483,7 +490,7 @@ export function GraphMapView({
         heatValues={terrainValues}
         heatField={showTerrain && isPaperMap ? signalField.points : undefined}
         lassoMode={lassoMode}
-        onLasso={onLasso ? (ids) => onLasso(ids) : undefined}
+        onLasso={onLasso}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
         renderHover={(id) => {
           const n = nodesById.get(id)
@@ -508,6 +515,7 @@ export function GraphMapView({
         viewStateKey={mapStateKey}
         className="rounded-none border-0"
       >
+        {plateOverlay}
       </SemanticMap>
 
       <MapLegend>

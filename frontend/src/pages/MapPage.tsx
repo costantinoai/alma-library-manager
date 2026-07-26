@@ -23,6 +23,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpen, LassoSelect, Map as MapIcon, X } from 'lucide-react'
 
+import { MapRegionCard } from '@/components/map/MapRegionCard'
+
 import {
   api,
   getPaperById,
@@ -372,11 +374,52 @@ export function MapPage() {
             regionSel.clear()
           }}
           lassoMode={selectMode}
-          onLasso={(ids) => {
+          onLasso={(ids, anchor) => {
             setSelected(null)
             setSelectMode(false)
-            regionSel.select(ids)
+            regionSel.select(ids, anchor)
           }}
+          // BOTH surfaces, deliberately (user call 2026-07-26): the on-plate
+          // card answers the gesture where it happened, the dense drilldown
+          // below keeps the full breakdown. A spatial act needs immediate
+          // feedback; a region worth reading needs room.
+          plateOverlay={
+            region && (
+              <MapRegionCard
+                kind="Area"
+                icon={<LassoSelect className="h-3.5 w-3.5 text-alma-folio" />}
+                count={region.papers.length}
+                pending={regionSel.describing}
+                insufficient={region.papers.length < 5}
+                insufficientMessage="Too few papers to characterize — drag a larger patch (5+)."
+                onClose={() => regionSel.clear()}
+              >
+                <p className="text-sm font-semibold capitalize text-alma-800">
+                  {regionSel.description?.label ?? `${region.papers.length} papers`}
+                </p>
+                <p className="mt-1.5 text-[11px] text-slate-500">
+                  {region.inLibrary} in your library ·{' '}
+                  {region.papers.length - region.inLibrary} tracked
+                  {region.areaScore != null
+                    ? ` · area score ${Math.round(region.areaScore)}/100`
+                    : ''}
+                </p>
+                {region.highest.length > 0 && (
+                  <ul className="mt-1.5 space-y-0.5">
+                    {region.highest.map(({ node }) => (
+                      <li key={node.id} className="line-clamp-1 text-[11px] text-slate-400">
+                        · {node.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-2 text-[11px] text-slate-400">
+                  Full breakdown — vocabulary, strongest and weakest papers, top
+                  authors — is in the Region panel below.
+                </p>
+              </MapRegionCard>
+            )
+          }
           hoverCard={(n) => {
             const score = scoresById.get(n.id)
             const areaScore =
