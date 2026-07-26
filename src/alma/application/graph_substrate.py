@@ -29,6 +29,7 @@ import hashlib
 import logging
 import sqlite3
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
@@ -93,6 +94,68 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
+@dataclass(frozen=True)
+class Assignment:
+    """Nearest-centroid assignment with its runner-up and margin.
+
+    ``margin = best_cos - second_cos`` is the boundary-uncertainty measure the
+    Signal Lab sampler keys on (task 54 §2.1): a small margin means the paper
+    sits ambiguously between two regions. ``second_id`` is ``None`` when only
+    one centroid exists (margin degenerates to ``best_cos`` so a lone-centroid
+    corpus still sorts sensibly). ``best_id`` is :data:`OUTLIER_CLUSTER_ID`
+    when the paper is below ``min_cosine`` of every centroid — same honesty
+    rule as :func:`assign_to_centroids`.
+    """
+
+    best_id: int
+    best_cos: float
+    second_id: int | None
+    second_cos: float
+    margin: float
+
+
+def assign_with_margin(
+    vec: np.ndarray,
+    centroid_vectors: dict[int, np.ndarray],
+    *,
+    min_cosine: float = INCREMENTAL_MIN_COSINE,
+) -> Assignment:
+    """Nearest + runner-up centroid for ``vec``, with the assignment margin.
+
+    THE shared assignment rule — :func:`assign_to_centroids` delegates here,
+    so the incremental placement path, the standalone sweep, and the Signal
+    Lab boundary sampler can never disagree about where a paper belongs.
+    """
+    if not centroid_vectors:
+        return Assignment(OUTLIER_CLUSTER_ID, 0.0, None, 0.0, 0.0)
+
+    # One pass, tracking best + runner-up — the sampler calls this over whole
+    # region pools, so avoid the sort-everything approach.
+    best_cid, best_cos = OUTLIER_CLUSTER_ID, -2.0
+    second_cid: int | None = None
+    second_cos = -2.0
+    for cid, centroid in centroid_vectors.items():
+        c = cosine(vec, centroid)
+        if c > best_cos:
+            second_cid, second_cos = best_cid, best_cos
+            best_cid, best_cos = int(cid), c
+        elif c > second_cos:
+            second_cid, second_cos = int(cid), c
+    if second_cid == OUTLIER_CLUSTER_ID:  # the initial sentinel, not a real runner-up
+        second_cid, second_cos = None, 0.0
+
+    if best_cos < min_cosine:
+        return Assignment(OUTLIER_CLUSTER_ID, best_cos, second_cid, second_cos,
+                          best_cos - second_cos if second_cid is not None else best_cos)
+    return Assignment(
+        best_id=best_cid,
+        best_cos=best_cos,
+        second_id=second_cid,
+        second_cos=second_cos if second_cid is not None else 0.0,
+        margin=best_cos - second_cos if second_cid is not None else best_cos,
+    )
+
+
 def assign_to_centroids(
     vec: np.ndarray,
     centroid_vectors: dict[int, np.ndarray],
@@ -101,16 +164,10 @@ def assign_to_centroids(
 ) -> int:
     """Nearest-centroid cluster id for ``vec``, or the Unclustered group.
 
-    The shared assignment rule for BOTH the in-build incremental path and the
-    standalone placement sweep, so a paper can't land in different clusters
-    depending on which path placed it.
+    Thin wrapper over :func:`assign_with_margin` — the one assignment rule —
+    kept for the placement paths that only need the winning id.
     """
-    if not centroid_vectors:
-        return OUTLIER_CLUSTER_ID
-    best_cid = max(centroid_vectors.keys(), key=lambda cid: cosine(vec, centroid_vectors[cid]))
-    if cosine(vec, centroid_vectors[best_cid]) < min_cosine:
-        return OUTLIER_CLUSTER_ID
-    return int(best_cid)
+    return assign_with_margin(vec, centroid_vectors, min_cosine=min_cosine).best_id
 
 
 def substrate_row_count(conn: sqlite3.Connection) -> int:
@@ -127,7 +184,7 @@ def substrate_row_count(conn: sqlite3.Connection) -> int:
         return 0
 
 
-def _load_vectors_by_id(
+def load_vectors_by_id(
     conn: sqlite3.Connection, paper_ids: list[str], model: str
 ) -> dict[str, np.ndarray]:
     """Decode active-model vectors for exactly ``paper_ids`` (bounded IN batches)."""
@@ -153,6 +210,11 @@ def _load_vectors_by_id(
             except Exception:  # noqa: BLE001 — one bad blob must not sink the sweep
                 continue
     return out
+
+
+# Back-compat alias — the loader went public for the Signal Lab sampler
+# (task 54 P2); internal callers migrated, external ones keep working.
+_load_vectors_by_id = load_vectors_by_id
 
 
 def load_cluster_centroids(
@@ -188,7 +250,7 @@ def load_cluster_centroids(
             sample_ids[cid].append(pid)
 
     all_ids = [pid for ids in sample_ids.values() for pid in ids]
-    vectors = _load_vectors_by_id(conn, all_ids, model)
+    vectors = load_vectors_by_id(conn, all_ids, model)
 
     centroid_vectors: dict[int, np.ndarray] = {}
     for cid, ids in sample_ids.items():
@@ -282,7 +344,7 @@ def place_missing_papers(
     from alma.discovery.similarity import get_active_embedding_model
 
     model = get_active_embedding_model(conn)
-    vectors = _load_vectors_by_id(conn, candidates, model)
+    vectors = load_vectors_by_id(conn, candidates, model)
 
     now_iso = datetime.now().isoformat()
     placed = 0
