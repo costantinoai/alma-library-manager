@@ -68,7 +68,7 @@ def get_topic_drift(
 @router.get(
     "/signal-impact",
     summary="Signal impact report",
-    description="Which scoring signals correlate with liked vs dismissed recommendations.",
+    description="Which scoring signals correlate with positive vs negative recommendation outcomes.",
 )
 def get_signal_impact(
     db: sqlite3.Connection = Depends(get_db),

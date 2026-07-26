@@ -28,8 +28,8 @@ Two filters apply on top of all the ranking math, and only two:
 * **Saved papers never reappear.** Once a paper is in your Library
   (`status='library'`), Discovery permanently excludes it. That's
   the canonical "you already have this" signal.
-* **Dismissed and disliked papers never reappear.** Explicit negative
-  actions block re-surfacing.
+* **Dismissed suggestions cool down per lens.** Dismiss changes visibility in
+  that lens; Dislike records global negative preference.
 
 Everything else in your corpus is fair game on a refresh — including
 papers your other workflows already pulled in but that you haven't
@@ -119,14 +119,14 @@ Paper feedback is projected onto the surrounding scholarly graph:
 | Signal you give | Ranking effect |
 |---|---|
 | Like / Love / high rating | Raises the paper, its main authors and co-authors, dominant topics, venue, keywords, tags, close semantic neighbours, and local citation neighbours. |
-| Dislike / Dismiss / low rating | Lowers the same connected signals without deleting papers or unfollowing authors. |
+| Dislike / low rating / remove paper | Lowers the same connected signals without deleting papers or unfollowing authors. |
 | Follow author | Adds a positive author signal to Discovery and weakly boosts that author's profile. |
 | Dismiss / remove author | Adds a negative author signal to Discovery and weakly lowers that author's profile. |
 | Repeated feedback in one area | Accumulates into stronger topic / venue / author priors, decayed over time. |
 
 Author suggestions listen to the same paper-feedback projection. If
 you love papers by an author, that author and nearby candidates get a
-reasonable bump. If you dismiss papers from a topic or venue, authors
+reasonable bump. If you dislike papers from a topic or venue, authors
 connected to that pattern lose rank unless other evidence outweighs it.
 
 ## Multi-source consensus
@@ -167,8 +167,8 @@ which one failed without digging through one combined log stream.
 ## Outcome calibration
 
 ALMa quietly tracks whether each retrieval source's recommendations
-end up Saved versus Dismissed and reweights the source on subsequent
-refreshes. A source where dismisses dominate gets pulled toward 0.5×;
+produce positive versus explicit negative preference and reweights the source
+on subsequent refreshes. A source where negative outcomes dominate gets pulled toward 0.5×;
 a source where saves dominate gets pushed toward 1.5×. Three axes
 calibrate independently — the API the candidate came from, the lane
 mode (`core`/`explore`/`safe`), and the specific branch — composed
@@ -212,12 +212,12 @@ These controls feed into the next refresh of that lens.
 
 | Action | Effect |
 |---|---|
-| **Dismiss** | Hides the recommendation and records a stronger negative signal with slow cooldown. Repeat dismissals increase the penalty. |
+| **Dismiss** | Hides the recommendation in this lens without changing preference. Repeat dismissals extend the lens-local visibility cooldown. |
 | **Dislike** | Sets a 1-star rating and records a negative signal. The recommendation stays visible. |
 
-Use **Dismiss** when the paper is wrong for the lens. Use **Dislike**
-when you want to teach the ranker without making as strong a visibility
-decision. Like and Love follow the same rule on the positive side:
+Use **Dismiss** when the paper is wrong for this lens. Use **Dislike**
+when you want to teach the ranker. Combine both for “bad and gone”.
+Like and Love follow the same rule on the positive side:
 they rate the paper but do not save or hide it.
 
 ## The tuning loop on `main`

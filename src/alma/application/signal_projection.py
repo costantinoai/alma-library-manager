@@ -1,9 +1,9 @@
 """Project paper feedback into reusable discovery signals.
 
 Paper actions are the most concrete preference events we have. This
-module turns them into a small graph of related signals so one liked or
-dismissed paper can influence papers, authors, topics, venues, semantic
-neighbors, keywords, and tags through the same calibrated value.
+module turns them into a small graph of related signals so one liked,
+disliked, or removed paper can influence papers, authors, topics, venues,
+semantic neighbors, keywords, and tags through the same calibrated value.
 """
 
 from __future__ import annotations
@@ -37,14 +37,13 @@ _POSITIVE_ACTIONS = {
     "triage_pick",
 }
 _NEGATIVE_ACTIONS = {
-    "dismiss",
-    "dismissed",
     "dislike",
     "disliked",
     "remove",
     "removed",
     "swipe_left",
 }
+_VISIBILITY_ACTIONS = {"dismiss", "dismissed"}
 _POSITION_WEIGHTS = {
     "first": 1.25,
     "last": 1.25,
@@ -80,6 +79,13 @@ def normalize_feedback_event_value(event_type: str, raw_value: Any = None) -> fl
     value = _coerce_value(raw_value)
 
     if isinstance(value, dict):
+        action = str(value.get("action") or "").strip().lower()
+        # D6: visibility is not preference. Check this before legacy
+        # `signal_value=-1` payloads so historical dismiss events stop
+        # affecting ranking and map terrain too.
+        if action in _VISIBILITY_ACTIONS:
+            return 0.0
+
         signal_value = _float_or_none(value.get("signal_value"))
         if signal_value is not None and signal_value != 0:
             # `record_paper_feedback` stores -1, 0, +1, +2. Divide by 2
@@ -91,12 +97,13 @@ def normalize_feedback_event_value(event_type: str, raw_value: Any = None) -> fl
         if rating is not None:
             return _rating_to_signal(rating)
 
-        action = str(value.get("action") or "").strip().lower()
         if action:
             mapped = _action_to_signal(action)
             if mapped != 0.0:
                 return mapped
 
+    if event in _VISIBILITY_ACTIONS:
+        return 0.0
     mapped = _action_to_signal(event)
     if mapped != 0.0:
         return mapped
@@ -114,7 +121,7 @@ def compute_paper_signal_map(
     The single source of truth for "how did the user feel about this paper":
     time-decayed feedback_events (via :func:`normalize_feedback_event_value`),
     Library ratings, and the reliably-stamped recommendation actions
-    (save/read/dismiss/seen). Both the discovery signal fan-out
+    (save/read/remove/seen). Both the discovery signal fan-out
     (:func:`load_projected_paper_signals`) and the Insights outcome projection
     (:mod:`alma.application.recommendation_outcomes`) consume THIS map, so
     "positive"/"negative" means the same thing everywhere.
@@ -303,7 +310,7 @@ def _add_recommendation_signals(
     """Fold legacy ``recommendations.user_action`` history into ``paper_events``.
 
     Pre-`feedback_events` recommendation feedback lives in this
-    table. It carries the same signed actions (`save`/`like`/`dismiss`)
+    table. It carries the same signed actions (`save`/`like`/`remove`)
     and an `action_at` timestamp, so we apply the same decay window
     used by `feedback_events`. Weight is the lowest of the three
     sources because some rows here have already been replayed into

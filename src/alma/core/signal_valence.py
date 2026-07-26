@@ -19,10 +19,19 @@ from __future__ import annotations
 # ── Named weights (the contract) ──────────────────────────────────────────
 # User signals — full authority.
 VALENCE_REMOVED = -0.8
-"""status='removed'/'dismissed' — the D3/D6 hard negative."""
+"""status='removed' — the D3 hard negative (pulled back out of the Library).
+
+`dismissed` is deliberately NOT here. Since the 2026-07-26 D6 amendment,
+`status='dismissed'` is the global *hide* verb — "stop surfacing this
+anywhere" — and carries no opinion. A hide is a visibility decision; the
+negative opinion verb is `dislike`, which travels as a rating."""
 
 VALENCE_NEGATIVE_ACTION = -0.6
-"""The user dismissed/removed a recommendation of this paper (D6)."""
+"""The user REMOVED a recommendation of this paper (D3).
+
+`dismiss` is deliberately excluded (D6 amended 2026-07-26): dismissing a
+recommendation resolves that one lens's row and says nothing about the paper.
+Counting it here made "I've seen this, not here" read as "I dislike this"."""
 
 VALENCE_LIBRARY = 0.35
 """Saved to Library — a mild, durable positive."""
@@ -70,10 +79,18 @@ toward "no opinion yet"."""
 
 # Membership states that read as a hard negative (D3: removed stays
 # visible in the corpus and reads as a negative signal).
-NEGATIVE_STATUSES = ("removed", "dismissed")
+#
+# `dismissed` was dropped here on 2026-07-26. It is now the global *hide*
+# state — "never surface this anywhere" — which is a visibility choice, not an
+# opinion. Keeping it negative meant tidying your surfaces silently poisoned
+# the paper's valence and dragged both map heat fields toward red.
+NEGATIVE_STATUSES = ("removed",)
 
-# `recommendations.user_action` values that record a user rejection.
-NEGATIVE_REC_ACTIONS = ("dismiss", "dismissed", "remove", "removed")
+# `recommendations.user_action` values that record a user REJECTION of the
+# paper itself. `dismiss`/`dismissed` were dropped on 2026-07-26: they resolve
+# one lens's row ("not here, for a while") and are scoped to that lens, so
+# they are not evidence about the paper. Rejection is `remove` (D3).
+NEGATIVE_REC_ACTIONS = ("remove", "removed")
 
 
 def rating_valence(rating: int) -> float:

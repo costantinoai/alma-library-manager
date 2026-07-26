@@ -65,11 +65,11 @@ Discovery has two ways to express "no":
 
 | Verb | Effect |
 |---|---|
-| **Dismiss** | Hides the card from the lens **and** writes a negative signal. The recommender will not re-suggest the paper in this lens. |
+| **Dismiss** | Hides the card in this lens without changing your preference signal. A lens-local cooldown controls when it may be tried again. |
 | **Dislike** | Writes a negative signal but keeps the card visible. Useful when you want the system to learn but want to keep evaluating the paper. |
 
-Feed has only **Dislike**. The Feed is chronological — it does not
-hide things — so a Dismiss verb wouldn't make sense there.
+Feed also has **Dismiss** for permanently hiding an inbox row. Like Discovery
+Dismiss, it changes visibility only; use **Dislike** to teach preference.
 
 ## Saving from Online search
 

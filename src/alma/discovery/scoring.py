@@ -12,7 +12,7 @@ and settings dict rather than depending on class state.
   5. journal_affinity  — overlap between paper journal and preferred journals
   6. recency_boost     — preference for recent publications
   7. citation_quality  — log-scaled citation count
-  8. feedback_adj      — adjustment from liked/dismissed recommendation history
+  8. feedback_adj      — adjustment from explicit paper preference history
   9. preference_affinity — Signal Lab swipe/game feedback
   10. usefulness_boost — reward for timely, credible, non-redundant candidates
 """
@@ -220,7 +220,7 @@ def compute_preference_profile(
     - Rated/liked publications (topics, authors, journals)
     - Collection items (topic overlap with weight 0.5)
     - User-applied tags (treated as high-weight topic signals)
-    - Past recommendation feedback (liked/dismissed)
+    - Past explicit paper preference
 
     Returns a dict with topic_weights, author_affinity, journal_affinity,
     feedback positive / negative semantic centroids, and the projected
@@ -411,8 +411,9 @@ def compute_preference_profile(
     # -- Feedback centroids from past recommendations --
     # Structured per-author / per-topic / per-venue / per-keyword / per-tag
     # signal flows through `load_projected_paper_signals` instead — the
-    # `_incorporate_feedback` helper now only produces the embedding
-    # centroids that semantic feedback similarity needs.
+    # `_incorporate_feedback` now produces only the positive embedding
+    # centroid. Explicit negative preference stays in the structured
+    # projection; visibility-only dismissals never enter either path.
     feedback_pos_centroid, feedback_neg_centroid = _incorporate_feedback(conn, settings)
     projected_feedback = load_projected_paper_signals(conn)
 
@@ -445,14 +446,16 @@ def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
 def _incorporate_feedback(
     conn: sqlite3.Connection, settings: dict[str, str]
 ) -> tuple[Any, Any]:
-    """Build positive / negative semantic centroids from past recommendation feedback.
+    """Build the positive semantic centroid from recommendation feedback.
 
-    Centroids are computed by averaging the cached active-model
-    embeddings of papers the user previously saved / liked vs.
-    dismissed. They feed `score_candidate`'s `feedback_adj` directly
-    via cosine similarity. Structured signal (authors / topics /
-    venues / keywords / tags) flows through `signal_projection`
-    instead — see `load_projected_paper_signals`. The legacy
+    The centroid averages cached active-model embeddings of papers the user
+    saved or liked. Explicit negative preference flows through the canonical
+    structured projection (ratings + feedback events); a visibility-only
+    dismiss must never become a global negative centroid. The positive
+    centroid feeds `score_candidate`'s `feedback_adj` via cosine similarity.
+    Structured signal (authors / topics / venues / keywords / tags) flows
+    through `signal_projection` instead — see
+    `load_projected_paper_signals`. The legacy
     title-word + comma-split-author fallback that used to live here
     has been removed: it was a coarse last-resort path, the structured
     projection layer covers the same ground far more accurately, and
@@ -460,14 +463,12 @@ def _incorporate_feedback(
     spurious matches on common stopword-like tokens.
     """
     liked_paper_ids: list[str] = []
-    dismissed_paper_ids: list[str] = []
-
     try:
         rows = conn.execute(
             f"""SELECT r.paper_id, r.user_action
                FROM recommendations r
                JOIN papers p ON p.id = r.paper_id
-               WHERE r.user_action IN ('save', 'like', 'dismiss', 'liked', 'dismissed')
+               WHERE r.user_action IN ('save', 'like', 'liked')
                  AND {standalone_paper_sql('p')}"""
         ).fetchall()
     except sqlite3.OperationalError:
@@ -478,25 +479,15 @@ def _incorporate_feedback(
         paper_id = row["paper_id"] or ""
         if not paper_id:
             continue
-        if row["user_action"] in {"save", "like", "liked"}:
-            liked_paper_ids.append(paper_id)
-        else:
-            dismissed_paper_ids.append(paper_id)
+        liked_paper_ids.append(paper_id)
 
     pos_centroid = None
-    neg_centroid = None
     if liked_paper_ids:
         try:
             pos_centroid = compute_centroid_from_ids(conn, liked_paper_ids)
         except Exception as exc:
             logger.warning("Failed to compute positive feedback centroid: %s", exc)
-    if dismissed_paper_ids:
-        try:
-            neg_centroid = compute_centroid_from_ids(conn, dismissed_paper_ids)
-        except Exception as exc:
-            logger.warning("Failed to compute negative feedback centroid: %s", exc)
-
-    return pos_centroid, neg_centroid
+    return pos_centroid, None
 
 
 # ---------------------------------------------------------------------------
@@ -802,8 +793,9 @@ def score_candidate(
     # -- 8. Feedback adjustment --
     # Two complementary inputs:
     #   1. Semantic centroid similarity — cosine of the candidate's
-    #      embedding against the average liked / dismissed paper
-    #      centroid. Captures full-document meaning that structured
+    #      embedding against the average liked paper centroid. Explicit
+    #      negative preference comes from the structured projection below.
+    #      Captures full-document meaning that structured
     #      tags cannot.
     #   2. Structured projected signal (`signal_projection`) — per
     #      author / topic / venue / keyword / tag / semantic-neighbour /
@@ -965,10 +957,11 @@ def score_candidate(
         _MAX_DISCOVERY_SCORE, weighted_score + consensus_bonus + citation_bonus
     )
 
-    # Dismissal cluster penalty — mirrors the author rail. Applied
+    # Negative paper-signal cluster penalty — function/breakdown names retain
+    # "dismissal" for compatibility. Applied
     # AFTER consensus so multi-source agreement can't entirely rescue
     # a candidate that overlaps with what the user has explicitly
-    # dismissed. Cap inside `_dismissal_cluster_penalty` keeps total
+    # disliked or removed. Cap inside `_dismissal_cluster_penalty` keeps total
     # ≤ 30 points so a candidate is never zero'd by penalty alone.
     dismissal_penalty, dismissal_parts = _dismissal_cluster_penalty(
         candidate,
@@ -1058,7 +1051,7 @@ def _projected_feedback_adjustment(
     """Signed adjustment from paper-feedback projections.
 
     The adjustment is intentionally bounded before it enters
-    `feedback_adj`, so one dismissed paper can pull down related
+    `feedback_adj`, so one explicitly disliked/removed paper can pull down related
     authors/topics/venues without overwhelming direct similarity and
     retrieval signals.
     """
@@ -1111,12 +1104,12 @@ def _dismissal_cluster_penalty(
 
     Mirror of `alma.application.authors._dismissal_overlap_penalty`.
     The author rail applies a dedicated post-weighted-sum penalty (up
-    to 30% of band) so explicit dismissal evidence can pull harder
+    to 30% of band) so explicit negative preference can pull harder
     than the bounded `feedback_adj` signal alone. Same idea here.
 
     Reads the negative side of `ProjectedPaperSignals.{topic, venue,
     author, author_name, keyword, tag}` — these are already
-    propagated from dismiss / dislike / unsave events upstream in
+    propagated from dislike / remove / unsave events upstream in
     `signal_projection`. For each candidate axis (topic of the paper,
     journal, paper authors, …) we look up the projected magnitude;
     only the negative-signed contribution adds to the penalty.

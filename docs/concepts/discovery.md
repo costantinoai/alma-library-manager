@@ -55,14 +55,13 @@ Several lifecycle filters run before staging, on top of scoring:
   still removes the paper from Discovery because you have acted on it.
 * **Dismissed suggestions** (`recommendations.user_action='dismiss'`,
   plus legacy `status='dismissed'`) — explicit dismissals hide the
-  suggestion and write a stronger negative signal.
+  suggestion without changing preference.
 
-Dismissal is no longer a forever block for newly generated candidate
-sets. It uses a slow cooldown: each dismiss contributes a negative
-paper signal with a long half-life, and repeat dismissals stack a
-stronger penalty. The card remains hidden while that decayed score is
-below the suppression threshold; much later, enough new evidence can
-earn another try.
+Discovery dismissal is scoped to the clicked lens. It uses a slow visibility
+cooldown; repeat dismissals keep the paper out of that lens longer, but never
+write a paper rating, feedback event, lens signal, or global map valence. Other
+lenses remain free to surface the paper. Use **Dislike** for negative opinion,
+or Dislike + Dismiss for “bad and gone”.
 
 `Like`, `Love`, and `Dislike` are intentionally softer: they rate the
 paper and write feedback signals, but they do **not** hide the
@@ -153,7 +152,7 @@ The hybrid scorer combines (default weights configurable):
   complementing what the Feed already shows.
 * **Citation quality** — log-scaled citation count.
 * **Feedback adjustment** — boosts or penalises candidates connected
-  to papers you've liked, loved, disliked, dismissed, or removed. The
+  to papers you've liked, loved, disliked, or removed. The
   signal propagates through the paper itself, its authors and
   co-authors, topics, venue, keywords, and tags.
 * **Preference affinity** — distance from your `preference_profiles`
@@ -463,18 +462,18 @@ ALMa actually holds.
 
 | Action | What it does |
 |---|---|
-| **Save** | Transitions to `library` with the default rating and removes the paper from Discovery. |
-| **Reading list** | Sets `reading_status='reading'` and removes the paper from Discovery without saving it to Library. |
+| **Save** | Transitions to `library` with the default rating. The current card stays visible; the next lens refresh excludes it. |
+| **Reading list** | Sets `reading_status='reading'` without saving it to Library. The current card stays visible; the next lens refresh excludes it. |
 | **Like / Love** | Sets rating 4 / 5 and writes a positive feedback signal. The recommendation stays visible. |
 | **Dislike** | Sets rating 1 and writes a negative feedback signal. The recommendation stays visible. |
-| **Dismiss** | Hides the suggestion and writes a stronger negative signal with slow cooldown and repeat-dismiss stacking. |
+| **Dismiss** | Hides this lens suggestion only. It changes no rating or preference signal; a per-lens cooldown controls re-entry. |
 | **Pivot** | Treats the paper as a seed for a new branch (find more like this, but I haven't saved it). |
 | **Open details** | Opens the shared Paper detail panel — abstract, topics, prior / derivative works, full provenance. |
 
 Paper feedback is graph-shaped, not just paper-shaped. A 5-star paper
 raises nearby authors, topics, venues, keywords, tags, close semantic
-neighbours, and local citation neighbours; a dismissed or disliked
-paper lowers those connected signals. Following an author adds a
+neighbours, and local citation neighbours; a disliked or removed paper lowers
+those connected signals. Following an author adds a
 positive author signal to Discovery, and rejecting an author adds a
 negative ranking signal through that author's profile. Except for
 explicit Save / Reading-list actions, this changes ranking only. It

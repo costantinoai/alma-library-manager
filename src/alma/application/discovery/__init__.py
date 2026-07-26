@@ -943,14 +943,14 @@ def refresh_lens_recommendations(
     timings_ms["preference_profile_preload"] = int(round((perf_counter() - phase_started) * 1000))
 
     # Outcome calibration: per-dimension multipliers on `source_relevance`
-    # based on observed save/dismiss outcomes from prior refreshes. Three
+    # based on observed explicit preference outcomes from prior refreshes. Three
     # calibration axes compose multiplicatively per candidate:
     #   - source_api  (which API surfaced it: openalex / s2 / …)
     #   - branch_mode (which retrieval lane: core / explore / safe)
     #   - branch_id   (which specific branch within the lens)
     # On a fresh DB all three return empty maps → multiplier 1.0 (no
     # behavior change). After enough events accumulate, axes where
-    # dismisses dominate get pulled toward 0.5x, axes where saves
+    # negative ratings/removals dominate get pulled toward 0.5x, axes where saves
     # dominate get pushed toward 1.5x. Composite is clamped to the
     # same band so three positives can't push past 1.5x.
     from alma.application.outcome_calibration import compute_outcome_calibration
@@ -1241,14 +1241,23 @@ def refresh_lens_recommendations(
         # cooldown window. Saves drive status='library'; reading-list handoffs
         # are caught by the reading-status filter; like/love/dislike are
         # rating signals and should not hide the paper.
+        #
+        # SCOPED TO THIS LENS. A dismiss means "not in THIS lens's suggestions
+        # for a while" — a visibility verdict on one lens, never a global
+        # opinion about the paper (D6 as amended 2026-07-26). Without the
+        # `lens_id` filter one dismiss cooled the paper down in EVERY lens,
+        # so passing on a paper in a methods lens silently suppressed it in an
+        # unrelated topic lens. Global negative opinion is `dislike`, and it
+        # travels as a rating — not through this window.
         action_rows = db.execute(
             f"""
             SELECT paper_id, user_action, action_at, created_at
             FROM recommendations
-            WHERE paper_id IN ({placeholders})
+            WHERE lens_id = ?
+              AND paper_id IN ({placeholders})
               AND user_action IN ('dismiss', 'dismissed', 'remove', 'removed')
             """,
-            chunk,
+            (lens_id, *chunk),
         ).fetchall()
         for paper_id, score in _paper_dismissal_scores(action_rows).items():
             if score <= _PAPER_DISMISS_SUPPRESSION_THRESHOLD:

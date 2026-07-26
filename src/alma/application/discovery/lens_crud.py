@@ -490,8 +490,15 @@ def mark_recommendation_action(
                 )
             feedback_action = "love" if effective_rating >= 5 else "like"
         elif action == "dismiss":
-            effective_rating = 1
-            feedback_action = "dismiss"
+            # RESOLUTION, not valence (D6 as amended 2026-07-26). Dismiss says
+            # "not in this lens's suggestions for a while" and writes nothing
+            # else: no rating, no feedback event, no lens signal. Leaving
+            # `feedback_action` unset is what suppresses those three writes
+            # below. `effective_rating` keeps the paper's CURRENT rating so the
+            # response reports the truth rather than stamping a phantom 1.
+            #
+            # Negative opinion is `dislike`. "Bad and gone" = dislike + dismiss.
+            pass
         elif action == "dislike":
             effective_rating = 1
             if paper_id:
@@ -502,7 +509,9 @@ def mark_recommendation_action(
             feedback_action = "dislike"
 
         if stamp_recommendation:
-            if paper_id and action in {"read", "dismiss"}:
+            if paper_id and action == "read":
+                # Reading is a fact about the PAPER, not about one lens, so
+                # every lens's unresolved row for it resolves together.
                 db.execute(
                     """
                     UPDATE recommendations
@@ -513,6 +522,11 @@ def mark_recommendation_action(
                     (action, now, paper_id),
                 )
             else:
+                # `dismiss` lands here deliberately: it stamps THIS
+                # recommendation only, so passing on a paper in one lens leaves
+                # it fully eligible in every other. It used to take the
+                # paper-wide branch above, which made one dismiss a silent
+                # cross-lens suppression.
                 db.execute(
                     "UPDATE recommendations SET user_action = ?, action_at = ? WHERE id = ?",
                     (action, now, rec_id),
@@ -572,10 +586,17 @@ def _paper_dismissal_scores(rows: list[sqlite3.Row]) -> dict[str, float]:
     """Return decayed suppression scores for dismissed Discovery papers.
 
     Mirrors the author-rail dismissal model: one dismissal is a temporary
-    negative signal, repeated dismissals stack, and three recent dismissals add
+    suppression, repeated dismissals stack, and three recent dismissals add
     a stronger long half-life penalty. The score is used only to decide whether
     a paper is still cooling down before being eligible for fresh Discovery
     recommendations.
+
+    **Visibility, not valence.** These scores answer "should this lens show the
+    paper again yet", never "does the user like it" — a dismiss writes no
+    rating and no feedback event (D6 as amended 2026-07-26). ``rows`` MUST
+    already be scoped to a single lens by the caller
+    (``refresh_lens_recommendations``), which is why grouping on ``paper_id``
+    alone is correct here: every row belongs to the lens being refreshed.
     """
     now = utcnow()
     grouped: dict[str, list[datetime | None]] = defaultdict(list)

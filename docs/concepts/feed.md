@@ -202,7 +202,7 @@ Each card carries the standard rating vocabulary:
 | **Like** | Saves with rating 4. |
 | **Love** | Saves with rating 5. |
 | **Dislike** | Down-weights the paper — records a negative signal and stamps rating 1. The paper **stays visible** in the Feed; chronological truth is preserved. |
-| **Dismiss** | **Hides the paper from the Feed for good** — settles every `feed_items` row for the paper to `status = 'dismissed'`, which the list query excludes permanently. Sends a small negative signal (no rating stamp), and offers an **undo** right after. |
+| **Dismiss** | **Hides the paper from the Feed for good** — settles every `feed_items` row for the paper to `status = 'dismissed'`, which the list query excludes permanently. It changes no rating or preference signal and offers an **undo** right after. |
 | **Queue** (reading status select) | Adds the paper to the Reading list. Independent of saving. |
 
 The Dislike-vs-Dismiss split is the core nuance (D6). **Dislike** is the
@@ -210,9 +210,8 @@ soft verb: it lowers the paper's standing without removing it, so the
 inbox keeps its complete chronological record. **Dismiss** is the one
 "forever" verb in the Feed: it hides the paper from the inbox for good —
 but because that's a heavy action, it always carries a transient **Undo**
-that restores the rows to `new` and drops the negative signal. Both
-actions also feed Discovery (Dislike and Dismiss both down-weight what
-the recommender shows).
+that restores the rows to `new`. Only Dislike teaches Discovery; Dismiss is
+visibility, not preference.
 
 Dismiss applies per card and in bulk: the per-card control and the
 selection bar's **Dismiss** button both settle the chosen items to

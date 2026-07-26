@@ -65,7 +65,7 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # Absolute minimum per-branch budget for the external retrieval
     # lane. Without a floor, a low-auto_weight branch can be starved
     # to 4-5 recommendations — too few to ever accumulate enough
-    # save/dismiss signal to recover. 8 keeps an "underexplored"
+    # save/dislike outcome evidence to recover. 8 keeps an "underexplored"
     # branch viable while the user evaluates it.
     "branches.min_budget_per_branch": "8",
     "lens.max_seeds": "500",

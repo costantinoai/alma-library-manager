@@ -60,7 +60,7 @@ _RECENCY_HALF_LIFE_DAYS = 730.0  # ~2 years
 _SIGNAL_LAB_DECAY_HALF_LIFE_DAYS = 180.0
 _SIGNAL_LAB_SATURATION = 5.0  # net events at which signal_lab = 1.0
 _POSITIVE_EVENTS = {"love", "like", "add", "reaction_positive", "swipe_right", "triage_pick"}
-_NEGATIVE_EVENTS = {"dislike", "dismiss", "remove", "reaction_negative", "swipe_left"}
+_NEGATIVE_EVENTS = {"dislike", "remove", "reaction_negative", "swipe_left"}
 
 
 # -- library state (shared across a batch of papers) ------------------

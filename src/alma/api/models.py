@@ -173,7 +173,7 @@ class AuthorSuggestionResponse(BaseModel):
     consensus_count: int = 1
     consensus_buckets: list[str] = Field(default_factory=list)
     # Signed score adjustment from projected paper feedback (saves /
-    # ratings / dismisses propagated through `signal_projection`).
+    # ratings / removals propagated through `signal_projection`).
     # Surfaced as a chip on the card when the magnitude clears 1 point.
     paper_signal_adjustment: float = 0.0
     # Per-bucket outcome-calibration multiplier (1.0 = neutral / fresh

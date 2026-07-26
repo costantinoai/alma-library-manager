@@ -65,7 +65,7 @@ ranker takes the stable components only:
 | Similarity | Author SPECTER2 centroid against the Library centroid. Author centroids use their own scale: cosine ≤0.35 is absent/0, cosine 1.0 is 100, and values between scale linearly. |
 | Neighborhood | Co-authorship with your Library circle and cited-by-Library adjacency, using soft saturation so one/few links are visible but do not become 100. |
 
-The volatile interaction component (fresh likes, dismisses, follows,
+The volatile interaction component (fresh likes, dislikes, follows,
 and projected paper feedback) flows through `feedback_adj` instead, so the
 same feedback is not counted twice.
 
@@ -131,7 +131,7 @@ per-paper signal map before fanning out:
 
 | Source | Weight | What it captures |
 |---|---|---|
-| `feedback_events` (`paper_action` + legacy single-action types) | 1.0 | Canonical write path (save / like / love / dismiss / remove). |
+| `feedback_events` (`paper_action` + legacy single-action types) | 1.0 | Canonical write path (save / like / love / dislike / remove). Historical dismiss events normalize to zero because visibility is not preference. |
 | `papers.rating` | 0.6 | Library star ratings. No time decay (a 5★ paper is still a 5★ paper). |
 | `recommendations.user_action` | 0.5 | Legacy per-recommendation actions, age-decayed like `feedback_events`. |
 
@@ -240,16 +240,16 @@ scored candidate confirmed by 3+ independent sources reliably climbs
 the rail. Pre-bonus value is preserved as
 `weighted_score_pre_consensus` in the breakdown for provenance.
 
-## Dismissal cluster penalty
+## Negative paper-signal cluster penalty
 
 After consensus, paper Discovery applies a dedicated penalty that
 mirrors the author-suggestion rail's `_dismissal_overlap_penalty`.
-`feedback_adj` already pulls in projected dismissal evidence, but it's
-bounded to ±0.6 and weighted at 0.10 — so direct user dismissals can
+`feedback_adj` already pulls in projected negative preference, but it is
+bounded to ±0.6 and weighted at 0.10 — so direct Dislikes/Removals can
 move a candidate by at most ~10 points on the 100-band score. That
-ceiling is intentionally low for *projected* feedback (one dismissed
+ceiling is intentionally low for *projected* feedback (one disliked
 paper shouldn't dominate similarity); but for the *cluster* of things
-the user has dismissed, the rail wants to pull harder. The dismissal
+the user has explicitly rejected, the rail wants to pull harder. The
 cluster pass is that harder pull.
 
 For each candidate the scorer reads the negative side of
@@ -265,14 +265,14 @@ tag}` and accumulates score-point penalties:
 | Keyword / tag | 1.0 × magnitude (each) | Noisier; lower per-hit weight |
 
 Total is capped at **30 points** so a candidate is never zeroed by
-penalty alone — the user can still dismiss them explicitly. Applied
+penalty alone — the user can still Dislike or Remove explicitly. Applied
 *after* the consensus bonus (so multi-source agreement can't fully
-rescue a candidate matching a dismissed cluster) and the result is
+rescue a candidate matching a rejected cluster) and the result is
 clamped at 0.
 
-The breakdown carries `score_pre_dismissal`, `dismissal_penalty`, and
-`dismissal_penalty_parts` (the per-axis decomposition) for provenance.
-A clean run with no dismissal evidence returns
+The breakdown retains the compatibility field names `score_pre_dismissal`,
+`dismissal_penalty`, and `dismissal_penalty_parts` (the per-axis
+decomposition). A clean run with no negative preference evidence returns
 `dismissal_penalty=0.0` and `dismissal_penalty_parts={}`.
 
 ## Outcome calibration
@@ -296,7 +296,7 @@ $$
 
 with $\alpha = \beta = 2$. A fresh DB returns 0.5 → multiplier 1.0
 (no behavior change). A source where saves dominate climbs toward
-1.5×; one where dismisses dominate falls toward 0.5×. The three
+1.5×; one where explicit negative preference dominates falls toward 0.5×. The three
 axes compose multiplicatively in log space, then the composite is
 clamped back to `[0.5, 1.5]` so three independent positive axes
 can't push past the per-axis ceiling.
@@ -426,7 +426,7 @@ The pipeline has five phases:
    appeared in more than one bucket.
 3. **Paper-feedback projection pass** bumps or penalizes candidates
    whose author, topics, venues, keywords, or tags are connected to
-   liked/dismissed papers.
+   liked/disliked/removed papers.
 4. **Dismissal cluster pass** subtracts a penalty from candidates
    whose attributes overlap recently dismissed authors'.
 5. **Per-bucket weight + sort** applies the

@@ -14,16 +14,17 @@ negatively, or neutrally?" from the authoritative sources:
 
 * the per-paper net signal — :func:`signal_projection.compute_paper_signal_map`
   (time-decayed ``feedback_events`` via the shared normaliser + Library ratings
-  + the reliably-stamped recommendation actions save/read/dismiss/seen), and
+  + the reliably-stamped signed recommendation actions), and
 * lifecycle membership — ``status='library'`` is a deliberate save (positive);
-  ``status in ('dismissed','removed')`` is a deliberate negative.
+  ``status='removed'`` is a deliberate negative. ``dismissed`` is visibility
+  only and carries no valence (D6 amended 2026-07-26).
 
 Every Insights/report call site joins the ``recommendations`` provenance
 (source / branch / day) to this outcome and aggregates — none of them
 re-derive "positive" on their own, so the word means the same thing
 everywhere. The ``user_action`` column is still read, but ONLY for the things
 it actually records: exposure (was the rec seen / acted on at all) and the
-save/dismiss corroboration that already feeds the signal map.
+save/remove corroboration that already feeds the signal map.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ from alma.core.sql_helpers import standalone_paper_sql_for_db
 _NEUTRAL_DEADBAND = 0.05
 
 # Lifecycle nudge: a saved paper is a deliberate positive even with no explicit
-# rating/feedback; a dismissed/removed paper is a deliberate negative. Kept
+# rating/feedback; a removed paper is a deliberate negative. Kept
 # modest so an explicit strong rating/feedback still dominates the sign.
 _LIFECYCLE_POSITIVE = 0.5
 _LIFECYCLE_NEGATIVE = -0.5
@@ -88,7 +89,7 @@ def build_paper_outcome_map(db: sqlite3.Connection) -> dict[str, PaperOutcome]:
             f"""
             SELECT id, status
             FROM papers
-            WHERE status IN ('library','dismissed','removed')
+            WHERE status IN ('library','removed')
               AND {standalone_paper_sql_for_db(db, 'papers')}
             """
         ).fetchall():
@@ -104,7 +105,7 @@ def build_paper_outcome_map(db: sqlite3.Connection) -> dict[str, PaperOutcome]:
         status = statuses.get(pid)
         if status == "library":
             polarity += _LIFECYCLE_POSITIVE
-        elif status in ("dismissed", "removed"):
+        elif status == "removed":
             polarity += _LIFECYCLE_NEGATIVE
         polarity = max(-1.0, min(1.0, polarity))
         out[pid] = PaperOutcome(pid, round(polarity, 4), _classify(polarity))
