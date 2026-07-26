@@ -4833,6 +4833,36 @@ export interface HomePaper {
   status?: string | null
   /** Best available timestamp for reading-list ordering. */
   added_at?: string | null
+  /** Capture provenance — Inbox items only, `null` for a paper that reached
+   *  the Inbox by some route other than a capture channel. */
+  capture_channel?: string | null
+  captured_at?: string | null
+}
+
+/** One day of inflow in the Home sparkline. Oldest first. */
+export interface HomeTrendPoint {
+  /** Local calendar date, `YYYY-MM-DD`. */
+  date: string
+  feed: number
+  discovery: number
+}
+
+/**
+ * An outside dependency Home watches, and whether it last worked.
+ *
+ * Derived from the operation ledger, not a live probe — so `checked_at` is
+ * load-bearing: "OpenAlex is fine" always means "was fine when last used".
+ */
+export interface HomeConnection {
+  key: string
+  label: string
+  state: 'ok' | 'failed' | 'running' | 'unknown' | 'not_configured'
+  /** What the last run reported. */
+  detail: string
+  /** What the user loses while this is broken. */
+  stake: string
+  checked_at?: string | null
+  href: string
 }
 
 export interface HomeHighlight {
@@ -4882,7 +4912,11 @@ export interface HomeBrief {
     alerts: {
       today: number
     }
+    /** Daily inflow across the last 7 local days, oldest first. */
+    trend: HomeTrendPoint[]
   }
+  /** The outside dependencies whose failure is otherwise silent. */
+  connections: HomeConnection[]
   highlights: HomeHighlight[]
   reading: {
     total: number

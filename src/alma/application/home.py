@@ -15,11 +15,13 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from alma.application import alerts as alerts_app
+from alma.application import connection_status
 from alma.application import feed as feed_app
 from alma.application import imports as imports_app
 from alma.application import library as library_app
 from alma.application import materialized_views as mv
 from alma.application.discovery import lens_crud
+from alma.core.sql_helpers import standalone_paper_sql
 from alma.services import author_attention
 from alma.services import health as health_service
 
@@ -85,6 +87,101 @@ def _window(
     )
 
 
+#: Days in the inflow sparkline, today inclusive.
+TREND_DAYS = 7
+
+
+def _local_days(
+    timezone_name: str, *, now: datetime | None = None, days: int = TREND_DAYS
+) -> list[tuple[str, str, str]]:
+    """`(local_date, utc_start, utc_end)` for the last `days` local days.
+
+    Boundaries are computed per-day in the user's zone rather than by
+    subtracting 24h repeatedly, so a DST change shifts one bucket by an hour
+    instead of smearing every bucket after it.
+    """
+    zone = ZoneInfo(timezone_name)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    today = current.astimezone(zone).date()
+
+    windows: list[tuple[str, str, str]] = []
+    for offset in range(days - 1, -1, -1):
+        day = today - timedelta(days=offset)
+        start = datetime.combine(day, time.min, tzinfo=zone)
+        end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=zone)
+        windows.append((day.isoformat(), _utc_sql(start), _utc_sql(end)))
+    return windows
+
+
+def _trend(
+    db: sqlite3.Connection, windows: list[tuple[str, str, str]]
+) -> list[dict[str, Any]]:
+    """Daily Feed + Discovery inflow across the sparkline window.
+
+    Counts match the headline `today` numbers by construction: Feed keys on a
+    paper's FIRST surfacing (so a second monitor can't inflate a day) and
+    Discovery counts distinct papers from active lenses. One query per surface
+    over the whole window — never one per day.
+    """
+    if not windows:
+        return []
+
+    start = windows[0][1]
+    end = windows[-1][2]
+
+    feed_rows = db.execute(
+        f"""
+        WITH per_paper AS (
+            SELECT fi.paper_id, MIN(fi.fetched_at) AS first_seen
+            FROM feed_items fi
+            GROUP BY fi.paper_id
+        )
+        SELECT pp.first_seen AS at
+        FROM per_paper pp
+        JOIN papers p ON p.id = pp.paper_id
+        WHERE pp.first_seen >= ? AND pp.first_seen < ?
+          AND {standalone_paper_sql('p')}
+        """,
+        (start, end),
+    ).fetchall()
+
+    discovery_rows = db.execute(
+        f"""
+        SELECT DISTINCT r.paper_id, MIN(r.created_at) AS at
+        FROM recommendations r
+        JOIN discovery_lenses l ON l.id = r.lens_id AND l.is_active = 1
+        JOIN papers p ON p.id = r.paper_id
+        WHERE r.created_at >= ? AND r.created_at < ?
+          AND {standalone_paper_sql('p')}
+        GROUP BY r.paper_id
+        """,
+        (start, end),
+    ).fetchall()
+
+    def bucket(rows: list[Any]) -> dict[str, int]:
+        counts: dict[str, int] = {date: 0 for date, _, _ in windows}
+        for row in rows:
+            stamp = str(row["at"] or "")
+            for date, day_start, day_end in windows:
+                if day_start <= stamp < day_end:
+                    counts[date] += 1
+                    break
+        return counts
+
+    feed_counts = bucket(feed_rows)
+    discovery_counts = bucket(discovery_rows)
+    return [
+        {
+            "date": date,
+            "feed": feed_counts[date],
+            "discovery": discovery_counts[date],
+        }
+        for date, _, _ in windows
+    ]
+
+
 def _paper(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(row.get("id") or ""),
@@ -100,6 +197,11 @@ def _paper(row: dict[str, Any]) -> dict[str, Any]:
         # Present only on the reading preview — highlight projections carry
         # their own period instead. Never fabricated.
         "added_at": row.get("added_at"),
+        # Present only on Inbox items (see `library._attach_capture_provenance`).
+        # Absent everywhere else rather than defaulted, so a missing channel
+        # stays visibly missing.
+        "capture_channel": row.get("capture_channel"),
+        "captured_at": row.get("captured_at"),
     }
 
 
@@ -363,7 +465,12 @@ def build_daily_brief(
             "alerts": {
                 "today": alerts_app.count_delivered_since(db, day_start),
             },
+            # Oldest day first, today last — the reading order of the strip.
+            "trend": _trend(db, _local_days(timezone_name, now=now)),
         },
+        # The three outside dependencies that fail silently. Derived from the
+        # operation ledger, never probed live on this read path.
+        "connections": connection_status.assess_connections(db),
         "highlights": _select_highlights(feed, discovery, day_start=day_start),
         "reading": {
             "total": int(reading["total"]),

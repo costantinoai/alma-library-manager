@@ -721,12 +721,75 @@ def inbox_preview(db: sqlite3.Connection, *, limit: int = 10) -> dict:
     Home renders this section only when the total is non-zero, so an empty Inbox
     disappears rather than nagging — a capture queue is a notification, not a
     chore list (I-22, "saved means saved").
+
+    Items carry their capture provenance (`capture_channel`, `captured_at`), so
+    a triage card can say where it came from — "I flicked this from Slack on the
+    train" is most of the context you need to decide.
+
+    **Ordered by CAPTURE time**, which is why this does not reuse
+    `_newest_first_preview`. That helper orders by `added_at`, meaning *when the
+    paper entered the corpus* — and a paper your Feed collected two years ago,
+    which you re-sent yourself this morning, would sort to the bottom of the
+    very queue it just joined. Every other preview genuinely wants added-order;
+    the Inbox wants the order you acted in. Real difference, not duplication.
+
+    A paper with no ledger row (promoted by some path other than a capture, or
+    predating the ledger) keeps `None` on both fields and falls back to
+    added-order — never a fabricated channel or timestamp.
     """
-    return _newest_first_preview(
-        db,
-        predicate=f"p.status = '{INBOX_STATUS}'",
-        limit=limit,
+    from alma.api.helpers import table_exists
+
+    has_ledger = table_exists(db, "inbox_messages")
+    where = f"p.status = '{INBOX_STATUS}' AND {standalone_paper_sql('p')}"
+
+    total_row = db.execute(
+        f"SELECT COUNT(*) AS c FROM papers p WHERE {where}"
+    ).fetchone()
+
+    # Newest message per paper: re-sending a link you already sent is the same
+    # capture, not two.
+    capture_join = (
+        """
+        LEFT JOIN (
+            SELECT paper_id,
+                   MAX(received_at) AS received_at,
+                   channel
+            FROM inbox_messages
+            WHERE paper_id IS NOT NULL
+            GROUP BY paper_id
+        ) cap ON cap.paper_id = p.id
+        """
+        if has_ledger
+        else ""
     )
+    capture_select = (
+        "cap.channel AS capture_channel, cap.received_at AS captured_at"
+        if has_ledger
+        else "NULL AS capture_channel, NULL AS captured_at"
+    )
+    capture_order = "cap.received_at, " if has_ledger else ""
+
+    rows = db.execute(
+        f"""
+        SELECT p.id, p.title, p.authors, p.year, p.journal, p.abstract, p.tldr,
+               p.url, p.doi, p.status,
+               COALESCE(p.added_at, p.created_at) AS added_at,
+               {capture_select}
+        FROM papers p
+        {capture_join}
+        WHERE {where}
+        ORDER BY COALESCE(
+            {capture_order}p.added_at, p.created_at, p.publication_date, ''
+        ) DESC
+        LIMIT ?
+        """,
+        (max(1, min(int(limit), 50)),),
+    ).fetchall()
+
+    return {
+        "total": int((total_row["c"] if total_row else 0) or 0),
+        "items": [dict(row) for row in rows],
+    }
 
 
 def reading_preview(db: sqlite3.Connection, *, limit: int = 3) -> dict:
