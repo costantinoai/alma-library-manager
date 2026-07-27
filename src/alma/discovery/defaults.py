@@ -16,15 +16,32 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "weights.citation_quality": "0.05",
     "weights.feedback_adj": "0.10",
     "weights.preference_affinity": "0.10",
-    # Signal Lab heads (task 54, D20). BOTH default 0.0 — promoted manually,
-    # per head, only on stage-1 held-out + churn evidence. At 0.0 the lab
-    # context is never even loaded and scoring is byte-identical to a
-    # lab-less build.
-    "weights.lab_region_offset": "0.0",
-    "weights.lab_utility": "0.0",
+    # Signal Lab heads (task 54, D20 — amended 2026-07-27).
+    #
+    # They defaulted to 0.0 and required a MANUAL promotion per head. Two things
+    # were wrong with that. The ceiling was 2.5 points on a 0-100 score, so even
+    # fully promoted the whole lab sat BELOW `citation_quality` (5) — explicit
+    # pairwise taste judgements counting for less than a prestige proxy. And the
+    # manual step gated an on/off decision that never needed gating, because the
+    # ceiling was not what protected against a thin fit.
+    #
+    # The dampers are, and all three heads already have one:
+    #   utility  — global confidence, min(1, train_prefs/60)
+    #   region   — per-region James-Stein shrinkage (a region judged once
+    #              contributes ~11% of its raw vote, ~71% at twenty)
+    #   author   — per-author James-Stein shrinkage + a minimum-comparison floor
+    # Each scales continuously with the evidence actually collected, which is
+    # strictly better than a fixed low ceiling that guaranteed irrelevance.
+    #
+    # So: non-zero by default, ceiling 10 (parity with `feedback_adj` and
+    # `preference_affinity`, the other signals encoding the user's own opinion).
+    # An unplayed install is still unaffected — `load_lab_scoring_context`
+    # early-returns when no usable model exists.
+    "weights.lab_region_offset": "5.0",
+    "weights.lab_utility": "5.0",
     # The author head folds into the canonical author signal rather than
-    # scoring on its own; at 0.0 the offsets are never even read.
-    "weights.lab_author_offset": "0.0",
+    # scoring on its own.
+    "weights.lab_author_offset": "5.0",
     # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
     # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
     # epsilon: ring-uniform exploration share — the self-confirmation guard.

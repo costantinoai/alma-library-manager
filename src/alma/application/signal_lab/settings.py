@@ -15,6 +15,31 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from alma.core.db_write import run_write_unit
 
+LAB_HEAD_MAX_POINTS = 10.0
+"""Ceiling for one Signal Lab head, in points on the 0-100 score.
+
+Was 2.5, which put the whole lab BELOW `citation_quality` (5 points) — your
+explicit pairwise taste judgements counting for less than how many strangers
+cited a paper. That is backwards for a signal whose entire purpose is to record
+what you actually prefer.
+
+10 puts a fully-evidenced head on par with `feedback_adj` and
+`preference_affinity`, the other two signals that encode your own opinions.
+
+Raising it is safe because the ceiling is NOT what protects against a thin fit:
+the evidence dampers do (`map_terms.utility_confidence` and
+`region_confidence`), continuously and in proportion to how much you have
+actually answered. A low ceiling only guaranteed the feature could never
+matter, even at full evidence."""
+
+LAB_HEAD_DEFAULT_POINTS = 5.0
+"""Default weight per head.
+
+Non-zero (was 0.0) so a fitted head takes effect without a manual promotion
+step. There is nothing to promote: `load_lab_scoring_context` already
+early-returns when no usable model exists, so an unplayed install is unaffected,
+and the dampers make an under-evidenced one small on their own."""
+
 
 class SignalLabSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -24,25 +49,25 @@ class SignalLabSettings(BaseModel):
         title="Enable Signal Lab",
         description="Offer games on Home and consume their retained model.",
     )
-    region_offset_points: Annotated[float, Field(ge=0, le=2.5)] = Field(
-        0.0,
+    region_offset_points: Annotated[float, Field(ge=0, le=LAB_HEAD_MAX_POINTS)] = Field(
+        LAB_HEAD_DEFAULT_POINTS,
         title="Region scoring nudge",
         description=(
-            "Maximum additive Discovery/Feed points from region preference. "
-            "Together the two Signal Lab heads cannot exceed the five-point "
-            "citation-evidence band."
+            "Maximum additive Discovery/Feed points from region preference, "
+            "before the evidence damper scales it down. Reaches full strength "
+            "only once a region has actually been judged several times."
         ),
     )
-    utility_points: Annotated[float, Field(ge=0, le=2.5)] = Field(
-        0.0,
+    utility_points: Annotated[float, Field(ge=0, le=LAB_HEAD_MAX_POINTS)] = Field(
+        LAB_HEAD_DEFAULT_POINTS,
         title="Utility scoring nudge",
         description=(
             "Maximum additive Discovery/Feed points from the confidence-scaled "
             "learned utility direction."
         ),
     )
-    author_offset_points: Annotated[float, Field(ge=0, le=2.5)] = Field(
-        0.0,
+    author_offset_points: Annotated[float, Field(ge=0, le=LAB_HEAD_MAX_POINTS)] = Field(
+        LAB_HEAD_DEFAULT_POINTS,
         title="Author scoring nudge",
         description=(
             "How much affinity a fully-preferred author gains. Fitted from "
