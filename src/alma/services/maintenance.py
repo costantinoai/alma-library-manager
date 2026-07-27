@@ -806,6 +806,24 @@ def _count_title_resolution_eligible(conn: sqlite3.Connection, params=None) -> i
         return 0
 
 
+def _s2_vector_batch_maximum() -> int:
+    """Largest S2 vector batch (in papers) that fits BOTH `/paper/batch` caps.
+
+    Read from `services.s2_vectors`, which derives it from the transport's own
+    `plan_paper_batch`. Declaring a literal here is what let the Settings slider
+    offer a value the runner would then silently clamp.
+    """
+    from alma.services.s2_vectors import max_vector_chunk_papers
+
+    return max_vector_chunk_papers()
+
+
+def _s2_vector_batch_default() -> int:
+    from alma.services.s2_vectors import DEFAULT_VECTOR_CHUNK_PAPERS
+
+    return min(DEFAULT_VECTOR_CHUNK_PAPERS, _s2_vector_batch_maximum())
+
+
 # --------------------------------------------------------------------------
 # Task registry
 # --------------------------------------------------------------------------
@@ -889,7 +907,18 @@ REGISTRY: dict[str, MaintenanceTask] = {
             max_manual_limit=5_000,
             default_auto_daily_cap=500,
             auto_chunk_size=200,
-            request_batch=BatchSpec(MaintenanceUnit.LOOKUP_ID, default=250, maximum=500),
+            # Bounds are DERIVED from the transport, not declared here. A second
+            # hard-coded copy (`default=250, maximum=500`) let the Settings
+            # slider offer 500 while `eta`/the runner clamped to the byte-safe
+            # ceiling, so the estimate and the queued preflight disagreed. The
+            # unit is papers: `/paper/batch` caps a response at 10 MB and one
+            # vector-bearing row is ~19 KB, so the payload binds before the
+            # 500-lookup-id cap does.
+            request_batch=BatchSpec(
+                MaintenanceUnit.PAPER,
+                default=_s2_vector_batch_default(),
+                maximum=_s2_vector_batch_maximum(),
+            ),
             sources=(SOURCE_SEMANTIC_SCHOLAR,),
         ),
         MaintenanceTask(

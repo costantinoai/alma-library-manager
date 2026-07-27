@@ -2159,24 +2159,35 @@ def resolve_openalex_candidates_from_scholar(
         except Exception as e:
             logger.warning(f"OpenAlex author search failed for '{name}': {e}")
 
+    # Enrich the incomplete candidates in ONE pipe-filtered request instead of a
+    # singleton GET each (task 61 F6). This is the only genuine per-result
+    # enrichment loop in this module, and it is on an interactive path, so the
+    # trade is worth making explicitly: under OpenAlex's usage-based pricing a
+    # singleton entity GET is FREE and a list/filter call costs 1 credit
+    # ($0.0001 — see `_CLASS_COSTS_USD` in `openalex/http.py`). We spend that
+    # hundredth of a cent to turn N sequential round trips into one, because the
+    # user is waiting. The other singleton lookups in this module stay singleton
+    # on purpose: they fetch one author and would gain nothing but cost.
+    needs_details = [
+        aid for aid, cand in candidates.items()
+        if aid and (not cand.get("orcid") or not cand.get("institution"))
+    ]
+    details_by_id: dict[str, dict[str, object]] = {}
+    if needs_details:
+        try:
+            details_by_id = batch_get_author_details(needs_details)
+        except Exception as exc:
+            logger.warning("OpenAlex batch author enrichment failed: %s", exc)
+
     out: list[dict[str, object]] = []
     for aid, cand in candidates.items():
-        if not cand.get("orcid") or not cand.get("institution"):
-            try:
-                normalized_aid = _normalize_openalex_author_id(aid)
-                details_resp = client.get(f"/authors/{normalized_aid}", timeout=20)
-                if details_resp.status_code == 200:
-                    details = details_resp.json() or {}
-                    cand["orcid"] = cand.get("orcid") or details.get("orcid")
-                    if not cand.get("institution"):
-                        cand["institution"] = (
-                            ((details.get("last_known_institution") or {}).get("display_name"))
-                            or cand.get("institution")
-                            or ""
-                        )
-            except Exception:
-                pass
-        cand["openalex_url"] = f"https://openalex.org/{_normalize_openalex_author_id(aid)}"
+        normalized_aid = _normalize_openalex_author_id(aid)
+        details = details_by_id.get(normalized_aid) or {}
+        if details:
+            cand["orcid"] = cand.get("orcid") or details.get("orcid")
+            if not cand.get("institution"):
+                cand["institution"] = details.get("institution") or cand.get("institution") or ""
+        cand["openalex_url"] = f"https://openalex.org/{normalized_aid}"
         out.append(cand)
 
     out.sort(key=lambda x: int(x.get("score") or 0), reverse=True)

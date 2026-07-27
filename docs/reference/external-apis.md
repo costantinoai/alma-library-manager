@@ -38,13 +38,35 @@ metadata, citations, topics, institutions, and the works graph.
   only fetch the fields we use. The select list lives in
   `alma/openalex/client.py::_WORKS_SELECT_FIELDS`. Adding a
   downstream consumer of a new field requires updating the select.
+* **Pricing is per request *class*, and singletons are FREE.** This is the
+  fact that decides when to batch:
+
+  | operation | cost / 1 000 calls |
+  |---|---|
+  | Get singleton (one entity by ID or DOI) | **free** |
+  | List + filter | $0.10 |
+  | Search (full-text) | $1.00 |
+  | Content download | $10.00 |
+
+  A free key is **$1.00/day** — unlimited singletons, ~10 000 list+filter,
+  ~1 000 search. Source of truth in-repo:
+  `alma/openalex/http.py::_CLASS_COSTS_USD` (+ `cost_class()`), which mirrors
+  <https://developers.openalex.org/api-reference/authentication>. Read those
+  constants rather than copying prices, which drift.
+* **Batch on latency, not by rule.** Because singleton GETs cost nothing,
+  mechanically replacing them with pipe-filter calls makes things *more*
+  expensive, not less. The trade only pays on a hot path: 100 singletons is
+  ~10 s of round trips at $0, whereas one pipe-filter is ~0.3 s at $0.0001
+  (0.01% of the daily budget). So ALMa batches the **interactive per-candidate
+  author-enrichment loop** in `openalex/client.py` and deliberately leaves the
+  one-off singleton lookups alone.
 * **Bulk-by-ID batching**: the corpus rehydrator fetches metadata for
   many papers in one call via `filter=openalex_id:W1|W2|…` — up to
   **100 IDs per filter** (the documented OR ceiling) with `per-page=100`,
-  splitting on HTTP 400/414 if a URL ever runs long. Far cheaper than
-  singleton GETs (and credits) at backlog scale. The client uses
-  **thread-local sessions** so the rehydration pipeline can fan these
-  out concurrently.
+  splitting on HTTP 400/414 if a URL ever runs long. Worth 1 list credit
+  instead of N free singletons because the backlog is latency-bound. The
+  client uses **thread-local sessions** so the rehydration pipeline can fan
+  these out concurrently.
 * **Rate limits**: ALMa tracks every response's `x-ratelimit-*`
   headers and exposes them at **Settings → External APIs → OpenAlex
   usage**. If you see "no calls yet", you haven't hit the API yet —
@@ -58,23 +80,76 @@ recommendations, and the reference/citation graph.
 
 * **Endpoints used**:
   * `/paper/batch` for bulk metadata + `specter_v2` vectors.
-  * `/paper/search/bulk` for broad non-interactive monitor/lane
-    retrieval; `/paper/search` for the title-search rescue.
+  * `/paper/search/bulk` for the recent Feed/monitor ingestion lane;
+    `/paper/search` for interactive/general Discovery.
+  * `/paper/search/match` for title→paper identity (the corpus
+    title-resolution sweep and author-identity triangulation).
   * `/paper/{id}/references` and `/paper/{id}/citations` for the
     graph lane.
-  * `/recommendations/v1/papers/forpaper/{id}` (single seed) and
-    `POST /recommendations/v1/papers` (positive + negative seeds) for
-    the `s2_related` recommendation channel — a different host path
+  * `/recommendations/v1/papers/forpaper/{id}` (single seed, all-time) and
+    `POST /recommendations/v1/papers` (positive + negative seeds, new work
+    only) for the `s2_related` recommendation channel — a different host path
     than the rest of the graph API.
   * `/author/batch`, `/author/search`, and `/author/{id}/papers` for
     author identity resolution.
-* **Bulk search is two-step (bulk → batch)**: `/paper/search/bulk`
-  hard-400s (`Unrecognized or unsupported fields`) on `tldr` and
-  `embedding.specter_v2`, so ALMa requests only a bulk-supported field
-  subset (`BULK_FIELDS`) for breadth, then issues a single
-  `/paper/batch` to backfill the two fields bulk can't return (`tldr` +
-  the SPECTER2 vector). One extra request hydrates the whole bulk slice
-  rather than N per-paper GETs (`discovery/semantic_scholar.py`).
+
+#### Documented limits (from the live `graph/v1/swagger.json`)
+
+| endpoint | limits |
+|---|---|
+| `POST /paper/batch` | **500 lookup ids**, **10 MB response**, 9 999 citations |
+| `POST /author/batch` | **1 000 author ids**, 10 MB |
+| `GET /paper/search` | `limit` ≤ 100, **≤ 1 000 relevance-ranked results total**, 10 MB |
+| `GET /paper/search/bulk` | **1 000 rows/call**, **no `limit`/`offset` parameter**, `token` pagination, 10 M total, no nested data |
+| `GET /paper/search/match` | one closest-title row; **404** on a miss |
+| `GET /paper/{id}/citations` · `/references` | `limit` ≤ **1 000** |
+| `GET /author/{id}/papers` · `/author/search` | `limit` ≤ **1 000** |
+
+`/paper/{paper_id}` and its sub-resources accept `DOI:<doi>`,
+`CorpusId:<id>`, `ARXIV:<id>`, `PMID:`, `PMCID:` — never pre-resolve an
+identifier to a `paperId` with an extra request.
+
+* **Field projection is per-endpoint, not global** (`ENDPOINT_FIELDS` +
+  `project_fields()` in `discovery/semantic_scholar.py`). S2 does **not**
+  accept the same `fields` everywhere, and an unsupported field is a hard
+  **HTTP 400**, not a silent drop. Verified live 2026-07-27:
+
+  | endpoint | `tldr` + `embedding.specter_v2` |
+  |---|---|
+  | `POST /paper/batch` | accepted |
+  | `GET /paper/search` · `/paper/search/match` | accepted |
+  | `GET /paper/search/bulk` | **rejected (400)** |
+  | `POST /recommendations/v1/papers` | **rejected (400)** |
+  | `GET /recommendations/v1/papers/forpaper/{id}` | **rejected (400)** |
+
+  The registry is **additive** — an endpoint declares what it allows, and an
+  unregistered endpoint raises rather than inheriting the global list. The
+  previous subtractive patch (one `_BULK_UNSUPPORTED_FIELDS` constant) failed
+  open: `POST /recommendations` inherited the two rejected fields and returned
+  HTTP 400 on **every** call for the life of the lane, hidden behind
+  `if resp.status_code != 200: return []`. Non-429 4xx now logs at WARNING.
+
+  **The trap that makes a registry necessary rather than a probe**: the field
+  error only fires when the query actually matches something. `GET /forpaper`
+  with the full field set returns a clean `200 {"recommendedPapers": []}` on
+  `from=recent` (empty for older seeds) and a hard **400** on `from=all-cs`.
+  An endpoint can look field-compatible right up until it starts returning
+  results.
+* **Bulk search is two-step (bulk → batch)**: bulk cannot return `tldr` or the
+  SPECTER2 vector, so ALMa requests the bulk-supported subset for breadth,
+  reranks locally, then issues a single `/paper/batch` to hydrate only the
+  slice it keeps.
+* **Bulk has no relevance ordering.** Its `sort` accepts only `paperId`,
+  `publicationDate` and `citationCount`, and **defaults to `paperId:asc`** — a
+  sha hash. Left at the default this lane returned the 1 000 lowest-paperId
+  matches out of millions, deterministically, so a keyword monitor surfaced the
+  same papers forever. ALMa now sends `sort=publicationDate:desc` (the pool
+  means "newest matching work") and reconstructs relevance locally with
+  `core.scoring_math.query_match_score`. Note the spec's caveat: records with an
+  undefined sort value sort **last**, so date-less papers fall outside the
+  1 000-row window — accepted for this recent-ingestion lane only.
+* **`year` is pushed server-side** (`year=2020-`). It used to be filtered in
+  Python after downloading all 1 000 rows.
 * **API key — strongly recommended**: set `SEMANTIC_SCHOLAR_API_KEY`
   (free at semanticscholar.org/product/api), in `.env` or via
   **Settings → Connections → Semantic Scholar**. Without one you share
@@ -82,16 +157,37 @@ recommendations, and the reference/citation graph.
   anonymous clients), so 429s are frequent — they're the root cause of
   the multi-minute Discovery graph-lane stalls. With a key you get a
   dedicated ~1 RPS.
-* **`/paper/batch` contract**:
-  * **Batch size**: up to **500 lookup IDs per call** (the documented
-    max). ALMa chunks at **250 papers** — at ≤2 IDs per paper (S2 ID +
-    DOI) that's ≤500 IDs, the most work per call against the 1 RPS limit.
+* **`/paper/batch` has TWO independent budgets**, and conflating them is a bug:
+  * **ID budget** — 500 *lookup ids* per call. One paper contributes up to two
+    (S2 ID + DOI), so a "500 papers" setting emits **1 000 ids**.
+  * **Payload budget** — **10 MB per response**. Measured 2026-07-27 with the
+    full field set: **18 899 bytes/row**, dominated by the 768-d SPECTER2
+    vector. 500 vector-bearing rows ≈ 9.4 MB, i.e. 94% of the hard cap.
+  * `plan_paper_batch()` sizes each request from the *requested field
+    projection* (a narrow projection legitimately earns a bigger batch), keeps
+    a 75% safety margin, and recursively splits on a size refusal. The batch
+    knob surfaced in Settings reads that same plan via `services/eta.py`, so
+    the estimate and the run can no longer disagree.
   * Results preserve the **request order** by lookup id (DOI / S2
     ID / OpenAlex ID).
   * Compacting the response shifts good papers onto bad IDs and
     corrupts state. ALMa preserves the original index.
   * `null` rows in the middle of a response are real — the lookup
     didn't match.
+* **One batched-vector primitive**: `fetch_vectors_for_identifiers()` returns
+  an `IdentifierFetchOutcome` (rows keyed by *requested* id, plus disjoint
+  `terminal_ids` / `retryable_ids`). `fetch_papers_batch` and
+  `services/s2_vectors` are both thin callers — a second resilient-split
+  implementation is exactly what `CLAUDE.md` → "fix the primitive" forbids.
+* **Recommendation pools**: `GET /forpaper/{id}` defaults to `from=recent`,
+  which is **empty for older seeds** (measured: 0/20 results on a 2017 seed vs
+  20/20 with `from=all-cs`). ALMa always sends `from=all-cs` — that lane exists
+  for foundational/older related work. The POST endpoint has **no `from`
+  parameter at all** and only returns 2025–26 work, so it is a *frontier*
+  source, not a general related-papers source.
+* **Author hydration batches.** `/author/batch` takes 1 000 ids; the sweep
+  gathers a whole phase's S2 ids into one request instead of one request per
+  author (at 1 RPS that was one second per author).
 * **Failure classification**:
   * Retryable failures (`429`, `5xx`, network) **stay retryable** —
     they don't become terminal "no match".
@@ -124,10 +220,25 @@ recommendations, and the reference/citation graph.
   a paper hydration step that finds a better DOI re-enters the
   fetch pool automatically.
 * **Title-search rescue**: papers that miss `/paper/batch` get one
-  `/paper/search` call each (Jaccard 0.92 + |Δyear|≤1). This lives in
+  **`/paper/search/match`** call each — the purpose-built closest-title
+  endpoint, which returns one row instead of N ranked ones and still carries
+  `abstract` + the SPECTER2 vector. This lives in
   `services/title_resolution.py` (not `s2_vectors.py`, which delegates
   to it), capped at `TITLE_RESOLUTION_PER_RUN_BUDGET` = 500 papers per
   run. The first 429 short-circuits the rest of the batch's rescue.
+
+  Three contract details that make it **not** a drop-in for `/paper/search`:
+  the envelope is `{"data": [row]}`; a miss is **HTTP 404**
+  (`Title match not found`), which is a normal outcome, not an error; and
+  `matchScore` is **unbounded** (131.8 on an exact title) and cannot be
+  requested in `fields`. Acceptance therefore stays with ALMa's local
+  Jaccard 0.92 / |Δyear| ≤ 1 contract — never `matchScore`.
+
+  `match_paper_by_title()` returns the **raw** S2 row so `externalIds` and
+  `authors[].authorId` survive. `application/author_identity` needs both, and
+  ALMa's normalized candidate shape drops them: it flattens `authors` to a
+  comma-joined string, so the previous `search_papers`-based code raised
+  `AttributeError` on `a.get("authorId")` and never extracted a preprint id.
 * **Identity resolution (OpenAlex-first)**: the *Resolve missing
   identity* sweep (`services/title_resolution.py`) handles title-only
   papers with no usable identifier. It tries OpenAlex `/works?search`
@@ -166,6 +277,27 @@ metadata fallback when OpenAlex doesn't have a paper.
   **3 polite / 1 anonymous** (`core/http_sources.py`).
 * **Used as a fallback**, not the primary path. Most papers resolve
   through OpenAlex first.
+
+## Europe PMC
+
+[Europe PMC](https://europepmc.org/RestfulWebService) indexes PubMed/MEDLINE,
+PMC, preprint servers and Agricola — the life-sciences counterpart to S2's
+CS-leaning corpus. Free, no key, abstracts inline.
+
+* **Endpoint used**: `GET /search` with `format=json` and
+  **`resultType=core`**. `core` is the only tier that returns `abstractText`;
+  `lite` is cheaper but every candidate would arrive unscoreable.
+* **Filters are pushed server-side** into the query string —
+  `FIRST_PDATE:[YYYY-01-01 TO 3000-12-31]` for a year floor and
+  `OPEN_ACCESS:y` for OA-only.
+* **Response shape gotcha**: the journal title is nested at
+  `journalInfo.journal.title`, *not* a top-level `journalTitle`.
+  `authorString` is already display-ready.
+* **Not a metadata authority.** OpenAlex and Crossref remain the
+  identifier/metadata sources of truth; this adapter contributes discovery
+  candidates plus the DOI / PMID / PMCID needed to reconcile them.
+* Paced at ~5 req/s, 2 concurrent (`core/http_sources.py`). EBI publishes no
+  hard per-second figure and asks only that clients be reasonable.
 
 ## arXiv and bioRxiv
 

@@ -430,9 +430,39 @@ def _hydrate_openalex(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tupl
     return {"source": OPENALEX_SOURCE, "status": "ok", "filled": filled_by_purpose}
 
 
-def _hydrate_s2(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tuple[str, ...]) -> dict[str, Any]:
+def prefetch_s2_authors(rows: list[sqlite3.Row] | tuple[sqlite3.Row, ...]) -> dict[str, dict]:
+    """One batched `/author/batch` call covering every S2 id in ``rows``.
+
+    S2 is rate-limited to 1 request/second even with a key, and `/author/batch`
+    accepts 1,000 ids per call — so hydrating a phase of N authors costs ONE
+    second batched, versus N seconds one-at-a-time. This is the whole of task 61
+    F5: the code already called a *batch* endpoint, it just called it with a
+    single id each time.
+    """
     from alma.discovery.semantic_scholar import fetch_authors_batch
 
+    sids = [
+        sid
+        for row in rows
+        if (sid := str(row["semantic_scholar_id"] or "").strip())
+    ]
+    if not sids:
+        return {}
+    return fetch_authors_batch(list(dict.fromkeys(sids)))
+
+
+def _hydrate_s2(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    purposes: tuple[str, ...],
+    s2_authors: dict[str, dict],
+) -> dict[str, Any]:
+    """Apply one author's already-fetched S2 record. Performs no network I/O.
+
+    ``s2_authors`` comes from `prefetch_s2_authors` — keeping the fetch in the
+    caller is what makes the batching possible, and it also keeps this function
+    free of network I/O so its `write_section` can never wrap a request.
+    """
     author_id = str(row["id"])
     lookup_key = _lookup_key(S2_SOURCE, row)
     fields_key = _fields_key(S2_SOURCE)
@@ -452,7 +482,7 @@ def _hydrate_s2(conn: sqlite3.Connection, row: sqlite3.Row, purposes: tuple[str,
                 )
         return {"source": S2_SOURCE, "status": TERMINAL_NO_MATCH_STATUS, "filled": []}
 
-    data = fetch_authors_batch([sid], batch_size=1).get(sid)
+    data = s2_authors.get(sid)
     # One gated write window opened AFTER the S2 fetch — everything below is
     # local-only (no further network), including the no-data terminal branch.
     filled_by_purpose: dict[str, list[str]] = {}
@@ -715,13 +745,22 @@ def hydrate_author_metadata(
     *,
     sources: tuple[str, ...] = (OPENALEX_SOURCE, ORCID_SOURCE, S2_SOURCE, CROSSREF_SOURCE),
     purposes: tuple[str, ...] = (PROFILE_PURPOSE, AFFILIATION_PURPOSE, ALIASES_PURPOSE),
+    s2_authors: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
-    """Best-effort metadata hydration for one author."""
+    """Best-effort metadata hydration for one author.
+
+    ``s2_authors`` is a pre-fetched `authorId -> record` map from
+    `prefetch_s2_authors`. The batch sweep passes one map covering the whole
+    phase so S2 is hit once instead of once per author; a single-author caller
+    omits it and gets a batch of one.
+    """
     ensure_author_hydration_tables(conn)
     author_key = str(author_id or "").strip()
     row = _author_row(conn, author_key)
     if row is None:
         return {"author_id": author_key, "success": False, "message": "author_not_found"}
+    if s2_authors is None:
+        s2_authors = prefetch_s2_authors([row]) if S2_SOURCE in sources else {}
 
     results: dict[str, Any] = {}
     evidence_touched = False
@@ -733,7 +772,7 @@ def hydrate_author_metadata(
             if source == OPENALEX_SOURCE:
                 result = _hydrate_openalex(conn, row, allowed_purposes)
             elif source == S2_SOURCE:
-                result = _hydrate_s2(conn, row, allowed_purposes)
+                result = _hydrate_s2(conn, row, allowed_purposes, s2_authors)
             elif source == ORCID_SOURCE:
                 result = _hydrate_orcid(conn, row, allowed_purposes)
             elif source == CROSSREF_SOURCE:
@@ -1089,6 +1128,19 @@ def run_author_metadata_rehydration(
             rows = source_rows[source]
             if add_job_log:
                 add_job_log(jid, f"{phase_name} phase selected {len(rows)} author(s)", step=f"{phase_name}_phase_prepare")
+            # Gather the whole phase's S2 ids and spend ONE request on them,
+            # before the per-author loop. At S2's 1 req/s a 200-author phase
+            # was 200 seconds of pure round-trip; batched it is one.
+            phase_s2_authors: dict[str, dict] = {}
+            if source == S2_SOURCE and rows:
+                phase_s2_authors = prefetch_s2_authors(rows)
+                if add_job_log:
+                    add_job_log(
+                        jid,
+                        f"Prefetched {len(phase_s2_authors)} Semantic Scholar author record(s) in one batch",
+                        step=f"{phase_name}_phase_prefetch",
+                        data={"authors": len(rows), "records": len(phase_s2_authors)},
+                    )
             for row in rows:
                 if is_cancellation_requested and is_cancellation_requested(jid):
                     if set_job_status:
@@ -1100,7 +1152,9 @@ def run_author_metadata_rehydration(
                     except ImportError:
                         raise RuntimeError("Operation cancelled")
                 author_id = str(row["id"])
-                result = hydrate_author_metadata(conn, author_id, sources=(source,))
+                result = hydrate_author_metadata(
+                    conn, author_id, sources=(source,), s2_authors=phase_s2_authors
+                )
                 processed += 1
                 summary[f"{source}.processed"] += 1
                 if result.get("affiliation_changed"):

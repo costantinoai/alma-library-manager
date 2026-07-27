@@ -2634,10 +2634,16 @@ def _resolve_identifiers_via_title(
         try:
             from alma.discovery import semantic_scholar
 
-            s2_candidates = semantic_scholar.search_papers(
-                query_text,
-                limit=TITLE_RESOLUTION_MAX_RESULTS,
-                raise_on_rate_limit=True,
+            # Purpose-built closest-title endpoint rather than relevance search:
+            # one row instead of N, and it still carries `abstract` + the
+            # SPECTER2 vector. Acceptance stays with the local Jaccard/year
+            # contract in `_accepts` — S2's `matchScore` is unbounded and not
+            # comparable across queries.
+            _s2_row = semantic_scholar.match_paper_by_title(query_text)
+            s2_candidates = (
+                [c for c in (semantic_scholar.s2_to_candidate(_s2_row),) if c]
+                if _s2_row
+                else []
             )
         except semantic_scholar.SemanticScholarBatchError as exc:
             if getattr(exc, "status_code", None) == 429:

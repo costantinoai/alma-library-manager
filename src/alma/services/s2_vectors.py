@@ -62,6 +62,28 @@ TERMINAL_FETCH_STATUSES = {
 _S2_BACKFILL_OPERATION_KEY = "ai.backfill_s2_vectors"
 
 _PER_RUN_PAPERS = 1500
+
+#: One local paper yields up to TWO S2 lookup ids (`semantic_scholar_id` and
+#: `DOI:`), so the API's per-request id cap translates to half as many *papers*.
+#: Conflating the two is why a "500 papers" batch setting silently emitted
+#: 1 000 ids and got re-chunked behind the user's back.
+LOOKUP_IDS_PER_PAPER = 2
+DEFAULT_VECTOR_CHUNK_PAPERS = 250
+
+
+def max_vector_chunk_papers() -> int:
+    """Largest papers-per-chunk that keeps one request inside BOTH API caps.
+
+    Derived from the transport's own `plan_paper_batch`, so the ETA
+    (`services/eta.py`) and the runner read one source of truth. Vector-bearing
+    rows are ~19 KB each, so in practice the 10 MB response cap binds before
+    the 500-id cap does.
+    """
+    plan = semantic_scholar.plan_paper_batch(
+        semantic_scholar.S2_MAX_PAPER_BATCH_IDS,
+        fields=semantic_scholar.FIELDS,
+    )
+    return max(1, plan.chunk_size // LOOKUP_IDS_PER_PAPER)
 # Self-rescheduling depth cap. 50 outer runs × 1500 papers = 75 000
 # papers per click — generous and bounded so a stuck loop can't run
 # away.
@@ -249,76 +271,54 @@ def _fetch_lookup_ids_resilient(
     job_id: str,
     add_job_log: Callable[..., None],
     batch_label: str,
-    min_retry_size: int = 1,
 ) -> tuple[dict[str, dict], dict[str, str], dict[str, str]]:
     """Fetch lookup ids and isolate per-id failures.
 
     Returns fetched papers, terminal lookup errors, and retryable lookup errors.
     Retryable errors must not be recorded as no-match terminal misses.
+
+    The batching, the 10 MB split and the terminal/retryable classification all
+    live in `semantic_scholar.fetch_vectors_for_identifiers` — this used to
+    carry its own recursive-split copy of that logic, which meant two
+    implementations of the same contract could drift (`CLAUDE.md` → "fix the
+    primitive"). What stays here is the job-log narration, which is a service
+    concern the transport must not know about.
     """
     deduped = [item for item in dict.fromkeys(lookup_ids) if item]
     if not deduped:
         return {}, {}, {}
 
-    try:
-        fetched = semantic_scholar.fetch_papers_batch(
-            deduped,
-            batch_size=len(deduped),
-            raise_on_error=True,
-        )
-        return fetched, {}, {}
-    except semantic_scholar.SemanticScholarBatchError as exc:
-        status_code = getattr(exc, "status_code", None)
-        retryable = (
-            status_code is None
-            or status_code in {401, 403, 408, 425, 429}
-            or (status_code is not None and status_code >= 500)
-        )
-        if retryable:
-            add_job_log(
-                job_id,
-                "S2/SPECTER2 vector fetch deferred by upstream service",
-                level="WARNING",
-                step="retryable_lookup_error",
-                data={
-                    "batch": batch_label,
-                    "lookup_ids": len(deduped),
-                    "status_code": status_code,
-                    "error": str(exc),
-                },
-            )
-            if status_code == 429 or (status_code is not None and status_code >= 500):
-                time.sleep(2)
-            return {}, {}, {lookup_id: str(exc) for lookup_id in deduped}
-        if len(deduped) <= min_retry_size:
-            add_job_log(
-                job_id,
-                "S2/SPECTER2 lookup id failed",
-                level="WARNING",
-                step="lookup_error",
-                data={"batch": batch_label, "lookup_id": deduped[0], "error": str(exc)},
-            )
-            return {}, {deduped[0]: str(exc)}, {}
+    outcome = semantic_scholar.fetch_vectors_for_identifiers(deduped)
 
-        midpoint = max(1, len(deduped) // 2)
-        left, left_terminal, left_retryable = _fetch_lookup_ids_resilient(
-            deduped[:midpoint],
-            job_id=job_id,
-            add_job_log=add_job_log,
-            batch_label=f"{batch_label}.a",
-            min_retry_size=min_retry_size,
+    if outcome.retryable_ids:
+        add_job_log(
+            job_id,
+            "S2/SPECTER2 vector fetch deferred by upstream service",
+            level="WARNING",
+            step="retryable_lookup_error",
+            data={
+                "batch": batch_label,
+                "lookup_ids": len(outcome.retryable_ids),
+                "requests": outcome.request_count,
+            },
         )
-        right, right_terminal, right_retryable = _fetch_lookup_ids_resilient(
-            deduped[midpoint:],
-            job_id=job_id,
-            add_job_log=add_job_log,
-            batch_label=f"{batch_label}.b",
-            min_retry_size=min_retry_size,
+        # Back off once so the next chunk does not walk straight into the same
+        # congestion window.
+        time.sleep(2)
+    for lookup_id in sorted(outcome.terminal_ids):
+        add_job_log(
+            job_id,
+            "S2/SPECTER2 lookup id failed",
+            level="WARNING",
+            step="lookup_error",
+            data={"batch": batch_label, "lookup_id": lookup_id},
         )
-        left.update(right)
-        left_terminal.update(right_terminal)
-        left_retryable.update(right_retryable)
-        return left, left_terminal, left_retryable
+
+    return (
+        dict(outcome.papers_by_requested_id),
+        {lookup_id: "rejected by Semantic Scholar" for lookup_id in outcome.terminal_ids},
+        {lookup_id: "deferred by Semantic Scholar" for lookup_id in outcome.retryable_ids},
+    )
 
 
 def run_s2_vector_backfill(
@@ -471,14 +471,14 @@ def run_s2_vector_backfill(
         errors = 0
         lookup_failures = 0
         bad_local_doi = 0
-        # Default 250 (2026-05-08). The S2 `/paper/batch` endpoint accepts up to
-        # 500 IDs per call (see `semantic_scholar.fetch_papers_batch` cap); at 2
-        # lookup IDs per paper (s2_id + DOI), 250 papers fits comfortably under
-        # that. Drops a 4 909-paper queue from ~99 batches to ~20 and cuts
-        # wall-clock from ~5–8 min to ~2–3 min. The caller (Health maintenance)
-        # may override via ``chunk_size`` — clamp to [1, 500] so the value the ETA
-        # was computed from is exactly what runs.
-        chunk_size = max(1, min(int(chunk_size or 250), 500))
+        # `chunk_size` counts PAPERS, but the API's caps are on lookup IDs and
+        # on response bytes — and one paper contributes up to two ids (s2_id +
+        # DOI). So the papers-per-chunk ceiling is derived from the transport's
+        # own declared plan rather than hard-coded here; a second copy of that
+        # arithmetic is what let the old 500 setting emit 1 000 ids and quietly
+        # re-chunk. `services/eta.py` reads the same plan, so the estimate and
+        # the run can no longer disagree.
+        chunk_size = max(1, min(int(chunk_size or DEFAULT_VECTOR_CHUNK_PAPERS), max_vector_chunk_papers()))
 
         for start in range(0, total, chunk_size):
             if _is_cancelled():

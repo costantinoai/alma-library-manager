@@ -294,6 +294,18 @@ _POLICIES: dict[str, SourcePolicy] = {
             {"email": get_contact_email()} if get_contact_email() else {}
         ),
     ),
+    "europe_pmc": SourcePolicy(
+        name="europe_pmc",
+        base_url="https://www.ebi.ac.uk/europepmc/webservices/rest",
+        # EBI publishes no hard per-second figure for the REST service and asks
+        # only that clients be reasonable. ~5 req/s is well inside what the
+        # service tolerates and matches how we pace the other unauthenticated
+        # open endpoints.
+        min_interval_seconds=0.2,
+        max_concurrency=2,
+        max_retries=3,
+        default_headers=(("Accept", "application/json"),),
+    ),
     "publisher": SourcePolicy(
         name="publisher",
         base_url="",

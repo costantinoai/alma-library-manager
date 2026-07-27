@@ -43,7 +43,7 @@ from alma.core.resolution import (
     resolve_author_identity,
 )
 from alma.core.time import utcnow
-from alma.core.utils import normalize_orcid, normalize_title_key
+from alma.core.utils import normalize_orcid
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ def _preprint_hints_from_titles(
         return preprint_ids, evidence
 
     try:
-        from alma.discovery.semantic_scholar import search_papers
+        from alma.discovery.semantic_scholar import match_paper_by_title
     except Exception as exc:
         logger.debug("S2 preprint search unavailable: %s", exc)
         return preprint_ids, evidence
@@ -145,26 +145,21 @@ def _preprint_hints_from_titles(
     for title in titles_to_try:
         if not title:
             continue
+        # `/paper/search/match` returns the RAW S2 row, which is what this
+        # function needs: it reads `externalIds` for preprint identifiers. The
+        # old `search_papers` path returned ALMa's normalized candidate, which
+        # has no `externalIds` key at all — so `ext_ids` was always `{}` and
+        # this loop never extracted a single preprint id.
         try:
-            papers = search_papers(title, limit=3)
+            best = match_paper_by_title(title)
         except Exception as exc:
-            logger.debug("S2 search_papers failed for %r: %s", title[:40], exc)
+            logger.debug("S2 title match failed for %r: %s", title[:40], exc)
             continue
-
-        best = None
-        best_key = normalize_title_key(title)
-        for paper in papers:
-            paper_title = str(paper.get("title") or "").strip()
-            if normalize_title_key(paper_title) == best_key:
-                best = paper
-                break
-        if not best and papers:
-            best = papers[0]
         if not best:
             continue
 
         # Extract preprint external IDs.
-        ext_ids = best.get("externalIds") or best.get("payload", {}).get("externalIds") or {}
+        ext_ids = best.get("externalIds") or {}
         if not isinstance(ext_ids, dict):
             continue
         for s2_name, our_name in _PREPRINT_EXTERNAL_IDS.items():
@@ -172,8 +167,13 @@ def _preprint_hints_from_titles(
             if raw and our_name not in preprint_ids:
                 preprint_ids[our_name] = raw
 
-        # Confirm the S2 paper lists our author.
-        authors_csv = str(best.get("authors") or "").lower()
+        # Confirm the S2 paper lists our author. Raw rows carry `authors` as a
+        # list of `{authorId, name}` dicts, not a flattened string.
+        authors_csv = ", ".join(
+            str(a.get("name") or "")
+            for a in (best.get("authors") or [])
+            if isinstance(a, dict)
+        ).lower()
         if normalized_author and normalized_author in authors_csv:
             matches += 1
 
@@ -351,26 +351,36 @@ def resolve_identity_hierarchical(
 
 
 def _lookup_s2_author_id(author_name: str, sample_titles: list[str]) -> str | None:
-    """Best-effort S2 authorId lookup from a paper-title round-trip."""
+    """Best-effort S2 authorId lookup from a paper-title round-trip.
+
+    Requires the RAW S2 row: it reads `authors[].authorId`, and ALMa's
+    normalized candidate flattens `authors` to a comma-joined *string*. Against
+    that shape `for a in paper["authors"]` iterated characters and `a.get(...)`
+    raised `AttributeError`, which the caller swallowed — so this lookup could
+    never succeed whenever the search actually returned something.
+    """
     if not author_name or not sample_titles:
         return None
     try:
-        from alma.discovery.semantic_scholar import search_papers
+        from alma.discovery.semantic_scholar import match_paper_by_title
     except Exception:
         return None
 
     needle = author_name.strip().lower()
     for title in sample_titles[:3]:
         try:
-            papers = search_papers(title, limit=3)
+            paper = match_paper_by_title(title)
         except Exception:
             continue
-        for paper in papers:
-            for a in paper.get("authors") or []:
-                if str(a.get("name") or "").strip().lower() == needle:
-                    author_id = str(a.get("authorId") or "").strip()
-                    if author_id:
-                        return author_id
+        if not paper:
+            continue
+        for a in paper.get("authors") or []:
+            if not isinstance(a, dict):
+                continue
+            if str(a.get("name") or "").strip().lower() == needle:
+                author_id = str(a.get("authorId") or "").strip()
+                if author_id:
+                    return author_id
     return None
 
 

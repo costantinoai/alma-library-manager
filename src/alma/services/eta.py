@@ -52,6 +52,29 @@ class RateProfile:
     max_batch_size: int | None = None
 
 
+def _s2_vector_profile() -> RateProfile:
+    """S2 vector-backfill profile, with its batch ceiling read from transport.
+
+    `services/s2_vectors.max_vector_chunk_papers()` derives the ceiling from
+    `semantic_scholar.plan_paper_batch`, which knows both API caps. Reading it
+    here means the ETA quotes the request count the runner will actually issue —
+    the previous hard-coded `max_batch_size=500` described neither cap and let
+    the UI offer a setting that silently split into twice as many requests.
+    """
+    from alma.services.s2_vectors import DEFAULT_VECTOR_CHUNK_PAPERS, max_vector_chunk_papers
+
+    ceiling = max_vector_chunk_papers()
+    return RateProfile(
+        "Semantic Scholar",
+        min(DEFAULT_VECTOR_CHUNK_PAPERS, ceiling),
+        1.0,
+        1.0,
+        False,
+        "semantic_scholar",
+        max_batch_size=ceiling,
+    )
+
+
 # Keyed by maintenance ``task.key``; the Settings repair lanes reuse the same keys.
 # Local / local-DB ops (``embedding``, ``gc_orphan_authors``, ``dedup_preprint_twins``)
 # intentionally have no profile — no ETA is shown.
@@ -65,9 +88,12 @@ class RateProfile:
 # - dedup_orcid: one OpenAlex ``filter=orcid:`` lookup per followed author → OpenAlex rate.
 PROFILES: dict[str, RateProfile] = {
     "corpus_metadata": RateProfile("OpenAlex", 50, 10.0, 1.0, True, "openalex"),
-    # S2 /paper/batch takes up to 500 ids; default 250. Overridable per-op — at the
-    # 1 req/s cap a bigger batch is proportionally faster, so this knob matters.
-    "s2_vector": RateProfile("Semantic Scholar", 250, 1.0, 1.0, False, "semantic_scholar", max_batch_size=500),
+    # S2 vector batches are sized in PAPERS, but the API caps are on lookup ids
+    # (500) and response bytes (10 MB) — and a paper yields up to two ids. The
+    # ceiling therefore comes from the transport's declared plan via
+    # `s2_vectors.max_vector_chunk_papers()`, never a literal here; see
+    # `_s2_vector_profile()`.
+    "s2_vector": _s2_vector_profile(),
     "title_resolution": RateProfile("Semantic Scholar", 1, 1.0, 1.0, False, "semantic_scholar"),
     "author_metadata": RateProfile("OpenAlex / ORCID / S2 / Crossref", 1, 1.0, 1.0, False, "semantic_scholar"),
     "refresh_authors": RateProfile("multi-source per author", 1, 0.5, 0.5, False, "semantic_scholar"),

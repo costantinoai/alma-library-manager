@@ -15,10 +15,67 @@ import math
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
+from alma.core.utils import normalize_text
+
+# Tokens too common to discriminate results for the query-text match.
+# Deliberately tiny — only glue words that appear in almost every academic
+# title. Dropping them stops "the role of X in Y" queries from scoring every
+# paper containing "the/of/in".
+QUERY_STOPWORDS = frozenset(
+    {"a", "an", "and", "are", "at", "by", "for", "from", "in", "is", "of", "on", "or", "the", "to", "with"}
+)
+
 
 def clamp(value: float, lo: float, hi: float) -> float:
     """Constrain ``value`` to ``[lo, hi]``."""
     return max(lo, min(hi, value))
+
+
+def query_tokens(query: str) -> tuple[str, list[str]]:
+    """``(normalized_query, discriminating_tokens)`` for `query_match_score`.
+
+    Glue words are dropped unless the query is *nothing but* glue words, in
+    which case they are kept so a degenerate query still matches something.
+    """
+    query_norm = normalize_text(query or "")
+    all_tokens = query_norm.split()
+    tokens = [t for t in all_tokens if t not in QUERY_STOPWORDS] or all_tokens
+    return query_norm, tokens
+
+
+def query_match_score(query_norm: str, tokens: list[str], candidate: Mapping) -> float:
+    """Lexical closeness of one candidate to the search query, in ``[0, 1]``.
+
+    Two ingredients, both over `normalize_text` output:
+
+    - token coverage: fraction of query tokens found in the title/authors
+      (full weight) or the abstract (half weight — a token buried in the
+      abstract is weaker evidence than one in the title);
+    - exact phrase: the whole normalized query appearing inside the title
+      (or, weaker, the abstract) — the strongest "this is the paper I typed"
+      signal, e.g. pasting a full title.
+
+    Lives here rather than in `discovery.source_search` because the Semantic
+    Scholar bulk adapter needs it too: `/paper/search/bulk` has **no relevance
+    sort** (only `paperId` / `publicationDate` / `citationCount`), so the
+    ordering has to be reconstructed locally from text. Importing it from
+    `source_search` would be circular — that module imports the adapter.
+    """
+    if not tokens:
+        return 0.0
+    title_norm = normalize_text(str(candidate.get("title") or ""))
+    authors_norm = normalize_text(str(candidate.get("authors") or ""))
+    abstract_norm = normalize_text(str(candidate.get("abstract") or ""))
+    strong_tokens = set(title_norm.split()) | set(authors_norm.split())
+    abstract_tokens = set(abstract_norm.split())
+
+    covered = sum(
+        1.0 if token in strong_tokens else (0.5 if token in abstract_tokens else 0.0)
+        for token in tokens
+    )
+    coverage = covered / len(tokens)
+    phrase = 1.0 if query_norm in title_norm else (0.5 if query_norm in abstract_norm else 0.0)
+    return clamp((0.8 * coverage) + (0.2 * phrase), 0.0, 1.0)
 
 
 def rank_score(index: int, total: int, *, ndigits: int = 4) -> float:

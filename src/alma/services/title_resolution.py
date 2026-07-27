@@ -456,17 +456,21 @@ def _fetch_openalex_title_match(
 def _fetch_s2_title_match(
     title: str, local_year: int | None
 ) -> tuple[dict | None, float, bool]:
-    """FETCH (worker): S2 ``/paper/search`` → (candidate, score, rate_limited).
+    """FETCH (worker): S2 ``/paper/search/match`` → (candidate, score, rate_limited).
 
-    The S2 response carries ``abstract`` + the SPECTER2 vector, which the
-    writer persists for free. NO DB writes here.
+    Uses the purpose-built title-match endpoint rather than relevance search:
+    this is the one-call-per-paper corpus sweep, so it is the highest-volume S2
+    path in the app, and `/paper/search/match` returns exactly one closest-title
+    row instead of N ranked ones. It still carries ``abstract`` and the SPECTER2
+    vector, which the writer persists for free. NO DB writes here.
+
+    `matchScore` is deliberately ignored — it is unbounded (131.8 on an exact
+    title) and not comparable across queries, so acceptance stays with the
+    local Jaccard 0.92 / |Δyear| ≤ 1 contract in `_pick_best_candidate`.
     """
     try:
-        candidates = semantic_scholar.search_papers(
-            title[:TITLE_RESOLUTION_QUERY_MAX_CHARS],
-            limit=TITLE_RESOLUTION_MAX_RESULTS,
-            raise_on_rate_limit=True,
-        )
+        row = semantic_scholar.match_paper_by_title(title[:TITLE_RESOLUTION_QUERY_MAX_CHARS])
+        candidates = [c for c in (semantic_scholar.s2_to_candidate(row),) if c] if row else []
     except semantic_scholar.SemanticScholarBatchError as exc:
         if getattr(exc, "status_code", None) == 429:
             return None, 0.0, True
