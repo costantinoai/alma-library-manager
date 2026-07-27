@@ -1416,7 +1416,25 @@ def get_preference_affinity_signal(
     # Graduated volume scaling: ramps 0.3→1.0 over 2-10 interactions
     volume_scale = min(1.0, 0.3 + (total - 2) * 0.0875)
 
+    # Confidence is a WEIGHT, not a scale factor.
+    #
+    # `confidence` is `min(1, interaction_count / 20)` — a per-entity
+    # reliability, and on a personal corpus an individual topic or author is
+    # seen once or twice, so it sits at 0.05–0.15. The old code summed
+    # `weight * confidence` and divided by the COUNT of matches, which turned
+    # that reliability into a multiplier on the output: a strongly liked topic
+    # you had seen twice contributed 0.3 * 0.1 = 0.03. Averaged over a few
+    # matches and shifted to [0, 1], every candidate landed within ~0.015 of
+    # 0.500 — the signal carried real information and none of it survived the
+    # arithmetic (198 of 233 stored rows were exactly 0.500).
+    #
+    # Dividing by the total confidence instead makes this a confidence-weighted
+    # MEAN of affinities: a well-evidenced entity outvotes a thinly-evidenced
+    # one, the result keeps `affinity_weight`'s full [-1, 1] range, and global
+    # caution stays where it belongs — in `volume_scale`, which reads the total
+    # interaction count across the whole profile rather than one entity's.
     score = 0.0
+    confidence_mass = 0.0
     components = 0
 
     profiles_map: dict[tuple[str, str], tuple[float, float]] | None = (
@@ -1437,6 +1455,7 @@ def get_preference_affinity_signal(
                 hit = profiles_map.get(("topic", term))
                 if hit is not None:
                     score += hit[0] * hit[1]
+                    confidence_mass += hit[1]
                     components += 1
         else:
             placeholders = ",".join("?" * len(topic_terms))
@@ -1449,6 +1468,7 @@ def get_preference_affinity_signal(
                 ).fetchall()
                 for r in rows:
                     score += r["affinity_weight"] * r["confidence"]
+                    confidence_mass += r["confidence"]
                     components += 1
             except sqlite3.OperationalError:
                 pass
@@ -1481,6 +1501,7 @@ def get_preference_affinity_signal(
                 hit = profiles_map.get(("author", name))
                 if hit is not None:
                     score += hit[0] * hit[1]
+                    confidence_mass += hit[1]
                     components += 1
         else:
             placeholders = ",".join("?" * len(author_names))
@@ -1493,6 +1514,7 @@ def get_preference_affinity_signal(
                 ).fetchall()
                 for r in rows:
                     score += r["affinity_weight"] * r["confidence"]
+                    confidence_mass += r["confidence"]
                     components += 1
             except sqlite3.OperationalError:
                 pass
@@ -1506,6 +1528,7 @@ def get_preference_affinity_signal(
             hit = profiles_map.get(("source", source_entity))
             if hit is not None:
                 score += hit[0] * hit[1]
+                confidence_mass += hit[1]
                 components += 1
         else:
             try:
@@ -1519,13 +1542,14 @@ def get_preference_affinity_signal(
                 ).fetchone()
                 if row:
                     score += float(row["affinity_weight"]) * float(row["confidence"])
+                    confidence_mass += float(row["confidence"])
                     components += 1
             except sqlite3.OperationalError:
                 pass
 
-    if components == 0:
+    if components == 0 or confidence_mass <= 0.0:
         return 0.0
 
-    # Normalise to [-1, 1] and apply volume scaling
-    avg = score / components
+    # Confidence-weighted mean of the matched affinities, then global caution.
+    avg = score / confidence_mass
     return max(-1.0, min(1.0, avg * volume_scale))
