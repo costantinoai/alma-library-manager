@@ -485,7 +485,6 @@ export function AuthorMapPanel() {
         // Year is meaningless for an author; Score/Heat reflect the mean
         // internal score of the author's papers (same criteria as
         // Discovery) — user call 2026-07-25.
-        colourModes={['clusters', 'score']}
         toolbarExtras={
           <>
             <MapModeSwitch

@@ -1,14 +1,19 @@
 /**
- * FrontierMap — the Discovery host of the shared `<SemanticMap>` primitive
- * (task 50 M2; layers/decisions from task 47 P3/P8).
+ * FrontierMap — Discovery's host of the shared `MapSurface`.
  *
- * This file owns Discovery-specific meaning ONLY: the frontier query, layer
- * toggles, the branches/clusters grouping switch (47-H: one grouping at a
- * time), branch legend chips that steer `branch_controls` through the shared
- * hook, and the lasso → describe → adopt-a-Direction loop. All rendering,
- * hit-testing, zoom/pan, toponym placement, and node semantics live in
- * `components/map/SemanticMap` — the same instrument every other map host
- * uses, so visuals and knobs cannot fork per surface (50-E/50-F).
+ * This file owns Discovery-specific MEANING only: the frontier query, the
+ * seen-layer toggle, the branch grouping and its steering chips, the
+ * recommendation popup, and the lasso → describe → adopt-a-Direction loop.
+ * Everything else — session state, colour modes, terrain, colourbars, edge
+ * chips, the plate itself — comes from `MapSurface`, the one host every map in
+ * the app renders through.
+ *
+ * It used to be a parallel implementation of that host (945 lines, its own
+ * `useMapField` wiring, its own legend, its own `SemanticMap` call), and the
+ * cost was exactly what task 64 was opened for: when the terrain ramp moved to
+ * a ±0.5 domain the Map page followed and this file did not, so its colourbar
+ * claimed `-1 … +1` beside a gradient that no longer used it. Nothing failed,
+ * because nothing tied the two together. Now there is nothing to tie.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -18,11 +23,7 @@ import {
   Eye,
   EyeOff,
   LassoSelect,
-  Loader2,
-  Mountain,
-  Share2,
   Sparkles,
-  Type,
 } from 'lucide-react'
 
 import { type FrontierNode, type Lens } from '@/api/client'
@@ -32,21 +33,16 @@ import { useRegionSelection } from '@/components/map/useRegionSelection'
 import { useBranchControls } from '@/hooks/useBranchControls'
 import { CorpusMapPaperPopup } from '@/components/map/CorpusMapPaperPopup'
 import type { MapPaperNeighbour } from '@/components/map/MapPaperPopup'
-import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, terrainLegendFor, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
+import { MapToggle } from '@/components/map/MapChrome'
 import {
-  ColourBarLegend,
-  MapDataStatus,
-  MapDisplayTuningRows,
-  MapTuningPopover,
-} from '@/components/map/MapChrome'
+  MapSurface,
+  MapSurfaceLoading,
+  type MapGrouping,
+  type MapSurfaceNode,
+} from '@/components/map/MapSurface'
+import { MAP_INK } from '@/components/map/mapNodeStyle'
 import { frontierQueryOptions } from '@/components/map/mapQueries'
-import {
-  MAP_TERRAIN_OPACITY_DEFAULT,
-  useMapSessionSet,
-  useMapSessionState,
-} from '@/components/map/mapSessionState'
-import { useMapField } from '@/components/map/useMapField'
+import { useMapSessionState } from '@/components/map/mapSessionState'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -76,7 +72,6 @@ interface FrontierMapProps {
     neighbours: MapPaperNeighbour[],
   ) => React.ReactNode
 }
-
 
 /** Map distinct branch ids → {color, label, index} in first-seen order. */
 function useBranchColors(nodes: FrontierNode[]) {
@@ -155,47 +150,16 @@ export function FrontierMap({
   onFilterList,
   renderRecommendationPopup,
 }: FrontierMapProps) {
+  // Both are FETCH parameters, not view filters — the server only ships the
+  // seen layer and the citation edges when asked — so they live here and the
+  // surface renders them controlled. Session-scoped like every other map knob.
   const [showSeen, setShowSeen] = useMapSessionState('frontier', 'showSeen', false)
   const [showEdges, setShowEdges] = useMapSessionState('frontier', 'showEdges', false)
-  // Words on/off is the user's call, not the grouping's side effect.
-  const [showNames, setShowNames] = useMapSessionState('frontier', 'showNames', true)
   const [highlightBranch, setHighlightBranch] = useState<string | null>(null)
-  // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
-  // (the recs are its hero layer); corpus clusters are the alternative lens on
-  // the same points. Never both — two colourings on one scatter is a lie about
-  // which structure you're looking at.
-  const [groupBy, setGroupBy] = useMapSessionState<'branches' | 'clusters' | 'year'>(
-    'frontier',
-    'groupBy',
-    'branches',
-  )
-  // Terrain (formerly "Heat") is an OVERLAY — the preference field composes
-  // with ANY grouping (user call 2026-07-25), it never competes with them.
-  const [showTerrain, setShowTerrain] = useMapSessionState('frontier', 'showTerrain', false)
-  const [terrainOpacity, setTerrainOpacity] = useMapSessionState(
-    'frontier',
-    'terrainOpacity',
-    MAP_TERRAIN_OPACITY_DEFAULT,
-  )
-  // Legend chips as toggles: a dimmed cluster recedes (never disappears —
-  // the territory stays honest), so you can mute the mega-cluster and read
-  // the rest. Reset on grouping switch.
-  const [dimmedClusters, setDimmedClusters] = useMapSessionSet<number>(
-    'frontier',
-    'dimmedClusters',
-  )
-  const [hiddenEdgeTypes, setHiddenEdgeTypes] = useMapSessionSet<string>(
-    'frontier',
-    'hiddenEdgeTypes',
-  )
   const [selectMode, setSelectMode] = useState(false)
   // Clicking a paper HIGHLIGHTS its cluster (everything else dims);
   // clicking the background clears it (user call 2026-07-25, all maps).
   const [focusClusterId, setFocusClusterId] = useState<number | null>(null)
-  const [sizeScale, setSizeScale] = useMapSessionState('frontier', 'sizeScale', 1)
-  const [dotOpacity, setDotOpacity] = useMapSessionState('frontier', 'dotOpacity', 1)
-  const [wordScale, setWordScale] = useMapSessionState('frontier', 'wordScale', 1)
-  const [wordCount, setWordCount] = useMapSessionState('frontier', 'wordCount', 3)
 
   const queryClient = useQueryClient()
   const query = useQuery(
@@ -209,40 +173,26 @@ export function FrontierMap({
   const branchColors = useBranchColors(nodes)
   const branchControls = useBranchControls(lens)
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.paper_id, n])), [nodes])
-  const visibleMapIds = useMemo(
-    () => new Set(nodes.map((node) => node.paper_id)),
-    [nodes],
-  )
+  const visibleMapIds = useMemo(() => new Set(nodes.map((node) => node.paper_id)), [nodes])
   // Selection can never outlive the exact layer/filter payload that drew it.
   const region = useRegionSelection({ visibleIds: visibleMapIds })
 
-  // Corpus clusters present on the map, largest first, each with a stable hue.
-  // Unclustered (-1) is deliberately excluded from the legend: it is the
-  // absence of a group, not a group.
-  //
-  // The HUE comes from the space (`cluster_hues`, ranked over the whole
-  // substrate), never from this deck: Discovery renders a different subset of
-  // the same corpus layout than the Map page does, and ranking locally gave one
-  // cluster a different colour on each surface.
-  const clusterColors = useMemo(() => {
+  // Corpus cluster hues come from the SPACE (`cluster_hues`, ranked over the
+  // whole substrate), never from this deck: Discovery renders a different
+  // subset of the same corpus layout than the Map page does, and ranking
+  // locally gave one cluster a different colour on each surface.
+  const clusterHues = useMemo(() => {
     const spaceHue = new Map<number, number>()
     for (const [id, index] of Object.entries(data?.cluster_hues ?? {})) {
       spaceHue.set(Number(id), Number(index))
     }
-    const tally = new Map<number, { label: string; count: number }>()
+    const counted = new Map<number, number>()
     for (const n of nodes) {
       if (typeof n.cluster_id !== 'number' || n.cluster_id < 0) continue
-      const row = tally.get(n.cluster_id)
-      if (row) row.count += 1
-      else tally.set(n.cluster_id, { label: n.cluster_label || `Cluster ${n.cluster_id}`, count: 1 })
+      counted.set(n.cluster_id, (counted.get(n.cluster_id) ?? 0) + 1)
     }
-    const ordered = [...tally.entries()].sort((a, b) => b[1].count - a[1].count)
-    return new Map(
-      ordered.map(([id, v], i) => [
-        id,
-        { ...v, color: branchMapColor(spaceHue.get(id) ?? i), index: i },
-      ]),
-    )
+    const ordered = [...counted.entries()].sort((a, b) => b[1] - a[1])
+    return new Map(ordered.map(([id], i) => [id, branchMapColor(spaceHue.get(id) ?? i)]))
   }, [nodes, data])
 
   // Recs that were NOT in the previous payload — the visible end of the
@@ -261,92 +211,38 @@ export function FrontierMap({
     prevRecIds.current = current
   }, [nodes, data?.status])
 
-  const yearRange = useMemo(
-    () => yearRampLimits(nodes.map((n) => Number(n.year))),
-    [nodes],
-  )
-
-  // Terrain (50-J): the SPACE-OWNED preference field — one valence per
-  // corpus paper at its substrate coordinates, fetched from
-  // /graphs/signal-field. NOT derived from the rendered dots: toggling
-  // "show seen" (or any layer) never changes the terrain, and a
-  // library-only view still shows the red of dismissed / weak-scored
-  // territory whose dots are hidden (user call 2026-07-25).
-  // The frontier is a pure read of the durable substrate — no tuning knob here
-  // re-fits it — so this host is permanently in the substrate frame and gets
-  // the whole space-owned field, off-view papers included. It still routes
-  // through the shared builder so its terrain and the Map page's are the same
-  // object with the same stats (`terrainField.ts`).
-  // ONE owner of field + terrain for every map surface (`useMapField`). This
-  // block used to inline its own copy of the Map page's wiring, which is how
-  // the ±0.5 terrain domain reached that map and not this one.
-  const field = useMapField({
-    kind: 'paper',
-    enabled: showTerrain,
-    nodes: [],
-    frame: 'substrate',
-    fallbackIsSubstrate: true,
-  })
-  const terrain = field.terrain
-
-  const yearStats = useMemo(
-    () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
-    [nodes],
-  )
-  const terrainStats = terrain.stats
-
-  // ── FrontierNode → SemanticMapNode: meaning mapping only (50-E) ──────────
-  const mapNodes = useMemo<SemanticMapNode[]>(() => {
-    return nodes.map((n): SemanticMapNode => {
-      const kind = n.layer === 'library' ? 'library' : n.layer === 'rec' ? 'suggestion' : 'seen'
-      // Colour follows whichever grouping is active — never both (47-H).
-      let color: string | undefined
-      if (groupBy === 'clusters') {
-        color =
-          typeof n.cluster_id === 'number' ? clusterColors.get(n.cluster_id)?.color : undefined
-      } else if (groupBy === 'year') {
-        color =
-          yearRange && typeof n.year === 'number' && n.year > 1800
-            ? yearRampColor(n.year, yearRange.lo, yearRange.hi)
-            : MAP_INK.ambientSoft
-      } else if (groupBy === 'branches' && n.layer === 'rec') {
-        color = n.branch_id ? branchColors.get(n.branch_id)?.color : branchMapColor(0)
-      }
-      return {
+  // FrontierNode → the surface's vocabulary-free shape. The ONLY translation.
+  const surfaceNodes = useMemo<MapSurfaceNode[]>(
+    () =>
+      nodes.map((n) => ({
         id: n.paper_id,
         x: n.x,
-        // Flip Y so higher-y sits at the top, like a chart (legacy convention).
-        y: 1 - n.y,
-        kind,
-        color,
+        y: n.y,
+        kind: n.layer === 'library' ? 'library' : n.layer === 'rec' ? 'suggestion' : 'seen',
+        groupId: typeof n.cluster_id === 'number' ? n.cluster_id : null,
+        groupColor:
+          typeof n.cluster_id === 'number' ? clusterHues.get(n.cluster_id) : undefined,
+        groupLabel: n.cluster_label ?? undefined,
+        // Score is the SIZE channel here, which is why this surface does not
+        // also offer it as a colour mode.
         sizeValue: n.layer === 'rec' ? (n.score ?? null) : null,
-        clusterId: n.cluster_id ?? undefined,
-        clusterLabel: n.cluster_label ?? undefined,
-        dimmed:
-          (groupBy === 'branches' &&
-            highlightBranch != null &&
-            n.layer === 'rec' &&
-            n.branch_id !== highlightBranch) ||
-          (groupBy === 'clusters' &&
-            typeof n.cluster_id === 'number' &&
-            dimmedClusters.has(n.cluster_id)) ||
-          // Cluster focus from a paper click: outside recedes, never hides.
-          (focusClusterId != null && n.cluster_id !== focusClusterId),
+        year: typeof n.year === 'number' ? n.year : null,
+        score: typeof n.score === 'number' ? n.score : null,
+        name: n.title ?? undefined,
         halo: newRecIds.has(n.paper_id),
-      }
-    })
-  }, [nodes, groupBy, clusterColors, branchColors, highlightBranch, newRecIds, dimmedClusters, yearRange, focusClusterId])
+      })),
+    [nodes, clusterHues, newRecIds],
+  )
 
-  const mapEdges = useMemo(
+  const surfaceEdges = useMemo(
     () =>
-      edges
-        .filter((e) => !hiddenEdgeTypes.has(e.edge_type))
-        .map((e) => ({
+      edges.map((e) => ({
         source: e.source,
         target: e.target,
-        color: EDGE_LAYER_COLORS[e.edge_type] ?? EDGE_LAYER_FALLBACK_COLOR,
+        weight: e.weight,
+        type: e.edge_type,
       })),
-    [edges, hiddenEdgeTypes],
+    [edges],
   )
 
   // Area score per cluster — mean suggestion score, for the hover card.
@@ -364,6 +260,110 @@ export function FrontierMap({
     }
     return new Map([...acc.entries()].map(([cid, { sum, n }]) => [cid, sum / n]))
   }, [nodes])
+
+  // 47-H: ONE grouping at a time. Branch colouring is the frontier's default
+  // (the recs are its hero layer); corpus clusters are the alternative lens on
+  // the same points. Never both — two colourings on one scatter is a lie about
+  // which structure you're looking at. Branches is genuinely host meaning: a
+  // lens branch is not a corpus cluster, so the surface cannot derive it.
+  const groupings = useMemo<MapGrouping[]>(() => {
+    const byId = new Map(nodes.map((n) => [n.paper_id, n]))
+    return [
+      {
+        id: 'branches',
+        label: 'Branches',
+        title: 'Colour suggestions by the lens branch that found them',
+        // Toponyms name CLUSTERS, so they would be lying under this grouping.
+        hideToponyms: true,
+        colorFor: (node) => {
+          const n = byId.get(node.id)
+          if (!n || n.layer !== 'rec') return undefined
+          return n.branch_id ? branchColors.get(n.branch_id)?.color : branchMapColor(0)
+        },
+        dimmed: (node) => {
+          if (highlightBranch == null) return false
+          const n = byId.get(node.id)
+          return n?.layer === 'rec' && n.branch_id !== highlightBranch
+        },
+        chips:
+          branchColors.size > 0 ? (
+            // Branch chips — highlight on click, and (when the lens is
+            // available) steer the branch inline. Boost/mute here write the
+            // SAME branch_controls Branch Studio writes, through the shared
+            // hook: one state, two views.
+            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
+              {[...branchColors.entries()].map(([id, b]) => {
+                const state = lens ? branchControls.stateOf(id) : 'normal'
+                return (
+                  <span
+                    key={id}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full border transition-colors',
+                      highlightBranch === id
+                        ? 'border-transparent text-white'
+                        : 'border-control-edge bg-control-quiet text-slate-600',
+                      state === 'muted' && 'opacity-50',
+                    )}
+                    style={highlightBranch === id ? { background: b.color } : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
+                      className="inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 hover:opacity-80"
+                      title={`Highlight the "${b.label}" branch`}
+                    >
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ background: b.color }}
+                      />
+                      {b.label} · {b.count}
+                    </button>
+                    {lens && (
+                      <span className="flex items-center pr-1">
+                        <button
+                          type="button"
+                          onClick={() => branchControls.cycleBranchState(id, 'boosted')}
+                          disabled={branchControls.isPending}
+                          className={cn(
+                            'rounded-full p-0.5 transition-colors hover:text-alma-folio',
+                            state === 'boosted'
+                              ? 'text-alma-folio'
+                              : 'opacity-50 hover:opacity-100',
+                          )}
+                          title={state === 'boosted' ? 'Remove boost' : 'Boost this branch'}
+                        >
+                          <ChevronUp className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => branchControls.cycleBranchState(id, 'muted')}
+                          disabled={branchControls.isPending}
+                          className={cn(
+                            'rounded-full p-0.5 transition-colors hover:text-warning-700',
+                            state === 'muted'
+                              ? 'text-warning-700'
+                              : 'opacity-50 hover:opacity-100',
+                          )}
+                          title={state === 'muted' ? 'Unmute this branch' : 'Mute this branch'}
+                        >
+                          <ChevronDown className="h-3 w-3" />
+                        </button>
+                      </span>
+                    )}
+                  </span>
+                )
+              })}
+            </div>
+          ) : undefined,
+      },
+      {
+        id: 'clusters',
+        label: 'Clusters',
+        title: 'Colour every paper by its corpus cluster',
+        colorFor: (node) => node.groupColor,
+      },
+    ]
+  }, [nodes, branchColors, highlightBranch, lens, branchControls])
 
   const cancelRegion = () => region.clear()
   const adoptRegion = () => {
@@ -398,246 +398,177 @@ export function FrontierMap({
   }
   if (!data) {
     return (
-      <div className="flex h-[420px] flex-col items-center justify-center gap-2 rounded-sm border border-[var(--color-border)] bg-surface-1 text-sm text-slate-500">
-        <Loader2 className="h-5 w-5 animate-spin text-alma-folio" />
-        {building
-          ? 'Building the semantic layout — this runs once, then it’s cached…'
-          : 'Loading the cached map…'}
-      </div>
+      <MapSurfaceLoading
+        building={Boolean(building)}
+        message="Building the semantic layout — this runs once, then it’s cached…"
+      />
     )
   }
 
   return (
-    <div className="overflow-hidden rounded-sm border border-[var(--color-border)] bg-surface-1">
-      {/* Toolbar — a real bar above the plate, never buttons floating on it
-          (user call 2026-07-25; also the 50-I controls contract). */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] bg-surface-2 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setShowSeen((s) => !s)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
-            showSeen
-              ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
-          )}
-          title="Show the top papers you've seen but not acted on — the frontier"
-        >
-          {showSeen ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-          Show everything I’ve seen
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowEdges((s) => !s)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
-            showEdges
-              ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
-          )}
-          title="Draw citation links (shared references + cited-together) between the papers on the map"
-        >
-          <Share2 className="h-3.5 w-3.5" />
-          Citation links{showEdges && counts?.edges ? ` · ${counts.edges}` : ''}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowNames((s) => !s)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
-            showNames && groupBy === 'clusters'
-              ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
-          )}
-          title={groupBy === 'clusters' ? 'Cluster names on the map' : 'Names show in the Clusters grouping'}
-        >
-          <Type className="h-3.5 w-3.5" />
-          Names
-        </button>
-        <MapTuningPopover>
-          <MapDisplayTuningRows
-            sizeScale={sizeScale}
-            onSizeScale={setSizeScale}
-            dotOpacity={dotOpacity}
-            onDotOpacity={setDotOpacity}
-            terrainOpacity={terrainOpacity}
-            onTerrainOpacity={setTerrainOpacity}
-            wordScale={wordScale}
-            onWordScale={setWordScale}
-            wordCount={wordCount}
-            onWordCount={setWordCount}
-          />
-        </MapTuningPopover>
-        <button
-          type="button"
-          onClick={() => setShowTerrain((s) => !s)}
-          className={cn(
-            'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
-            showTerrain
-              ? 'border-accent-edge bg-accent-soft text-alma-folio'
-              : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
-          )}
-          title="Preference terrain — the space-owned signal field (all your ratings, saves, removals + engine scores) washed under the dots. Composes with any grouping; the same whatever layers are shown (view only)"
-        >
-          <Mountain className="h-3.5 w-3.5" />
-          Terrain
-        </button>
-        {/* 47-H: one grouping at a time — this is a switch, not two toggles. */}
-        {clusterColors.size > 0 && (
-          <div className="inline-flex overflow-hidden rounded-sm border border-[var(--color-border)]">
-            {(['branches', 'clusters', 'year'] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => {
-                  setGroupBy(mode)
-                  setHighlightBranch(null)
-                  setDimmedClusters(new Set())
-                }}
-                className={cn(
-                  'px-2 py-1 text-xs font-medium transition-colors',
-                  groupBy === mode
-                    ? 'bg-accent-soft text-alma-folio'
-                    : 'bg-control-well text-slate-600 hover:bg-control-quiet',
-                )}
-                title={
-                  mode === 'branches'
-                    ? 'Colour suggestions by the lens branch that found them'
-                    : mode === 'clusters'
-                      ? 'Colour every paper by its corpus cluster'
-                      : 'Recency ramp — older fades, newer leads'
-                }
-              >
-                {mode === 'branches' ? 'Branches' : mode === 'clusters' ? 'Clusters' : 'Year'}
-              </button>
-            ))}
-          </div>
-        )}
-        {onAdoptDirection && (
-          <button
-            type="button"
-            onClick={() => {
-              setSelectMode((s) => !s)
-              cancelRegion()
-            }}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-sm border px-2.5 py-1 text-xs font-medium transition-colors',
-              selectMode
-                ? 'border-accent-edge bg-accent-soft text-alma-folio'
-                : 'border-control-edge bg-control-well text-slate-600 hover:bg-control-quiet',
-            )}
-            title="Drag a box around a cluster of papers to name it and explore that direction"
+    <MapSurface
+      stateKey="frontier"
+      fieldKind="paper"
+      nodes={surfaceNodes}
+      edges={surfaceEdges}
+      // The frontier is a pure read of the durable substrate — no knob here
+      // re-fits it — so this host is permanently in the substrate frame and
+      // gets the whole space-owned field, off-view papers included. Toggling
+      // "show seen" therefore never changes the terrain.
+      frame="substrate"
+      fallbackIsSubstrate
+      groupings={groupings}
+      defaultColourMode="branches"
+      // Score is already the dot-size channel here; colouring by it too would
+      // say one thing twice.
+      offerScoreMode={false}
+      linksLabel="Citation links"
+      showEdges={showEdges}
+      onShowEdgesChange={setShowEdges}
+      // The frontier's find-by-title lives in the list below the map.
+      searchable={false}
+      tuningInToolbar
+      height={520}
+      building={Boolean(building)}
+      refreshing={query.isFetching}
+      focusGroupId={focusClusterId}
+      lassoMode={selectMode}
+      onLasso={(ids, anchor) => region.select(ids, anchor)}
+      onBackgroundClick={() => setFocusClusterId(null)}
+      onOpenNode={(id) => {
+        const n = nodesById.get(id)
+        if (!n) return
+        // The popup is owned by SemanticMap. The ONLY click side effect is
+        // cluster focus. Navigating to a recommendation's list row requires the
+        // explicit "Go to paper" action inside its popup.
+        setFocusClusterId(
+          typeof n.cluster_id === 'number' && n.cluster_id >= 0 ? n.cluster_id : null,
+        )
+      }}
+      toolbarExtras={
+        <>
+          <MapToggle
+            active={showSeen}
+            onClick={() => setShowSeen((s) => !s)}
+            title="Show the top papers you've seen but not acted on — the frontier"
           >
-            <LassoSelect className="h-3.5 w-3.5" />
-            Select a direction
-          </button>
-        )}
-        <span className="ml-auto">
-          <MapDataStatus
-            phase={
-              building
-                ? 'building'
-                : query.isFetching || (showTerrain && field.isFetching)
-                  ? 'refreshing'
-                  : 'idle'
-            }
-          />
-        </span>
-      </div>
-
-      <SemanticMap
-        nodes={mapNodes}
-        edges={mapEdges}
-        showEdges={showEdges}
-        showToponyms={showNames && groupBy === 'clusters'}
-        sizeScale={sizeScale}
-        dotOpacity={dotOpacity}
-        toponymScale={wordScale}
-        toponymWordCount={wordCount}
-        heatField={showTerrain ? terrain.points : undefined}
-        heatFieldAbsMax={terrain.absMax}
-        terrainOpacity={terrainOpacity}
-        height={520}
-        lassoMode={selectMode}
-        onLasso={(ids, anchor) => region.select(ids, anchor)}
-        onClickNode={(id) => {
-          if (id == null) {
-            setFocusClusterId(null)
-            return
-          }
-          const n = nodesById.get(id)
-          if (!n) return
-          // Popup is owned by SemanticMap. The ONLY click side effect is
-          // cluster focus. Navigating to a recommendation's list row requires
-          // the explicit "Go to paper" action inside its popup.
-          setFocusClusterId(
-            typeof n.cluster_id === 'number' && n.cluster_id >= 0 ? n.cluster_id : null,
-          )
-        }}
-        renderClick={(id, close) => {
-          const n = nodesById.get(id)
-          if (!n) return null
-          const neighbours = frontierNeighbours(n, nodes, edges)
-          if (n.layer === 'rec') return renderRecommendationPopup(n, close, neighbours)
-          return (
-            <CorpusMapPaperPopup
-              paperId={n.paper_id}
-              onClose={close}
-              onOpenDetails={() => {
-                close()
-                onSelectPaper(n.paper_id)
+            {showSeen ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            Show everything I’ve seen
+          </MapToggle>
+          {onAdoptDirection && (
+            <MapToggle
+              active={selectMode}
+              onClick={() => {
+                setSelectMode((s) => !s)
+                cancelRegion()
               }}
-              fallback={{
-                id: n.paper_id,
-                title: n.title || n.paper_id,
-                year: n.year,
-                score: n.score,
-                statusLabel: n.layer === 'library' ? 'In your library' : 'Seen',
-                branchLabel: n.branch_label,
-                clusterLabel: n.cluster_label,
-                neighbours,
-              }}
+              title="Drag a box around a cluster of papers to name it and explore that direction"
+            >
+              <LassoSelect className="h-3.5 w-3.5" />
+              Select a direction
+            </MapToggle>
+          )}
+        </>
+      }
+      legendCounts={
+        <>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full"
+              style={{ background: MAP_INK.library }}
             />
-          )
-        }}
-        renderHover={(id) => {
-          const n = nodesById.get(id)
-          if (!n) return null
-          return (
-            <>
-              <p className="line-clamp-2 font-medium text-alma-800">{n.title || n.paper_id}</p>
-              <p className="mt-0.5 text-slate-500">
-                {n.layer === 'library' ? 'In your library' : n.layer === 'rec' ? 'Suggestion' : 'Seen'}
-                {n.year ? ` · ${n.year}` : ''}
+            Library {counts ? `(${counts.library})` : ''} — filled
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-full border-2 bg-transparent"
+              style={{ borderColor: branchMapColor(0) }}
+            />
+            Suggestions {counts ? `(${counts.recs})` : ''} — hollow
+          </span>
+        </>
+      }
+      legendExtras={
+        <>
+          {showSeen && (
+            <span className="inline-flex items-center gap-1.5 text-slate-400">
+              <span
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: MAP_INK.ambientSoft }}
+              />
+              {counts
+                ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
+                  (data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
+                : 'seen'}
+            </span>
+          )}
+          {counts && counts.recs_unplaced > 0 && (
+            <span className="text-slate-400">
+              · {counts.recs_unplaced} suggestion
+              {counts.recs_unplaced === 1 ? '' : 's'} not on the map (no abstract yet)
+            </span>
+          )}
+        </>
+      }
+      hoverCard={(id) => {
+        const n = nodesById.get(id)
+        if (!n) return null
+        const area =
+          typeof n.cluster_id === 'number' && n.cluster_id >= 0
+            ? clusterAreaScores.get(n.cluster_id)
+            : undefined
+        const hasScore = typeof n.score === 'number' && n.layer === 'rec'
+        return (
+          <>
+            <p className="line-clamp-2 font-medium text-alma-800">{n.title || n.paper_id}</p>
+            <p className="mt-0.5 text-slate-500">
+              {n.layer === 'library' ? 'In your library' : n.layer === 'rec' ? 'Suggestion' : 'Seen'}
+              {n.year ? ` · ${n.year}` : ''}
+            </p>
+            {(hasScore || area != null) && (
+              <p className="mt-0.5 font-medium text-alma-800">
+                {hasScore ? `Score ${Math.round(n.score as number)}/100` : ''}
+                {hasScore && area != null ? ' · ' : ''}
+                {area != null ? `area ${Math.round(area)}/100` : ''}
               </p>
-              {(() => {
-                const area =
-                  typeof n.cluster_id === 'number' && n.cluster_id >= 0
-                    ? clusterAreaScores.get(n.cluster_id)
-                    : undefined
-                const hasScore = typeof n.score === 'number' && n.layer === 'rec'
-                if (!hasScore && area == null) return null
-                return (
-                  <p className="mt-0.5 font-medium text-alma-800">
-                    {hasScore ? `Score ${Math.round(n.score as number)}/100` : ''}
-                    {hasScore && area != null ? ' · ' : ''}
-                    {area != null ? `area ${Math.round(area)}/100` : ''}
-                  </p>
-                )
-              })()}
-              {n.branch_label && <p className="mt-0.5 text-slate-500">branch: {n.branch_label}</p>}
-              {n.cluster_label && n.cluster_label !== 'Unclustered' && (
-                <p className="mt-0.5 text-slate-400">cluster: {n.cluster_label}</p>
-              )}
-            </>
-          )
-        }}
-        viewStateKey="frontier"
-        className="rounded-none border-0"
-      >
-        {/* Region popover — the describe payload + adopt action. Meaning
-            (label + terms + counts) is shown before the action, per 47 §8. */}
-        {region.ids && (
+            )}
+            {n.branch_label && <p className="mt-0.5 text-slate-500">branch: {n.branch_label}</p>}
+            {n.cluster_label && n.cluster_label !== 'Unclustered' && (
+              <p className="mt-0.5 text-slate-400">cluster: {n.cluster_label}</p>
+            )}
+          </>
+        )
+      }}
+      renderClickCard={(id, close) => {
+        const n = nodesById.get(id)
+        if (!n) return null
+        const neighbours = frontierNeighbours(n, nodes, edges)
+        if (n.layer === 'rec') return renderRecommendationPopup(n, close, neighbours)
+        return (
+          <CorpusMapPaperPopup
+            paperId={n.paper_id}
+            onClose={close}
+            onOpenDetails={() => {
+              close()
+              onSelectPaper(n.paper_id)
+            }}
+            fallback={{
+              id: n.paper_id,
+              title: n.title || n.paper_id,
+              year: n.year,
+              score: n.score,
+              statusLabel: n.layer === 'library' ? 'In your library' : 'Seen',
+              branchLabel: n.branch_label,
+              clusterLabel: n.cluster_label,
+              neighbours,
+            }}
+          />
+        )
+      }}
+      plateOverlay={
+        // Region popover — the describe payload + adopt action. Meaning
+        // (label + terms + counts) is shown before the action, per 47 §8.
+        region.ids ? (
           <MapRegionCard
             kind="Direction"
             icon={<Sparkles className="h-3.5 w-3.5 text-alma-folio" />}
@@ -721,223 +652,8 @@ export function FrontierMap({
               </>
             )}
           </MapRegionCard>
-        )}
-
-      </SemanticMap>
-
-      {/* Legend — its own section BELOW the plate (user call 2026-07-25):
-          ownership semantics from the registry (filled vs hollow), grouping
-          chips per the active mode. Never an overlay hiding dots. */}
-      <div className="border-t border-[var(--color-border)] bg-surface-2 px-3 py-2.5 text-xs">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-slate-600">
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ background: MAP_INK.library }}
-              />
-              Library {counts ? `(${counts.library})` : ''} — filled
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full border-2 bg-transparent"
-                style={{ borderColor: branchMapColor(0) }}
-              />
-              Suggestions {counts ? `(${counts.recs})` : ''} — hollow
-            </span>
-            {groupBy === 'year' && yearRange && yearStats && (
-              // Ramp clamps at p10–p90 for contrast; extend notation
-              // ("≤2004") keeps the real data range honest.
-              <ColourBarLegend
-                gradient={RAMP_GRADIENTS.year}
-                min={yearStats.min < yearRange.lo ? `≤${yearRange.lo}` : String(yearRange.lo)}
-                max={yearStats.max > yearRange.hi ? `≥${yearRange.hi}` : String(yearRange.hi)}
-                mean={String(Math.round(yearStats.mean))}
-              />
-            )}
-            {showTerrain && terrainStats && (
-              // Fixed semantic valence domain, shared with every map — bounds
-              // and gradient both DERIVED from the ramp, so this bar cannot
-              // drift from the Map page's (it said -1..1 while the ramp used
-              // ±0.5, until the descriptor was centralised).
-              <ColourBarLegend
-                gradient={terrainLegendFor(terrain.absMax).gradient}
-                min={terrainLegendFor(terrain.absMax).min}
-                mid={terrainLegendFor(terrain.absMax).mid}
-                max={terrainLegendFor(terrain.absMax).max}
-                mean={terrainStats.mean.toFixed(2)}
-              />
-            )}
-            {showSeen && (
-              <span className="inline-flex items-center gap-1.5 text-slate-400">
-                <span
-                  className="inline-block h-1.5 w-1.5 rounded-full"
-                  style={{ background: MAP_INK.ambientSoft }}
-                />
-                {counts
-                  ? `showing ${counts.seen_shown} nearest of ${counts.seen_total} seen` +
-                    (data?.seen_ranked_by === 'lens' ? ' (nearest to this lens)' : '')
-                  : 'seen'}
-              </span>
-            )}
-          </div>
-          {showSeen && (
-            <p className="mt-1 text-[11px] text-slate-400">
-              Seen = surfaced in an EARLIER refresh and never acted on (not saved, not dismissed).
-              They are not in the current deck — each new refresh builds a fresh one — but they are
-              your unworked frontier: lasso a patch of them to explore it as a Direction.
-            </p>
-          )}
-          {showEdges && edges.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-              {Object.entries(
-                edges.reduce<Record<string, number>>((acc, e) => {
-                  acc[e.edge_type] = (acc[e.edge_type] ?? 0) + 1
-                  return acc
-                }, {}),
-              ).map(([type, count]) => {
-                const off = hiddenEdgeTypes.has(type)
-                return (
-                  <button
-                    key={type}
-                    type="button"
-                    aria-pressed={!off}
-                    onClick={() =>
-                      setHiddenEdgeTypes((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(type)) next.delete(type)
-                        else next.add(type)
-                        return next
-                      })
-                    }
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600 transition-opacity hover:bg-control-quiet-hover',
-                      off && 'opacity-40 line-through',
-                    )}
-                    title={off ? `Show ${type} links` : `Hide ${type} links`}
-                  >
-                    <span
-                      className="inline-block h-1.5 w-3 rounded-full"
-                      style={{ background: EDGE_LAYER_COLORS[type] ?? EDGE_LAYER_FALLBACK_COLOR }}
-                    />
-                    {type === 'bibliographic_coupling' ? 'Shared references' : type === 'co_citation' ? 'Cited together' : type} · {count}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {/* Branch chips — highlight on click, and (when the lens is available)
-              steer the branch inline. Boost/mute here write the SAME
-              branch_controls Branch Studio writes, through the shared hook: one
-              state, two views. */}
-          {groupBy === 'branches' && branchColors.size > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-              {[...branchColors.entries()].map(([id, b]) => {
-                const state = lens ? branchControls.stateOf(id) : 'normal'
-                return (
-                  <span
-                    key={id}
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full border transition-colors',
-                      highlightBranch === id
-                        ? 'border-transparent text-white'
-                        : 'border-control-edge bg-control-quiet text-slate-600',
-                      state === 'muted' && 'opacity-50',
-                    )}
-                    style={highlightBranch === id ? { background: b.color } : undefined}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setHighlightBranch((h) => (h === id ? null : id))}
-                      className="inline-flex items-center gap-1 rounded-full py-0.5 pl-1.5 hover:opacity-80"
-                      title={`Highlight the "${b.label}" branch`}
-                    >
-                      <span
-                        className="inline-block h-2 w-2 rounded-full"
-                        style={{ background: b.color }}
-                      />
-                      {b.label} · {b.count}
-                    </button>
-                    {lens && (
-                      <span className="flex items-center pr-1">
-                        <button
-                          type="button"
-                          onClick={() => branchControls.cycleBranchState(id, 'boosted')}
-                          disabled={branchControls.isPending}
-                          className={cn(
-                            'rounded-full p-0.5 transition-colors hover:text-alma-folio',
-                            state === 'boosted' ? 'text-alma-folio' : 'opacity-50 hover:opacity-100',
-                          )}
-                          title={state === 'boosted' ? 'Remove boost' : 'Boost this branch'}
-                        >
-                          <ChevronUp className="h-3 w-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => branchControls.cycleBranchState(id, 'muted')}
-                          disabled={branchControls.isPending}
-                          className={cn(
-                            'rounded-full p-0.5 transition-colors hover:text-warning-700',
-                            state === 'muted' ? 'text-warning-700' : 'opacity-50 hover:opacity-100',
-                          )}
-                          title={state === 'muted' ? 'Unmute this branch' : 'Mute this branch'}
-                        >
-                          <ChevronDown className="h-3 w-3" />
-                        </button>
-                      </span>
-                    )}
-                  </span>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Cluster chips — TOGGLES: click to dim a cluster's dots (they
-              recede, never vanish), click again to restore. Corpus clusters
-              aren't steerable, so this is a reading aid, not a signal. */}
-          {groupBy === 'clusters' && clusterColors.size > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
-              {[...clusterColors.entries()].slice(0, 8).map(([id, c]) => {
-                const dimmed = dimmedClusters.has(id)
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() =>
-                      setDimmedClusters((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(id)) next.delete(id)
-                        else next.add(id)
-                        return next
-                      })
-                    }
-                    aria-pressed={!dimmed}
-                    className={cn(
-                      'inline-flex max-w-[14rem] items-center gap-1 rounded-full border border-control-edge bg-control-quiet px-1.5 py-0.5 text-slate-600 transition-opacity hover:bg-control-quiet-hover',
-                      dimmed && 'opacity-40',
-                    )}
-                    title={
-                      dimmed
-                        ? `Show "${c.label}" (${c.count} papers)`
-                        : `Dim "${c.label}" (${c.count} papers)`
-                    }
-                  >
-                    <span
-                      className="inline-block h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: c.color }}
-                    />
-                    <span className={cn('truncate', dimmed && 'line-through')}>{c.label}</span>
-                    <span className="shrink-0 text-slate-400">· {c.count}</span>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {counts && counts.recs_unplaced > 0 && (
-            <p className="mt-1.5 text-[11px] text-slate-400">
-              {counts.recs_unplaced} suggestion{counts.recs_unplaced === 1 ? '' : 's'} not on the map (no abstract yet)
-            </p>
-          )}
-        </div>
-    </div>
+        ) : undefined
+      }
+    />
   )
 }
