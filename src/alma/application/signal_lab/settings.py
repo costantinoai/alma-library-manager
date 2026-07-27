@@ -41,6 +41,15 @@ class SignalLabSettings(BaseModel):
             "learned utility direction."
         ),
     )
+    author_offset_points: Annotated[float, Field(ge=0, le=2.5)] = Field(
+        0.0,
+        title="Author scoring nudge",
+        description=(
+            "How much affinity a fully-preferred author gains. Fitted from "
+            "within-region comparisons only, and ADDED to the author signal "
+            "your Library already produces — never a replacement for it."
+        ),
+    )
     map_tint_strength: Annotated[float, Field(ge=0, le=1)] = Field(
         0.45,
         title="Map taste tint",
@@ -66,6 +75,7 @@ _KEYS = {
     "enabled": "signal_lab.enabled",
     "region_offset_points": "weights.lab_region_offset",
     "utility_points": "weights.lab_utility",
+    "author_offset_points": "weights.lab_author_offset",
     "map_tint_strength": "signal_lab.map_tint_strength",
     "ring_decay": "signal_lab.gamma_start",
     "exploration_rate": "signal_lab.epsilon",
@@ -84,6 +94,7 @@ def read(db: sqlite3.Connection) -> SignalLabSettings:
         enabled=stored[_KEYS["enabled"]].lower() == "true",
         region_offset_points=float(stored[_KEYS["region_offset_points"]]),
         utility_points=float(stored[_KEYS["utility_points"]]),
+        author_offset_points=float(stored[_KEYS["author_offset_points"]]),
         map_tint_strength=float(stored[_KEYS["map_tint_strength"]]),
         ring_decay=float(stored[_KEYS["ring_decay"]]),
         exploration_rate=float(stored[_KEYS["exploration_rate"]]),

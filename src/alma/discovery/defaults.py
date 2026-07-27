@@ -23,6 +23,9 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     # lab-less build.
     "weights.lab_region_offset": "0.0",
     "weights.lab_utility": "0.0",
+    # The author head folds into the canonical author signal rather than
+    # scoring on its own; at 0.0 the offsets are never even read.
+    "weights.lab_author_offset": "0.0",
     # Signal Lab tuning (task 54). Right defaults; tunable from Settings.
     # gamma_start: ring-prior decay (ring 1 pulls ~1/3 of ring 0).
     # epsilon: ring-uniform exploration share — the self-confirmation guard.

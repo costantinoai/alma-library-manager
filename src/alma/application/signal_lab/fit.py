@@ -9,7 +9,7 @@ other fit.
 
 :func:`fit_model` is deliberately connection-free: the view's ``build_fn``
 (:func:`build_signal_lab_model`) gathers inputs (rounds, vectors, paper→
-region map, prior) and hands them over. That keeps the fit golden-file
+region and paper→author maps, prior) and hands them over. That keeps the fit golden-file
 testable and lets the stage-0 simulator drive it with synthetic answers.
 
 Heads, in order of statistical safety (task 53):
@@ -19,6 +19,10 @@ Heads, in order of statistical safety (task 53):
   Library-centroid prior, plus a K-vector bootstrap ensemble.
 * ``metric`` — non-negative diagonal distance weights fitted from relative
   similarity constraints, plus a bootstrap ensemble for odd-one-out EIG.
+* ``author_offsets`` — James–Stein-shrunk per-author win-rates, fitted on
+  WITHIN-REGION preferences only so topic cannot masquerade as taste for a
+  person. Consumed by the canonical author signal, not by a second ranker
+  term (see ``application/author_signal.py``).
 * ``region_overrides`` — odd-one-out boundary votes past a threshold.
 
 M0 note: the prior is the Library vector centroid. M1 wires the true Rocchio
@@ -34,9 +38,11 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import sqlite3
 from collections import defaultdict
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, TypeVar
 
 import numpy as np
 
@@ -52,11 +58,22 @@ from alma.core.vector_blob import decode_vector, encode_vector
 
 logger = logging.getLogger(__name__)
 
+# Entity key of a categorical head: a region id, an author match key, …
+K = TypeVar("K", int, str)
+
 MODEL_VIEW_KEY = "signal_lab:model"
 
 # James–Stein-style shrinkage mass: a region's offset is pulled toward the
 # global mean with the weight of this many pseudo-observations.
 OFFSET_SHRINKAGE = 8.0
+
+# The author head is the sparsest thing we fit — three papers a round, a
+# handful of authors each — so it is pulled toward zero much harder than the
+# ~32-parameter region head, and an author needs this many usable comparisons
+# before it is published at all. Both guard the same failure: a prolific name
+# drifting away from zero on noise because it simply appears more often.
+AUTHOR_SHRINKAGE = 12.0
+AUTHOR_MIN_COMPARISONS = 4
 
 # Bootstrap ensemble size for full-outcome expected-information acquisition.
 ENSEMBLE_K = 8
@@ -118,6 +135,7 @@ def fit_model(
     games: dict[str, MiniGame],
     vectors: dict[str, np.ndarray],
     paper_regions: dict[str, int],
+    paper_authors: dict[str, list[str]] | None = None,
     prior: np.ndarray | None,
     gamma_start: float = GAMMA_START,
     override_min_votes: int = OVERRIDE_MIN_VOTES,
@@ -169,6 +187,7 @@ def fit_model(
     gamma = _anneal_gamma(rounds, gamma_start, coverage_target)
     prior_unit = _unit_or_none(prior)
     offsets = _fit_region_offsets(train_prefs, paper_regions)
+    author_offsets = _fit_author_offsets(train_prefs, paper_authors or {}, paper_regions)
     utility, ensemble = _fit_utility(train_prefs, vectors, prior_unit)
     metric, metric_ensemble = _fit_metric(train_sims, vectors)
     utility_delta = (
@@ -195,8 +214,10 @@ def fit_model(
             "holdout_prefs": len(holdout_prefs),
             "train_sims": len(train_sims),
             "holdout_sims": len(holdout_sims),
+            "authors_fitted": len(author_offsets),
         },
         "region_offsets": {str(k): round(v, 4) for k, v in offsets.items()},
+        "author_offsets": {k: round(v, 4) for k, v in author_offsets.items()},
         "utility_b64": _b64(utility) if utility is not None else None,
         "utility_delta_b64": _b64(utility_delta) if utility_delta is not None else None,
         "ensemble_b64": [_b64(w) for w in ensemble],
@@ -235,6 +256,41 @@ def _anneal_gamma(rounds: list[RoundRow], gamma_start: float, coverage_target: i
     return float(min(1.0, gamma_start * (1.25**levels)))
 
 
+def shrunk_win_rates(
+    votes: Sequence[tuple[K, float]],
+    *,
+    shrinkage: float,
+    min_observations: int = 0,
+) -> dict[K, float]:
+    """James–Stein-shrunk win rate per entity — the ONE estimator every
+    categorical head uses (regions today, authors today, topics when they land).
+
+    Each vote is ``(entity, +1)`` when that entity was on the preferred side and
+    ``(entity, -1)`` when it was on the rejected one. The result is the mean
+    pulled toward the grand mean with the weight of ``shrinkage``
+    pseudo-observations, so an entity seen twice barely moves and one seen a
+    hundred times is nearly its raw rate. Entities under ``min_observations``
+    are withheld entirely.
+
+    Keeping this in one place is the point: the heads must differ only in what
+    they count and how hard they are shrunk, never in the maths. Two hand-rolled
+    copies is how a "similar" head quietly becomes a different estimator.
+    """
+    sums: defaultdict[K, float] = defaultdict(float)
+    counts: defaultdict[K, int] = defaultdict(int)
+    for entity, value in votes:
+        sums[entity] += value
+        counts[entity] += 1
+    if not counts:
+        return {}
+    grand_mean = sum(sums.values()) / sum(counts.values())
+    return {
+        entity: (sums[entity] + shrinkage * grand_mean) / (n + shrinkage)
+        for entity, n in counts.items()
+        if n >= min_observations
+    }
+
+
 def _fit_region_offsets(prefs: list[Pref], paper_regions: dict[str, int]) -> dict[int, float]:
     """Per-region win-rate offsets, James–Stein-shrunk toward the global mean.
 
@@ -242,22 +298,67 @@ def _fit_region_offsets(prefs: list[Pref], paper_regions: dict[str, int]) -> dic
     offset is the shrunk mean in [−1, 1]. ~32 parameters, converges in tens
     of rounds — the head that ships first for a reason (task 53).
     """
-    sums: defaultdict[int, float] = defaultdict(float)
-    counts: defaultdict[int, int] = defaultdict(int)
+    votes: list[tuple[int, float]] = []
     for p in prefs:
         for pid, val in ((p.a, 1.0), (p.b, -1.0)):
             region = paper_regions.get(pid)
             if region is not None:
-                sums[region] += val
-                counts[region] += 1
-    if not counts:
-        return {}
-    total_n = sum(counts.values())
-    grand_mean = sum(sums.values()) / total_n
-    return {
-        r: (sums[r] + OFFSET_SHRINKAGE * grand_mean) / (counts[r] + OFFSET_SHRINKAGE)
-        for r in counts
-    }
+                votes.append((region, val))
+    return shrunk_win_rates(votes, shrinkage=OFFSET_SHRINKAGE)
+
+
+def author_match_keys(name: str) -> set[str]:
+    """Match keys for one author name — the SAME normalisation the discovery
+    ranker looks authors up by, so a fitted offset lands on the right person.
+
+    Re-derived here rather than imported so the fit stays connection-free and
+    golden-file testable; `test_signal_lab_author_head.py` pins the two
+    implementations together so they cannot drift.
+    """
+    tokens = [t for t in re.split(r"[^a-z0-9]+", (name or "").lower()) if t]
+    if not tokens:
+        return set()
+    keys = {" ".join(tokens)}
+    if tokens[0] and tokens[-1]:
+        keys.add(f"{tokens[-1]}|{tokens[0][0]}")
+    return keys
+
+
+def _fit_author_offsets(
+    prefs: list[Pref],
+    paper_authors: dict[str, list[str]],
+    paper_regions: dict[str, int],
+) -> dict[str, float]:
+    """Per-author win-rate offsets, from WITHIN-REGION preferences only.
+
+    Why within-region only: inside one super-region the region head cannot
+    explain the outcome — both papers carry the same offset — so what is left
+    is the reader's response to the papers themselves. Across regions, topic
+    dominates the choice, and crediting that to whoever happened to be on the
+    winning paper is how you learn "I love this author" from "I love this
+    topic". Restricting the sample removes the confound structurally, which is
+    stronger than subtracting a fitted estimate of it.
+
+    An author on BOTH papers of a comparison is dropped from it: a co-author of
+    the winner and the loser was not what separated them.
+
+    Keys are match keys (see :func:`author_match_keys`), so one author with a
+    known first initial contributes to both their spellings.
+    """
+    votes: list[tuple[str, float]] = []
+    for pref in prefs:
+        region_a = paper_regions.get(pref.a)
+        region_b = paper_regions.get(pref.b)
+        if region_a is None or region_a != region_b:
+            continue
+        won = {k for name in paper_authors.get(pref.a, []) for k in author_match_keys(name)}
+        lost = {k for name in paper_authors.get(pref.b, []) for k in author_match_keys(name)}
+        votes.extend((key, 1.0) for key in won - lost)
+        votes.extend((key, -1.0) for key in lost - won)
+
+    return shrunk_win_rates(
+        votes, shrinkage=AUTHOR_SHRINKAGE, min_observations=AUTHOR_MIN_COMPARISONS
+    )
 
 
 def _sgd_utility(
@@ -502,6 +603,26 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         except sqlite3.OperationalError:
             pass
 
+    # paper → author names, for the author head. Parsed with the ranker's own
+    # splitter so "Last, First" imports and "A and B" strings land as the same
+    # people the ranker will later look up.
+    paper_authors: dict[str, list[str]] = {}
+    if shown_ids:
+        from alma.discovery.scoring import parse_author_names
+
+        placeholders = ",".join("?" for _ in shown_ids)
+        try:
+            rows = conn.execute(
+                f"SELECT id, authors FROM papers WHERE id IN ({placeholders})",
+                shown_ids,
+            ).fetchall()
+            for row in rows:
+                names = parse_author_names(row["authors"] or "")
+                if names:
+                    paper_authors[str(row["id"])] = names
+        except sqlite3.OperationalError:
+            pass
+
     # M0 prior: the Library vector centroid (M1 swaps in the true Rocchio
     # profile prior — see module docstring).
     prior: np.ndarray | None = None
@@ -530,6 +651,7 @@ def build_signal_lab_model(conn: sqlite3.Connection) -> dict[str, Any]:
         games=games,
         vectors=vectors,
         paper_regions=paper_regions,
+        paper_authors=paper_authors,
         prior=prior,
         gamma_start=tuning["gamma_start"],
         override_min_votes=tuning["override_min_votes"],

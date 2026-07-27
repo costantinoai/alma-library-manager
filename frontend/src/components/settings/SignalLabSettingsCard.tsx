@@ -34,6 +34,7 @@ const DEFAULTS: SignalLabSettings = {
   enabled: true,
   region_offset_points: 0,
   utility_points: 0,
+  author_offset_points: 0,
   map_tint_strength: 0.45,
   ring_decay: 0.35,
   exploration_rate: 0.20,
@@ -173,6 +174,16 @@ export function SignalLabSettingsCard() {
             step={0.05}
             description="Confidence-scaled, at most 2.5 points. Promote only after holdout evidence."
             onChange={(value) => update('utility_points', value)}
+          />
+          <NumberField
+            id="lab-author-points"
+            label="Author nudge (points)"
+            value={form.author_offset_points}
+            min={0}
+            max={2.5}
+            step={0.05}
+            description="Folds into the author signal your Library already produces. Fitted from same-region comparisons only."
+            onChange={(value) => update('author_offset_points', value)}
           />
           <NumberField
             id="lab-map-tint"

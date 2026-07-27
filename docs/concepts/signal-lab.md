@@ -120,6 +120,7 @@ there is no incremental accumulator.
 The model has:
 
 - James–Stein-shrunk per-region taste offsets;
+- James–Stein-shrunk per-**author** offsets (see below);
 - a Bradley–Terry utility direction with a bootstrap ensemble;
 - non-negative diagonal semantic-distance weights, shrunk strongly toward the
   identity metric, with a bootstrap ensemble;
@@ -140,8 +141,36 @@ mean, while learned offsets describe how you feel about that territory. Tint
 strength is bounded, and adjusted terrain remains in the canonical
 `[-1,+1]` domain.
 
+### The author head
+
+Regions and authors are fitted by the **same estimator** —
+`shrunk_win_rates()`, a James–Stein win rate — differing only in what they
+count and how hard they are pulled toward the mean. When a topic head lands it
+uses that function too; two hand-rolled copies is how "similar" heads quietly
+become different estimators.
+
+The author head trains on **within-region comparisons only**. Inside one
+super-region the region head cannot explain the outcome — both papers carry the
+same offset — so what remains is the reader's response to the papers
+themselves. Across regions topic dominates the choice, and crediting that to
+whoever happened to be on the winning paper is how you learn "I love this
+author" from "I love this topic". Restricting the sample removes the confound
+structurally rather than subtracting an estimate of it. Two further guards: an
+author on BOTH papers of a comparison is dropped from it, and an author needs
+`AUTHOR_MIN_COMPARISONS` usable comparisons before being published at all, so a
+prolific name cannot drift on noise.
+
+It is consumed by **one** reader: `build_discovery_author_affinity()` in
+`application/author_signal.py`, the canonical definition of "how much do I care
+about this author". Folding it in there rather than adding a second author term
+to the ranker keeps one definition — a parallel `lab_author` signal beside
+`author_affinity` would let the same evidence count twice. The offset is ADDED
+to the signal your Library already produces; Signal Lab nudges, your Library
+decides. Guarded by `tests/test_geometry_admission_contract.py`.
+
 Ranking terms are separately promotion-gated.
-`weights.lab_region_offset` and `weights.lab_utility` default to zero; when
+`weights.lab_region_offset`, `weights.lab_utility` and
+`weights.lab_author_offset` default to zero; when
 promoted they add bounded points through the same scorer used by Discovery and
 Feed. Each term is limited to 2.5 points, so the combined game nudge stays in
 the same small additive evidence band as sibling scoring sources. Settings

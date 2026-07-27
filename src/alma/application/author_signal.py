@@ -818,4 +818,60 @@ def build_discovery_author_affinity(
         if signal is not None:
             _register(name, signal.affinity)
 
+    _apply_signal_lab_author_offsets(db, affinity)
     return affinity
+
+
+def _apply_signal_lab_author_offsets(
+    db: sqlite3.Connection, affinity: dict[str, float]
+) -> None:
+    """Add Signal Lab's fitted author head into the canonical affinity map.
+
+    Folded in HERE rather than added as a second author term in the ranker:
+    this module is the one definition of "how much do I care about this
+    author", and a parallel `lab_author` signal beside `author_affinity` would
+    let the same evidence be counted twice and drift apart — the same trap the
+    rating-contract guard exists to prevent.
+
+    Promotion-gated like every other lab term: ``weights.lab_author_offset``
+    defaults to 0, so a freshly fitted head changes no ranking until the
+    held-out evidence in Settings justifies turning it up. The offset is a
+    win-rate in [-1, 1]; the weight is how many affinity points a full +1 is
+    worth. It is ADDED to the curated signal, never replaces it — Signal Lab
+    nudges, your Library decides.
+    """
+    from alma.application import materialized_views as mv
+    from alma.application.discovery.lens_crud import read_settings
+    from alma.application.signal_lab.fit import MODEL_VIEW_KEY
+
+    # ONE settings read for both gates. `is_enabled()` would re-read the same
+    # table, and this runs inside the preference-profile build on the scoring
+    # hot path.
+    try:
+        settings = read_settings(db)
+    except Exception:  # noqa: BLE001 — no settings table ⇒ the lab contributes 0
+        return
+
+    # The consumption gate every other lab term honours: disabling Signal Lab
+    # keeps the rounds and the fitted model but stops anything reading them.
+    if str(settings.get("signal_lab.enabled", "true")).lower() != "true":
+        return
+    try:
+        weight = float(settings.get("weights.lab_author_offset", "0.0") or 0.0)
+    except (TypeError, ValueError):
+        weight = 0.0
+    if weight <= 0:
+        return
+
+    stored = mv.get_stored(db, MODEL_VIEW_KEY)
+    offsets = (stored or {}).get("payload", {}).get("author_offsets") or {}
+    if not offsets:
+        return
+
+    for key, offset in offsets.items():
+        try:
+            delta = float(offset) * weight
+        except (TypeError, ValueError):
+            continue
+        if delta:
+            affinity[key] = affinity.get(key, 0.0) + delta

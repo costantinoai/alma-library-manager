@@ -120,5 +120,32 @@ def build_summary(conn: sqlite3.Connection) -> dict[str, Any]:
             "downward": downward,
             "regions_moving": len(directions),
             "boundary_overrides": len(model_payload.get("region_overrides") or {}),
+            **_author_effects(model_payload),
         },
+    }
+
+
+def _author_effects(model_payload: dict[str, Any]) -> dict[str, Any]:
+    """The author head, as the same up/down shape the regions report.
+
+    Keys are the ranker's match keys, so a name that resolved to
+    ``"lastname|f"`` is not something to show a person — prefer the readable
+    full-name key when the same author produced both.
+    """
+    offsets = model_payload.get("author_offsets") or {}
+    readable = [
+        {"key": key, "label": key, "value": round(float(value), 4)}
+        for key, value in offsets.items()
+        if "|" not in key and abs(float(value)) >= 1e-6
+    ]
+    return {
+        "authors_up": sorted(
+            (item for item in readable if item["value"] > 0),
+            key=lambda i: i["value"],
+            reverse=True,
+        )[:2],
+        "authors_down": sorted(
+            (item for item in readable if item["value"] < 0), key=lambda i: i["value"]
+        )[:2],
+        "authors_moving": len(readable),
     }
