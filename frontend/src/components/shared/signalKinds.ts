@@ -3,8 +3,10 @@ import {
   AlertTriangle,
   Bookmark,
   Calendar,
+  Compass,
   Database,
   FileText,
+  FlaskConical,
   GitBranch,
   GitMerge,
   Globe,
@@ -14,7 +16,10 @@ import {
   Link2,
   Quote,
   Route,
+  Scale,
+  Split,
   Target,
+  TrendingDown,
   TrendingUp,
   Type,
   Users,
@@ -56,6 +61,18 @@ export type SignalKind =
   | 'work-type'
   | 'collection'
   | 'meta'
+  // Signal Lab telemetry — what the calibration rounds have moved so far.
+  // Valence is read from the direction the fit learned: a signal pushed UP is
+  // the model arguing FOR that dimension, one pushed DOWN is it arguing
+  // against, and the counters (rounds, fit size, coverage) are plumbing.
+  | 'lab-rounds'
+  | 'lab-up'
+  | 'lab-down'
+  | 'lab-author-up'
+  | 'lab-author-down'
+  | 'lab-boundary'
+  | 'lab-fit'
+  | 'lab-coverage'
 
 interface SignalSpec {
   tone: StatusBadgeTone
@@ -101,4 +118,13 @@ export const SIGNAL_KINDS: Record<SignalKind, SignalSpec> = {
   'work-type': { tone: 'neutral', icon: FileText },
   collection: { tone: 'neutral', icon: Bookmark },
   meta: { tone: 'neutral', icon: Database },
+
+  'lab-rounds': { tone: 'neutral', icon: FlaskConical, hint: 'Calibration rounds you have answered' },
+  'lab-up': { tone: 'positive', icon: TrendingUp, hint: 'Your answers pushed this signal up' },
+  'lab-down': { tone: 'warning', icon: TrendingDown, hint: 'Your answers pushed this signal down' },
+  'lab-author-up': { tone: 'positive', icon: Users, hint: 'An author your answers pulled toward' },
+  'lab-author-down': { tone: 'warning', icon: Users, hint: 'An author your answers steer away from' },
+  'lab-boundary': { tone: 'accent', icon: Split, hint: 'Region boundaries your answers moved' },
+  'lab-fit': { tone: 'accent', icon: Scale, hint: 'What the current fit was trained on' },
+  'lab-coverage': { tone: 'accent', icon: Compass, hint: 'How much of the map the rounds have visited' },
 }

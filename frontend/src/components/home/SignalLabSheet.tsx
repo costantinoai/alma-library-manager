@@ -29,7 +29,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, FlaskConical, RotateCcw, Split, X } from 'lucide-react'
+import { BookOpen, Check, FlaskConical, RotateCcw, Split, X } from 'lucide-react'
 
 import {
   answerSignalLabRound,
@@ -40,7 +40,7 @@ import {
   type SignalLabDirection,
 } from '@/api/client'
 import { PaperDetailPanel } from '@/components/discovery'
-import { PaperTile, PaperTileGrid } from '@/components/shared'
+import { PaperTile, PaperTileGrid, SignalChip } from '@/components/shared'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Meter } from '@/components/ui/meter'
@@ -153,25 +153,34 @@ const TASK = {
   oddOneOut: 'Pick the one that does not belong with the other two.',
 } as const
 
-/** Tone classes, matching `PaperActionBar` so a verdict button here reads as
- *  the same object as an action button on a paper card. */
+/**
+ * Tone classes for the verdict controls.
+ *
+ * These are the app's CHIP language worn by a button, not the grey ink well
+ * `PaperActionBar` uses. The difference is deliberate and local to this
+ * surface: on a paper card the buttons are one of several things you may do,
+ * so they recede until hovered; here answering IS the surface, the two
+ * verdicts are the only interaction on the tile, and a row of identical grey
+ * pills made a best–worst call read as a form to fill in. Wearing the wash at
+ * rest (`hue-700 @ ~8%`, the chip formula one step lighter) means the row says
+ * "green one, red one" from across the page — the fast instinctive answer the
+ * round is asking for. Picking deepens the same wash and adds a check; no new
+ * hue is introduced by the act of choosing.
+ */
 const TONE = {
-  // `active` runs one step heavier than `PaperActionBar`'s: here the button
-  // sits on a cell ALREADY tinted with its own hue, and the standard /15 wash
-  // disappeared into it.
   success: {
-    idle: 'hover:bg-success-700/10 hover:text-success-800',
-    active: 'border-success-700/35 bg-success-700/25 font-semibold text-success-800',
-    icon: 'text-success-600',
+    idle: 'border-transparent bg-success-700/[0.12] text-success-800 hover:bg-success-700/[0.22]',
+    active: 'border-success-700/40 bg-success-700/25 font-semibold text-success-800',
+    icon: 'text-success-700',
   },
   critical: {
-    idle: 'hover:bg-critical-700/10 hover:text-critical-700',
-    active: 'border-critical-700/35 bg-critical-700/25 font-semibold text-critical-700',
-    icon: 'text-slate-500',
+    idle: 'border-transparent bg-critical-700/[0.12] text-critical-700 hover:bg-critical-700/[0.22]',
+    active: 'border-critical-700/40 bg-critical-700/25 font-semibold text-critical-700',
+    icon: 'text-critical-700',
   },
   accent: {
-    idle: 'hover:bg-accent-soft hover:text-alma-folio',
-    active: 'border-accent-edge bg-alma-folio/20 font-semibold text-alma-folio',
+    idle: 'border-transparent bg-alma-folio/[0.12] text-alma-folio hover:bg-alma-folio/[0.22]',
+    active: 'border-accent-edge bg-alma-folio/25 font-semibold text-alma-folio',
     icon: 'text-alma-folio',
   },
 } as const
@@ -202,15 +211,22 @@ function VerdictButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'h-7 flex-1 gap-1.5 whitespace-nowrap rounded-sm border px-2 text-[11px] font-medium',
+        // Pill, not the letterpress `rounded-sm` corner every other button
+        // wears: these read as chips (see the TONE note above). Chip METRICS
+        // too — no stretch, no 8px height: a pair of buttons stretched across
+        // the plate reads as a form's submit row, which is exactly the weight a
+        // one-second instinctive judgement should not carry.
+        'h-6 gap-1 whitespace-nowrap rounded-full border px-2.5 text-[11px] font-medium',
         'focus-visible:ring-offset-1 disabled:opacity-40',
-        active
-          ? tone.active
-          : cn('border-control-edge bg-control-well text-alma-900', tone.idle),
+        active ? tone.active : tone.idle,
       )}
     >
       <Icon className={cn('h-3.5 w-3.5 shrink-0', active ? 'text-current' : tone.icon)} />
       {spec.label}
+      {/* The chosen chip carries a tick as well as a heavier wash: the wash
+          alone is a hue difference, and hue is the one channel already spent
+          on which verdict this is. */}
+      {active && <Check className="h-3 w-3 shrink-0" aria-hidden />}
     </Button>
   )
 }
@@ -368,6 +384,8 @@ export function SignalLabSheet() {
   const downward = effects?.downward ?? []
   const authorsUp = effects?.authors_up ?? []
   const authorsDown = effects?.authors_down ?? []
+  const hasEffects =
+    upward.length + downward.length + authorsUp.length + authorsDown.length > 0
   // Best–worst needs both verdicts before it can record. Say so only while the
   // round is half-answered: an instruction that is always on screen is read
   // once and then becomes furniture.
@@ -497,7 +515,7 @@ export function SignalLabSheet() {
                       ) : undefined
                     }
                     actions={
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {verdicts.map((verdict) => (
                           <VerdictButton
                             key={verdict.id}
@@ -521,56 +539,100 @@ export function SignalLabSheet() {
 
       {/* Foot: what the answers have done so far. Evidence, not a second
           diagnostics product — the model, its eval and every knob live in
-          Settings → Intelligence → Signal Lab. */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-edge-1 pt-2.5 text-[11px]">
-        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          <Fact label="Rounds">
-            {tally?.today ?? 0} today · {tally?.total ?? 0} recorded
-          </Fact>
+          Settings → Intelligence → Signal Lab.
+
+          It used to be one long line of grey `label value` pairs, which is the
+          shape of a debug dump: eight facts of equal weight, none of them
+          scannable, and the two that actually answer "did my answers do
+          anything?" buried in the middle. Now it reads in two registers — the
+          LEARNED directions as valence chips (the payoff), then the counters as
+          quiet plumbing chips (the receipts) — through the same `SignalChip`
+          registry every other pill in the app resolves through, so a green pill
+          here means what a green pill means on a paper card. */}
+      <div className="mt-4 space-y-2 border-t border-edge-1 pt-3">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span className="mr-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+            Learned
+          </span>
           {/* Valence colour belongs to a real reading; a placeholder painted
-              green or red claims a direction that has not been measured. */}
-          <Fact label="Up" tone={upward.length > 0 ? 'positive' : 'neutral'}>
-            {upward.length > 0 ? upward.map(directionText).join(' · ') : 'not fitted'}
-          </Fact>
-          <Fact label="Down" tone={downward.length > 0 ? 'negative' : 'neutral'}>
-            {downward.length > 0 ? downward.map(directionText).join(' · ') : 'not fitted'}
-          </Fact>
-          <Fact label="Authors up" tone={authorsUp.length > 0 ? 'positive' : 'neutral'}>
-          {authorsUp.length > 0
-            ? authorsUp.map((a) => a.label).join(' · ')
-            : 'not fitted'}
-        </Fact>
-        <Fact label="Authors down" tone={authorsDown.length > 0 ? 'negative' : 'neutral'}>
-          {authorsDown.length > 0
-            ? authorsDown.map((a) => a.label).join(' · ')
-            : 'not fitted'}
-        </Fact>
-        <Fact label="Boundaries">
-            {effects?.boundary_overrides ?? 0} sharpened · {effects?.regions_moving ?? 0}{' '}
-            moving
-          </Fact>
-          <Fact
-            label="Fit"
+              green or red claims a direction that has not been measured, so an
+              unfitted model gets ONE quiet chip rather than four coloured
+              "not fitted" ones. */}
+          {hasEffects ? (
+            <>
+              {upward.map((direction) => (
+                <SignalChip key={`up-${direction.label}`} kind="lab-up">
+                  {directionText(direction)}
+                </SignalChip>
+              ))}
+              {downward.map((direction) => (
+                <SignalChip key={`down-${direction.label}`} kind="lab-down">
+                  {directionText(direction)}
+                </SignalChip>
+              ))}
+              {authorsUp.map((author) => (
+                <SignalChip key={`author-up-${author.label}`} kind="lab-author-up">
+                  {author.label}
+                </SignalChip>
+              ))}
+              {authorsDown.map((author) => (
+                <SignalChip key={`author-down-${author.label}`} kind="lab-author-down">
+                  {author.label}
+                </SignalChip>
+              ))}
+            </>
+          ) : (
+            <SignalChip kind="meta" title="The fit needs more rounds before it can state a direction">
+              Not fitted yet — keep answering
+            </SignalChip>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span className="mr-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+            Ledger
+          </span>
+          <SignalChip kind="lab-rounds">
+            <Stat value={tally?.today ?? 0} unit="today" />
+            <Dot />
+            <Stat value={tally?.total ?? 0} unit="recorded" />
+          </SignalChip>
+          <SignalChip kind="lab-boundary">
+            <Stat value={effects?.boundary_overrides ?? 0} unit="sharpened" />
+            <Dot />
+            <Stat value={effects?.regions_moving ?? 0} unit="moving" />
+          </SignalChip>
+          <SignalChip
+            kind="lab-fit"
             title={
               fit
                 ? `${fit.fitted_queries} unique queries in the current fit; ${fit.pending_rounds} recorded rounds await refit`
-                : undefined
+                : 'Nothing fitted yet'
             }
           >
-            {fit?.fitted_observations ?? 0} obs · {fit?.utility_preferences ?? 0} prefs
-          </Fact>
-          <Fact
-            label="Coverage"
+            <Stat value={fit?.fitted_observations ?? 0} unit="obs" />
+            <Dot />
+            <Stat value={fit?.utility_preferences ?? 0} unit="prefs" />
+          </SignalChip>
+          <SignalChip
+            kind="lab-coverage"
             title={
               tally
                 ? `${tally.unique_queries} unique question sets; ${tally.duplicate_queries} accidental repeats`
                 : undefined
             }
           >
-            {coverage?.regions_observed ?? 0}/{coverage?.regions_total ?? 0} regions ·{' '}
-            {coverage?.edges_observed ?? 0}/{coverage?.edges_total ?? 0} edges
-          </Fact>
-        </dl>
+            <Stat
+              value={`${coverage?.regions_observed ?? 0}/${coverage?.regions_total ?? 0}`}
+              unit="regions"
+            />
+            <Dot />
+            <Stat
+              value={`${coverage?.edges_observed ?? 0}/${coverage?.edges_total ?? 0}`}
+              unit="edges"
+            />
+          </SignalChip>
+        </div>
       </div>
 
       {/* The paper behind a tile, in the app's one paper popup. */}
@@ -583,30 +645,22 @@ export function SignalLabSheet() {
   )
 }
 
-/** One `label value` pair in the foot ledger. */
-function Fact({
-  label,
-  tone = 'neutral',
-  title,
-  children,
-}: {
-  label: string
-  tone?: 'neutral' | 'positive' | 'negative'
-  title?: string
-  children: React.ReactNode
-}) {
+/** A figure and the word for what it counts, inside a ledger chip.
+ *
+ *  Both live in ONE element: the number and its unit are a single phrase to
+ *  read ("14 obs"), and splitting them across spans to dim the unit also splits
+ *  the text node, which is how a screen reader — and `getByText` — stops seeing
+ *  the phrase. Tabular figures keep a row of chips from twitching as the counts
+ *  tick up. */
+function Stat({ value, unit }: { value: number | string; unit: string }) {
   return (
-    <span className="flex items-baseline gap-1.5" title={title}>
-      <dt className="text-slate-400">{label}</dt>
-      <dd
-        className={cn(
-          tone === 'neutral' && 'text-slate-600',
-          tone === 'positive' && 'text-success-800',
-          tone === 'negative' && 'text-critical-700',
-        )}
-      >
-        {children}
-      </dd>
+    <span className="tabular-nums">
+      {value} {unit}
     </span>
   )
+}
+
+/** The separator between two figures in one chip. */
+function Dot() {
+  return <span className="opacity-40" aria-hidden>·</span>
 }

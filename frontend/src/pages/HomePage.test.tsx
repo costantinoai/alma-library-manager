@@ -432,7 +432,7 @@ describe('HomePage', () => {
   it('keeps a truthful quiet state and opens Find & add on the desk, not elsewhere', async () => {
     getHomeBrief.mockResolvedValue(QUIET)
     renderHome()
-    expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
+    expect(await screen.findByText(/Your (morning|afternoon|evening|late) brief/)).toBeInTheDocument()
     expect(screen.getByText(/Your workspace is quiet/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument()
 
@@ -450,7 +450,7 @@ describe('HomePage', () => {
     window.location.hash = '#/home?action=find'
     getHomeBrief.mockResolvedValue(QUIET)
     renderHome()
-    expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
+    expect(await screen.findByText(/Your (morning|afternoon|evening|late) brief/)).toBeInTheDocument()
 
     // The deep link opens the fold in place and then scrubs `action` out of the
     // URL, so a reload doesn't re-open it forever.
@@ -469,6 +469,6 @@ describe('HomePage', () => {
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
 
-    expect(await screen.findByText('Your daily brief')).toBeInTheDocument()
+    expect(await screen.findByText(/Your (morning|afternoon|evening|late) brief/)).toBeInTheDocument()
   })
 })

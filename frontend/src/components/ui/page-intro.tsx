@@ -171,6 +171,12 @@ export function PageIntro({
   // The page's identity hue comes from AppShell, never a prop — see
   // `page-theme.tsx` for why a prop was the wrong shape.
   const theme = usePageTheme()
+  const metaRow = meta ? (
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      {meta}
+      {tour}
+    </div>
+  ) : null
   const body = (
     <>
       <div
@@ -192,11 +198,21 @@ export function PageIntro({
                 <Icon className="h-[1.15rem] w-[1.15rem]" />
               </span>
             )}
-            <div className="min-w-0 space-y-1">
+            {/* A masthead's rows sit tighter: the lede is 28px type, so the
+                standard 4px gap under it reads as a paragraph break between the
+                greeting and its own date line. */}
+            <div className={cn('min-w-0', masthead ? 'space-y-0.5' : 'space-y-1')}>
               <p
                 className={cn(
-                  'font-brand font-semibold leading-snug text-alma-800',
-                  masthead ? 'text-2xl sm:text-[1.75rem]' : 'text-lg',
+                  'font-brand font-semibold leading-snug',
+                  // A masthead lede may wear the page's own hue (`PAGE_THEMES`
+                  // → `masthead`). Home does: a greeting set in the same ink as
+                  // every section heading below it read as one more section
+                  // rather than as the page speaking to you. Every other page
+                  // keeps ink, hue or not.
+                  masthead
+                    ? cn('text-2xl sm:text-[1.75rem]', theme?.masthead ?? 'text-alma-800')
+                    : 'text-lg text-alma-800',
                 )}
               >
                 {lede}
@@ -204,14 +220,16 @@ export function PageIntro({
               {detail && (
                 <p className="max-w-2xl text-sm leading-relaxed text-slate-600">{detail}</p>
               )}
+              {/* A masthead's status line belongs to the LEDE, not to the
+                  block: on Home it is the date under the greeting, and starting
+                  it at the medallion's left edge instead of the greeting's left
+                  the two lines read as unrelated rows. Elsewhere the status line
+                  reports on the whole page, so it keeps the block's own margin
+                  and can run the full width under the icon. */}
+              {masthead && metaRow}
             </div>
           </div>
-          {meta && (
-            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-              {meta}
-              {tour}
-            </div>
-          )}
+          {!masthead && metaRow}
           {children}
         </div>
         {/* The tour rides the status line when there is one. On a page with no

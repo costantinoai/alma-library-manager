@@ -17,9 +17,12 @@ import {
   BookOpen,
   FileSearch,
   Inbox,
+  Moon,
   Send,
   Sparkles,
+  Sun,
   Sunrise,
+  Sunset,
 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -48,12 +51,11 @@ import { PageSection } from '@/components/ui/page-section'
 import { SignalLabSheet } from '@/components/home/SignalLabSheet'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Surface } from '@/components/ui/surface'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { errorToast, toast } from '@/hooks/useToast'
 import { buildHashRoute, navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
-  CAPTURE_CHANNEL_CHIP,
-  CAPTURE_CHANNEL_CHIP_FALLBACK,
   CAPTURE_CHANNEL_LABEL,
   HOME_SECTION_THEMES,
   MONITOR_MIX_FILL,
@@ -61,13 +63,100 @@ import {
 } from '@/lib/palette'
 import { cn, formatRelativeShort } from '@/lib/utils'
 
-function greeting(name: string | null): string {
-  if (!name) return 'Your daily brief'
-  const firstName = name.trim().split(/\s+/)[0] || name
-  const hour = new Date().getHours()
-  if (hour < 12) return `Good morning, ${firstName}`
-  if (hour < 18) return `Good afternoon, ${firstName}`
-  return `Good evening, ${firstName}`
+/**
+ * The four parts of a working day, by local hour.
+ *
+ * Four, not three: 01:00 is not "evening", and a tool you open at midnight
+ * saying "Good evening" is the tell that nobody looked. The bands are the ones
+ * spoken English actually uses — night runs from 22:00 to 05:00 and owns both
+ * ends of the clock, which is why this is a function and not a `<` ladder.
+ */
+type DayPart = 'morning' | 'afternoon' | 'evening' | 'night'
+
+function dayPart(hour: number): DayPart {
+  if (hour >= 22 || hour < 5) return 'night'
+  if (hour < 12) return 'morning'
+  if (hour < 18) return 'afternoon'
+  return 'evening'
+}
+
+/**
+ * Greetings per part of the day — several, so the page does not say the same
+ * eight words every time you open it, and one of them is always the plain
+ * "Good morning, X" so the rotation never feels like a gimmick.
+ *
+ * `{name}` is the reader's first name.
+ */
+const GREETINGS: Record<DayPart, string[]> = {
+  morning: [
+    'Good morning, {name}',
+    'Morning, {name}',
+    'A fresh page, {name}',
+    'Coffee and papers, {name}',
+  ],
+  afternoon: [
+    'Good afternoon, {name}',
+    'Afternoon, {name}',
+    'Back to it, {name}',
+    'Mid-day reading, {name}',
+  ],
+  evening: [
+    'Good evening, {name}',
+    'Evening, {name}',
+    'Winding down, {name}',
+    'One more paper, {name}',
+  ],
+  night: [
+    'Still up, {name}',
+    'Late shift, {name}',
+    'Burning the midnight oil, {name}',
+    'Good night, {name}',
+  ],
+}
+
+/**
+ * A reader who never gave a name gets a TITLE, not a greeting — and no
+ * rotation: "Still up" without a name is the app talking to nobody, and a
+ * masthead that changes its words for an anonymous reader is just noise. It
+ * still follows the clock, because "Your morning brief" opened at 23:00 would
+ * be the same lie the old three-band split told.
+ */
+const ANONYMOUS_GREETINGS: Record<DayPart, string> = {
+  morning: 'Your morning brief',
+  afternoon: 'Your afternoon brief',
+  evening: 'Your evening brief',
+  night: 'Your late brief',
+}
+
+/** Days since the epoch — the rotation cursor. Stable for the whole day, so a
+ *  reload or a background refetch cannot reshuffle the greeting under you, and
+ *  a new one still arrives tomorrow. */
+function dayIndex(now: Date): number {
+  return Math.floor(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 86_400_000,
+  )
+}
+
+function greeting(name: string | null, now: Date = new Date()): string {
+  const part = dayPart(now.getHours())
+  const firstName = name?.trim().split(/\s+/)[0] || null
+  if (!firstName) return ANONYMOUS_GREETINGS[part]
+  const pool = GREETINGS[part]
+  // Offset by the part as well as the day, so the four bands of one day do not
+  // all land on the same index of their pools.
+  const line = pool[(dayIndex(now) + part.length) % pool.length]
+  return line.replace('{name}', firstName)
+}
+
+/** The masthead glyph, following the same clock as the words beside it. It is
+ *  the only page whose medallion changes through the day — which is the point:
+ *  this block is a greeting, not a section heading. */
+function greetingIcon(now: Date = new Date()): typeof Sun {
+  const part = dayPart(now.getHours())
+  if (part === 'morning') return Sunrise
+  if (part === 'afternoon') return Sun
+  if (part === 'evening') return Sunset
+  return Moon
 }
 
 function localDate(): string {
@@ -236,7 +325,15 @@ const TRIAGE_CONFIRMATION: Partial<Record<OnboardingPaperAction, string>> = {
   defer: 'Cleared from your Inbox, kept in your corpus',
 }
 
-/** The Inbox tile's eyebrow: which transport this arrived on, and when. */
+/**
+ * The Inbox tile's eyebrow: which transport this arrived on, and when.
+ *
+ * The chip wears the INBOX note's hue, not the channel's own
+ * (`CAPTURE_CHANNEL_CHIP`): on a coloured sticky note a categorical hue reads
+ * as a clash rather than as information, and the channel is already named in
+ * words. The channel palette still owns the chip everywhere the host surface is
+ * plain paper.
+ */
 function CaptureEyebrow({ paper }: { paper: HomePaper }) {
   const channel = (paper.capture_channel || '').toLowerCase()
   const when = paper.captured_at ?? paper.added_at
@@ -245,7 +342,7 @@ function CaptureEyebrow({ paper }: { paper: HomePaper }) {
       {channel && (
         <IdentityChip
           icon={Send}
-          chipClassName={CAPTURE_CHANNEL_CHIP[channel] ?? CAPTURE_CHANNEL_CHIP_FALLBACK}
+          chipClassName={HOME_SECTION_THEMES.inbox.noteChip}
           title="The channel you sent this from"
         >
           {CAPTURE_CHANNEL_LABEL[channel] ?? channel}
@@ -354,23 +451,38 @@ export function HomePage() {
       <Card className="space-y-5 p-5 sm:p-6">
         {/* The one page whose intro IS its content: the greeting is the lede,
             and the gold rule closes the masthead (masthead trim only — never a
-            section divider). Rendered `bare` because the blotter Card already
-            supplies the paper. */}
-        <PageIntro
-          bare
-          masthead
-          rule
-          lede={greeting(brief.user_name)}
-          meta={
-            <MetaLine
-              items={[
-                localDate(),
-                <span>updated {formatRelativeShort(brief.generated_at)}</span>,
-              ]}
-            />
-          }
-          tour={<PageTour pageKey="home" steps={HOME_TOUR} />}
-        />
+            section divider). Rendered `bare` because this band supplies the
+            paper.
+
+            The band is one rung LIGHTER than the blotter it sits on (`Surface`,
+            relational — never a hand-picked cream) and bleeds to the card's
+            edges, so the masthead is visibly a nameplate rather than the first
+            of the blotter's sections. The gold rule closes it from inside, so
+            the lighter paper stops exactly where the trim does. */}
+        <Surface
+          bordered={false}
+          className="-mx-5 -mt-5 rounded-t-sm px-5 pt-5 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pt-6"
+        >
+          <PageIntro
+            bare
+            masthead
+            rule
+            // The gold medallion + gold lede are Home's identity hue doing what
+            // it does on every other page's masthead — here it also separates a
+            // greeting from the section headings under it.
+            icon={greetingIcon()}
+            lede={greeting(brief.user_name)}
+            meta={
+              <MetaLine
+                items={[
+                  localDate(),
+                  <span>updated {formatRelativeShort(brief.generated_at)}</span>,
+                ]}
+              />
+            }
+            tour={<PageTour pageKey="home" steps={HOME_TOUR} />}
+          />
+        </Surface>
 
         <PageSection
           id="home-activity"
@@ -614,28 +726,39 @@ export function HomePage() {
           // use — a shortlist, not a truncated list, so no "Show more".
           collapsedRows={1}
           expandable={false}
-          renderTile={(highlight) => (
+          renderTile={(highlight) => {
+            const noteTheme = highlight.kind === 'discovery_paper' ? 'discovery' : 'feed'
+            return (
             <PaperTile
               href={highlightHref(highlight)}
               title={highlight.paper.title}
               byline={paperByline(highlight.paper)}
               excerpt={excerpt(highlight.paper)}
-              noteTheme={
-                highlight.kind === 'discovery_paper' ? 'discovery' : 'feed'
-              }
+              noteTheme={noteTheme}
+              // The period chip takes the note's own hue rather than `accent`:
+              // a folio pill on a magenta or cyan sheet fights it. "Today" vs
+              // "Last 7 days" is still carried by the words, and by the chip's
+              // weight against the quieter older-window one.
               eyebrow={
-                <StatusBadge
-                  tone={highlight.period === 'today' ? 'accent' : 'neutral'}
-                  size="sm"
-                >
-                  {highlight.period === 'today' ? 'Today' : 'Last 7 days'}
-                </StatusBadge>
+                highlight.period === 'today' ? (
+                  <IdentityChip
+                    size="sm"
+                    chipClassName={HOME_SECTION_THEMES[noteTheme].noteChip}
+                  >
+                    Today
+                  </IdentityChip>
+                ) : (
+                  <StatusBadge tone="neutral" size="sm">
+                    Last 7 days
+                  </StatusBadge>
+                )
               }
               score={highlight.score ?? null}
               reason={highlight.reason.label}
               explanation={highlightExplanation(highlight)}
             />
-          )}
+            )
+          }}
         />
       </PageSection>
 
