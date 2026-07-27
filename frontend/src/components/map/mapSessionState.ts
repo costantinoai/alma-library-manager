@@ -24,7 +24,6 @@ export const PAPER_MAP_DEFAULTS = {
   terrainOpacity: MAP_TERRAIN_OPACITY_DEFAULT,
   wordScale: 1,
   wordCount: 3,
-  blend: { sem: 1, coauth: 0, refs: 0, cocite: 0 },
 }
 
 export const AUTHOR_MAP_DEFAULTS = {

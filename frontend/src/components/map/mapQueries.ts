@@ -160,26 +160,25 @@ export function frontierQueryOptions(
   })
 }
 
+/** Paper-map request params.
+ *
+ *  **Semantic only.** The layout-blend sliders (co-authors / shared references
+ *  / cited together) are gone: every other map places by meaning alone, and a
+ *  map whose geometry answers a different question per scope is not the same
+ *  map with fewer dots. Scope selects which dots are drawn — never where they
+ *  sit. The fused-layout weights are therefore never requested, so both scopes
+ *  serve the one cached substrate. */
 export function paperMapParams({
   scope,
   resolution,
-  blend,
 }: {
   scope: 'library' | 'corpus'
   resolution: number
-  blend: { sem: number; coauth: number; refs: number; cocite: number }
 }): Record<string, string> {
-  const params: Record<string, string> = {
+  return {
     scope,
     cluster_resolution: resolution.toFixed(1),
   }
-  if (scope === 'library') {
-    params.w_semantic = String(blend.sem)
-    params.w_coauthorship = String(blend.coauth)
-    params.w_bibliographic = String(blend.refs)
-    params.w_cocitation = String(blend.cocite)
-  }
-  return params
 }
 
 /**
@@ -202,16 +201,11 @@ export function prefetchMapPage(
       'resolution',
       PAPER_MAP_DEFAULTS.resolution,
     )
-    const blend = readMapSessionValue(
-      'paper-map',
-      'blend',
-      PAPER_MAP_DEFAULTS.blend,
-    )
     return queryClient.prefetchQuery(
       graphQueryOptions(
         queryClient,
         'paper-map',
-        paperMapParams({ scope, resolution, blend }),
+        paperMapParams({ scope, resolution }),
         { prefetch: true },
       ),
     )

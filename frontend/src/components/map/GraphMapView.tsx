@@ -236,21 +236,18 @@ export function GraphMapView({
   const isPaperMap = endpoint === 'paper-map'
   const fieldNeeded = showTerrain || colourMode === 'score'
 
-  // Which coordinate space this payload's dots live in. The Advanced knobs can
-  // re-fit the layout (cluster detail → fresh UMAP, layout blend → fused
-  // positions), and terrain painted at SUBSTRATE coordinates over a re-fitted
-  // layout is one map's landscape on another map's land (user report
+  // Which coordinate space this payload's dots live in. A non-default cluster
+  // detail re-runs UMAP, and terrain painted at SUBSTRATE coordinates over a
+  // re-fitted layout is one map's landscape on another map's land (user report
   // 2026-07-26). The backend declares the frame; the fallback covers payloads
   // cached before it did, and only the default request can claim substrate.
+  //
+  // Cluster detail is now the ONLY knob that can re-fit: the layout-blend
+  // sliders were removed on 2026-07-28 so placement is semantic everywhere.
   const layoutFrame = (data?.metadata?.layout as { frame?: string } | undefined)?.frame
   const requestedDefaultLayout = useMemo(() => {
     const resolution = Number(params.cluster_resolution ?? PAPER_MAP_DEFAULTS.resolution)
-    const blended = ['w_coauthorship', 'w_bibliographic', 'w_cocitation'].some(
-      (key) => Number(params[key] ?? 0) > 0,
-    )
-    return (
-      Math.abs(resolution - PAPER_MAP_DEFAULTS.resolution) < 1e-6 && !blended
-    )
+    return Math.abs(resolution - PAPER_MAP_DEFAULTS.resolution) < 1e-6
   }, [params])
 
   // ONE owner of field + terrain for every map surface (`useMapField`). This

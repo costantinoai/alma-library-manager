@@ -13,8 +13,8 @@
  *     stability, method — the map's vital signs;
  *   - fine tuning in ONE Advanced popover (50-I): cluster detail as a
  *     continuous slider (0.5–3.0, background variant builds), dot size,
- *     and the layout-blend sliders (semantic / co-authors / shared refs /
- *     cited together — library scope, where the fused layout runs).
+ *     dot/terrain opacity and toponyms. Placement itself is NOT tunable —
+ *     the map is semantic-only, like every other map (2026-07-28).
  *
  * Clicking opens the shared paper mini-popup and selects as a side effect;
  * full paper detail remains one explicit action away.
@@ -139,13 +139,6 @@ export function MapPage() {
     'wordCount',
     PAPER_MAP_DEFAULTS.wordCount,
   )
-  // Layout blend (the old "physics") — library scope only; the corpus stays
-  // on the cached pure-semantic substrate path.
-  const [blend, setBlend] = useMapSessionState(
-    'paper-map',
-    'blend',
-    PAPER_MAP_DEFAULTS.blend,
-  )
   // Which substrate is on the plate. Session-scoped like every other map
   // control, so switching tabs and coming back keeps the view you were in.
   const [mapKind, setMapKind] = useMapSessionState<MapKind>('paper-map', 'kind', 'papers')
@@ -254,8 +247,8 @@ export function MapPage() {
 
 
   const params = useMemo(
-    () => paperMapParams({ scope, resolution, blend }),
-    [scope, resolution, blend],
+    () => paperMapParams({ scope, resolution }),
+    [scope, resolution],
   )
 
   useEffect(() => {
@@ -646,24 +639,6 @@ export function MapPage() {
                     wordCount={wordCount}
                     onWordCount={setWordCount}
                   />
-                    {scope === 'library' ? (
-                      <div className="space-y-3 border-t border-[var(--color-border)] pt-3">
-                        <p className="font-medium text-alma-800">
-                          Layout blend
-                          <span className="ml-1 font-normal text-slate-400">
-                            — pull related papers together
-                          </span>
-                        </p>
-                        <SliderRow label="Semantic" value={blend.sem} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, sem: v }))} />
-                        <SliderRow label="Shared authors" value={blend.coauth} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, coauth: v }))} />
-                        <SliderRow label="Shared references" value={blend.refs} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, refs: v }))} />
-                        <SliderRow label="Cited together" value={blend.cocite} min={0} max={1} step={0.05} format={(v) => v.toFixed(2)} onCommit={(v) => setBlend((b) => ({ ...b, cocite: v }))} />
-                      </div>
-                    ) : (
-                      <p className="border-t border-[var(--color-border)] pt-2 text-[11px] text-slate-400">
-                        Layout blend is available on the Library scope — the corpus keeps the fast cached layout.
-                      </p>
-                    )}
                     <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2">
                       <Button size="sm" variant="outline" className="w-full" disabled={rebuildMutation.isPending} onClick={() => rebuildMutation.mutate()}>
                         Rebuild layout ({scope})
