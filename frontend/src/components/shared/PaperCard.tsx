@@ -433,8 +433,9 @@ export function PaperCard({
   })()
   // Does the signal row carry any of the numeric fields? Decides whether the
   // row renders at all when the surface supplies only `metaSlot`.
-  const hasMetaLead =
-    !!citationsLabel || rankDisplay != null || !!starDisplay || score != null
+  // The score bar is NOT part of this — it has its own row below the chips
+  // (see the score-row comment further down).
+  const hasMetaLead = !!citationsLabel || rankDisplay != null || !!starDisplay
   const padding = isCompact ? 'p-3' : 'p-4'
   const hasBreakdown = scoreBreakdown && Object.keys(scoreBreakdown).length > 0
   const hasExplanation = !!explanation?.trim()
@@ -705,10 +706,9 @@ export function PaperCard({
                 2026-04-24). Reading left to right: the surface's own why-chips
                 (`metaSlot` — Feed's matched authors/monitors, Discovery's
                 provenance), citations (with the S2 influential count when
-                > 0), the paper_signal rank, the user's star rating, and last
-                the score bar with its Why toggle. That order is deliberate
-                (2026-07-27): the qualitative reason a paper is in front of you
-                leads, the number that ranked it closes. Every field is
+                > 0), the paper_signal rank and the user's star rating — all of
+                them short inline facts. The score bar used to close this row
+                and now has its own line below it. Every field is
                 optional (sparse-field policy); the row hides entirely when
                 there is nothing to show. The year lives in the authors row
                 above, never here. */}
@@ -756,49 +756,6 @@ export function PaperCard({
                     </span>
                   </>
                 )}
-                {score != null && (
-                  <>
-                    {(metaSlot || citationsLabel || rankDisplay != null || starDisplay) && (
-                      <span className="text-slate-300">·</span>
-                    )}
-                    <span className="inline-flex items-center gap-2">
-                      <ScoreMeter score={score} />
-                      {(hasBreakdown || hasExplanation) && (
-                        <HoverCard openDelay={200} closeDelay={100}>
-                          <HoverCardTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                const next = !showBreakdown
-                                setShowBreakdown(next)
-                                if (next && onExpandBreakdown) onExpandBreakdown()
-                              }}
-                              className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-control-quiet hover:text-slate-600"
-                              title="Show score breakdown"
-                            >
-                              Why
-                              <ChevronDown
-                                className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
-                              />
-                            </button>
-                          </HoverCardTrigger>
-                          <HoverCardContent
-                            side="top"
-                            align="start"
-                            className="w-72 p-3"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ScoreBreakdownTeaser
-                              breakdown={scoreBreakdown}
-                              explanation={explanation}
-                            />
-                          </HoverCardContent>
-                        </HoverCard>
-                      )}
-                    </span>
-                  </>
-                )}
               </div>
             )}
 
@@ -818,6 +775,56 @@ export function PaperCard({
                     {source.replace(/_/g, ' ')}
                   </SignalChip>
                 ))}
+              </div>
+            )}
+
+            {/* Score row — the bar and its Why toggle, on a line of their own
+                below every chip row and above the actions.
+
+                They used to be the last item of the dense signal row, sharing a
+                line with "very close topic", the citation count and the star
+                rating. A measured bar is not a chip: it has its own baseline,
+                its own width and a number welded to it, so wrapped in among
+                pills it was the one element the eye could never find twice in
+                the same place. On its own line the reading is fixed — what this
+                paper is about, then how well it scored, then what you can do
+                about it. */}
+            {score != null && (
+              <div className="mt-2 flex items-center gap-2">
+                <ScoreMeter score={score} />
+                {(hasBreakdown || hasExplanation) && (
+                  <HoverCard openDelay={200} closeDelay={100}>
+                    <HoverCardTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const next = !showBreakdown
+                          setShowBreakdown(next)
+                          if (next && onExpandBreakdown) onExpandBreakdown()
+                        }}
+                        className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-control-quiet hover:text-slate-600"
+                        title="Show score breakdown"
+                      >
+                        Why
+                        <ChevronDown
+                          className={`h-3 w-3 transition-transform duration-200 ${showBreakdown ? 'rotate-180' : ''}`}
+                        />
+                      </button>
+                    </HoverCardTrigger>
+                    <HoverCardContent
+                      side="top"
+                      align="start"
+                      className="w-72 p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ScoreBreakdownTeaser
+                        breakdown={scoreBreakdown}
+                        explanation={explanation}
+                      />
+                    </HoverCardContent>
+                  </HoverCard>
+                )}
               </div>
             )}
 

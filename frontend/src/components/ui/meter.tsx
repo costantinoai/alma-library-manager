@@ -34,14 +34,30 @@ export type MeterTone =
   /** Present but weak — a filled bar that deliberately doesn't claim attention. */
   | 'muted'
 
-/** Semantic tone → fill. Categorical fills (per-signal, per-branch) have no
- *  token: those callers pass `fillClassName` sourced from `lib/palette.ts`. */
+/**
+ * Semantic tone → fill.
+ *
+ * ONE step for every tone — `-600` — instead of the old mix of `-600`
+ * (success), `-500` (warning, critical, info) and `alma-500`, which made three
+ * bars sitting in the same list read as three different weights of statement.
+ *
+ * `-600` and not the chips' `-700`: a chip is a wash behind TEXT, whereas a
+ * bar is 4–6px of bare colour and nothing else, so it has to hold the hue on
+ * its own. The score bars on a paper card are the test — at `-700` the
+ * red/amber/green went muddy and stopped reading as a traffic light, which is
+ * their entire job (user report 2026-07-27).
+ *
+ * Categorical fills (per-signal, per-branch, per-Home-category) have no token:
+ * those callers pass `fillClassName` sourced from `lib/palette.ts`.
+ */
 const TONE_FILL: Record<MeterTone, string> = {
   accent: 'bg-alma-folio',
   success: 'bg-success-600',
-  warning: 'bg-warning-500',
-  critical: 'bg-critical-500',
-  info: 'bg-info-500',
+  warning: 'bg-warning-600',
+  critical: 'bg-critical-600',
+  info: 'bg-info-600',
+  // Neutral and muted stay on the ink ramp: they are the ABSENCE of valence,
+  // and a 700-weight grey rail would out-shout the coloured ones.
   neutral: 'bg-alma-500',
   muted: 'bg-alma-300',
 }

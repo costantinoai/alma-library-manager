@@ -37,9 +37,30 @@ export interface HomeSectionTheme {
   title: string
   icon: string
   chip: string
+  /**
+   * Chip worn by anything sitting ON the sticky note (a tile's eyebrow).
+   *
+   * A note is a coloured sheet, so a chip that keeps its own hue there reads as
+   * a clash, not as information — a purple Slack chip on the green Inbox note
+   * (user report 2026-07-27). One step stronger than `chip` because it
+   * composites over the note's own wash rather than over paper, and it must
+   * still separate from it.
+   */
+  noteChip: string
   noteSurface: string
   notePlate: string
   noteFold: string
+  /**
+   * SOLID fill for a bar / column / legend dot in this theme's colour.
+   *
+   * Always `hue-600` — the same step `Meter`'s semantic fills use, one brighter
+   * than the `hue-700` of this theme's text and chip wash. A bar is bare colour
+   * with nothing around it to establish the hue, so it carries one step more
+   * than a wash sitting behind words. These used to be a private per-theme
+   * guess (`success-500`, `violet-500`, `gold-400`, `cyan-600`, `fuchsia-500`):
+   * five different steps, so Home's inflow columns and the "Feed + Discovery"
+   * caption under them were visibly different colours.
+   */
   series: string
 }
 
@@ -48,33 +69,37 @@ export const HOME_SECTION_THEMES: Record<HomeSectionThemeKey, HomeSectionTheme> 
     title: 'text-success-800',
     icon: 'text-success-700',
     chip: 'border-success-700/10 bg-success-700/10 text-success-800',
+    noteChip: 'border-success-700/20 bg-success-700/[0.16] text-success-800',
     noteSurface: '!border-success-700/20 !bg-success-700/[0.07]',
     notePlate: '!border-success-700/20 !bg-success-700/[0.11]',
     noteFold: 'border-t-success-700/25',
-    series: 'bg-success-500',
+    series: 'bg-success-600',
   },
   reading: {
     title: 'text-violet-800',
     icon: 'text-violet-700',
     chip: 'border-violet-700/10 bg-violet-700/10 text-violet-800',
+    noteChip: 'border-violet-700/20 bg-violet-700/[0.15] text-violet-800',
     noteSurface: '!border-violet-700/20 !bg-violet-700/[0.065]',
     notePlate: '!border-violet-700/20 !bg-violet-700/[0.1]',
     noteFold: 'border-t-violet-700/25',
-    series: 'bg-violet-500',
+    series: 'bg-violet-600',
   },
   picked: {
     title: 'text-gold-700',
     icon: 'text-gold-600',
     chip: 'border-gold-700/10 bg-gold-700/10 text-gold-700',
+    noteChip: 'border-gold-700/20 bg-gold-700/[0.17] text-gold-700',
     noteSurface: '!border-gold-700/20 !bg-gold-700/[0.075]',
     notePlate: '!border-gold-700/20 !bg-gold-700/[0.115]',
     noteFold: 'border-t-gold-700/25',
-    series: 'bg-gold-400',
+    series: 'bg-gold-600',
   },
   discovery: {
     title: 'text-cyan-800',
     icon: 'text-cyan-700',
     chip: 'border-cyan-700/10 bg-cyan-700/10 text-cyan-800',
+    noteChip: 'border-cyan-700/20 bg-cyan-700/[0.16] text-cyan-800',
     noteSurface: '!border-cyan-700/20 !bg-cyan-700/[0.07]',
     notePlate: '!border-cyan-700/20 !bg-cyan-700/[0.105]',
     noteFold: 'border-t-cyan-700/25',
@@ -84,10 +109,11 @@ export const HOME_SECTION_THEMES: Record<HomeSectionThemeKey, HomeSectionTheme> 
     title: 'text-fuchsia-800',
     icon: 'text-fuchsia-700',
     chip: 'border-fuchsia-700/10 bg-fuchsia-700/10 text-fuchsia-800',
+    noteChip: 'border-fuchsia-700/20 bg-fuchsia-700/[0.15] text-fuchsia-800',
     noteSurface: '!border-fuchsia-700/20 !bg-fuchsia-700/[0.06]',
     notePlate: '!border-fuchsia-700/20 !bg-fuchsia-700/[0.095]',
     noteFold: 'border-t-fuchsia-700/25',
-    series: 'bg-fuchsia-500',
+    series: 'bg-fuchsia-600',
   },
 }
 
@@ -128,6 +154,15 @@ export interface PageTheme {
   /** Count-pill classes, shaped to drop straight into `PageSection`'s
    *  `categoryTheme` so a page's bands inherit its identity. */
   chip: string
+  /**
+   * Ink for a MASTHEAD lede — the one place a page's identity hue carries the
+   * words themselves rather than just the glyph beside them.
+   *
+   * Optional, and today only Home defines it: Home's lede is a greeting, not a
+   * thesis, and set in the same `alma-800` as every heading on the page it read
+   * as one more section title. A page whose lede is a thesis keeps ink.
+   */
+  masthead?: string
 }
 
 export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
@@ -135,6 +170,7 @@ export const PAGE_THEMES: Record<PageThemeKey, PageTheme> = {
     icon: HOME_SECTION_THEMES.picked.icon,
     medallion: 'bg-gold-700/10',
     chip: HOME_SECTION_THEMES.picked.chip,
+    masthead: HOME_SECTION_THEMES.picked.title,
   },
   feed: {
     icon: HOME_SECTION_THEMES.feed.icon,
@@ -312,11 +348,15 @@ export const HOME_TREND_SERIES = {
  * Feed monitor-type mix ribbon on Home. Matches `MONITOR_TYPE_CHIP` above,
  * as solid fills for a `Meter` segment (a chip wash is too faint for a 6px
  * rail). `other` has no monitor identity, so it takes the neutral ink.
+ *
+ * Same rule as `HomeSectionTheme.series`: `hue-600`, the shared solid-bar step.
+ * `indigo-500` beside an `indigo-800` chip label read as two different
+ * categories.
  */
 export const MONITOR_MIX_FILL = {
-  authors: 'bg-indigo-500',
+  authors: 'bg-indigo-600',
   journals: 'bg-alma-folio',
-  other: 'bg-slate-400',
+  other: 'bg-slate-500',
 } as const
 
 /**
