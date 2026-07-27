@@ -132,6 +132,14 @@ answer retry with the same nonce and content returns the existing row; a
 different answer for an already-used nonce is rejected. Presentation writes
 nothing. The first valid answer writes one row.
 
+A token is its JSON claims followed by a truncated HMAC, and the MAC is split
+off by **fixed width**. It used to be appended after a literal `.` and recovered
+with `rsplit`, which silently corrupted any token whose binary MAC happened to
+contain that byte — 6.07% of them (measured 5.99% over 20,000). Those rounds
+were rejected with "token invalid or from a previous backend run" and their
+signal was lost. Fixed 2026-07-27; tokens minted before that no longer verify,
+which is exactly what that message covers.
+
 The region head can bend paper-space Terrain at read time. The utility head
 stores only its delta from the Library prior, projects that direction onto
 super-region centroids, then mass-centres the projection so weak evidence
