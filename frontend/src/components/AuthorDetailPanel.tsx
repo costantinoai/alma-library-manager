@@ -8,7 +8,6 @@ import {
   ExternalLink,
   GitMerge,
   Loader2,
-  Network,
   Newspaper,
   RefreshCw,
   Trash2,
@@ -58,7 +57,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { monitorHealthTone } from '@/components/ui/status-badge-tones'
 import { AuthorMergeDialog } from '@/components/authors/AuthorMergeDialog'
-import { NeighbourhoodDialog } from '@/components/authors/NeighbourhoodDialog'
 import { AuthorSignalBar } from '@/components/authors/AuthorSignalBar'
 import { AuthorIdentifierResolution } from '@/components/authors/AuthorIdentifierResolution'
 import { useToast, errorToast } from '@/hooks/useToast'
@@ -318,7 +316,6 @@ export function AuthorDetailPanel({
   const canMerge = hasAuthorRow || !!suggestion?.openalex_id
   const [scope, setScope] = useState<Scope>(isSuggestionOnly ? 'openalex' : 'all')
   const [mergeOpen, setMergeOpen] = useState(false)
-  const [neighbourhoodOpen, setNeighbourhoodOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
 
   const detailQuery = useQuery({
@@ -404,7 +401,6 @@ export function AuthorDetailPanel({
         ['authors'],
         ['author-detail', resolved.id],
         ['author-publications', resolved.id],
-        ['author-neighbourhood', resolved.id],
         ['activity-operations'],
       )
       toast({
@@ -616,17 +612,6 @@ export function AuthorDetailPanel({
                     ) : null}
                   </div>
                   <AuthorSignalBar signal={detail?.signal ?? null} className="mt-3" breakdown="inline" />
-                  {!isSuggestionOnly && author?.id ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setNeighbourhoodOpen(true)}
-                      className="mt-3 w-full justify-center gap-2 text-accent hover:bg-accent-soft hover:text-accent"
-                    >
-                      <Network className="h-4 w-4" aria-hidden />
-                      Explore neighbourhood
-                    </Button>
-                  ) : null}
                 </Card>
 
                 <div className="grid gap-3 md:grid-cols-4">
@@ -931,19 +916,6 @@ export function AuthorDetailPanel({
         // The suggestion is resolved by the merge — close the panel and let the
         // dialog's own ['author-suggestions'] invalidation refresh the rail.
         onOpenChange(false)
-      }}
-    />
-    <NeighbourhoodDialog
-      authorId={author?.id ?? null}
-      authorName={resolved?.name ?? author?.name ?? 'Author'}
-      hasOpenAlexId={!!(resolved?.openalex_id || author?.openalex_id)}
-      open={neighbourhoodOpen}
-      onOpenChange={setNeighbourhoodOpen}
-      onBuildData={() => refreshMutation.mutate()}
-      isBuilding={refreshMutation.isPending}
-      onResolveIdentity={() => {
-        setNeighbourhoodOpen(false)
-        setActiveTab('identifiers')
       }}
     />
     </>

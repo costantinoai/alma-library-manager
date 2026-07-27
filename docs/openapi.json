@@ -2945,88 +2945,6 @@
         }
       }
     },
-    "/api/v1/authors/{author_id}/neighbourhood": {
-      "get": {
-        "tags": [
-          "authors"
-        ],
-        "summary": "Author neighbourhood ego-network (3D explorer)",
-        "description": "On-demand ego-network around one author: co-authors, citation neighbours, and semantically-similar authors, plus the co-authorship edges among them. Computed lazily (only when requested) and bounded per relation. Shape: {center, nodes[], links[], counts}.",
-        "operationId": "get_author_neighbourhood_api_v1_authors__author_id__neighbourhood_get",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "author_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Author Id"
-            }
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/authors/{author_id}/dossier": {
       "get": {
         "tags": [
@@ -12929,74 +12847,6 @@
         }
       }
     },
-    "/api/v1/discovery/refresh": {
-      "post": {
-        "tags": [
-          "discovery"
-        ],
-        "summary": "Refresh recommendations",
-        "description": "Trigger the discovery engine to generate new recommendations.\n\nClears existing neutral (unseen/undismissed/unliked) recommendations\nand regenerates fresh ones based on the user's liked publications.\n\nReturns:\n    Dict with the count of new recommendations generated.",
-        "operationId": "refresh_recommendations_api_v1_discovery_refresh_post",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "background",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "description": "Run refresh in background and track in Activity",
-              "default": true,
-              "title": "Background"
-            },
-            "description": "Run refresh in background and track in Activity"
-          },
-          {
-            "name": "x-api-key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Api-Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/discovery/similar": {
       "post": {
         "tags": [
@@ -13232,6 +13082,74 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PaperResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/impressions": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Record visible Discovery recommendations",
+        "description": "Persist actual item visibility; unrendered recommendations stay unlabeled.",
+        "operationId": "record_discovery_impressions_api_v1_discovery_impressions_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryImpressionBatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryImpressionBatchResponse"
                 }
               }
             }
@@ -13529,6 +13447,62 @@
                 "schema": {
                   "$ref": "#/components/schemas/RecommendationExplainResponse"
                 }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/frontier/rebuild": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Rebuild the candidate frontier",
+        "description": "Build the citation/query frontier on demand.\n\nThe frontier is what lets Discovery return a paper the corpus has never\nheld: works cited by the Library that we hold no row for, plus query and\ntaste leads, each carrying an S2 vector so the dense lane can reach it.\nUntil now it was built only by the periodic citation-graph job, so a fresh\ninstall had an empty frontier and a dense lane that could only re-rank\npapers already in the corpus.\n\nRuns in the background on its own connection: the three phases each make\nnetwork calls, and a request connection may not hold a write txn across\nthose (CLAUDE.md \u2192 SQLite write discipline).",
+        "operationId": "rebuild_frontier_api_v1_discovery_frontier_rebuild_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -18845,7 +18819,7 @@
           "graphs"
         ],
         "summary": "Get Signal Field",
-        "description": "The SPACE-OWNED preference field over the corpus substrate.\n\nOne valence per signal-carrying paper, at its substrate coordinates \u2014\nindependent of which dots any view renders (user call 2026-07-25: the\nstats of the space belong to the space; toggling layers must never\nchange the terrain). Every map host splats THIS field for its Heat\nmode, so Discovery and the Map page show the same landscape.\n\nThe valence hierarchy and every weight live in ONE place:\n`alma.core.signal_valence` (strongest user signal wins; engine\nevidence at reduced authority; no-signal papers carry\nVALENCE_NO_SIGNAL so EVERY substrate point has a value \u2014 the\nterrain has no holes, user call 2026-07-25).\n\nPure read; the substrate is the durable corpus layout.",
+        "description": "The SPACE-OWNED preference field over the corpus substrate.\n\nOne valence per signal-carrying paper, at its substrate coordinates \u2014\nindependent of which dots any view renders (user call 2026-07-25: the\nstats of the space belong to the space; toggling layers must never\nchange the terrain). Every map host splats THIS field for its Heat\nmode, so Discovery and the Map page show the same landscape.\n\nThe valence hierarchy and every weight live in ONE place:\n`alma.core.signal_valence` (strongest user signal wins; engine\nevidence at reduced authority; no-signal papers carry\nVALENCE_NO_SIGNAL so EVERY substrate point has a value \u2014 the\nterrain has no holes, user call 2026-07-25).\n\nSince 2026-07-27 the field is a FIELD: where a paper carries no signal\nof its own, `alma.application.terrain` predicts one from its\nneighbourhood in embedding space and reports how much it trusts the\nprediction. Every point therefore carries `c` (confidence, 0\u20131) and\n`src` (what produced the value) so hosts can render a guess\ndifferently from a fact. See that module for the method.\n\nPure read; the substrate is the durable corpus layout.",
         "operationId": "get_signal_field_api_v1_graphs_signal_field_get",
         "security": [
           {
@@ -21483,6 +21457,117 @@
             }
           }
         },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/user-profile": {
+      "get": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Get User Profile",
+        "description": "The greeting name plus the claimed owner identity, for Settings.\n\n`/status` reports `has_owner` as a boolean because onboarding only needs to\nknow whether to ask. Settings has to SHOW who you claimed and let you change\nit, which needs the row itself.",
+        "operationId": "get_user_profile_api_v1_onboarding_user_profile_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/onboarding/clear-owner": {
+      "post": {
+        "tags": [
+          "onboarding",
+          "onboarding"
+        ],
+        "summary": "Clear Owner",
+        "description": "Un-claim the \"this is me\" author WITHOUT unfollowing them.\n\nTwo different statements: \"I am not this person\" and \"I do not want their\npapers\". Clearing the owner flag leaves the follow \u2014 and therefore the Feed\nmonitor and everything already in the Library \u2014 exactly as it was. Use the\nAuthors page to stop following.",
+        "operationId": "clear_owner_api_v1_onboarding_clear_owner_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "Successful Response"
@@ -24237,6 +24322,83 @@
         "title": "DiscoveryCache",
         "description": "Cache settings for similarity searches."
       },
+      "DiscoveryImpressionBatch": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveryImpressionItem"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "DiscoveryImpressionBatch",
+        "description": "Idempotent batch of first-visibility observations."
+      },
+      "DiscoveryImpressionBatchResponse": {
+        "properties": {
+          "received": {
+            "type": "integer",
+            "title": "Received"
+          },
+          "inserted": {
+            "type": "integer",
+            "title": "Inserted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "received",
+          "inserted"
+        ],
+        "title": "DiscoveryImpressionBatchResponse"
+      },
+      "DiscoveryImpressionItem": {
+        "properties": {
+          "recommendation_id": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Recommendation Id"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Position"
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "discovery_card",
+              "discovery_compact"
+            ],
+            "title": "Surface"
+          },
+          "sort_mode": {
+            "type": "string",
+            "enum": [
+              "relevance",
+              "recent",
+              "custom"
+            ],
+            "title": "Sort Mode"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recommendation_id",
+          "position",
+          "surface",
+          "sort_mode"
+        ],
+        "title": "DiscoveryImpressionItem",
+        "description": "One recommendation that was actually visible on a Discovery surface."
+      },
       "DiscoveryLimits": {
         "properties": {
           "max_results": {
@@ -24511,18 +24673,11 @@
             "type": "boolean",
             "title": "Enabled",
             "default": true
-          },
-          "weight": {
-            "type": "number",
-            "maximum": 2.5,
-            "minimum": 0.0,
-            "title": "Weight",
-            "default": 1.0
           }
         },
         "type": "object",
         "title": "DiscoverySourcePolicy",
-        "description": "One external source toggle + weight."
+        "description": "One external source toggle."
       },
       "DiscoverySources": {
         "properties": {
@@ -24539,6 +24694,9 @@
             "$ref": "#/components/schemas/DiscoverySourcePolicy"
           },
           "biorxiv": {
+            "$ref": "#/components/schemas/DiscoverySourcePolicy"
+          },
+          "europe_pmc": {
             "$ref": "#/components/schemas/DiscoverySourcePolicy"
           }
         },
@@ -24672,13 +24830,6 @@
             "minimum": 0.0,
             "title": "Preference Affinity",
             "default": 0.1
-          },
-          "usefulness_boost": {
-            "type": "number",
-            "maximum": 1.0,
-            "minimum": 0.0,
-            "title": "Usefulness Boost",
-            "default": 0.06
           }
         },
         "type": "object",
@@ -26527,6 +26678,52 @@
         ],
         "title": "OnlineSearchSaveRequest"
       },
+      "OwnerIdentity": {
+        "properties": {
+          "author_id": {
+            "type": "string",
+            "title": "Author Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "openalex_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openalex Id"
+          },
+          "orcid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orcid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "author_id"
+        ],
+        "title": "OwnerIdentity"
+      },
       "OwnerProfileResponse": {
         "properties": {
           "openalex_id": {
@@ -28178,6 +28375,30 @@
         "type": "object",
         "title": "SettingsModel"
       },
+      "SignalLabAuthorDirection": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value"
+        ],
+        "title": "SignalLabAuthorDirection",
+        "description": "One author the fitted head is moving, by ranker match key."
+      },
       "SignalLabCoverageEvidence": {
         "properties": {
           "regions_observed": {
@@ -28262,6 +28483,26 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Boundary Overrides"
+          },
+          "authors_up": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLabAuthorDirection"
+            },
+            "type": "array",
+            "title": "Authors Up"
+          },
+          "authors_down": {
+            "items": {
+              "$ref": "#/components/schemas/SignalLabAuthorDirection"
+            },
+            "type": "array",
+            "title": "Authors Down"
+          },
+          "authors_moving": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Authors Moving",
+            "default": 0
           }
         },
         "type": "object",
@@ -28382,19 +28623,35 @@
           },
           "region_offset_points": {
             "type": "number",
-            "maximum": 2.5,
+            "maximum": 10.0,
             "minimum": 0.0,
             "title": "Region scoring nudge",
-            "description": "Maximum additive Discovery/Feed points from region preference. Together the two Signal Lab heads cannot exceed the five-point citation-evidence band.",
-            "default": 0.0
+            "description": "Maximum additive Discovery/Feed points from region preference, before the evidence damper scales it down. Reaches full strength only once a region has actually been judged several times.",
+            "default": 5.0
           },
           "utility_points": {
             "type": "number",
-            "maximum": 2.5,
+            "maximum": 10.0,
             "minimum": 0.0,
             "title": "Utility scoring nudge",
             "description": "Maximum additive Discovery/Feed points from the confidence-scaled learned utility direction.",
-            "default": 0.0
+            "default": 5.0
+          },
+          "author_offset_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Author scoring nudge",
+            "description": "How much affinity a fully-preferred author gains. Fitted from within-region comparisons only, and ADDED to the author signal your Library already produces \u2014 never a replacement for it.",
+            "default": 5.0
+          },
+          "venue_offset_points": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Venue scoring nudge",
+            "description": "How much affinity a fully-preferred journal gains. Fitted only from same-field, different-venue rounds \u2014 the one place ALMa can learn which venue you would rather read at equal topic \u2014 and ADDED to the venue signal your Library already produces.",
+            "default": 5.0
           },
           "map_tint_strength": {
             "type": "number",
@@ -28979,6 +29236,34 @@
           "event_type"
         ],
         "title": "TrackRequest"
+      },
+      "UserProfileResponse": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OwnerIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "UserProfileResponse",
+        "description": "Who ALMa thinks you are \u2014 the greeting name, and the author row you\nclaimed as yourself. Read by Settings so the identity set during onboarding\nstops being write-once."
       },
       "ValidationError": {
         "properties": {

@@ -1313,40 +1313,6 @@ export function getAuthorDetail(authorId: string): Promise<AuthorDetail> {
   return api.get<AuthorDetail>(`/authors/${encodeURIComponent(authorId)}/detail`)
 }
 
-// ── Author neighbourhood (3D ego-network explorer) ──
-export type AuthorNeighbourRelation = 'center' | 'coauthor' | 'citation' | 'similar'
-
-export interface AuthorNeighbourNode {
-  id: string
-  oid?: string
-  name: string
-  relation: AuthorNeighbourRelation
-  weight: number
-  affiliation?: string | null
-  citedby?: number | null
-  is_center?: boolean
-}
-
-export interface AuthorNeighbourLink {
-  source: string
-  target: string
-  relation: Exclude<AuthorNeighbourRelation, 'center'>
-  weight: number
-}
-
-export interface AuthorNeighbourhood {
-  center: AuthorNeighbourNode
-  nodes: AuthorNeighbourNode[]
-  links: AuthorNeighbourLink[]
-  counts: { coauthor: number; citation: number; similar: number }
-  empty: boolean
-}
-
-/** Lazily fetch one author's ego-network. The backend computes it on demand
- *  (bounded per relation), so only call this when the explorer opens. */
-export function getAuthorNeighbourhood(authorId: string): Promise<AuthorNeighbourhood> {
-  return api.get<AuthorNeighbourhood>(`/authors/${encodeURIComponent(authorId)}/neighbourhood`)
-}
 
 export interface OpenAlexWork {
   openalex_id?: string
