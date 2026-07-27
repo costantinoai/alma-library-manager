@@ -1105,6 +1105,14 @@ class SignalLabCoverageEvidence(BaseModel):
     edges_total: int = Field(ge=0)
 
 
+class SignalLabAuthorDirection(BaseModel):
+    """One author the fitted head is moving, by ranker match key."""
+
+    key: str
+    label: str
+    value: float
+
+
 class SignalLabEffects(BaseModel):
     """Active fitted effects; empty while the feature is disabled."""
 
@@ -1112,6 +1120,14 @@ class SignalLabEffects(BaseModel):
     downward: list[SignalLabDirection] = Field(default_factory=list)
     regions_moving: int = Field(ge=0)
     boundary_overrides: int = Field(ge=0)
+    # The author head, same up/down shape as the regions. Declared here or the
+    # response model silently DROPS them and Home reads "not fitted" forever —
+    # a pydantic response_model is an allowlist, so a new payload key that is
+    # not declared never reaches the client (caught in the 2026-07-27 release
+    # rehearsal against prod, not by any test).
+    authors_up: list[SignalLabAuthorDirection] = Field(default_factory=list)
+    authors_down: list[SignalLabAuthorDirection] = Field(default_factory=list)
+    authors_moving: int = Field(default=0, ge=0)
 
 
 class SignalLabSummaryResponse(BaseModel):
