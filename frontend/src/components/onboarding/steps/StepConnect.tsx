@@ -124,8 +124,8 @@ export function StepConnect({ next, back }: StepContext) {
   return (
     <StepShell
       eyebrow="Connect your sources"
-      title="A couple of keys make this much faster."
-      lead="ALMa reads public metadata from OpenAlex and Semantic Scholar. A free OpenAlex key and a contact email get you the fast lane; a Semantic Scholar key is optional but helps."
+      title="Two free keys, about a minute."
+      lead="ALMa reads public metadata from OpenAlex and Semantic Scholar. OpenAlex now REQUIRES a key; Semantic Scholar works without one but badly. Both are free and take under a minute."
       footer={
         <StepNav
           onBack={back}
@@ -133,33 +133,36 @@ export function StepConnect({ next, back }: StepContext) {
           onContinue={saveAndContinue}
           continueLabel="Save & continue"
           continueLoading={save.isPending}
-          hint="You can skip this — but without a key, downloading your papers and suggestions can be much slower. You can always add keys later in Settings."
+          hint="Skip if you like — ALMa will run, but OpenAlex stops after 100 credits a day and Semantic Scholar will stall on shared-pool rate limits. Add keys any time in Settings → Connections."
         />
       }
     >
       <div className="space-y-5">
         <ConceptCallout
-          eyebrow="Why a key?"
-          summary="OpenAlex now expects an API key for reliable access; the email joins their polite pool."
+          eyebrow="Why these keys, and what happens without them"
+          summary="OpenAlex requires a key — without one you get 100 credits a day, then errors. Semantic Scholar works keyless but shares one global pool, which is what makes Discovery crawl."
         >
-          <p>
-            OpenAlex and Semantic Scholar are open, free APIs. A key authenticates you for a higher,
-            steadier rate limit, and a contact email puts your requests in the "polite pool" — both
-            mean your library and suggestions arrive in seconds rather than minutes.
+          <p className="mb-2">
+            Both are open, free APIs — no payment, no approval wait. The keys are about
+            <span className="font-medium text-alma-800"> rate limits</span>, which decide whether
+            your library arrives in seconds or minutes.
+          </p>
+          <p className="mb-2">
+            <span className="font-medium text-alma-800">OpenAlex — required.</span> Since
+            February 2026 every request needs a key. Without one you get 100 credits per day and
+            then hard <span className="font-mono text-[0.9em]">HTTP 409</span> errors, which stops
+            metadata and author lookups mid-import. A free key raises that to 100,000 credits a day.
+          </p>
+          <p className="mb-2">
+            <span className="font-medium text-alma-800">Semantic Scholar — optional but
+            recommended.</span> Keyless requests share one anonymous pool with every other
+            anonymous client worldwide, so 429s are constant — they are the direct cause of
+            multi-minute stalls in Discovery. A key gives you a dedicated allowance.
           </p>
           <p>
-            Your email is sent <span className="font-medium text-alma-800">only</span> to OpenAlex /
-            Semantic Scholar alongside those lookups. It is never shared anywhere else. Get a free key
-            at{' '}
-            <a
-              href="https://openalex.org/"
-              target="_blank"
-              rel="noreferrer"
-              className="text-alma-folio underline underline-offset-2"
-            >
-              openalex.org
-            </a>
-            .
+            The contact email is courtesy, not a rate limit — OpenAlex retired its "polite pool".
+            It identifies your requests to OpenAlex and Crossref and is sent
+            <span className="font-medium text-alma-800"> only</span> to them, never anywhere else.
           </p>
         </ConceptCallout>
 
@@ -184,7 +187,15 @@ export function StepConnect({ next, back }: StepContext) {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <Label htmlFor="ob-oa-key" className="text-slate-600">
-              OpenAlex API key
+              OpenAlex API key <span className="text-critical-700">(required)</span>{' '}
+              <a
+                href="https://openalex.org/settings/api"
+                target="_blank"
+                rel="noreferrer"
+                className="ml-1 font-normal text-alma-folio underline underline-offset-2"
+              >
+                Get an OpenAlex key ↗
+              </a>
             </Label>
             <ConnectionDot
               configured={openalexStatus.data?.configured}
@@ -205,7 +216,15 @@ export function StepConnect({ next, back }: StepContext) {
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <Label htmlFor="ob-s2-key" className="text-slate-600">
-              Semantic Scholar key <span className="text-slate-400">(optional)</span>
+              Semantic Scholar key <span className="text-slate-400">(optional)</span>{' '}
+              <a
+                href="https://www.semanticscholar.org/product/api"
+                target="_blank"
+                rel="noreferrer"
+                className="ml-1 font-normal text-alma-folio underline underline-offset-2"
+              >
+                Request a Semantic Scholar key ↗
+              </a>
             </Label>
             <ConnectionDot
               configured={s2Status.data?.configured}
