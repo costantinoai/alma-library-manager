@@ -4625,6 +4625,16 @@ _AUTHOR_NETWORK_LIBRARY_FP_SQL = f"""
       (SELECT COUNT(*) FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM followed_authors),
+      -- The SUBSTRATE this view is derived from. An author's coordinate is the
+      -- centroid of their papers' substrate positions, so a layout rebuild
+      -- moves every author on the map — and until 2026-07-27 this fingerprint
+      -- did not read it. Corpus was rebuilt, Library was not, and the two
+      -- scopes disagreed on where 274 shared authors lived, which looks exactly
+      -- like "the library is not a subset of the corpus" (user report). The
+      -- gauge must key on the artifact's real input.
+      (SELECT COALESCE(MAX(pc.updated_at), '') FROM publication_clusters pc
+        WHERE pc.scope = 'corpus'),
+      (SELECT COUNT(*) FROM publication_clusters WHERE scope = 'corpus'),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
       (SELECT COUNT(*) FROM publication_authors pa
          JOIN papers p ON p.id = pa.paper_id WHERE p.status = 'library' AND {standalone_paper_sql("p")}),
@@ -4639,6 +4649,16 @@ _AUTHOR_NETWORK_CORPUS_FP_SQL = f"""
       (SELECT COUNT(*) FROM papers p WHERE {standalone_paper_sql("p")}),
       (SELECT COALESCE(MAX(p.updated_at), '') FROM papers p WHERE {standalone_paper_sql("p")}),
       (SELECT COUNT(*) FROM followed_authors),
+      -- The SUBSTRATE this view is derived from. An author's coordinate is the
+      -- centroid of their papers' substrate positions, so a layout rebuild
+      -- moves every author on the map — and until 2026-07-27 this fingerprint
+      -- did not read it. Corpus was rebuilt, Library was not, and the two
+      -- scopes disagreed on where 274 shared authors lived, which looks exactly
+      -- like "the library is not a subset of the corpus" (user report). The
+      -- gauge must key on the artifact's real input.
+      (SELECT COALESCE(MAX(pc.updated_at), '') FROM publication_clusters pc
+        WHERE pc.scope = 'corpus'),
+      (SELECT COUNT(*) FROM publication_clusters WHERE scope = 'corpus'),
       (SELECT COALESCE(MAX(followed_at), '') FROM followed_authors),
       (SELECT COUNT(*) FROM publication_authors pa
          JOIN papers p ON p.id = pa.paper_id WHERE {standalone_paper_sql("p")}),
