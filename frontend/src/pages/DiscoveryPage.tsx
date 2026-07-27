@@ -80,6 +80,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { errorToast, useToast } from '@/hooks/useToast'
 import { usePaperUndo } from '@/hooks/usePaperUndo'
+import { useDiscoveryImpressions } from '@/hooks/useDiscoveryImpressions'
 import { navigateTo, useHashRoute } from '@/lib/hashRoute'
 import {
   invalidateAfterPaperMutation,
@@ -208,6 +209,11 @@ export function DiscoveryPage() {
   // density (compact / normal / extended), and bulk-selection set.
   const [sort, setSort] = useState<DiscoverySort>('relevance')
   const [viewMode, setViewMode] = useState<DiscoveryViewMode>('normal')
+  const observeCardImpression = useDiscoveryImpressions('discovery_card', sort)
+  const observeCompactImpression = useDiscoveryImpressions(
+    'discovery_compact',
+    'custom',
+  )
   // Task 50 M4 (50-B): the frontier map is a PANEL above the rec list —
   // selection flows down into it. FOLDED by default (user call 2026-07-27):
   // it is a ~560px plate between the reader and the list they came for, and
@@ -1665,6 +1671,9 @@ export function DiscoveryPage() {
               recommendations={recommendations}
               selectedIds={selectedRecIds}
               onSelectionChange={setSelectedRecIds}
+              rowRef={(element, rec, position) =>
+                observeCompactImpression(element, rec.id, position)
+              }
               onOpenDetails={(paper) => {
                 setSelectedPaper(paper)
                 setDetailOpen(true)
@@ -1701,6 +1710,7 @@ export function DiscoveryPage() {
               return (
                 <div
                   key={rec.id}
+                  ref={(element) => observeCardImpression(element, rec.id, recIdx + 1)}
                   id={`rec-card-${rec.paper_id}`}
                   className={cn(
                     'rounded-lg transition-shadow',
@@ -1848,6 +1858,11 @@ interface DiscoveryCompactTableProps {
   selectedIds: Set<string>
   onSelectionChange: (next: Set<string>) => void
   onOpenDetails: (paper: Publication | null) => void
+  rowRef: (
+    element: HTMLTableRowElement | null,
+    recommendation: LensRecommendation,
+    position: number,
+  ) => void
 }
 
 function DiscoveryCompactTable({
@@ -1855,6 +1870,7 @@ function DiscoveryCompactTable({
   selectedIds,
   onSelectionChange,
   onOpenDetails,
+  rowRef,
 }: DiscoveryCompactTableProps) {
   const rows: DiscoveryCompactRow[] = useMemo(
     () =>
@@ -1971,6 +1987,7 @@ function DiscoveryCompactTable({
       storageKey="discovery.compact"
       getRowId={(row) => row.id}
       onRowClick={(row) => onOpenDetails(row.paper)}
+      rowRef={(element, row, position) => rowRef(element, row.rec, position)}
       selectedIds={selectedIds}
       onSelectionChange={onSelectionChange}
     />

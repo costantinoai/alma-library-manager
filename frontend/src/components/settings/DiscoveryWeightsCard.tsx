@@ -44,7 +44,6 @@ const WEIGHT_LABELS: { key: keyof DiscoveryWeights; label: string; description: 
   { key: 'citation_quality', label: 'Citation Quality', description: 'Citation count quality indicator' },
   { key: 'feedback_adj', label: 'Feedback Adjustment', description: 'Adjusted based on your past feedback' },
   { key: 'preference_affinity', label: 'Preference Affinity', description: 'Affinity learned from your accumulated feedback interactions' },
-  { key: 'usefulness_boost', label: 'Usefulness Boost', description: 'Rewards timely, credible, and less redundant papers' },
 ]
 
 const STRATEGY_LABELS: { key: keyof DiscoveryStrategies; label: string; description: string }[] = [
@@ -67,6 +66,7 @@ const SOURCE_LABELS: Array<{ key: keyof DiscoverySettings['sources']; label: str
   { key: 'crossref', label: 'Crossref', description: 'Broad DOI-oriented metadata fallback.' },
   { key: 'arxiv', label: 'arXiv', description: 'Preprint lane for arXiv.' },
   { key: 'biorxiv', label: 'bioRxiv', description: 'Preprint lane for bioRxiv and medRxiv-style freshness.' },
+  { key: 'europe_pmc', label: 'Europe PMC', description: 'Biomedical articles, preprints, and full abstracts.' },
 ]
 
 const RECOMMENDATION_MODES: Array<{ value: string; label: string; description: string }> = [
@@ -90,7 +90,6 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
     citation_quality: 0.05,
     feedback_adj: 0.1,
     preference_affinity: 0.1,
-    usefulness_boost: 0.06,
   },
   strategies: {
     related_works: true,
@@ -122,11 +121,12 @@ const DEFAULT_DISCOVERY: DiscoverySettings = {
     similarity_ttl_hours: 24,
   },
   sources: {
-    openalex: { enabled: true, weight: 1.0 },
-    semantic_scholar: { enabled: true, weight: 0.95 },
-    crossref: { enabled: true, weight: 0.72 },
-    arxiv: { enabled: true, weight: 0.66 },
-    biorxiv: { enabled: true, weight: 0.62 },
+    openalex: { enabled: true },
+    semantic_scholar: { enabled: true },
+    crossref: { enabled: true },
+    arxiv: { enabled: true },
+    biorxiv: { enabled: true },
+    europe_pmc: { enabled: true },
   },
   branches: {
     temperature: 0.28,
@@ -171,6 +171,10 @@ function mergeDiscoverySettings(input?: Partial<DiscoverySettings> | null): Disc
       crossref: { ...DEFAULT_DISCOVERY.sources.crossref, ...(input?.sources?.crossref ?? {}) },
       arxiv: { ...DEFAULT_DISCOVERY.sources.arxiv, ...(input?.sources?.arxiv ?? {}) },
       biorxiv: { ...DEFAULT_DISCOVERY.sources.biorxiv, ...(input?.sources?.biorxiv ?? {}) },
+      europe_pmc: {
+        ...DEFAULT_DISCOVERY.sources.europe_pmc,
+        ...(input?.sources?.europe_pmc ?? {}),
+      },
     },
     branches: {
       ...DEFAULT_DISCOVERY.branches,
@@ -190,7 +194,7 @@ function mergeDiscoverySettings(input?: Partial<DiscoverySettings> | null): Disc
 // resolver so the global save button is guarded by the same rules as the
 // per-field number inputs.
 const weightShape = z.number().min(0).max(1)
-const sourcePolicy = z.object({ enabled: z.boolean(), weight: z.number().min(0).max(2.5) })
+const sourcePolicy = z.object({ enabled: z.boolean() })
 const discoverySchema = z.object({
   weights: z.object({
     source_relevance: weightShape,
@@ -202,7 +206,6 @@ const discoverySchema = z.object({
     citation_quality: weightShape,
     feedback_adj: weightShape,
     preference_affinity: weightShape,
-    usefulness_boost: weightShape,
   }),
   strategies: z.object({
     related_works: z.boolean(),
@@ -237,6 +240,7 @@ const discoverySchema = z.object({
     crossref: sourcePolicy,
     arxiv: sourcePolicy,
     biorxiv: sourcePolicy,
+    europe_pmc: sourcePolicy,
   }),
   branches: z.object({
     temperature: z.number().min(0).max(1),
@@ -434,26 +438,6 @@ export function DiscoveryWeightsCard() {
                           />
                           Enabled
                         </label>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs uppercase tracking-wide text-slate-500">
-                            Weight
-                          </span>
-                          <Input
-                            type="number"
-                            className="h-9 w-24 text-right"
-                            min={0}
-                            max={2.5}
-                            step="0.05"
-                            value={values.sources[source.key].weight}
-                            onChange={(event) =>
-                              form.setValue(
-                                `sources.${source.key}.weight` as const,
-                                Number(event.target.value),
-                                { shouldDirty: true },
-                              )
-                            }
-                          />
-                        </div>
                       </div>
                     </div>
                   </div>

@@ -1909,6 +1909,13 @@ export interface LensRecommendation {
   paper?: Publication | null
 }
 
+export interface DiscoveryImpression {
+  recommendation_id: string
+  position: number
+  surface: 'discovery_card' | 'discovery_compact'
+  sort_mode: 'relevance' | 'recent' | 'custom'
+}
+
 export interface LensBranchSeedSample {
   paper_id?: string | null
   title: string
@@ -1988,7 +1995,6 @@ export interface DiscoveryWeights {
   citation_quality: number
   feedback_adj: number
   preference_affinity: number
-  usefulness_boost: number
 }
 
 export interface DiscoveryStrategies {
@@ -2026,7 +2032,6 @@ export interface DiscoveryCache {
 
 export interface DiscoverySourcePolicy {
   enabled: boolean
-  weight: number
 }
 
 export interface DiscoverySources {
@@ -2035,6 +2040,7 @@ export interface DiscoverySources {
   crossref: DiscoverySourcePolicy
   arxiv: DiscoverySourcePolicy
   biorxiv: DiscoverySourcePolicy
+  europe_pmc: DiscoverySourcePolicy
 }
 
 export interface DiscoveryBranchSettings {
@@ -3881,6 +3887,12 @@ export function markLensSeen(lensId: string): Promise<{ lens_id: string; last_se
     `/lenses/${encodeURIComponent(lensId)}/seen`,
     {},
   )
+}
+
+export function recordDiscoveryImpressions(
+  items: DiscoveryImpression[],
+): Promise<{ received: number; inserted: number }> {
+  return api.post('/discovery/impressions', { items })
 }
 
 export function createLens(body: {

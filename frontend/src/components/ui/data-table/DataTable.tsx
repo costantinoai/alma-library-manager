@@ -83,6 +83,8 @@ interface DataTableProps<T> {
   getRowId?: (row: T, index: number) => string
   /** Extra className on the row. */
   rowClassName?: (row: T) => string
+  /** Observe the actual rendered row element (e.g. viewport impressions). */
+  rowRef?: (element: HTMLTableRowElement | null, row: T, visibleIndex: number) => void
   /** Default column sizing. */
   defaultColumnWidth?: number
   /** Optional empty-state content. */
@@ -154,6 +156,7 @@ export function DataTable<T>({
   onRowClick,
   getRowId,
   rowClassName,
+  rowRef,
   defaultColumnWidth = 160,
   emptyState,
   footerCaption,
@@ -443,13 +446,14 @@ export function DataTable<T>({
             </thead>
             <tbody className="divide-y divide-[var(--color-border)]">
               {hasRows ? (
-                table.getRowModel().rows.map((row) => {
+                table.getRowModel().rows.map((row, visibleIndex) => {
                   const extraClass = rowClassName ? rowClassName(row.original) : ''
                   const rowId = deriveRowId(row.original, row.index)
                   const isSelected = selectionEnabled && selectedIds!.has(rowId)
                   return (
                     <tr
                       key={row.id}
+                      ref={(element) => rowRef?.(element, row.original, visibleIndex + 1)}
                       onClick={onRowClick ? () => onRowClick(row.original) : undefined}
                       className={cn(
                         'transition-colors hover:bg-surface-2',
