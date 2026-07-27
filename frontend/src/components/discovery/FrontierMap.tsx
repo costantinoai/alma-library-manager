@@ -33,7 +33,7 @@ import { useBranchControls } from '@/hooks/useBranchControls'
 import { CorpusMapPaperPopup } from '@/components/map/CorpusMapPaperPopup'
 import type { MapPaperNeighbour } from '@/components/map/MapPaperPopup'
 import { SemanticMap, type SemanticMapNode } from '@/components/map/SemanticMap'
-import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, TERRAIN_LEGEND, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
+import { EDGE_LAYER_COLORS, EDGE_LAYER_FALLBACK_COLOR, MAP_INK, RAMP_GRADIENTS, summarizeValues, terrainLegendFor, yearRampColor, yearRampLimits } from '@/components/map/mapNodeStyle'
 import {
   ColourBarLegend,
   MapDataStatus,
@@ -555,6 +555,7 @@ export function FrontierMap({
         toponymScale={wordScale}
         toponymWordCount={wordCount}
         heatField={showTerrain ? terrain.points : undefined}
+        heatFieldAbsMax={terrain.absMax}
         terrainOpacity={terrainOpacity}
         height={520}
         lassoMode={selectMode}
@@ -759,10 +760,10 @@ export function FrontierMap({
               // drift from the Map page's (it said -1..1 while the ramp used
               // ±0.5, until the descriptor was centralised).
               <ColourBarLegend
-                gradient={TERRAIN_LEGEND.gradient}
-                min={TERRAIN_LEGEND.min}
-                mid={TERRAIN_LEGEND.mid}
-                max={TERRAIN_LEGEND.max}
+                gradient={terrainLegendFor(terrain.absMax).gradient}
+                min={terrainLegendFor(terrain.absMax).min}
+                mid={terrainLegendFor(terrain.absMax).mid}
+                max={terrainLegendFor(terrain.absMax).max}
                 mean={terrainStats.mean.toFixed(2)}
               />
             )}

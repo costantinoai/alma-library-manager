@@ -47,7 +47,7 @@ import {
   SCORE_LEGEND,
   scoreRampColor,
   summarizeValues,
-  TERRAIN_LEGEND,
+  terrainLegendFor,
   yearRampColor,
   yearRampLimits,
   type MapNodeKind,
@@ -516,6 +516,7 @@ export function GraphMapView({
         toponymScale={toponymScale}
         toponymWordCount={toponymWordCount}
         heatField={showTerrain ? terrain.points : undefined}
+        heatFieldAbsMax={terrain.absMax}
         lassoMode={lassoMode}
         onLasso={onLasso}
         selectedIds={selectedNodeId ? new Set([selectedNodeId]) : undefined}
@@ -620,10 +621,10 @@ export function GraphMapView({
             // DERIVED from the ramp constant — hardcoding "-1"/"1" made the
             // colourbar claim a domain the ramp had stopped using.
             <ColourBarLegend
-              gradient={TERRAIN_LEGEND.gradient}
-              min={TERRAIN_LEGEND.min}
-              mid={TERRAIN_LEGEND.mid}
-              max={TERRAIN_LEGEND.max}
+              gradient={terrainLegendFor(terrain.absMax).gradient}
+              min={terrainLegendFor(terrain.absMax).min}
+              mid={terrainLegendFor(terrain.absMax).mid}
+              max={terrainLegendFor(terrain.absMax).max}
               mean={terrainStats.mean.toFixed(2)}
             />
           )}

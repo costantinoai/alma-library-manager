@@ -67,6 +67,7 @@ export interface TerrainTexture {
  */
 export function buildTerrainGrid(
   points: ReadonlyArray<TerrainPoint>,
+  scaleAbsMax: number = TERRAIN_SCALE_ABS_MAX,
 ): TerrainGrid | null {
   if (!points.length) return null
 
@@ -77,7 +78,7 @@ export function buildTerrainGrid(
   const radius = TERRAIN_KERNEL_WORLD * size
   const twoSigmaSq = 2 * (radius / 2) ** 2
 
-  const absMax = TERRAIN_SCALE_ABS_MAX
+  const absMax = scaleAbsMax
 
   for (const p of points) {
     const gx = p.x * size
@@ -121,7 +122,7 @@ export function buildTerrainGrid(
   for (let i = 0; i < wsum.length; i++) {
     if (wsum[i] <= 0.02) continue
     const mean = vsum[i] / wsum[i]
-    const t = Math.max(-1, Math.min(1, mean / TERRAIN_SCALE_ABS_MAX))
+    const t = Math.max(-1, Math.min(1, mean / absMax))
     const [r, g, b] = terrainColor(t)
     // Opacity carries EVIDENCE and nothing else.
     //
@@ -149,8 +150,9 @@ export function buildTerrainGrid(
 /** The grid as a canvas the renderer can `drawImage` through its transform. */
 export function buildTerrainTexture(
   points: ReadonlyArray<TerrainPoint>,
+  scaleAbsMax?: number,
 ): TerrainTexture | null {
-  const grid = buildTerrainGrid(points)
+  const grid = buildTerrainGrid(points, scaleAbsMax)
   if (!grid) return null
   const canvas = document.createElement('canvas')
   canvas.width = grid.size

@@ -308,6 +308,58 @@ function gradientFromStops(stops: ReadonlyArray<Stop>): string {
  *  Beyond ±0.5 values clamp, which is the honest reading of "as strong as this
  *  scale can say". */
 export const TERRAIN_SCALE_ABS_MAX = 0.5
+/** Floor / ceiling for the auto-derived terrain scale. */
+export const TERRAIN_SCALE_MIN = 0.08
+export const TERRAIN_SCALE_MAX = 1
+/** Which quantile of |valence| becomes the scale endpoint.
+ *
+ *  p75, not the max and not p95. Valence is long-tailed: on the real paper
+ *  field the 95th percentile is 0.46 while the MEDIAN is 0.157, so a p95 scale
+ *  leaves half the map below t=0.35 — pale, which is exactly the complaint this
+ *  replaces. At p75 the median renders around t=0.6 and the map reads.
+ *
+ *  The top quartile saturates, and that is the right trade: those are genuinely
+ *  the strongest opinions, and clipping them costs nothing a reader needs. The
+ *  original "never data-derived" rule was guarding against a WEAK population
+ *  being stretched to look strong — that is what TERRAIN_SCALE_MIN is for. */
+export const TERRAIN_SCALE_QUANTILE = 0.75
+
+/** The ±scale this field should be drawn on, derived from the field itself.
+ *
+ *  A FIXED domain is what kept making the map unreadable. Valence is bounded by
+ *  ±1 in principle, but a real field never spends that range: papers sit mostly
+ *  inside ±0.2, and the author field — where most values are GP predictions
+ *  shrunk toward zero by low confidence — is smaller again. Drawn on a fixed
+ *  ±0.5 both looked like blank paper.
+ *
+ *  The old rule this replaces was "never data-derived, or a weak population
+ *  saturates". That concern is real but it is about the MAX, not about being
+ *  fixed: normalising to the largest value lets one outlier define the scale.
+ *  So this uses a robust high quantile, not the max, and clamps it — the floor
+ *  stops a near-empty field being blown up into strong opinion, the ceiling
+ *  keeps it inside the semantic domain. Two maps of comparable fields still get
+ *  comparable scales, and the legend prints the number either way. */
+export function terrainScaleFor(values: ReadonlyArray<number>): number {
+  const magnitudes = values
+    .map((v) => Math.abs(v))
+    .filter((v) => Number.isFinite(v) && v > 0)
+    .sort((a, b) => a - b)
+  if (!magnitudes.length) return TERRAIN_SCALE_MIN
+  const cut = magnitudes[
+    Math.min(magnitudes.length - 1, Math.floor(magnitudes.length * TERRAIN_SCALE_QUANTILE))
+  ]
+  return Math.min(TERRAIN_SCALE_MAX, Math.max(TERRAIN_SCALE_MIN, Number(cut.toFixed(2))))
+}
+
+/** Colourbar descriptor for a given scale — gradient and bounds from one place. */
+export function terrainLegendFor(absMax: number) {
+  return {
+    gradient: TERRAIN_LEGEND_GRADIENT,
+    min: `−${absMax}`,
+    mid: '0',
+    max: `+${absMax}`,
+  }
+}
 
 /** ColorBrewer **RdYlGn** at natural spacing — the standard diverging ramp.
  *
@@ -353,12 +405,8 @@ export function scoreRampColor(score: number): [number, number, number] {
  *  else; narrowing the terrain domain left the bar labelling a range the ramp
  *  no longer used. Bounds and gradient now come from one place, so changing a
  *  scale updates its bar automatically. */
-export const TERRAIN_LEGEND = {
-  gradient: gradientFromStops(TERRAIN_STOPS),
-  min: `−${TERRAIN_SCALE_ABS_MAX}`,
-  mid: '0',
-  max: `+${TERRAIN_SCALE_ABS_MAX}`,
-} as const
+const TERRAIN_LEGEND_GRADIENT = gradientFromStops(TERRAIN_STOPS)
+export const TERRAIN_LEGEND = terrainLegendFor(TERRAIN_SCALE_ABS_MAX)
 
 export const SCORE_LEGEND = {
   gradient: gradientFromStops(SCORE_STOPS),

@@ -115,7 +115,9 @@ export interface SemanticMapProps {
    *  coordinates are in the frame this payload is rendered in (a re-fitted
    *  layout has its own). A per-rendered-node variant used to exist and could
    *  satisfy neither. */
-  heatField?: ReadonlyArray<{ x: number; y: number; v: number }>
+  heatField?: ReadonlyArray<{ x: number; y: number; v: number; c?: number }>
+  /** ±scale the heat field is drawn on. Derived per field by `buildTerrainField`. */
+  heatFieldAbsMax?: number
   /** Alpha for terrain texture only; normal paper plate stays unchanged. */
   terrainOpacity?: number
   /** Rectangle-select mode: drag selects instead of panning. */
@@ -158,6 +160,7 @@ export function SemanticMap({
   sizeScale = 1,
   dotOpacity = 1,
   heatField,
+  heatFieldAbsMax,
   terrainOpacity = 1,
   onHover,
   onClickNode,
@@ -197,8 +200,8 @@ export function SemanticMap({
   // Baked once per field, never per frame: the terrain is a property of the
   // space, so the same field must produce the same picture at any camera.
   const terrainTexture = useMemo(
-    () => (heatField && heatField.length ? buildTerrainTexture(heatField) : null),
-    [heatField],
+    () => (heatField && heatField.length ? buildTerrainTexture(heatField, heatFieldAbsMax) : null),
+    [heatField, heatFieldAbsMax],
   )
   const closeClickCard = useCallback(() => {
     setClickedId(null)

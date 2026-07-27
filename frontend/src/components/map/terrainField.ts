@@ -24,7 +24,7 @@
  * The render half of the contract lives in `terrainTexture.ts`: the field is
  * baked in world space so the camera cannot change it either.
  */
-import { summarizeValues } from './mapNodeStyle'
+import { summarizeValues, terrainScaleFor } from './mapNodeStyle'
 
 /** No opinion recorded. The paper substrate is deliberately hole-free: a point
  *  with no signal still covers space so the splat has no gaps (2026-07-25). */
@@ -58,6 +58,10 @@ export interface TerrainField {
   frame: 'substrate' | 'own'
   /** How many of the layout's nodes carry a real opinion (own frame only). */
   coverage: { valued: number; total: number }
+  /** The ±scale THIS field is drawn on, derived from its own values. Fixed
+   *  domains kept making real fields — whose values are small — read as blank
+   *  paper. Texture and colourbar both take it from here so they agree. */
+  absMax: number
 }
 
 export interface TerrainNode {
@@ -71,6 +75,7 @@ const EMPTY: TerrainField = {
   stats: null,
   frame: 'substrate',
   coverage: { valued: 0, total: 0 },
+  absMax: terrainScaleFor([]),
 }
 
 /** True when a payload's coordinates are the space's own (not a private re-fit). */
@@ -116,6 +121,7 @@ export function buildTerrainField({
       stats: summarizeValues(spacePoints.map((p) => p.v)),
       frame: 'substrate',
       coverage: { valued: spacePoints.length, total: spacePoints.length },
+      absMax: terrainScaleFor(spacePoints.map((p) => p.v)),
     }
   }
 
@@ -141,5 +147,6 @@ export function buildTerrainField({
     stats: summarizeValues(points.map((p) => p.v)),
     frame: 'own',
     coverage: { valued, total: nodes.length },
+    absMax: terrainScaleFor(points.map((p) => p.v)),
   }
 }
