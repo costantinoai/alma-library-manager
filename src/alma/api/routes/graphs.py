@@ -1405,77 +1405,54 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
     VALENCE_NO_SIGNAL so EVERY substrate point has a value — the
     terrain has no holes, user call 2026-07-25).
 
+    Since 2026-07-27 the field is a FIELD: where a paper carries no signal
+    of its own, `alma.application.terrain` predicts one from its
+    neighbourhood in embedding space and reports how much it trusts the
+    prediction. Every point therefore carries `c` (confidence, 0–1) and
+    `src` (what produced the value) so hosts can render a guess
+    differently from a fact. See that module for the method.
+
     Pure read; the substrate is the durable corpus layout.
     """
-    from alma.core.signal_valence import (
-        NEGATIVE_REC_ACTIONS,
-        VALENCE_NO_SIGNAL,
-        paper_valence,
-    )
-
-    neg_actions_sql = ",".join(f"'{a}'" for a in NEGATIVE_REC_ACTIONS)
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT pc.paper_id, pc.cluster_id, pc.x, pc.y, p.status,
-                   COALESCE(p.rating, 0) AS rating,
-                   latest.score AS rec_score,
-                   COALESCE(neg.n_neg, 0) AS n_neg
-            FROM publication_clusters pc
-            JOIN papers p ON p.id = pc.paper_id
-            LEFT JOIN (
-                SELECT paper_id, score, MAX(created_at)
-                FROM recommendations GROUP BY paper_id
-            ) latest ON latest.paper_id = pc.paper_id
-            LEFT JOIN (
-                SELECT paper_id, COUNT(*) AS n_neg
-                FROM recommendations
-                WHERE COALESCE(user_action, '') IN ({neg_actions_sql})
-                GROUP BY paper_id
-            ) neg ON neg.paper_id = pc.paper_id
-            WHERE pc.scope = ?
-            """,
-            (SUBSTRATE_SCOPE,),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        rows = []
-
     from alma.application.signal_lab.map_terms import (
         apply_lab_map_tint,
         load_lab_map_context,
     )
+    from alma.application.terrain import build_terrain_field
 
+    field = build_terrain_field(conn)
     lab_context = load_lab_map_context(conn)
+
+    # The Signal Lab tint is the top layer over whatever the base resolved to,
+    # observed or predicted — it adjusts a super-region, not a paper's evidence.
     points: list[dict] = []
     vmin = float("inf")
     vmax = float("-inf")
     vsum = 0.0
-    for row in rows:
-        v = paper_valence(
-            status=str(row["status"] or ""),
-            rating=int(row["rating"] or 0),
-            n_negative_actions=int(row["n_neg"] or 0),
-            rec_score=row["rec_score"],
-        )
-        if v is None:
-            v = VALENCE_NO_SIGNAL
+    for point in field.points:
         v = apply_lab_map_tint(
-            v,
-            paper_id=str(row["paper_id"]),
-            cluster_id=int(row["cluster_id"]),
+            point.value,
+            paper_id=point.paper_id,
+            cluster_id=point.cluster_id,
             context=lab_context,
         )
         points.append(
             {
-                "id": str(row["paper_id"]),
-                "x": float(row["x"]),
-                "y": float(row["y"]),
+                "id": point.paper_id,
+                "x": point.x,
+                "y": point.y,
                 "v": round(v, 3),
+                # How much this value is to be believed: 1.0 for something you
+                # said, the GP's explained-variance fraction for something we
+                # inferred, 0.0 for a point we know nothing about. Hosts fade
+                # the splat by this so unworked territory looks unworked.
+                "c": round(point.confidence, 3),
+                "src": point.source,
                 # Raw internal score (0-100, latest recommendation) rides
                 # along so hosts colour Score mode LIVE — scores move with
                 # every refresh while the cached layout payload does not,
                 # and a stale materialized view must never grey the dots.
-                "score": float(row["rec_score"]) if row["rec_score"] is not None else None,
+                "score": float(point.rec_score) if point.rec_score is not None else None,
             }
         )
         vmin = min(vmin, v)
@@ -1492,7 +1469,12 @@ def get_signal_field(conn: sqlite3.Connection = Depends(get_db)):
         if points
         else None
     )
-    return {"status": "ready", "points": points, "stats": stats}
+    return {
+        "status": "ready",
+        "points": points,
+        "stats": stats,
+        "model": field.model.as_dict(),
+    }
 
 
 def _author_space_coordinates(conn: sqlite3.Connection) -> dict[str, tuple[float, float]]:
@@ -1580,7 +1562,8 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
                    p.status AS status,
                    COALESCE(p.rating, 0) AS rating,
                    latest.score AS rec_score,
-                   COALESCE(neg.n_neg, 0) AS n_neg
+                   COALESCE(neg.n_neg, 0) AS n_neg,
+                   COALESCE(clicks.n_click, 0) AS n_click
             FROM publication_authors pa
             JOIN papers p ON p.id = pa.paper_id
             LEFT JOIN (
@@ -1593,6 +1576,12 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
                 WHERE COALESCE(user_action, '') IN ({neg_actions_sql})
                 GROUP BY paper_id
             ) neg ON neg.paper_id = pa.paper_id
+            LEFT JOIN (
+                SELECT entity_id, COUNT(*) AS n_click
+                FROM feedback_events
+                WHERE event_type = 'external_link_click' AND entity_type = 'publication'
+                GROUP BY entity_id
+            ) clicks ON clicks.entity_id = pa.paper_id
             WHERE TRIM(COALESCE(pa.openalex_id, '')) <> ''
             """
         ).fetchall()
@@ -1624,6 +1613,7 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
             status=str(row["status"] or ""),
             rating=int(row["rating"] or 0),
             n_negative_actions=int(row["n_neg"] or 0),
+            n_engagements=int(row["n_click"] or 0),
             rec_score=rec_score,
         )
         if evidence is not None:

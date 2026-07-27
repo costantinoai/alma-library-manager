@@ -40,6 +40,15 @@ Counting it here made "I've seen this, not here" read as "I dislike this"."""
 VALENCE_LIBRARY = 0.35
 """Saved to Library — a mild, durable positive."""
 
+VALENCE_ENGAGEMENT = 0.2
+"""You opened the paper's external link — the weakest positive we record.
+
+Clicking through to the PDF is a real act of interest, and until 2026-07-27 it
+was the one user signal the field ignored entirely: `feedback_events` rows of
+type `external_link_click` had no path into any valence. It sits BELOW
+`library` because opening something is weaker evidence than keeping it, and
+ABOVE the engine because it is still the user acting rather than us guessing."""
+
 RATING_NEUTRAL = 3
 """The neutral star on the fixed 1–5 rating domain.
 
@@ -82,6 +91,11 @@ The score already has reduced amplitude through ``ENGINE_AUTHORITY``; this
 second, separate quantity says how much evidence it provides that the user
 likes an *author*. One recommendation must not paint a person strongly green.
 """
+
+ENGAGEMENT_EVIDENCE_WEIGHT = 0.4
+"""Confidence mass of a click-only paper — under half a save, over an engine
+guess. Opening a link says you were interested enough to look; it does not say
+the paper survived the look."""
 
 USER_EVIDENCE_WEIGHT = 1.0
 """Confidence mass of one explicit user-derived paper signal."""
@@ -127,7 +141,14 @@ def score_valence(score: float) -> float:
     return max(-1.0, min(1.0, raw)) * ENGINE_AUTHORITY
 
 
-ValenceSource = Literal["removed", "rating", "negative_action", "library", "engine"]
+ValenceSource = Literal[
+    "removed",
+    "rating",
+    "negative_action",
+    "library",
+    "engagement",
+    "engine",
+]
 
 
 @dataclass(frozen=True)
@@ -148,12 +169,23 @@ def paper_valence_evidence(
     status: str,
     rating: int,
     n_negative_actions: int,
+    n_engagements: int,
     rec_score: float | None,
 ) -> ValenceEvidence | None:
     """Resolve one paper to strongest-first valence evidence.
 
     The paper-map value and author-level confidence travel together so routes
     cannot silently invent a second hierarchy or set of weights.
+
+    Args:
+        status: Membership state (`library` / `tracked` / `removed` / …).
+        rating: Stored 1–5 star rating, 0 when never set.
+        n_negative_actions: Count of `remove` actions on recommendations of it.
+        n_engagements: Count of `external_link_click` feedback events. Required,
+            not defaulted: a caller that has not looked the number up would
+            otherwise silently claim "no clicks", which is exactly the bug this
+            argument was added to fix.
+        rec_score: Latest internal 0–100 recommendation score, if any.
     """
     if status in NEGATIVE_STATUSES:
         return ValenceEvidence(VALENCE_REMOVED, "removed", USER_EVIDENCE_WEIGHT)
@@ -167,6 +199,12 @@ def paper_valence_evidence(
         )
     if status == "library":
         return ValenceEvidence(VALENCE_LIBRARY, "library", USER_EVIDENCE_WEIGHT)
+    if n_engagements > 0:
+        return ValenceEvidence(
+            VALENCE_ENGAGEMENT,
+            "engagement",
+            ENGAGEMENT_EVIDENCE_WEIGHT,
+        )
     if rec_score is not None:
         return ValenceEvidence(score_valence(rec_score), "engine", ENGINE_EVIDENCE_WEIGHT)
     return None
@@ -177,6 +215,7 @@ def paper_valence(
     status: str,
     rating: int,
     n_negative_actions: int,
+    n_engagements: int,
     rec_score: float | None,
 ) -> float | None:
     """Resolve a paper's signals to one valence, strongest-user-first.
@@ -188,6 +227,7 @@ def paper_valence(
         status=status,
         rating=rating,
         n_negative_actions=n_negative_actions,
+        n_engagements=n_engagements,
         rec_score=rec_score,
     )
     return evidence.value if evidence is not None else None
