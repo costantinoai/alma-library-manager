@@ -35,6 +35,11 @@ export interface AuthorFieldEntry {
   /** Mean valence in [-1, +1] over this author's SIGNALLED papers; null when
    *  you have no signal on any of them. */
   v: number | null
+  /** How much `v` is to be believed, 0–1: 1.0 observed, the fitted field's
+   *  explained-variance fraction when inferred. */
+  c?: number
+  /** `observed` | `predicted` | `unknown`. */
+  src?: string
   /** Mean internal relevance score (0–100) over their SCORED papers. */
   score: number | null
   /** How many papers the valence rests on. */
@@ -67,6 +72,9 @@ export function useAuthorField(enabled: boolean): {
   points: Array<{ x: number; y: number; v: number }>
   /** Valence per author id — ONLY authors carrying a signal. */
   valenceById: ReadonlyMap<string, number>
+  /** Confidence per author id — travels with the valence so an inferred
+   *  author cannot be drawn as strongly as one you actually rated. */
+  confidenceById: ReadonlyMap<string, number>
   /** Live mean internal score per author id — the Score colour mode's source. */
   scoresById: ReadonlyMap<string, number>
   /** Evidence behind each valence, for the hover card. */
@@ -85,6 +93,7 @@ export function useAuthorField(enabled: boolean): {
 
   return useMemo(() => {
     const valenceById = new Map<string, number>()
+    const confidenceById = new Map<string, number>()
     const scoresById = new Map<string, number>()
     const entriesById = new Map<string, AuthorFieldEntry>()
     const points: Array<{ x: number; y: number; v: number }> = []
@@ -95,6 +104,7 @@ export function useAuthorField(enabled: boolean): {
       const key = a.id.trim().toLowerCase()
       entriesById.set(key, a)
       if (typeof a.v === 'number') valenceById.set(key, a.v)
+      if (typeof a.c === 'number') confidenceById.set(key, a.c)
       if (typeof a.score === 'number') scoresById.set(key, a.score)
       if (typeof a.v === 'number' && typeof a.x === 'number' && typeof a.y === 'number') {
         // Flipped once, here, into the plate convention every host draws in.
@@ -104,6 +114,7 @@ export function useAuthorField(enabled: boolean): {
     return {
       points,
       valenceById,
+      confidenceById,
       scoresById,
       entriesById,
       stats: query.data?.stats ?? null,

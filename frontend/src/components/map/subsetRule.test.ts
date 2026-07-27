@@ -109,7 +109,10 @@ describe('the library is a subset of the corpus', () => {
     const weak = buildTerrainGrid([{ x: 0.5, y: 0.5, v: 0.03 }])!
     const i = (Math.floor(0.5 * weak.size) * weak.size + Math.floor(0.5 * weak.size)) * 4
     const actual = [...weak.rgba.slice(i, i + 3)]
-    const expected = terrainColor(0.03)
+    // The grid paints `terrainColor(v / TERRAIN_SCALE_ABS_MAX)`. Comparing
+    // against `terrainColor(v)` silently assumed a ±1 domain and broke the
+    // moment the ramp was narrowed to the range valence actually occupies.
+    const expected = terrainColor(0.03 / TERRAIN_SCALE_ABS_MAX)
 
     expect(weak.absMax).toBe(TERRAIN_SCALE_ABS_MAX)
     expect(actual).toEqual(expected)

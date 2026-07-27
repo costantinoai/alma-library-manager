@@ -56,8 +56,8 @@ export interface MapField {
   /** Every score on the surface — for the legend's mean. */
   scores: ReadonlyMap<string, number>
   terrain: TerrainField
-  /** What the paper field was fitted from; null for author fields, which are
-   *  observed-only and predict nothing. */
+  /** What the field was fitted from. Paper only for now — the author field
+   *  predicts but does not yet ship a model summary. */
   model: SignalFieldModel | null
   isFetching: boolean
 }
@@ -103,11 +103,12 @@ export function useMapField({
         // terrain, not a smaller terrain.
         spacePoints: points,
         valenceById,
-        // Only the paper field is FITTED, so only it can report a value it
-        // inferred rather than observed. The author field is observed-only
-        // until task 64 Phase 2 generalises the estimator, so it passes no
-        // confidence and every author reads as fully believed.
-        confidenceById: isPaper ? signalField.confidenceById : undefined,
+        // BOTH fields are fitted now (task 64 Phase 2 generalised the
+        // estimator), so both report which values they inferred and how much
+        // they trust them.
+        confidenceById: isPaper
+          ? signalField.confidenceById
+          : authorField.confidenceById,
       }),
     [
       isPaper,
@@ -117,6 +118,7 @@ export function useMapField({
       points,
       valenceById,
       signalField.confidenceById,
+      authorField.confidenceById,
     ],
   )
 

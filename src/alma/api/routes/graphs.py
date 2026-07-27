@@ -1633,12 +1633,31 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
     lab = load_lab_map_context(conn)
 
     authors: list[dict] = []
+    # Observed valence first, then PREDICT the rest from author-centroid
+    # geometry with the same estimator the paper map uses (`terrain.fit_field`).
+    # Without this the author terrain was drawn from observed authors only —
+    # measured 2026-07-27: 17,960 authors on the map, 1,478 with a value, 8.2%.
+    # The other 91.8% were simply absent, and nothing on screen said so.
+    observed_valence: dict[str, float] = {}
+    for aid, entry in agg.items():
+        raw = aggregate_author_valence(entry["evidence"])
+        if raw is not None:
+            observed_valence[aid] = raw
+    predicted = _predict_author_valence(conn, agg, observed_valence, coords)
+
     vmin = float("inf")
     vmax = float("-inf")
     vsum = 0.0
     n_valenced = 0
     for aid, entry in agg.items():
-        raw_v = aggregate_author_valence(entry["evidence"])
+        raw_v = observed_valence.get(aid)
+        confidence = 1.0 if raw_v is not None else 0.0
+        source = "observed" if raw_v is not None else "unknown"
+        if raw_v is None:
+            guess = predicted.get(aid)
+            if guess is not None:
+                raw_v, confidence = guess
+                source = "predicted"
         keys = tuple(author_match_keys(names.get(aid, ""))) + (aid.strip().lower(),)
         raw_v = apply_lab_author_tint(raw_v, match_keys=keys, context=lab)
         v = round(raw_v, 3) if raw_v is not None else None
@@ -1647,6 +1666,8 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
             {
                 "id": aid,
                 "v": v,
+                "c": round(confidence, 3),
+                "src": source,
                 "score": round(entry["s_sum"] / entry["s_n"], 1) if entry["s_n"] else None,
                 # How much evidence the valence rests on — the hover card says so
                 # rather than presenting a 1-paper opinion as an author verdict.
@@ -1674,6 +1695,82 @@ def get_author_field(conn: sqlite3.Connection = Depends(get_db)):
         else None
     )
     return {"status": "ready", "authors": authors, "stats": stats}
+
+
+def _predict_author_valence(
+    conn: sqlite3.Connection,
+    agg: dict,
+    observed: dict[str, float],
+    coords: dict[str, tuple[float, float]],
+) -> dict[str, tuple[float, float]]:
+    """Predicted (valence, confidence) for authors carrying no signal of their own.
+
+    Same estimator as the paper terrain — `terrain.fit_field` — over author
+    CENTROID vectors instead of paper vectors. An author with no opinion of
+    their own but sitting among authors you consistently save now reads as
+    likely-relevant, at a confidence that says how much of that is inference.
+
+    Only authors placed on the map are predicted: an author with no coordinate
+    cannot be drawn, so predicting them is work with nowhere to go.
+
+    Engine evidence is excluded from the FIT for the same reason as the paper
+    field: ranking already feeds the terrain, and fitting on it would close the
+    loop on our own opinion. `aggregate_author_valence` mixes engine evidence
+    in at reduced weight, so only authors with at least one USER signal train.
+    """
+    from alma.application.terrain import fit_field
+    from alma.core.vector_blob import decode_vector
+    from alma.discovery.similarity import get_active_embedding_model
+
+    # `author_centroids.author_openalex_id` is stored LOWERCASE while
+    # `publication_authors.openalex_id` is uppercase, so every lookup folds.
+    # Comparing them raw silently matched nothing and the field stayed
+    # observed-only with no error (caught 2026-07-27 by measuring, not by a
+    # test — the endpoint answered 200 with a perfectly plausible payload).
+    raw_by_fold = {aid.strip().lower(): aid for aid in agg}
+    placed = {
+        fold for fold, aid in raw_by_fold.items() if coords.get(fold) and aid in agg
+    }
+    if not placed:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT author_openalex_id, centroid_blob FROM author_centroids WHERE model = ?",
+            (get_active_embedding_model(conn),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    vectors: dict[str, Any] = {}
+    for row in rows:
+        fold = str(row["author_openalex_id"] or "").strip().lower()
+        if not fold or fold not in placed:
+            continue
+        try:
+            vectors[fold] = np.asarray(decode_vector(row["centroid_blob"]), dtype=np.float32)
+        except Exception:  # noqa: BLE001 — one bad blob must not sink the field
+            continue
+
+    observed_folds = {aid.strip().lower() for aid in observed}
+    labels = [
+        (
+            aid.strip().lower(),
+            value,
+            float(agg[aid]["user_signal_papers"]) or 1.0,
+        )
+        for aid, value in observed.items()
+        if aid.strip().lower() in vectors and int(agg[aid]["user_signal_papers"]) > 0
+    ]
+    targets = [f for f in placed if f not in observed_folds and f in vectors]
+    predictions, _model = fit_field(
+        vectors=vectors, labels=labels, target_ids=targets
+    )
+    # Back to the caller's raw ids.
+    return {
+        raw_by_fold[fold]: value
+        for fold, value in predictions.items()
+        if fold in raw_by_fold
+    }
 
 
 def _build_author_network_payload(

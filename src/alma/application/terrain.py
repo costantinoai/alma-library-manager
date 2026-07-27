@@ -73,7 +73,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from alma.core.scope import Scope
 from alma.core.signal_valence import (
@@ -399,6 +399,28 @@ def _recency_weight(recorded_at: object, *, now: datetime) -> float:
     return float(0.5**half_lives)
 
 
+def fit_field(
+    *,
+    vectors: dict[str, Any],
+    labels: list[tuple[str, float, float]],
+    target_ids: list[str],
+) -> tuple[dict[str, tuple[float, float]], TerrainModelInfo]:
+    """THE terrain estimator. Entity-agnostic.
+
+    Takes ``{id: vector}``, ``[(id, observed_value, weight)]`` and the ids to
+    predict, and returns ``{id: (value, confidence)}``. It knows nothing about
+    papers or authors — which is what lets ONE estimator serve the paper map
+    and the author map instead of the author map having none at all (measured
+    2026-07-27: 17,960 authors on the map, 1,478 with a value, 8.2%).
+
+    Method and rationale in the module docstring: Gaussian process over a
+    cosine kernel, fitted in embedding space and never in the 2-D projection,
+    adaptive bandwidth, heteroscedastic ridge carrying the label weights, and
+    a posterior variance that becomes the reported confidence.
+    """
+    return _fit_core(vectors=vectors, labels=labels, target_ids=target_ids)
+
+
 def _fit_and_predict(
     conn: sqlite3.Connection,
     *,
@@ -411,15 +433,16 @@ def _fit_and_predict(
     cannot be trusted, rather than a degraded one — a field that quietly falls
     back to smoothing nothing looks identical to a field that worked.
     """
-    empty = TerrainModelInfo(False, len(labels), 0, 0, 0, None, LABEL_NOISE, None)
     if len(labels) < MIN_LABELS_TO_FIT:
         return {}, replace(
-            empty, reason=f"only {len(labels)} labels; need {MIN_LABELS_TO_FIT}"
+            TerrainModelInfo(False, len(labels), 0, 0, 0, None, LABEL_NOISE, None),
+            reason=f"only {len(labels)} labels; need {MIN_LABELS_TO_FIT}",
         )
     if not targets:
-        return {}, replace(empty, reason="nothing to predict")
-
-    import numpy as np
+        return {}, replace(
+            TerrainModelInfo(False, len(labels), 0, 0, 0, None, LABEL_NOISE, None),
+            reason="nothing to predict",
+        )
 
     from alma.application.graph_substrate import load_vectors_by_id
     from alma.discovery.similarity import get_active_embedding_model
@@ -427,9 +450,28 @@ def _fit_and_predict(
     model_key = get_active_embedding_model(conn)
     wanted = [row.paper_id for row in labels] + [row.paper_id for row in targets]
     vectors = load_vectors_by_id(conn, wanted, model_key)
+    return _fit_core(
+        vectors=vectors,
+        labels=[
+            (row.paper_id, float(row.value or 0.0), max(row.weight, 1e-3))
+            for row in labels
+        ],
+        target_ids=[row.paper_id for row in targets],
+    )
 
-    label_rows = [row for row in labels if row.paper_id in vectors]
-    target_rows = [row for row in targets if row.paper_id in vectors]
+
+def _fit_core(
+    *,
+    vectors: dict[str, Any],
+    labels: list[tuple[str, float, float]],
+    target_ids: list[str],
+) -> tuple[dict[str, tuple[float, float]], TerrainModelInfo]:
+    """Shared numerics. See :func:`fit_field` for the contract."""
+    import numpy as np
+
+    empty = TerrainModelInfo(False, len(labels), 0, 0, 0, None, LABEL_NOISE, None)
+    label_rows = [row for row in labels if row[0] in vectors]
+    target_rows = [pid for pid in target_ids if pid in vectors]
     if len(label_rows) < MIN_LABELS_TO_FIT:
         return {}, replace(
             empty,
@@ -441,9 +483,11 @@ def _fit_and_predict(
             empty, n_labels=len(label_rows), reason="no target has a vector"
         )
 
-    x_label = _unit_matrix(np.stack([vectors[row.paper_id] for row in label_rows]))
-    y_label = np.asarray([row.value for row in label_rows], dtype=np.float64)
-    w_label = np.asarray([max(row.weight, 1e-3) for row in label_rows], dtype=np.float64)
+    x_label = _unit_matrix(np.stack([vectors[pid] for pid, _, _ in label_rows]))
+    y_label = np.asarray([value for _, value, _ in label_rows], dtype=np.float64)
+    w_label = np.asarray(
+        [max(weight, 1e-3) for _, _, weight in label_rows], dtype=np.float64
+    )
 
     # Cosine distance among labels, then the adaptive bandwidth read off it.
     label_distance = np.clip(1.0 - (x_label @ x_label.T), 0.0, 2.0)
@@ -467,7 +511,7 @@ def _fit_and_predict(
     chunk = 2048
     for start in range(0, len(target_rows), chunk):
         window = target_rows[start : start + chunk]
-        x_target = _unit_matrix(np.stack([vectors[row.paper_id] for row in window]))
+        x_target = _unit_matrix(np.stack([vectors[pid] for pid in window]))
         cross = np.exp(-np.clip(1.0 - (x_target @ x_label.T), 0.0, 2.0) / bandwidth)
         mean = cross @ alpha
         # GP posterior: var = k(x,x) - kᵀ A k, and k(x,x) == 1 for this kernel,
@@ -475,8 +519,8 @@ def _fit_and_predict(
         # explain — i.e. confidence, already on [0, 1].
         explained = np.einsum("ij,jk,ik->i", cross, inverse, cross)
         confidence = np.clip(explained, 0.0, 1.0)
-        for row, value, conf in zip(window, mean, confidence, strict=True):
-            predictions[row.paper_id] = (
+        for pid, value, conf in zip(window, mean, confidence, strict=True):
+            predictions[pid] = (
                 float(np.clip(value, -1.0, 1.0)),
                 float(conf),
             )
