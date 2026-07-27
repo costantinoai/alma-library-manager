@@ -34,9 +34,7 @@ import {
   useMapSessionState,
 } from './mapSessionState'
 import { SemanticMap, type SemanticMapNode } from './SemanticMap'
-import { buildTerrainField } from './terrainField'
-import { useAuthorField } from './useAuthorField'
-import { useSignalField } from './useSignalField'
+import { useMapField } from './useMapField'
 import {
   EDGE_LAYER_COLORS,
   EDGE_LAYER_FALLBACK_COLOR,
@@ -237,8 +235,6 @@ export function GraphMapView({
   // (2026-07-26).
   const isPaperMap = endpoint === 'paper-map'
   const fieldNeeded = showTerrain || colourMode === 'score'
-  const signalField = useSignalField(fieldNeeded && isPaperMap)
-  const authorField = useAuthorField(fieldNeeded && !isPaperMap)
 
   // Which coordinate space this payload's dots live in. The Advanced knobs can
   // re-fit the layout (cluster detail → fresh UMAP, layout blend → fused
@@ -257,21 +253,30 @@ export function GraphMapView({
     )
   }, [params])
 
-  /** OpenAlex author ids are case-insensitive and the payload's casing does
-   *  not match the authors table's — fold before every id lookup. */
-  const nodeKey = (n: GraphNode) => n.id.trim().toLowerCase()
-
+  // ONE owner of field + terrain for every map surface (`useMapField`). This
+  // used to be inlined here AND in Discovery's FrontierMap, which is how the
+  // ±0.5 terrain domain reached one map and not the other.
+  const fieldNodes = useMemo(
+    () => nodes.map((n) => ({ id: n.id, x: n.x, y: n.y })),
+    [nodes],
+  )
+  const field = useMapField({
+    kind: isPaperMap ? 'paper' : 'author',
+    enabled: fieldNeeded,
+    nodes: fieldNodes,
+    frame: layoutFrame,
+    fallbackIsSubstrate: requestedDefaultLayout,
+  })
   const liveScore = useCallback(
     (n: GraphNode): number | null => {
-      if (isPaperMap) return signalField.scoresById.get(n.id) ?? null
-      // Live field first; the payload's baked score is the pre-load fallback
-      // so the hover card is never blank while the field is in flight.
-      const live = authorField.scoresById.get(nodeKey(n))
+      const live = field.scoreFor(n.id)
       if (typeof live === 'number') return live
+      // The payload's baked score is the pre-load fallback so a hover card is
+      // never blank while the field is in flight.
       const raw = n.metadata?.score
       return typeof raw === 'number' ? raw : null
     },
-    [isPaperMap, signalField.scoresById, authorField.scoresById],
+    [field],
   )
 
   const dataColour = useCallback(
@@ -283,12 +288,8 @@ export function GraphMapView({
         return yearRampColor(y, yearRange.lo, yearRange.hi)
       }
       if (colourMode === 'score') {
-        // Internal relevance score on its fixed 0–100 domain. SEQUENTIAL, not
-        // diverging: 20 is not "disliked", it is weakly ranked. Never-scored
-        // papers (no recommendation yet) stay recessive. The ramp lives in
-        // mapNodeStyle — this used to inline its own red/yellow/green mix,
-        // which both duplicated the maths and made Score indistinguishable
-        // from Terrain.
+        // Fixed 0–100 domain, SEQUENTIAL: 20 is not "disliked", it is weakly
+        // ranked. The ramp lives in mapNodeStyle.
         const s = liveScore(n)
         if (s == null) return MAP_INK.ambientSoft
         return `rgb(${scoreRampColor(s).join(',')})`
@@ -298,46 +299,7 @@ export function GraphMapView({
     [colourMode, yearRange, liveScore],
   )
 
-  // Author terrain: the live valence of each RENDERED author that carries one.
-  // Authors you have no signal on contribute NOTHING — they used to be pushed
-  // in as hard zeros, and in corpus scope ~90% of authors have no signal, so
-  // the splat's local mean was diluted to ≈0 everywhere and the terrain read as
-  // flat yellow (user catch 2026-07-26). Pale paper where you have no opinion
-  // is the honest render; the paper map can afford neutral filler because its
-  // substrate must stay hole-free, the author map cannot.
-  // ONE builder for both families (`terrainField.ts`): space-owned when the
-  // payload is in the substrate frame, joined onto THIS payload's nodes by id
-  // when it fitted its own. The author network was always the id-keyed case —
-  // its own layout space, payload always complete — which is exactly why it
-  // never had the frame bug the paper map did.
-  const terrain = useMemo(
-    () =>
-      buildTerrainField({
-        frame: isPaperMap ? layoutFrame : 'substrate',
-        fallbackIsSubstrate: !isPaperMap || requestedDefaultLayout,
-        nodes,
-        // Both families hand over the WHOLE space's points, at the space's own
-        // coordinates. Scope filters dots, never the field — the Library view of
-        // either map is a subset of the same terrain, not a smaller terrain.
-        spacePoints: isPaperMap ? signalField.points : authorField.points,
-        valenceById: isPaperMap ? signalField.valenceById : authorField.valenceById,
-        // Papers carry a fitted field, so a value may be inferred and must be
-        // drawn as such. The author field is observed-only, so it has no
-        // confidence to pass and every author reads as fully believed.
-        confidenceById: isPaperMap ? signalField.confidenceById : undefined,
-      }),
-    [
-      isPaperMap,
-      layoutFrame,
-      requestedDefaultLayout,
-      nodes,
-      signalField.points,
-      signalField.valenceById,
-      signalField.confidenceById,
-      authorField.points,
-      authorField.valenceById,
-    ],
-  )
+  const terrain = field.terrain
 
   // Colourbar stats — the numbers the legend owes the reader.
   const yearStats = useMemo(
@@ -523,10 +485,7 @@ export function GraphMapView({
             building || serverRebuilding
               ? 'building'
               : graphQuery.isFetching ||
-                  (fieldNeeded &&
-                    (isPaperMap
-                      ? signalField.isFetching
-                      : authorField.isFetching))
+                  (fieldNeeded && field.isFetching)
                 ? 'refreshing'
                 : 'idle'
           }
@@ -668,19 +627,19 @@ export function GraphMapView({
               mean={terrainStats.mean.toFixed(2)}
             />
           )}
-          {showTerrain && isPaperMap && signalField.model?.fitted && (
+          {showTerrain && field.model?.fitted && (
             // The terrain is mostly INFERRED, and a reader who thinks they are
             // looking at recorded opinions everywhere would badly misread it.
             // Say the split out loud: faint regions are the model guessing.
             <span
               className="text-slate-400"
               title={
-                `Fitted from ${signalField.model.n_labels.toLocaleString()} of your signals in ` +
+                `Fitted from ${field.model.n_labels.toLocaleString()} of your signals in ` +
                 `SPECTER2 space. Faded areas are low-confidence predictions, not recorded opinions.`
               }
             >
-              {signalField.model.n_observed.toLocaleString()} recorded ·{' '}
-              {signalField.model.n_predicted.toLocaleString()} inferred
+              {field.model.n_observed.toLocaleString()} recorded ·{' '}
+              {field.model.n_predicted.toLocaleString()} inferred
             </span>
           )}
           {showTerrain && terrain.frame === 'own' && (

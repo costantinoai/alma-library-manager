@@ -45,7 +45,7 @@ import {
 } from '@/components/map/mapSessionState'
 import { useRegionSelection } from '@/components/map/useRegionSelection'
 import { AuthorMapPanel } from '@/components/map/AuthorMapPanel'
-import { useSignalField } from '@/components/map/useSignalField'
+import { useMapField } from '@/components/map/useMapField'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 /** The two substrates this page can draw. */
@@ -193,8 +193,15 @@ export function MapPage() {
   // Live internal scores (same space-owned endpoint the terrain uses):
   // hover Score, region area score, and cluster "area scores" all read
   // from HERE, never from the cached layout payload.
-  const signalField = useSignalField(true)
-  const scoresById = signalField.scoresById
+  // Panel-side scores come from the SAME owner the plate uses, so a number in
+  // a side panel cannot disagree with the dot it describes.
+  const signalField = useMapField({
+    kind: 'paper',
+    enabled: true,
+    nodes: [],
+    fallbackIsSubstrate: true,
+  })
+  const scoresById = signalField.scores
   // Area score per cluster: mean live score of its scored papers.
   const clusterAreaScores = useMemo(() => {
     const acc = new Map<number, { sum: number; n: number }>()

@@ -46,8 +46,7 @@ import {
   useMapSessionSet,
   useMapSessionState,
 } from '@/components/map/mapSessionState'
-import { buildTerrainField } from '@/components/map/terrainField'
-import { useSignalField } from '@/components/map/useSignalField'
+import { useMapField } from '@/components/map/useMapField'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { branchMapColor } from '@/lib/palette'
 import { cn } from '@/lib/utils'
@@ -278,19 +277,17 @@ export function FrontierMap({
   // the whole space-owned field, off-view papers included. It still routes
   // through the shared builder so its terrain and the Map page's are the same
   // object with the same stats (`terrainField.ts`).
-  const signalField = useSignalField(showTerrain)
-  const terrain = useMemo(
-    () =>
-      buildTerrainField({
-        frame: 'substrate',
-        fallbackIsSubstrate: true,
-        nodes: [],
-        spacePoints: signalField.points,
-        valenceById: signalField.valenceById,
-        confidenceById: signalField.confidenceById,
-      }),
-    [signalField.points, signalField.valenceById, signalField.confidenceById],
-  )
+  // ONE owner of field + terrain for every map surface (`useMapField`). This
+  // block used to inline its own copy of the Map page's wiring, which is how
+  // the ±0.5 terrain domain reached that map and not this one.
+  const field = useMapField({
+    kind: 'paper',
+    enabled: showTerrain,
+    nodes: [],
+    frame: 'substrate',
+    fallbackIsSubstrate: true,
+  })
+  const terrain = field.terrain
 
   const yearStats = useMemo(
     () => summarizeValues(nodes.map((n) => Number(n.year)).filter((y) => y > 1800)),
@@ -540,7 +537,7 @@ export function FrontierMap({
             phase={
               building
                 ? 'building'
-                : query.isFetching || (showTerrain && signalField.isFetching)
+                : query.isFetching || (showTerrain && field.isFetching)
                   ? 'refreshing'
                   : 'idle'
             }
