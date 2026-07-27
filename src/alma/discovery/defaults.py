@@ -170,7 +170,7 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "paper_signal_weights.topic_alignment": "0.20",
     "paper_signal_weights.embedding_sim": "0.25",
     "paper_signal_weights.author_alignment": "0.15",
-    "paper_signal_weights.signal_lab": "0.10",
+    "paper_signal_weights.feedback_events": "0.10",
     "paper_signal_weights.recency": "0.10",
     # D12 candidate-author composite (score of a candidate surfaced by
     # openalex_related / s2_related). Also uses the redistribution

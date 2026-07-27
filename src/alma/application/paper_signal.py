@@ -25,7 +25,9 @@ Signals blended:
   embedding_sim   — cos(paper_vec, library_centroid), [-1,1]→[0,1]
   author_alignment— max cos(author_centroid, library_centroid) over
                     this paper's authors that have cached centroids
-  signal_lab      — net decayed positive feedback events on the paper
+  feedback_events — net decayed positive feedback events on the paper
+                    (named `signal_lab` until 2026-07-27, which was simply
+                    wrong: it never read a Signal Lab round)
   recency         — half-life decay over publication_date (2yr)
 """
 
@@ -52,13 +54,13 @@ _COMPONENT_NAMES: tuple[str, ...] = (
     "topic_alignment",
     "embedding_sim",
     "author_alignment",
-    "signal_lab",
+    "feedback_events",
     "recency",
 )
 
 _RECENCY_HALF_LIFE_DAYS = 730.0  # ~2 years
-_SIGNAL_LAB_DECAY_HALF_LIFE_DAYS = 180.0
-_SIGNAL_LAB_SATURATION = 5.0  # net events at which signal_lab = 1.0
+_FEEDBACK_DECAY_HALF_LIFE_DAYS = 180.0
+_FEEDBACK_SATURATION = 5.0  # net events at which feedback_events = 1.0
 _POSITIVE_EVENTS = {"love", "like", "add", "reaction_positive", "swipe_right", "triage_pick"}
 _NEGATIVE_EVENTS = {"dislike", "remove", "reaction_negative", "swipe_left"}
 
@@ -460,7 +462,7 @@ def score_papers_batch(
         if signal == 0.0:
             continue
         age_days = _days_since(row["created_at"], now)
-        decay = age_decay(age_days, half_life_days=_SIGNAL_LAB_DECAY_HALF_LIFE_DAYS)
+        decay = age_decay(age_days, half_life_days=_FEEDBACK_DECAY_HALF_LIFE_DAYS)
         sig_lab[str(row["entity_id"])] = (
             sig_lab.get(str(row["entity_id"]), 0.0) + signal * decay
         )
@@ -489,9 +491,9 @@ def score_papers_batch(
             present["author_alignment"] = True
 
         if pid in sig_lab:
-            raw = sig_lab[pid] / _SIGNAL_LAB_SATURATION
-            components["signal_lab"] = max(0.0, min(1.0, (raw + 1.0) / 2.0))
-            present["signal_lab"] = True
+            raw = sig_lab[pid] / _FEEDBACK_SATURATION
+            components["feedback_events"] = max(0.0, min(1.0, (raw + 1.0) / 2.0))
+            present["feedback_events"] = True
 
         if meta["publication_date"]:
             age = _days_since(meta["publication_date"], now)

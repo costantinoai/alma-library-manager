@@ -1407,6 +1407,36 @@ def _m_0037_finalize_discovery_observation_schema(conn: sqlite3.Connection) -> N
     _finalize_discovery_observation_schema(conn)
 
 
+def _m_0038_rename_paper_signal_feedback_weight(conn: sqlite3.Connection) -> None:
+    """`paper_signal_weights.signal_lab` never had anything to do with Signal Lab.
+
+    It is the composite paper-signal's net-decayed-feedback-events component,
+    computed from `feedback_events` and read by author-suggestion seeding. The
+    name invited exactly one mistake: tuning it expecting the Signal Lab game's
+    influence to change, when the game never touched it. Renamed to
+    `paper_signal_weights.feedback_events`.
+
+    A stored value is carried across so a user's tuning survives; the old row is
+    dropped so the forward-only reader has one key to look for, not two.
+    """
+    row = conn.execute(
+        "SELECT value FROM discovery_settings WHERE key = 'paper_signal_weights.signal_lab'"
+    ).fetchone()
+    if row is not None:
+        conn.execute(
+            """
+            INSERT INTO discovery_settings (key, value, updated_at)
+            VALUES ('paper_signal_weights.feedback_events', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (row[0],),
+        )
+    conn.execute(
+        "DELETE FROM discovery_settings WHERE key = 'paper_signal_weights.signal_lab'"
+    )
+
+
 MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "papers_columns", _m_0001_papers_columns),
     (2, "papers_status_relabels", _m_0002_papers_status_relabels),
@@ -1445,6 +1475,7 @@ MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (35, "cluster_placement_provenance", _m_0035_cluster_placement_provenance),
     (36, "discovery_ranking_observations", _m_0036_discovery_ranking_observations),
     (37, "finalize_discovery_observation_schema", _m_0037_finalize_discovery_observation_schema),
+    (38, "rename_paper_signal_feedback_weight", _m_0038_rename_paper_signal_feedback_weight),
 ]
 
 #: The schema version a fully-migrated (or freshly-bootstrapped) DB carries.
