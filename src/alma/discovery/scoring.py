@@ -208,6 +208,72 @@ def load_settings(conn: sqlite3.Connection) -> dict[str, str]:
     return kv
 
 
+TITLE_FALLBACK_TOPIC_SCORE = 0.3
+"""Weight given to a word plucked out of a title when nothing better exists."""
+
+TITLE_FALLBACK_MIN_WORD_LENGTH = 4
+"""Shorter tokens are function words; embedding them buys noise."""
+
+_TOPIC_TOKEN_STRIP = ".,;:!?()[]{}\"'"
+
+
+def resolve_candidate_topics(
+    candidate: dict,
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
+    """THE topic terms a candidate will be SCORED on, in priority order.
+
+    One owner, two callers, and that is the whole point. The scorer resolves
+    topics through three fallbacks — the candidate's own list, the stored
+    `publication_topics` rows, then tokens off the title/abstract — while the
+    refresh separately pre-warms the topic-embedding cache so the semantic
+    overlap does not pay one SPECTER2 forward per term.
+
+    Those two pieces of code used to derive the term list independently, and
+    they disagreed: the warm-up read only `candidate["topics"]`, so a candidate
+    with no curated topics fell through to ~80 title tokens that had never been
+    warmed, and `compute_topic_overlap` embedded each of them ONE AT A TIME.
+    Measured 2026-07-27: ~2.6 s per candidate, ~480 s to score a 185-candidate
+    deck. Task 19 F1 had already fixed this once for the curated-topic path; the
+    fallback path silently reintroduced it because the knowledge lived in two
+    places.
+
+    So the resolution lives here and both callers ask for it. A future fallback
+    can only be added in one place, and the warm-up gets it for free.
+
+    Args:
+        candidate: The merged candidate dict.
+        conn: Open connection, when the stored-topics lookup should be tried.
+            Omit it in the warm-up pass, which works from candidate dicts only.
+
+    Returns:
+        ``[{"term": str, "score": float}, ...]``, possibly empty.
+    """
+    topics: list[dict] = list(candidate.get("topics") or [])
+    if topics:
+        return topics
+
+    paper_id = str(candidate.get("id") or "").strip()
+    if conn is not None and paper_id:
+        try:
+            rows = conn.execute(
+                "SELECT term, score FROM publication_topics WHERE paper_id = ?",
+                (paper_id,),
+            ).fetchall()
+            topics = [{"term": r["term"], "score": r["score"]} for r in rows]
+        except sqlite3.OperationalError:
+            topics = []
+    if topics:
+        return topics
+
+    words = _pub_text(candidate).lower().split()
+    return [
+        {"term": token, "score": TITLE_FALLBACK_TOPIC_SCORE}
+        for token in (w.strip(_TOPIC_TOKEN_STRIP) for w in words)
+        if len(token) >= TITLE_FALLBACK_MIN_WORD_LENGTH
+    ]
+
+
 def compute_preference_profile(
     conn: sqlite3.Connection,
     positive_pubs: list[dict],
@@ -569,27 +635,7 @@ def score_candidate(
         source_relevance = min(1.0, source_relevance / 100.0)
 
     # -- 2. Topic score --
-    paper_topics: list[dict] = candidate.get("topics", [])
-    if not paper_topics:
-        paper_id = candidate.get("id", "")
-        if paper_id:
-            try:
-                rows = conn.execute(
-                    "SELECT term, score FROM publication_topics WHERE paper_id = ?",
-                    (paper_id,),
-                ).fetchall()
-                paper_topics = [{"term": r["term"], "score": r["score"]} for r in rows]
-            except sqlite3.OperationalError:
-                pass
-
-    if not paper_topics:
-        text = _pub_text(candidate)
-        words = text.lower().split()
-        paper_topics = [
-            {"term": w.strip(".,;:!?()[]{}\"'"), "score": 0.3}
-            for w in words
-            if len(w.strip(".,;:!?()[]{}\"'")) >= 4
-        ]
+    paper_topics = resolve_candidate_topics(candidate, conn)
 
     topic_score = (
         sim_module.compute_topic_overlap(

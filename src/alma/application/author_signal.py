@@ -811,8 +811,17 @@ def build_discovery_author_affinity(
             _register(name, signal.affinity)
 
     # Name-only authors (no resolved OpenAlex ID).
+    #
+    # Flatten the resolved names ONCE. The membership test used to be
+    # `any(name in names for names in ctx.names_by_oid.values())`, re-walking
+    # every resolved author's name set for every name-only author — O(names x
+    # oids). On the dev corpus that generator ran 151,986,728 times and cost
+    # ~7 s of a 7.8 s preference-profile build, which by itself exceeded the
+    # 8 s retrieval-lane cap and meant the external lane was cut off on EVERY
+    # refresh (measured 2026-07-27).
+    resolved_names = {name for names in ctx.names_by_oid.values() for name in names}
     for name in ctx.stats_by_name:
-        if any(name in names for names in ctx.names_by_oid.values()):
+        if name in resolved_names:
             continue
         signal = ctx.signal_for(author_name=name, exclude=stable)
         if signal is not None:

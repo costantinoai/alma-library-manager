@@ -16,12 +16,14 @@ from typing import Any
 from alma.core.concurrency import bounded_thread_pool
 from alma.core.db_retry import commit_with_retry
 from alma.core.paper_groups import resolve_paper_root_id
+from alma.core.settings_helpers import setting_float
 from alma.core.sql_helpers import standalone_paper_sql
 from alma.core.time import utcnow
 from alma.core.utils import resolve_existing_paper_id
 from alma.discovery import similarity as sim_module
 from alma.discovery.scoring import (
     compute_preference_profile,
+    resolve_candidate_topics,
 )
 from alma.discovery.scoring import (
     load_settings as load_scoring_settings,
@@ -474,6 +476,48 @@ def refresh_lens_recommendations(
             except Exception:
                 pass
 
+    lane_label_by_name = {name: label for name, label, _ in lane_specs}
+    # A backstop against pathological local computation, not a normal budget —
+    # and a setting, because when it was a hardcoded 8.0 it silently became the
+    # binding constraint on the external lane. Read through the canonical
+    # settings reader; there is exactly one of those.
+    lane_deadline_s = setting_float(
+        scoring_settings, "limits.lane_deadline_seconds", 30.0, 5.0, 300.0
+    )
+
+    def _fail_lane_subtask(lane_name: str, reason: str) -> None:
+        """Record a lane that produced nothing, in the log AND in Activity.
+
+        Both destinations on purpose: the Python log is for whoever is tailing
+        the server, the subtask status and the parent's Activity entry are for
+        the person looking at the refresh and wondering why their deck is thin.
+        """
+        pretty = lane_label_by_name.get(lane_name, lane_name)
+        logger.warning("lens lane %s produced nothing: %s", lane_name, reason)
+        if not parent_job_id:
+            return
+        from alma.api.scheduler import add_job_log as _add_job_log
+        from alma.api.scheduler import set_job_status as _set_job_status
+
+        try:
+            _set_job_status(
+                f"{parent_job_id}_lane_{lane_name}",
+                status="failed",
+                finished_at=utcnow().isoformat(),
+                error=reason,
+                message=f"{pretty} retrieval failed: {reason}",
+                parent_job_id=parent_job_id,
+            )
+            _add_job_log(
+                parent_job_id,
+                f"Lane '{pretty}' contributed no candidates: {reason}",
+                level="ERROR",
+                step=f"lane.{lane_name}.failed",
+                data={"lane": lane_name, "reason": reason},
+            )
+        except Exception:
+            logger.debug("lane failure bookkeeping failed for %s", lane_name, exc_info=True)
+
     lane_results: dict[str, Any] = {}
     lane_pool = bounded_thread_pool(4, thread_name_prefix="lens-lane-top")
     try:
@@ -483,16 +527,22 @@ def refresh_lens_recommendations(
         }
         done, _pending = wait(
             fut_to_name,
-            timeout=_LANE_HARD_CAP_S,
+            timeout=lane_deadline_s,
         )
         for fut, name in fut_to_name.items():
             if fut not in done:
-                logger.warning(
-                    "lens lane %s exceeded the %.1fs local-read deadline",
+                # A lane that misses the deadline costs the deck an entire
+                # retrieval family. That MUST be visible: previously this was a
+                # bare `logger.warning`, so the subtask row stayed "running"
+                # forever, Activity showed no error, and the only symptom was a
+                # thinner deck with no explanation (CLAUDE.md → no silent
+                # failures). Note the thread is NOT stopped — a running future
+                # cannot be cancelled — it is abandoned, and says so.
+                _fail_lane_subtask(
                     name,
-                    _LANE_HARD_CAP_S,
+                    f"exceeded the {lane_deadline_s:.0f}s local-read deadline "
+                    f"and was abandoned; this deck was built WITHOUT it",
                 )
-                fut.cancel()
                 lane_results[name] = (
                     ([], {}) if name in ("graph", "external") else []
                 )
@@ -500,7 +550,7 @@ def refresh_lens_recommendations(
             try:
                 lane_results[name] = fut.result()
             except Exception as exc:
-                logger.warning("lens lane %s failed: %s", name, exc)
+                _fail_lane_subtask(name, f"{type(exc).__name__}: {exc}")
                 lane_results[name] = (
                     ([], {}) if name in ("graph", "external") else []
                 )
@@ -704,16 +754,22 @@ def refresh_lens_recommendations(
         # active local space; cosine across model spaces is meaningless even
         # when dimensions happen to match.
         for key, candidate in merged.items():
-            vector = candidate.get("specter2_embedding")
+            # NOT `vector` — that name holds the vector LANE's results for the
+            # rest of this function. Shadowing it here made
+            # `retrieval_summary.channels.vector` report the last candidate's
+            # embedding length instead of the lane's candidate count, and threw
+            # `TypeError: object of type 'NoneType' has no len()` outright
+            # whenever the last candidate had no embedding (2026-07-27).
+            transported = candidate.get("specter2_embedding")
             model = str(candidate.get("specter2_model") or "").strip()
-            if vector is None:
+            if transported is None:
                 continue
             if model != active_embedding_model:
                 candidate["embedding_model_compatible"] = False
                 incompatible_embedding_count += 1
                 continue
             try:
-                decoded = np.asarray(vector, dtype=np.float32)
+                decoded = np.asarray(transported, dtype=np.float32)
             except (TypeError, ValueError):
                 continue
             if decoded.ndim != 1 or decoded.size == 0:
@@ -925,11 +981,16 @@ def refresh_lens_recommendations(
     # SPECTER2 model takes tens of seconds to satisfy. Doing one big
     # `provider.embed(all_terms)` call warms the cache in ~O(1) network
     # round-trip, after which the per-term lookup is a dict hit.
+    #
+    # The term list comes from `resolve_candidate_topics` — the same owner the
+    # SCORER asks. This loop used to read `candidate["topics"]` directly, which
+    # meant it never warmed the title-token fallback, and every candidate with
+    # no curated topics paid ~80 single-term forwards after all (2026-07-27).
     phase_started = perf_counter()
     if user_topic_embeddings is not None and _topic_provider is not None:
         candidate_topic_terms: set[str] = set()
         for candidate in merged.values():
-            for t in (candidate.get("topics") or []):
+            for t in resolve_candidate_topics(candidate, db):
                 term = (t.get("term") or "").strip().lower()
                 if term and term not in sim_module._topic_embedding_cache:
                     candidate_topic_terms.add(term)
@@ -1540,7 +1601,3 @@ def refresh_lens_recommendations(
         "retrieval_summary": retrieval_summary,
         "inserted": inserted,
     }
-
-
-# Backstop for pathological local computation. Network never runs in refresh.
-_LANE_HARD_CAP_S: float = 8.0
