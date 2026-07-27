@@ -316,6 +316,36 @@ A frontier row is a **lead, not a corpus citizen**. It carries no membership
 state, so it never enters the map, Insights counts, dedup, or any preference
 query. It is promoted into `papers` only when actually staged as a suggestion.
 
+**Building it.** `frontier.run_frontier_maintenance` is the single owner of the
+three-phase sequence (bibliographic coupling → query/taste leads → S2 vector
+fill) and of the commit between phases — each phase gathers over HTTP with no
+transaction open, writes, then commits before the next phase's network calls
+begin. Two callers, one implementation: the periodic citation-graph job, and
+`POST /discovery/frontier/rebuild` for building it on demand. Until 2026-07-27
+only the periodic job existed, so a machine that had never hit that schedule had
+an empty frontier and a dense lane that could only re-rank the corpus. First
+build on the dev corpus: **0 → 479 leads, 394 with vectors.**
+
+### The lane deadline
+
+The four lanes run concurrently under `limits.lane_deadline_seconds`
+(default 30). It is a backstop against pathological *local* computation —
+network collection belongs to the offline builder, so no lane should come close.
+
+It was a hardcoded 8.0 and that made it a binding constraint rather than a
+backstop. The external lane's first act is to wait for the shared preference
+profile; that profile took 7.8 s, so external burned its whole budget waiting
+and was abandoned **on every refresh**, by construction. The deck was quietly
+built from three lanes. Fixing the profile's quadratic author scan (7.8 s →
+3.6 s) and raising the ceiling to a setting fixed it; external now completes in
+~18–20 s.
+
+A lane that misses the deadline now writes an Activity entry and marks its
+subtask failed, naming the lane, the deadline, and the consequence. Previously
+it logged a warning and nothing else, so the subtask row read `running` forever
+and the only symptom was a thinner deck. The thread is **abandoned, not
+cancelled** — a running future cannot be cancelled — and the message says so.
+
 ### Personalized PageRank
 
 A random walker starts on your Library (or only your loved papers), follows
@@ -393,14 +423,32 @@ aggregates topic and author affinity from `preference_profiles` and only
 produces a non-zero value past a minimum interaction count, ramping from 0.3 to
 1.0 over 2–10 interactions.
 
-**Its measured state is worth stating plainly.** On the dev database it is the
-constant `0.500` on 198 of 233 scored rows — 85% — because Signal Lab has only
-17 answered rounds. It carries weight 0.10 on a feature with essentially no
-variance. That is not a weighting problem to be tuned away; it is an empty
-input. The fix is upstream (more rounds, or replacing the signal with the
-K-dimensional cluster-anchored vector, which carries the same "which region of
-the field is this, and do I like that region" information without needing game
-rounds at all).
+**It was broken, and the way it was broken is instructive** (fixed
+2026-07-27). On the dev database it read the constant `0.500` on 198 of 233
+scored rows, and everything else sat within ~0.015 of it — a signal carrying
+weight 0.10 with a standard deviation of 0.004. The obvious reading was an
+empty input, and the obvious fix was to drop the weight.
+
+Both were wrong. 183 of 215 candidates *do* match a topic or author in
+`preference_profiles`. The information was there; the arithmetic destroyed it.
+`confidence` is `min(1, interaction_count / 20)` — a *per-entity reliability* —
+and the code summed `weight × confidence` then divided by the COUNT of matches.
+That turns a reliability into a multiplier on the output. On a personal corpus
+an individual topic or author is seen once or twice, so confidence sits at
+0.05–0.15, and a strongly-liked topic seen twice contributed `0.3 × 0.1 = 0.03`.
+
+Dividing by the total confidence instead makes it a confidence-weighted **mean**
+of affinities, which is what a confidence is for: a well-evidenced entity
+outvotes a thin one, and the result keeps `affinity_weight`'s full `[-1, 1]`
+range. Global caution stays in `volume_scale`, which reads the whole profile's
+interaction count rather than one entity's.
+
+Measured over the same 215 candidates: exactly-`0.500` falls from 198/233 to
+59/215 (those are genuine no-match), the range opens from 0.36 to 0.94, and the
+standard deviation goes from ~0.004 to 0.149.
+
+The lesson generalises: **a feature pinned near a constant is a bug report, not
+a weighting problem.** Re-weighting it would have hidden the defect permanently.
 
 ### 7.4 What Signal Lab may never do
 
@@ -415,6 +463,32 @@ refactors rather than depending on reviewer memory.
 The same reasoning admits PPR: seeding a walk reads Library membership as a node
 *attribute* to choose a starting distribution. It is retrieval targeting, which
 is ranking, not geometry.
+
+### 7.5 Promotion verdict, 2026-07-27: not yet
+
+`weights.lab_region_offset`, `weights.lab_utility` and `weights.lab_author_offset`
+are all `0.0`, so today's build is byte-identical to a lab-less one
+(`load_lab_scoring_context` early-returns `None` when both scoring weights are
+≤ 0). D20 requires manual promotion on **held-out** evidence. The evidence was
+evaluated and does not support promotion:
+
+| Check | Measured | Needed |
+|---|---|---|
+| Held-out preference pairs | **0** | enough to test at all |
+| Regions ever seen in a round | 11 of 32 | most of the map |
+| Region-boundary edges observed | 4 of 26 | — |
+| Authors the head moves | 0 | non-zero |
+| Candidates entering the top-20 if promoted | 0 | — |
+| Mean rank displacement if promoted | 0.34 | — |
+
+The first row is decisive on its own: 20 rounds produced exactly one holdout
+round, and it yielded no usable pairs, so there is literally nothing to test the
+head against. The last two rows say the argument is moot anyway — promoting
+today would reorder essentially nothing.
+
+**The gate to re-check:** a non-empty holdout (target ≥ 30 pairs) where
+`utility_accuracy` beats `prior_accuracy` by a margin that survives a binomial
+test at that sample size. Read it from `GET /signal-lab/eval`.
 
 ---
 
@@ -438,6 +512,57 @@ is ranking, not geometry.
 | OpenAlex query construction | `discovery/openalex_related.py` |
 | S2 transport + field contracts | `discovery/semantic_scholar.py` |
 | Signal Lab heads | `application/signal_lab/` |
+
+## 9. Terrain: the preference field over the map
+
+Terrain is a **read-time tint**, not part of ranking, and it is the one place a
+model predicts your preference over the whole corpus rather than over a
+candidate deck.
+
+Before 2026-07-27 it was a per-point lookup: each substrate point resolved its
+own signals through `core/signal_valence.py` and nothing else. On the dev corpus
+that left **9,437 of 9,736 points (96.9%) at exactly 0.0** — a scatter of labels
+rendered as if it were a landscape.
+
+`application/terrain.py` adds the spatial model:
+
+- **Gaussian-process regression over a cosine kernel**, fitted in 768-d SPECTER2
+  space. Not in the 2-D UMAP projection: UMAP distorts distance by construction,
+  so a model fitted on the picture learns the projection's artifacts. Render at
+  the 2-D position, infer in embedding space.
+- **Kernel, not plain ridge.** ~350 labels against 768 dimensions is p≫n, the
+  same trap the ranker is in, and a linear head cannot express "I like A and C
+  but not the B between them" — the ordinary shape of a research interest.
+- **Adaptive bandwidth**: the median cosine distance from a label to its 5th
+  nearest fellow label, clamped to `[0.02, 0.60]`. Read off the label geometry
+  rather than configured, so the field tightens by itself as the library grows.
+- **Heteroscedastic ridge** (`λ = 0.15`, divided by each label's weight), which
+  is how time decay and evidence strength enter: believe a stale or weak label
+  less without touching its value.
+- **Predictive variance is the point.** With `k(x,x) = 1` the posterior variance
+  is `1 − kᵀA k`, so the quadratic form *is* the fraction of prior variance the
+  labels explain — a confidence already on `[0, 1]`, for free from the same
+  inverse. Label propagation would have given a smoothed value with no
+  calibrated uncertainty, which is why it was skipped rather than shipped first.
+
+Below `MIN_LABELS_TO_FIT = 12` nothing is predicted and the payload states the
+reason. A missing table raises rather than returning an empty field — a schema
+fault must not render as "you have no opinions yet".
+
+`GET /graphs/signal-field` returns per point: `v` (value), `c` (confidence),
+`src` (`rating` / `library` / `engagement` / `removed` / `negative_action` /
+`engine` / `predicted` / `unknown`), plus a `model` block naming what was fitted.
+
+**Two exclusions, both deliberate.** Engine `rec_score` renders but does not
+train — ranking already feeds terrain through it, and fitting on it would close
+a loop on our own opinion. Author/venue/topic affinity are ranking signals, not
+geometry; a second recommender wearing a colour ramp is not a terrain.
+
+Measured on the dev corpus after the change: points at exactly 0.0 fall
+**9,437 → 15**, fitted from 188 user labels, bandwidth 0.067, median predicted
+confidence 0.18 — most of a corpus really is far from anything you have rated.
+
+---
 
 ## See also
 

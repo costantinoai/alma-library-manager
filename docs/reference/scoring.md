@@ -199,14 +199,27 @@ Range before normalization: -1…+1. The weighted scorer stores it as a
 
 ### `preference_affinity`
 
-Distance from the candidate's vector to the lens's
-`preference_profiles` centroid (a learned projection of your
-positive-rated saves). Lower distance → higher score.
+A **confidence-weighted mean of your recorded affinities** for the entities this
+candidate touches — its topics, its authors, and the source it came from — read
+from `preference_profiles` (`feedback_substrate.get_preference_affinity_signal`).
+It is not a vector distance; every entity that matches a profile row contributes
+its `affinity_weight`, weighted by that row's `confidence`:
 
-Computed as $1 - \text{cosine\_distance}$, with optional
-non-linear calibration to spread out the top.
+$$\text{raw} = \frac{\sum_i w_i c_i}{\sum_i c_i} \times \text{volume\_scale}$$
 
-Range: 0…1. Available only when embeddings are enabled.
+where $w_i \in [-1, 1]$ is the stored affinity, $c_i = \min(1,\,n_i/20)$ is that
+entity's reliability from its own interaction count, and `volume_scale` ramps
+0.3 → 1.0 over 2–10 interactions across the *whole* profile. Shifted to
+$[0, 1]$ for the breakdown, so **0.500 means "no matching evidence"**.
+
+Dividing by $\sum c_i$ rather than by the match count matters more than it
+looks: until 2026-07-27 the code divided by the count, which turned a per-entity
+reliability into a multiplier on the output. On a personal corpus an entity is
+seen once or twice, so $c \approx 0.05$–$0.15$, and the signal was pinned within
+±0.015 of 0.500 on 85% of rows. See
+[discovery-pipeline §7.3](./discovery-pipeline.md) for the full diagnosis.
+
+Range: 0…1. Requires `preference_profiles` to have entries; no embeddings needed.
 
 ### Two more weights
 
@@ -215,9 +228,11 @@ the UI exposes:
 
 * **`source_relevance` boost per channel** — per-channel multipliers
   used by the retrieval phase before the global scorer.
-* **`usefulness_boost`** — a small explicit per-source bonus that
-  lets you say "I trust S2 recs more than topic search" without
-  changing the channel weights.
+* **`usefulness_boost`** — **diagnostic only.** It is still measured and shown
+  in the score breakdown, but carries `weight: 0.0` and contributes nothing to
+  the score; the breakdown marks it `diagnostic_only` and the UI labels the row
+  so an empty bar cannot be mistaken for "measured zero". Its two atoms
+  (`novelty`, `metadata_quality`) remain logged as reward features.
 
 ## Multi-source consensus bonus
 
@@ -374,8 +389,8 @@ final 0–100 score. Source of truth:
 | `author_affinity` | 0.15 | ~13% | Has the candidate's author appeared in your library or follow list? Log-prevalence weighted so a single dominant author can't crowd the long tail. |
 | `recency_boost` | 0.10 | ~9% | Newer papers get a bump (linear decay over `recency_window_years`, default 10). Reads `year`, falls back to `publication_date[:4]`. |
 | `feedback_adj` | 0.10 | ~9% | Liked / disliked papers and their projected graph neighbours. |
-| `preference_affinity` | 0.10 | ~9% | Distance from your `preference_profiles` centroid. |
-| `usefulness_boost` | 0.06 | ~5% | Explicit per-source bonus, partly tied to recency and citation_quality. |
+| `preference_affinity` | 0.10 | ~9% | Confidence-weighted mean of your recorded affinity for this candidate's topics, authors and source. 0.500 = no matching evidence. |
+| `usefulness_boost` | **0.00** | 0% | **Diagnostic only** — measured and shown, contributes nothing. Marked `diagnostic_only` in the breakdown. |
 | `journal_affinity` | 0.05 | ~4% | Does the candidate's venue appear often in your library (log-prevalence). |
 | `citation_quality` | 0.05 | ~4% | `log(effective_citations + 1) / log(1000)` where `effective_citations = max(cited_by_count, 2 * influential_citation_count)`. |
 

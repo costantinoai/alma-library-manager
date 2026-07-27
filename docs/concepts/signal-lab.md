@@ -223,6 +223,36 @@ The settings model strictly validates activation, map tint, promotion points,
 ring decay, exploration, coverage, refit cadence, holdout share, and override
 votes.
 
+## Promotion verdict, 2026-07-27: not yet
+
+All three scoring weights (`weights.lab_region_offset`, `weights.lab_utility`,
+`weights.lab_author_offset`) are `0.0`, so the shipping build is byte-identical
+to one with no Signal Lab at all — `load_lab_scoring_context` early-returns
+`None` when both scoring weights are ≤ 0. That is D20 working as designed:
+promotion is a deliberate act on held-out evidence, never a side effect of
+fitting.
+
+The evidence was evaluated on 2026-07-27 and does not support promotion:
+
+| Check | Measured |
+|---|---|
+| Held-out preference pairs | **0** |
+| Regions ever seen in a round | 11 of 32 |
+| Region-boundary edges observed | 4 of 26 |
+| Authors the head moves | 0 |
+| Candidates entering the top-20 if promoted | 0 |
+| Mean rank displacement if promoted | 0.34 |
+
+The first row settles it: 20 rounds produced exactly one holdout round, and it
+yielded no usable pairs, so there is nothing to test the head against. The last
+two rows say the question is moot today anyway — promoting would reorder
+essentially nothing.
+
+**Re-check when** the holdout is non-empty (target ≥ 30 pairs) and
+`utility_accuracy` beats `prior_accuracy` by a margin that survives a binomial
+test at that sample size. Read it from `GET /signal-lab/eval`. Play more rounds
+first; the map is two-thirds unvisited.
+
 ## Evaluation evidence
 
 `scripts/simulate_signal_lab.py` drives the shipping full-outcome EIG and

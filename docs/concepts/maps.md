@@ -88,7 +88,7 @@ The exact legend varies by host, but the channels do not:
 | Dashed halo | A secondary fact such as followed/new, never a replacement colour |
 | Colour | The selected grouping or score mode |
 | Size | The selected magnitude, such as citations or publication count |
-| Terrain | A smoothed live preference field from likes, loves, dislikes, saves, removals, and engine scores |
+| Terrain | A fitted preference field: your recorded signals, plus a prediction wherever you have not given one |
 
 Cluster words and place names share one collision-aware label pass. Advanced
 controls tune cluster detail, dot size, dot opacity, **Terrain opacity**, word
@@ -99,6 +99,63 @@ positive population cannot stretch its own small maximum to full green.
 Terrain is a translucent overlay on the ordinary map-paper background; it does
 not replace the whole plate with the ramp's yellow midpoint. The shared
 opacity control changes only the overlay, never dots, labels, or positions.
+
+### Recorded and inferred are not the same colour
+
+Terrain used to be a scatter of labels with a blur applied. Every point looked
+up only its own signals, so a paper with nothing recorded against it drew at
+dead neutral — including a paper sitting in the middle of a cluster you had
+loved forty times over. On a real corpus that was 96.9% of the map. It answered
+"what sits here" only in the places you had already answered yourself.
+
+It is now a **field**. Where you have recorded something, that value is used
+unchanged. Where you have not, ALMa predicts one from the paper's neighbourhood
+in embedding space and reports how much it trusts the guess.
+
+What counts as recorded, strongest first — the one hierarchy, in
+`alma.core.signal_valence`:
+
+| Signal | Value |
+|---|---|
+| Removed from Library | `-0.8` |
+| Rated (1★ … 5★, 3★ is neutral and not an opinion) | `-1.0` … `+1.0` |
+| A recommendation of it was removed | `-0.6` |
+| Saved to Library | `+0.35` |
+| You opened its external link | `+0.2` |
+| The engine's own score, at half authority | `-0.5` … `+0.5` |
+
+The link click is new (2026-07-27) and was previously the one user signal no
+valence path read at all. Evidence that carries a real timestamp decays with a
+540-day half-life; evidence that does not carry one is never decayed, because
+inventing a date to make the arithmetic uniform is not an option.
+
+The prediction is a Gaussian process over the 768-dimension SPECTER2 space, not
+over the two-dimensional picture. The map's layout is a projection, and two
+dots that sit next to each other on screen can be far apart in meaning; a model
+fitted on the picture would learn the projection's distortions. Inference
+happens in the embedding space, and only the *drawing* uses the 2-D position.
+
+**Confidence is a separate visual channel.** Colour says what the field thinks;
+strength says how much evidence stands behind it. A region built from papers
+you actually rated reads several times stronger than one the model guessed at,
+and territory far from anything you have touched stays faint. This matters more
+than it sounds: "+0.7 inferred from forty nearby labels" and "+0.7 inferred
+from one label three clusters away" must not look identical, and a smooth field
+that resembles measured data is worse than a sparse honest one. The legend
+states the split — *"N recorded, M inferred"*.
+
+Below a dozen recorded signals nothing is predicted at all, and the field says
+why. A confident-looking landscape fitted from eight labels would be a lie.
+
+Two things deliberately stay out of the fit:
+
+- **The engine's own recommendation scores.** They still *render* where they
+  exist, at their reduced authority, but they do not train the field. Ranking
+  already feeds terrain through those scores; letting terrain fit on them and
+  then feed ranking back would close a loop on our own opinion.
+- **Author, venue and topic affinity.** Those are ranking signals. Terrain
+  answers "what sits at this place in the literature"; a second recommender
+  wearing a colour ramp is not that.
 
 ### Terrain follows the layout
 
