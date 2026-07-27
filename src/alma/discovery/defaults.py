@@ -77,6 +77,18 @@ DISCOVERY_SETTINGS_DEFAULTS: dict[str, str] = {
     "limits.recency_window_years": "10",
     "limits.feedback_decay_days_full": "90",
     "limits.feedback_decay_days_half": "180",
+    # Seconds a single retrieval lane may take before the refresh gives up on
+    # it and builds the deck without it. Every lane is a LOCAL read (network
+    # collection belongs to scheduled maintenance), so this is a backstop
+    # against pathological computation, not a normal budget.
+    #
+    # It was a hardcoded 8.0 and that made it a binding constraint rather than
+    # a backstop: the external lane waits on the shared preference profile,
+    # which took 7.8 s, so external was cut on EVERY refresh and the deck
+    # silently lost a whole retrieval family (measured 2026-07-27). The profile
+    # is now ~3.6 s and the ceiling is a setting, so a slow box can raise it
+    # instead of quietly shipping three-quarters of a deck.
+    "limits.lane_deadline_seconds": "30",
     "limits.taste_topic_queries": "3",
     "limits.taste_author_queries": "3",
     "limits.taste_venue_queries": "2",

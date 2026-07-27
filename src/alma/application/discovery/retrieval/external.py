@@ -6,6 +6,8 @@ import sqlite3
 from collections import Counter
 from typing import Any
 
+from alma.core.settings_helpers import setting_int
+
 from ..frontier import load_live_frontier, search_frontier
 from ..lens_crud import (
     _apply_branch_controls,
@@ -81,9 +83,9 @@ def _retrieve_external_channel(
     # Branch Studio's knobs are user-facing sliders persisted through
     # `PUT /discovery/settings`. Hard-coding their default values here made the
     # sliders inert — the UI claimed control it did not have.
-    max_active = _setting_int(settings, "branches.max_active_for_retrieval", 4, 1, 12)
-    core_variants = _setting_int(settings, "branches.query_core_variants", 2, 1, 4)
-    explore_variants = _setting_int(settings, "branches.query_explore_variants", 2, 1, 4)
+    max_active = setting_int(settings, "branches.max_active_for_retrieval", 4, 1, 12)
+    core_variants = setting_int(settings, "branches.query_core_variants", 2, 1, 4)
+    explore_variants = setting_int(settings, "branches.query_explore_variants", 2, 1, 4)
 
     active_branches = [item for item in branches if item.get("is_active")]
     for branch in active_branches[:max_active]:
@@ -244,9 +246,3 @@ def _retrieve_external_channel(
     }
 
 
-def _setting_int(settings: dict, key: str, default: int, lo: int, hi: int) -> int:
-    """Read an integer setting, clamped to the range the UI offers."""
-    try:
-        return max(lo, min(hi, int(settings.get(key, default))))
-    except (TypeError, ValueError):
-        return default
