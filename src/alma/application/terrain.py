@@ -71,7 +71,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -413,11 +413,11 @@ def _fit_and_predict(
     """
     empty = TerrainModelInfo(False, len(labels), 0, 0, 0, None, LABEL_NOISE, None)
     if len(labels) < MIN_LABELS_TO_FIT:
-        return {}, TerrainModelInfo(
-            **{**empty.__dict__, "reason": f"only {len(labels)} labels; need {MIN_LABELS_TO_FIT}"}
+        return {}, replace(
+            empty, reason=f"only {len(labels)} labels; need {MIN_LABELS_TO_FIT}"
         )
     if not targets:
-        return {}, TerrainModelInfo(**{**empty.__dict__, "reason": "nothing to predict"})
+        return {}, replace(empty, reason="nothing to predict")
 
     import numpy as np
 
@@ -431,16 +431,14 @@ def _fit_and_predict(
     label_rows = [row for row in labels if row.paper_id in vectors]
     target_rows = [row for row in targets if row.paper_id in vectors]
     if len(label_rows) < MIN_LABELS_TO_FIT:
-        return {}, TerrainModelInfo(
-            **{
-                **empty.__dict__,
-                "n_labels": len(label_rows),
-                "reason": f"only {len(label_rows)} labels carry a vector",
-            }
+        return {}, replace(
+            empty,
+            n_labels=len(label_rows),
+            reason=f"only {len(label_rows)} labels carry a vector",
         )
     if not target_rows:
-        return {}, TerrainModelInfo(
-            **{**empty.__dict__, "n_labels": len(label_rows), "reason": "no target has a vector"}
+        return {}, replace(
+            empty, n_labels=len(label_rows), reason="no target has a vector"
         )
 
     x_label = _unit_matrix(np.stack([vectors[row.paper_id] for row in label_rows]))
@@ -458,12 +456,8 @@ def _fit_and_predict(
     try:
         inverse = np.linalg.inv(gram)
     except np.linalg.LinAlgError:
-        return {}, TerrainModelInfo(
-            **{
-                **empty.__dict__,
-                "n_labels": len(label_rows),
-                "reason": "kernel matrix is singular",
-            }
+        return {}, replace(
+            empty, n_labels=len(label_rows), reason="kernel matrix is singular"
         )
     alpha = inverse @ y_label
 
